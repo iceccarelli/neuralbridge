@@ -1,0 +1,95 @@
+# ──────────────────────────────────────────────────────────────
+# NeuralBridge — Docker Compose (Development)
+# ──────────────────────────────────────────────────────────────
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose logs -f app    # Follow application logs
+#   docker compose down            # Stop and remove containers
+# ──────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  # ── NeuralBridge Application ───────────────────────────────
+  app:
+    build: .
+    container_name: neuralbridge
+    ports:
+      - "8000:8000"
+    environment:
+      NEURALBRIDGE_ENV: development
+      NEURALBRIDGE_DEBUG: "true"
+      DATABASE_URL: postgresql://neuralbridge:neuralbridge@postgres:5432/neuralbridge
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── PostgreSQL (Audit Logs & State) ────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: neuralbridge-postgres
+    environment:
+      POSTGRES_USER: neuralbridge
+      POSTGRES_PASSWORD: neuralbridge
+      POSTGRES_DB: neuralbridge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuralbridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Caching & Rate Limiting) ────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: neuralbridge-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Prometheus (Metrics) ───────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neuralbridge-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - app
+
+  # ── Grafana (Dashboards) ───────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neuralbridge-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: neuralbridge
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  redis_data:

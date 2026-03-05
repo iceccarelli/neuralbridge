@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* NeuralBridge custom styles */
+@layer base {
+  :root {
+    --nb-primary: 99 102 241;     /* indigo-500 */
+    --nb-secondary: 168 85 247;   /* purple-500 */
+    --nb-success: 34 197 94;      /* green-500 */
+    --nb-warning: 234 179 8;      /* yellow-500 */
+    --nb-danger: 239 68 68;       /* red-500 */
+  }
+}
+
+@layer components {
+  .nb-card {
+    @apply bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-6;
+  }
+  .nb-btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition-colors;
+  }
+  .nb-btn-secondary {
+    @apply bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium px-4 py-2 rounded-lg transition-colors;
+  }
+  .nb-badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .nb-badge-success {
+    @apply nb-badge bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400;
+  }
+  .nb-badge-warning {
+    @apply nb-badge bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400;
+  }
+  .nb-badge-danger {
+    @apply nb-badge bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400;
+  }
+}

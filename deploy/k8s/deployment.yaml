@@ -1,0 +1,158 @@
+# NeuralBridge Kubernetes Deployment
+# Apply: kubectl apply -f deploy/k8s/
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neuralbridge
+  namespace: neuralbridge
+  labels:
+    app: neuralbridge
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: neuralbridge
+      component: api
+  template:
+    metadata:
+      labels:
+        app: neuralbridge
+        component: api
+    spec:
+      serviceAccountName: neuralbridge
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: neuralbridge
+          image: ghcr.io/your-org/neuralbridge:latest
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: NEURALBRIDGE_ENV
+              value: production
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: neuralbridge-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: neuralbridge-secrets
+                  key: redis-url
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: neuralbridge-secrets
+                  key: encryption-key
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: neuralbridge-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neuralbridge
+  namespace: neuralbridge
+spec:
+  selector:
+    app: neuralbridge
+    component: api
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neuralbridge
+  labels:
+    app: neuralbridge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: neuralbridge
+  namespace: neuralbridge
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: neuralbridge
+  namespace: neuralbridge
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: neuralbridge
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: neuralbridge
+  namespace: neuralbridge
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - neuralbridge.example.com
+      secretName: neuralbridge-tls
+  rules:
+    - host: neuralbridge.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: neuralbridge
+                port:
+                  number: 80
