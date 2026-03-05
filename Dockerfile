@@ -9,7 +9,7 @@
 FROM node:22-alpine AS dashboard-builder
 WORKDIR /app/dashboard
 COPY src/dashboard/package*.json ./
-RUN npm ci --production=false
+RUN npm install
 COPY src/dashboard/ ./
 RUN npm run build
 
