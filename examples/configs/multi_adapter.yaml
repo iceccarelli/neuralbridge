@@ -1,0 +1,81 @@
+# ──────────────────────────────────────────────────────────────
+# NeuralBridge — Multi-Adapter Configuration Example
+# ──────────────────────────────────────────────────────────────
+# This demonstrates connecting an AI agent to multiple systems
+# simultaneously: a database, a CRM, and a messaging platform.
+#
+# Think of it as "Stripe for AI agents" — one config file to
+# connect to everything.
+# ──────────────────────────────────────────────────────────────
+
+# Global settings
+global:
+  environment: production
+  log_level: info
+  encryption_key: ${NEURALBRIDGE_ENCRYPTION_KEY}
+  audit:
+    enabled: true
+    retention_days: 365
+  compliance:
+    cra_enabled: true
+    gdpr_enabled: true
+    organization: "Your Company Name"
+    contact: "dpo@yourcompany.com"
+
+# Adapter configurations
+adapters:
+  # ── Database: PostgreSQL ───────────────────────────────────
+  analytics_db:
+    type: postgres
+    auth:
+      host: ${PG_HOST}
+      port: 5432
+      database: analytics
+      username: ${PG_USER}
+      password: ${PG_PASSWORD}
+      ssl_mode: require
+    permissions:
+      allowed_operations: [query, list_tables, describe_table]
+      blocked_operations: [execute]  # Read-only for agents
+    rate_limit: 1000/minute
+    cache:
+      enabled: true
+      ttl: 60
+
+  # ── CRM: Salesforce ────────────────────────────────────────
+  crm:
+    type: salesforce
+    auth:
+      type: oauth2
+      client_id: ${SF_CLIENT_ID}
+      client_secret: ${SF_CLIENT_SECRET}
+      instance_url: https://yourorg.my.salesforce.com
+    permissions:
+      allowed_operations: [query, create_record, update_record]
+      allowed_objects: [Account, Contact, Opportunity]
+    rate_limit: 500/hour
+
+  # ── Messaging: Slack ───────────────────────────────────────
+  notifications:
+    type: slack
+    auth:
+      bot_token: ${SLACK_BOT_TOKEN}
+    permissions:
+      allowed_operations: [send_message, list_channels]
+      allowed_channels: ["#ai-alerts", "#sales-updates"]
+    rate_limit: 100/minute
+
+  # ── Cloud Storage: AWS S3 ──────────────────────────────────
+  documents:
+    type: aws_s3
+    auth:
+      access_key_id: ${AWS_ACCESS_KEY_ID}
+      secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+      region: us-east-1
+    config:
+      bucket: company-documents
+      prefix: ai-agent-uploads/
+    permissions:
+      allowed_operations: [list_objects, get_object, put_object]
+      max_file_size_mb: 50
+    rate_limit: 200/minute
