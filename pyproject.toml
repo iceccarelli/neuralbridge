@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neuralbridge-middleware"
-version = "0.1.0"
+version = "0.1.1"
 description = "Universal Enterprise Middleware for Agentic AI Integration — securely connect ANY AI agent to ANY system with YAML configuration, CRA compliance, and zero-trust security."
 readme = "README.md"
 license = {text = "Apache-2.0"}
