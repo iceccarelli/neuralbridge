@@ -134,6 +134,6 @@ jobs:
           python-version: 3.11
       - name: Install dependencies
         run: |
-          pip install mkdocs-material mkdocstrings-python
+          pip install "mkdocs-material<10" "mkdocs<2"
       - name: Build and deploy docs
         run: mkdocs gh-deploy --force

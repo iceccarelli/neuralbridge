@@ -2,23 +2,16 @@ site_name: NeuralBridge
 site_url: https://iceccarelli.github.io/neuralbridge/
 site_description: Universal Enterprise Middleware for Agentic AI Integration.
 site_author: NeuralBridge Contributors
-
-# Repository
 repo_name: iceccarelli/neuralbridge
 repo_url: https://github.com/iceccarelli/neuralbridge
 edit_uri: edit/main/docs/
-
-# Copyright
 copyright: Copyright &copy; 2026 NeuralBridge Contributors
-
-# Theme
 theme:
   name: material
-  logo: assets/logo.svg
+  logo: assets/logo.png
   favicon: assets/favicon.png
   palette:
-    # Palette toggle for light vs dark mode
-    - media: "(prefers-color-scheme: light)"
+    - media: "(prefers-color-scheme: light )"
       scheme: default
       toggle:
         icon: material/brightness-7
@@ -36,18 +29,8 @@ theme:
     - search.highlight
     - content.code.annotate
     - content.code.copy
-
-# Plugins
 plugins:
   - search
-  - mkdocstrings:
-      handlers:
-        python:
-          options:
-            show_root_heading: yes
-            show_source: no
-
-# Navigation
 nav:
   - Home: index.md
   - Introduction: introduction.md
@@ -68,8 +51,6 @@ nav:
   - Dashboard: dashboard.md
   - Contributing: contributing.md
   - Roadmap: roadmap.md
-
-# Markdown extensions
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
