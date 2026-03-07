@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel>=0.41.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "neuralbridge"
+name = "neuralbridge-middleware"
 version = "0.1.0"
 description = "Universal Enterprise Middleware for Agentic AI Integration — securely connect ANY AI agent to ANY system with YAML configuration, CRA compliance, and zero-trust security."
 readme = "README.md"
