@@ -50,3 +50,112 @@ Enterprises are eager to deploy AI agents to automate complex workflows, but are
 ```bash
 docker compose up -d
 Visit the dashboard at http://localhost:3000 and the API docs at http://localhost:8000/docs.
+2. pip
+Bash
+pip install neuralbridge-middleware
+neuralbridge serve
+Architecture Overview
+<p align="center"> <a href="https://iceccarelli.github.io/neuralbridge/architecture/"> <img src="https://raw.githubusercontent.com/iceccarelli/neuralbridge/main/docs/assets/architecture_overview.png" alt="NeuralBridge Architecture Diagram" width="800"> </a> </p>
+See the full Architecture Documentation for a deep dive into the components.
+Feature Deep Dive
+Universal Adapter Framework
+NeuralBridge ships with 22+ production-ready adapters that cover the most common enterprise integration scenarios. Each adapter is configured through a simple YAML file, requires no custom code, and is secured by the zero-trust engine out of the box.
+Category
+Supported Systems
+Databases
+PostgreSQL, MySQL, MongoDB, Snowflake, BigQuery
+APIs
+REST, GraphQL, SOAP, OData
+Messaging
+Slack, Teams, Discord, Telegram, Email
+Productivity
+Gmail, Notion
+ERP / CRM
+Salesforce, SAP
+Cloud Storage
+AWS S3, Azure Blob, Google Cloud Storage
+Every adapter follows the same lifecycle: configure (YAML), authenticate (OAuth2, API key, or Vault), connect (health-checked), and audit (every operation is logged). Building a custom adapter requires implementing a single Python base class and registering it with the framework.
+Secure Sandboxing Engine
+NeuralBridge implements strict sandboxing for plugin execution, ensuring that untrusted code or third-party OpenClaw plugins cannot compromise the core middleware. The engine provides three isolation levels, selected automatically based on the runtime environment:
+Isolation Level
+Environment
+Security
+Description
+Docker
+Production
+Highest
+Each plugin runs in a disposable container with no network, read-only filesystem, limited memory/CPU, and a hard timeout.
+Subprocess
+Staging
+Medium
+Uses asyncio.create_subprocess_exec with ulimit resource guards and a restricted PATH.
+In-Process
+Development
+Basic
+Wraps execution in a restricted globals() scope with timeout enforcement.
+The sandbox integrates directly with the EU CRA compliance engine, recording every execution in the immutable audit log — including the code hash, resource consumption, and exit status.
+EU CRA Compliance Engine
+With the EU Cyber Resilience Act deadline of September 2026 approaching, NeuralBridge provides a built-in compliance engine that ensures your AI agent deployments are audit-ready from day one.
+Capability
+Description
+Immutable Audit Logs
+Hash-chain-verified logs of every agent action. Every API call, database query, and plugin execution is recorded with a cryptographic proof of integrity.
+SBOM Generation
+Automatically generates CycloneDX-compliant Software Bill of Materials on every CI build.
+Vulnerability Reporting
+Generate CRA Article 14 vulnerability reports on demand, covering all dependencies and runtime components.
+GDPR Data Mapping
+Track which adapters access personal data and generate data-flow maps for your Data Protection Officer.
+MCP Gateway
+The Model Context Protocol (MCP) Gateway is the standardized entry point for any AI agent. It translates agent requests into adapter calls, enforces security policies, and returns structured results — all through a single, well-documented API.
+NeuralBridge supports native integration with the OpenClaw plugin ecosystem, meaning any OpenClaw-compatible agent can discover and use NeuralBridge adapters as tools without additional configuration.
+React Dashboard
+<p align="center"> <a href="https://iceccarelli.github.io/neuralbridge/dashboard/"> <img src="https://raw.githubusercontent.com/iceccarelli/neuralbridge/main/docs/assets/dashboard_screenshot.png" alt="NeuralBridge Dashboard Screenshot" width="800"> </a> </p>
+The dashboard provides a complete management interface for non-technical users:
+Feature
+Description
+No-Code Connection Wizard
+Create, configure, and deploy new adapter connections through an intuitive step-by-step UI.
+Real-Time Monitoring
+Live metrics on adapter health, request latency, error rates, and throughput.
+Compliance Dashboard
+At-a-glance CRA and GDPR readiness status with actionable recommendations.
+Cost Optimization
+Token cost analytics, caching hit rates, and recommendations to reduce API spend.
+User Management
+Role-based access control with audit trails for every administrative action.
+Example: Connecting an Agent to Salesforce
+Create a salesforce.yaml file:
+YAML
+adapters:
+  salesforce:
+    type: salesforce
+    auth:
+      type: oauth2
+      client_id: ${SALESFORCE_CLIENT_ID}
+      client_secret: ${SALESFORCE_CLIENT_SECRET}
+      instance_url: https://yourorg.my.salesforce.com
+    permissions:
+      - query: "SELECT Id, Name FROM Account"
+Run the connection:
+Bash
+neuralbridge connect --config salesforce.yaml
+Now, any agent can use the salesforce_query tool through the NeuralBridge MCP gateway.
+Documentation
+Full documentation is available at iceccarelli.github.io/neuralbridge, including:
+Getting Started Guide
+Architecture Deep Dive
+Adapter Reference
+Security & Sandboxing
+EU CRA Compliance
+API Reference
+Dashboard Guide
+Contributing
+We welcome contributions from the community! Please see our Contributing Guide to get started.
+Security
+For security vulnerabilities, please see our Security Policy.
+Roadmap
+See our Roadmap for planned features.
+License
+NeuralBridge is licensed under the MIT License.
+Plain Text
