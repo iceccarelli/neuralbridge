@@ -545,7 +545,7 @@ print(_json.dumps({{"result": _result}}))
 
         def _run_sandboxed(src: str, ns: dict[str, Any]) -> None:
             compiled = compile(src, "<sandbox>", "exec")
-            exec(compiled, ns)  # noqa: S102
+            exec(compiled, ns)  # noqa: S102  # nosec B102  # nosec B102
 
         try:
             await asyncio.wait_for(
