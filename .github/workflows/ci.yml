@@ -1,0 +1,139 @@
+name: CI — NeuralBridge
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ── Lint & Type Check ──────────────────────────────────────
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements/dev.txt
+          pip install -e .
+      - name: Run ruff linter
+        run: ruff check src/
+      - name: Run mypy type checker
+        run: mypy src/neuralbridge/ --ignore-missing-imports
+
+  # ── Unit Tests ─────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install -r requirements/test.txt
+          pip install -e .
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=neuralbridge --cov-report=xml --cov-report=term-missing
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+
+  # ── Security Scan ──────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install bandit safety
+      - name: Run Bandit security linter
+        run: bandit -r src/neuralbridge/ -ll
+      - name: Check dependencies for vulnerabilities
+        run: safety check -r requirements/base.txt || true
+
+  # ── SBOM Generation ────────────────────────────────────────
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install CycloneDX
+        run: pip install cyclonedx-bom
+      - name: Generate SBOM
+        run: cyclonedx-py requirements requirements/base.txt -o sbom.json --of JSON
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  # ── Dashboard Build ────────────────────────────────────────
+  dashboard:
+    name: Build Dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: src/dashboard
+        run: npm install
+      - name: Build dashboard
+        working-directory: src/dashboard
+        run: npm run build
+
+  # ── Docker Build ───────────────────────────────────────────
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t neuralbridge:test .
+      - name: Test Docker image
+        run: docker run --rm neuralbridge:test python -c "import neuralbridge; print(neuralbridge.__version__)"
+
+  # ── Docs Build & Deploy ────────────────────────────────────
+  deploy-docs:
+    name: Deploy Docs to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install dependencies
+        run: |
+          pip install mkdocs-material mkdocstrings-python
+      - name: Build and deploy docs
+        run: mkdocs gh-deploy --force

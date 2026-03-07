@@ -1,0 +1,10 @@
+# NeuralBridge — Development Dependencies
+-r base.txt
+ruff>=0.3.0
+mypy>=1.8.0
+types-PyYAML>=6.0.0
+types-PyMySQL>=1.1.0
+pre-commit>=3.6.0
+ipython>=8.20.0
+jupyter>=1.0.0
+nbformat>=5.9.0

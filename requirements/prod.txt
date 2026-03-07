@@ -1,0 +1,5 @@
+# NeuralBridge — Production Dependencies
+-r base.txt
+gunicorn>=21.2.0
+opentelemetry-exporter-otlp>=1.22.0
+sentry-sdk[fastapi]>=1.40.0

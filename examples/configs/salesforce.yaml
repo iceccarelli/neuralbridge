@@ -1,0 +1,56 @@
+# ──────────────────────────────────────────────────────────────
+# NeuralBridge — Salesforce CRM Adapter Configuration
+# ──────────────────────────────────────────────────────────────
+# This YAML file configures a connection from any AI agent
+# (OpenClaw, AutoGPT, LangChain, etc.) to Salesforce CRM.
+#
+# Usage:
+#   neuralbridge connect --config salesforce.yaml
+# ──────────────────────────────────────────────────────────────
+
+adapters:
+  salesforce:
+    type: salesforce
+    enabled: true
+
+    # Authentication — OAuth 2.0 (recommended for production)
+    auth:
+      type: oauth2
+      client_id: ${SALESFORCE_CLIENT_ID}
+      client_secret: ${SALESFORCE_CLIENT_SECRET}
+      instance_url: https://yourorg.my.salesforce.com
+      username: ${SALESFORCE_USERNAME}
+      password: ${SALESFORCE_PASSWORD}
+      security_token: ${SALESFORCE_SECURITY_TOKEN}
+      api_version: "59.0"
+
+    # Permissions — What operations agents are allowed to perform
+    permissions:
+      allowed_operations:
+        - query
+        - create_record
+        - update_record
+        - describe_object
+      blocked_operations:
+        - delete_record  # Prevent agents from deleting records
+      allowed_objects:
+        - Account
+        - Contact
+        - Opportunity
+        - Case
+
+    # Rate Limiting
+    rate_limit: 500/hour
+
+    # Security
+    security:
+      encryption: aes-256-gcm
+      audit_logging: true
+      data_classification: confidential
+      pii_detection: true
+
+    # Caching
+    cache:
+      enabled: true
+      ttl: 300  # seconds
+      invalidate_on_write: true

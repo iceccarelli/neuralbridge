@@ -1,0 +1,16 @@
+apiVersion: v2
+name: neuralbridge
+description: NeuralBridge — Universal Enterprise Middleware for Agentic AI
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ai
+  - middleware
+  - agentic-ai
+  - mcp
+  - enterprise
+  - compliance
+  - cra
+maintainers:
+  - name: NeuralBridge Team
