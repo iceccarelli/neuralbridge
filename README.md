@@ -19,7 +19,7 @@
 
 ---
 
-**NeuralBridge** is an open-source, standardized adapter platform that lets ANY AI agent (OpenClaw, AutoGPT, LangChain, Claude, ChatGPT) securely connect to ANY data source, API, or enterprise system with simple YAML configuration.
+**NeuralBridge** is an open-source, that aims to be a standard adapter platform which lets ANY AI agent (OpenClaw, AutoGPT, LangChain, Claude, ChatGPT) securely connect to ANY data source, API, or enterprise system with simple YAML configuration.
 
 ## The Enterprise Problem: Agents Can Think, But They Can't Act
 
