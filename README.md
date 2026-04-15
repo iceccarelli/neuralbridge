@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <em>The missing infrastructure layer for agentic AI. Developed by Vincenzo Grimaldi.</em>
+  <em>The missing infrastructure layer for agentic AI.</em>
 </p>
 
 <p align="center">
