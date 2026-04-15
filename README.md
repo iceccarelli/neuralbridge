@@ -30,7 +30,7 @@ The project is intentionally being narrowed so that users can clone it, understa
 
 NeuralBridge is **not** currently presented as a complete enterprise-ready universal middleware for every system, every compliance requirement, or every security model. The repository already contains work toward a broader future, including many adapter modules, compliance-oriented components, and security abstractions. However, those areas should currently be understood as **evolving**, **partial**, or **planned**, unless they are part of the documented supported workflow.
 
-This README therefore focuses on the smaller product that the repository can grow into honestly.
+This README therefore focuses on the smaller product that the repository can grow.
 
 ## Current Supported Scope
 
@@ -50,7 +50,7 @@ This README therefore focuses on the smaller product that the repository can gro
 
 ## Product Direction
 
-The most honest way to describe NeuralBridge today is this:
+The way to describe NeuralBridge today is this:
 
 > NeuralBridge is a lightweight integration hub that helps AI workflows interact with external systems through a clean backend, a gateway layer, and a small set of supported adapters.
 
@@ -131,7 +131,7 @@ The project should aim to support a few adapters very well before claiming broad
 
 ### Experimental or Future Areas
 
-Other adapters may remain in the repository, but they should be described honestly as **experimental**, **in progress**, or **planned** until they are covered by clear setup instructions and repeatable tests.
+Other adapters may remain in the repository, but they should be described as **experimental**, **in progress**, or **planned** until they are covered by clear setup instructions and repeatable tests.
 
 ## Installation
 
