@@ -111,13 +111,17 @@ class TestReport:
         assert page.index("Ledger chain verifies") < page.index("Component advisory")
 
     def test_a_broken_chain_is_shouted_at_the_top(self, demo, tmp_path):
-        import shutil
         import sqlite3
         _, fleet = demo
-        broken = tmp_path / "broken.db"
-        shutil.copy(fleet.ledger_path, broken)
-        with sqlite3.connect(broken) as db:
+        # A plain file copy of a WAL database leaves the write-ahead log behind
+        # and can arrive without its records, or without the schema at all.
+        broken = EvidenceLedger(fleet.ledger_path).snapshot_to(tmp_path / "broken.db")
+        db = sqlite3.connect(broken)
+        try:
             db.execute("UPDATE chain SET subject = 'tampered' WHERE seq = 2")
+            db.commit()
+        finally:
+            db.close()
         html = render_report(ReportInput(ledger=EvidenceLedger(broken)))
         assert "THE LEDGER CHAIN DOES NOT VERIFY" in html
         assert html.index("DOES NOT VERIFY") < html.index("Fleet")

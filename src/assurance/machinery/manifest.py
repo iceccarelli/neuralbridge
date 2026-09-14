@@ -115,8 +115,25 @@ class MachineIdentity:
     year: str = ""
     #: Where it physically is. Useful when a fleet manifest covers many sites.
     site: str = ""
+    #: ISO 3166-1 alpha-2 of the territory this unit was made available in.
+    #:
+    #: This is here because of Article 14(2)(a) of the Cyber Resilience Act. An
+    #: early warning must indicate the Member States in whose territory the
+    #: manufacturer is aware the product has been made available, and that list
+    #: is the one thing that cannot be assembled inside 24 hours from a
+    #: standing start. A site string is not a country: "Plant 2, Line 4" tells
+    #: nobody where the machine is, and guessing a country from free text is
+    #: exactly the kind of inference that puts a wrong Member State on a
+    #: regulatory filing. Recorded explicitly or not at all.
+    country: str = ""
 
     def __post_init__(self) -> None:
+        if self.country and (len(self.country) != 2 or not self.country.isalpha()):
+            raise ManifestError(
+                f"country {self.country!r} is not an ISO 3166-1 alpha-2 code. A "
+                "regulatory filing names territories in that form, and a "
+                "half-recognised country code is worse than an absent one."
+            )
         for name in ("manufacturer", "model", "serial"):
             if not getattr(self, name):
                 raise ManifestError(
@@ -133,6 +150,7 @@ class MachineIdentity:
         return {
             "manufacturer": self.manufacturer, "model": self.model,
             "serial": self.serial, "year": self.year, "site": self.site,
+            "country": self.country,
         }
 
     @classmethod
@@ -140,7 +158,7 @@ class MachineIdentity:
         return cls(
             manufacturer=str(d["manufacturer"]), model=str(d["model"]),
             serial=str(d["serial"]), year=str(d.get("year", "")),
-            site=str(d.get("site", "")),
+            site=str(d.get("site", "")), country=str(d.get("country", "")).upper(),
         )
 
 

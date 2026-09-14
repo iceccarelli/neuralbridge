@@ -114,9 +114,15 @@ class EvidenceLedger:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        with self._connect() as db:
+        # sqlite3's context manager commits or rolls back; it does NOT close.
+        # Closing is explicit here because a ledger is constructed once per
+        # request in a served deployment, and a leaked handle per construction
+        # exhausts the file table under load.
+        db = self._connect()
+        try:
             db.executescript(_SCHEMA)
-            row = db.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            row = db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
             if row is None:
                 db.execute(
                     "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
@@ -127,6 +133,8 @@ class EvidenceLedger:
                     f"{self.path} was written by ledger schema {row[0]}, this build speaks "
                     f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing."
                 )
+        finally:
+            db.close()
 
     # -- plumbing ---------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -325,6 +333,28 @@ class EvidenceLedger:
             "head_link_hash": head.link_hash if head else GENESIS,
             "attested_at": format_utc(utc_now()),
         }
+
+    def snapshot_to(self, destination: str | Path) -> Path:
+        """Copy the whole ledger to ``destination``, WAL and all.
+
+        A plain file copy of a WAL-mode database copies the main file and
+        leaves the write-ahead log behind, so the copy can be missing its most
+        recent records — or, on a freshly written ledger, every record and even
+        the schema. Anything that duplicates a ledger (a backup, a test, an
+        export to hand to an auditor) must come through here.
+        """
+        dest = Path(destination)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        source = self._connect()
+        try:
+            target = sqlite3.connect(dest)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+        return dest
 
     def export(self, *, subject: str | None = None) -> dict[str, Any]:
         """Export a verifiable bundle, refusing if the chain does not verify.

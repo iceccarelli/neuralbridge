@@ -140,7 +140,9 @@ class AccountStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        with self._connect() as db:
+        # sqlite3's context manager commits; it does not close.
+        db = self._connect()
+        try:
             db.executescript(_SCHEMA)
             row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if row is None:
@@ -153,6 +155,8 @@ class AccountStore:
                     f"{self.path} was written by accounts schema {row[0]}; this build "
                     f"speaks {ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
                 )
+        finally:
+            db.close()
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)

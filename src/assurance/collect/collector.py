@@ -223,6 +223,7 @@ def collect(
     serial: str,
     taken_by: Actor,
     site: str = "",
+    country: str = "",
     year: str = "",
     manifest_id: str = "",
     source: ManifestSource = ManifestSource.AS_FOUND,
@@ -295,7 +296,8 @@ def collect(
         manifest_id=manifest_id or f"{plan.plan_id}-{serial}-"
                                    f"{format_utc(taken_at or utc_now())[:10]}",
         machine=MachineIdentity(manufacturer=plan.manufacturer, model=plan.model,
-                                serial=serial, year=year, site=site),
+                                serial=serial, year=year, site=site,
+                                country=country.upper()),
         source=source,
         taken_at=taken_at or utc_now(),
         taken_by=taken_by,
