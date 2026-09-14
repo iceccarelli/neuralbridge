@@ -12,6 +12,8 @@ Layout
 ``assurance.evidence``  the tamper-evident ledger every record lands in
 ``assurance.attest``    signed head attestations — the part of the ledger a
                         rewind cannot reach, because the key left the building
+``assurance.kit``       the offline enrolment kit: one command inside a plant,
+                        with a guard over the socket layer proving it stayed there
 ``assurance.security``  product-security obligations. ``security.art14`` is the
                         EU CRA reporting duty that has applied since 2026-09-11.
 
