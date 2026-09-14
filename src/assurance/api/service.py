@@ -19,8 +19,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .. import __version__
+from .billing_routes import billing_router
 from .deps import auth_mode
-from .routes import public_router, router
+from .routes import free_router, public_router, router
 
 __all__ = ["create_app", "app"]
 
@@ -57,7 +58,11 @@ def create_app(**kwargs: Any) -> FastAPI:
         version=__version__,
         description=_DESCRIPTION,
         openapi_tags=[
-            {"name": "article 14", "description": "Cases, filings and the field specification."},
+            {"name": "free", "description": "The field specification and the dry-run "
+                                            "validator. No account needed."},
+            {"name": "article 14", "description": "The register. Needs a plan that "
+                                                  "includes it."},
+            {"name": "billing", "description": "Plans, checkout, and your own account."},
             {"name": "service", "description": "Liveness and configuration."},
         ],
         **kwargs,
@@ -72,6 +77,8 @@ def create_app(**kwargs: Any) -> FastAPI:
         )
 
     application.include_router(public_router)
+    application.include_router(billing_router)
+    application.include_router(free_router)
     application.include_router(router)
     return application
 

@@ -1,0 +1,159 @@
+"""What each tier may do.
+
+Entitlements are declared here and enforced in one place. The rule the
+palletizer repository got right and is worth keeping: **if it is not gated in
+code, it is not on the pricing page.** A feature list that the software does
+not enforce is marketing, and it is the kind of marketing that produces refund
+requests.
+
+Prices live in Stripe, not here. This module carries only the price *lookup*
+and the entitlements, so changing a number never means shipping code.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+__all__ = ["Tier", "Plan", "PLANS", "plan_for", "plan_for_price", "public_catalogue"]
+
+Tier = str  # "free" | "register" | "cell"
+
+
+@dataclass(frozen=True)
+class Plan:
+    """One tier, and exactly what it permits."""
+
+    tier: Tier
+    name: str
+    blurb: str
+    #: Environment variable holding the Stripe price id. Empty for free.
+    price_env: str = ""
+    price_label: str = ""
+    #: Calls per UTC day to the free validator. None = unlimited.
+    validations_per_day: int | None = None
+    #: May create and write cases in the register.
+    register: bool = False
+    #: Product families that may appear in availability records.
+    product_families: int | None = None
+    #: Cases per UTC day.
+    cases_per_day: int | None = None
+    #: May export a verifiable evidence bundle.
+    export: bool = False
+    #: May request a signed head attestation.
+    signed_attestation: bool = False
+    included: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def price_id(self) -> str:
+        return os.environ.get(self.price_env, "") if self.price_env else ""
+
+    @property
+    def purchasable(self) -> bool:
+        return bool(self.price_id)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "tier": self.tier,
+            "name": self.name,
+            "blurb": self.blurb,
+            "price": self.price_label or "free",
+            "purchasable": self.purchasable,
+            "includes": list(self.included),
+            "limits": {
+                "validations_per_day": self.validations_per_day,
+                "product_families": self.product_families,
+                "cases_per_day": self.cases_per_day,
+                "register_access": self.register,
+                "verifiable_export": self.export,
+                "signed_attestation": self.signed_attestation,
+            },
+        }
+
+
+PLANS: dict[Tier, Plan] = {
+    "free": Plan(
+        tier="free",
+        name="Validator",
+        blurb=(
+            "Check a draft Article 14 filing against the ENISA platform's 39-field "
+            "specification before you open the platform. No account, nothing recorded."
+        ),
+        validations_per_day=20,
+        included=(
+            "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
+            "which listed territories are not EU Member States",
+            "GET /v1/spec/fields — the full field specification per track and stage",
+            "20 validations per day, per address",
+        ),
+    ),
+    "register": Plan(
+        tier="register",
+        name="Register",
+        blurb=(
+            "The Article 14 register for one manufacturer: awareness records, both "
+            "deadline clocks, triage with the grounds cited, and a hash-chained evidence "
+            "ledger you can export."
+        ),
+        price_env="ASSURANCE_PRICE_REGISTER",
+        price_label="€390 / month",
+        validations_per_day=None,
+        register=True,
+        product_families=25,
+        cases_per_day=50,
+        export=True,
+        included=(
+            "Everything in Validator, without the daily cap",
+            "Unlimited cases; awareness records with the reasoning that defends them",
+            "Both final-report clocks computed correctly, and the platform's counter "
+            "defect surfaced rather than inherited",
+            "Hash-chained evidence ledger; export refuses if the chain does not verify",
+            "Up to 25 product families",
+        ),
+    ),
+    "cell": Plan(
+        tier="cell",
+        name="Cell",
+        blurb=(
+            "For a manufacturer with a large fielded installed base: unlimited product "
+            "families, several Assigned Representatives, and a signed head attestation so "
+            "a silent rewind of the ledger is detectable."
+        ),
+        price_env="ASSURANCE_PRICE_CELL",
+        price_label="€1,290 / month",
+        validations_per_day=None,
+        register=True,
+        product_families=None,
+        cases_per_day=None,
+        export=True,
+        signed_attestation=True,
+        included=(
+            "Everything in Register",
+            "Unlimited product families and cases",
+            "Signed head attestation for the evidence ledger",
+            "Priority response",
+        ),
+    ),
+}
+
+
+def plan_for(tier: Tier) -> Plan:
+    """The plan for a tier, falling back to free rather than raising.
+
+    An unknown tier in a stored account must degrade to the least privilege, not
+    to an error and not to the most.
+    """
+    return PLANS.get(tier, PLANS["free"])
+
+
+def plan_for_price(price_id: str) -> Plan | None:
+    """Which plan a Stripe price belongs to."""
+    for plan in PLANS.values():
+        if plan.price_id and plan.price_id == price_id:
+            return plan
+    return None
+
+
+def public_catalogue() -> list[dict[str, Any]]:
+    return [PLANS[t].to_public_dict() for t in ("free", "register", "cell")]

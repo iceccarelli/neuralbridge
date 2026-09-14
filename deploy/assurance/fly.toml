@@ -1,0 +1,53 @@
+# fly.io deployment for the assurance register.
+#
+#   fly launch --no-deploy --copy-config --config deploy/assurance/fly.toml
+#   fly volumes create assurance_data --size 1 --region fra
+#   fly secrets set \
+#       ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \
+#       STRIPE_SECRET_KEY=sk_test_... \
+#       STRIPE_WEBHOOK_SECRET=whsec_... \
+#       ASSURANCE_PRICE_REGISTER=price_... \
+#       ASSURANCE_PRICE_CELL=price_...
+#   fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile
+#
+# Then point a Stripe webhook endpoint at https://<app>.fly.dev/v1/billing/webhook
+# for checkout.session.completed, customer.subscription.updated and
+# customer.subscription.deleted.
+
+app = "assurance-register"
+primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regulatory record
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ASSURANCE_HOST = "0.0.0.0"
+  ASSURANCE_PORT = "8080"
+  ASSURANCE_LEDGER = "/data/art14-register.db"
+  ASSURANCE_ACCOUNTS = "/data/accounts.db"
+  ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
+
+[[mounts]]
+  source = "assurance_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # SQLite on one volume means one writer. auto_stop would be fine; running two
+  # machines would not, and this is the config line that prevents it.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  max_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
