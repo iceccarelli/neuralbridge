@@ -1,0 +1,1169 @@
+From 362b387e21558890bc6512e7dbfda88ffc3e7e0e Mon Sep 17 00:00:00 2001
+From: i <v@g>
+Date: Mon, 14 Sep 2026 18:27:26 +0000
+Subject: [PATCH] assurance.watch: watch the suppliers, not just the machines
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The machine watch answers "did anything on my floor change". This answers the
+other half, and it is the half that wakes somebody up: did the world change
+underneath machines that did not.
+
+A supplier publishes a signed advisory at 09:00. Nothing on the plant floor
+moved, every manifest still matches, and the machine watch reports QUIET —
+correctly. The integrator finds out when their insurer asks. That gap is the
+difference between a tool and a subscription: something that tells you about a
+problem you did not know to look for is worth paying for every month, and
+something you have to remember to run is not.
+
+WatchConfig gains `feeds`: a supplier id, a feed path and a public key path. The
+key is a separate file deliberately. A feed that carries its own key
+authenticates nothing, because the forged feed will carry one too; it has to be
+a file the operator put there, obtained by a route the advisories do not travel
+on.
+
+Four judgements, and each of them is a way this is normally built wrong.
+
+**New is not the same as outstanding.** An advisory reported last week does not
+reappear as new, and is not forgotten either — it is carried as outstanding
+until the fleet stops matching it or the supplier withdraws it. A watch that
+re-reports everything trains the reader to skim by the third Monday, at which
+point it has become an expensive way to generate silence.
+
+**A feed that cannot be checked is DEGRADED, never quiet.** Missing file, wrong
+key, broken chain, bad signature: all exit 2, and nothing in an unverified feed
+is acted on. This is where a signed-advisory mechanism most easily becomes
+decoration — the fetch fails, verification is skipped, the run reports quiet,
+and the absence of alarms is read as the absence of danger.
+
+**A withdrawal is a finding.** If an advisory that affected this fleet is
+retracted, somebody here very likely changed a machine because of it, and
+nothing else in this industry tells them. Announced exactly once, and only to a
+fleet that was told about the original: an advisory published and retracted
+between two runs is not mentioned, because nothing here was acted on.
+
+**Stop-use is said first and alone.** An advisory the supplier marked stop_use
+against a machine that matched is not one line among forty; it is the reason
+this ran.
+
+The advisory pass runs after the machine pass, against the manifests this run
+has just sealed. Asking first would report yesterday's fleet against today's
+advisories, which is the one combination guaranteed to be wrong.
+
+checks_skipped gains the one that matters most operationally: this watch learns
+of an advisory when the subscribed file changes, whatever puts the supplier's
+feed there is outside this system, and a sync that silently stopped looks
+exactly like a supplier with nothing to report.
+
+Tests: 18 new, 719 total, all passing. ruff clean, mypy clean on both new
+modules. Exercised live before committing across four runs of a real two-machine
+fleet: an advisory arriving against still machines, the same advisory going
+quiet on the second run, a withdrawal announced once with the consequence
+spelled out, and a deleted feed file coming back DEGRADED rather than QUIET.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/WATCH.md                | 111 +++++++
+ src/assurance/watch/__init__.py          |  20 +-
+ src/assurance/watch/advisories.py        | 358 +++++++++++++++++++++++
+ src/assurance/watch/cli.py               |  35 +++
+ src/assurance/watch/config.py            |  65 ++++
+ src/assurance/watch/runner.py            |  53 +++-
+ tests/test_assurance_watch_advisories.py | 293 +++++++++++++++++++
+ 7 files changed, 931 insertions(+), 4 deletions(-)
+ create mode 100644 src/assurance/watch/advisories.py
+ create mode 100644 tests/test_assurance_watch_advisories.py
+
+diff --git a/deploy/assurance/WATCH.md b/deploy/assurance/WATCH.md
+index 23bad97..ab29ad5 100644
+--- a/deploy/assurance/WATCH.md
++++ b/deploy/assurance/WATCH.md
+@@ -107,3 +107,114 @@ nothing. The configuration is compared against the last manifest **sealed** for
+ that machine, so a change made and reverted between two runs leaves no trace.
+ And the watch reports that verification evidence is in doubt after a
+ safety-relevant drift — it cannot re-run the verification, and it says so.
++
++
++---
++
++# Watching the suppliers, not just the machines
++
++The machine watch answers *"did anything on my floor change"*. Add `feeds` to
++the configuration and it answers the other half — **did the world change
++underneath machines that did not** — which is the half that wakes somebody up.
++
++A supplier publishes a signed advisory at 09:00. Nothing on the plant floor
++moved. Every manifest still matches. The machine watch reports QUIET, correctly,
++and the integrator learns about it when their insurer asks.
++
++```json
++{
++  "watch_id": "plant-1",
++  "targets": [ ... ],
++  "feeds": [
++    {
++      "supplier_id": "controlco",
++      "feed": "feeds/controlco.jsonl",
++      "public_key": "keys/controlco.pub",
++      "notes": "fingerprint confirmed against the 2025 supply contract"
++    }
++  ]
++}
++```
++
++The key is a separate file on purpose. A feed that carries its own key
++authenticates nothing — the forged feed will carry one too. It has to be a file
++the operator put there, obtained from the supplier by a route the advisories do
++not travel on. See `SUPPLIER.md`.
++
++## What one run looks like when it matters
++
++```
++plant-1 — FINDINGS — something changed since the last run
++  [ok   ] CELL-0412  unchanged at e0045e0e1110
++  [ok   ] CELL-0501  unchanged at 6ec7ca52368e
++
++  suppliers: 1 STOP-USE advisory(ies) match this fleet; 1 new
++
++  ** STOP USE ** CTRL-2026-11 (controlco) — Authentication bypass in safety controller firmware
++       machines: Grimaldi/AR-7#CELL-0412, Grimaldi/AR-7#CELL-0501
++       remedy:   Update to 3.9.1.
++       source:   https://controlco.example/psirt/CTRL-2026-11
++```
++
++Both machines are *unchanged*. That is the point.
++
++## Four judgements, and each is a way this is normally built wrong
++
++**New is not the same as outstanding.** Run it again and the same advisory does
++not reappear as new — but it has not been forgotten either; it is carried as
++`outstanding` until the fleet stops matching it or the supplier withdraws it. A
++watch that re-reports everything trains the reader to skim by the third Monday,
++at which point it has become an expensive way to generate silence.
++
++**A feed that cannot be checked is DEGRADED, never quiet.**
++
++```
++  suppliers: 1 feed(s) could not be checked
++    !! controlco: absent — feeds/controlco.jsonl does not exist. The watch is
++       blind to this supplier; that is not the same as this supplier having
++       nothing to say.
++```
++
++Exit 2, not 0. This is where a signed-advisory mechanism most easily turns into
++decoration: the fetch fails, verification is skipped, the run reports quiet, and
++the absence of alarms is read as the absence of danger. A feed that fails
++signature verification is treated the same way, and **nothing in it is acted
++on** — an advisory that cannot be authenticated must not drive a change to a
++safety system.
++
++**A withdrawal is a finding.**
++
++```
++    WITHDRAWN  CTRL-2026-11     Authentication bypass in safety controller firm
++               reason: 3.9.0 is not affected; the range was wrong
++               You were told about this one. If somebody changed a machine
++               because of it, that change now rests on a retracted advisory.
++```
++
++Announced exactly once, and only to a fleet that was actually told about the
++original — an advisory published and retracted between two runs is not
++mentioned, because nothing here was acted on. Nothing else in this industry
++tells an integrator that the bulletin they acted on in March has been retracted.
++
++**Stop-use is said first and alone.** An advisory the supplier marked
++`stop_use` against a machine that matched is not one line among forty.
++
++## Order of operations
++
++The advisory pass runs **after** the machine pass, against the manifests this
++run has just sealed. Asking first would report yesterday's fleet against today's
++advisories, which is the one combination guaranteed to be wrong.
++
++## What it does not establish
++
++Carried in `checks_skipped` on every run:
++
++* That the key belongs to the supplier. Confirm the fingerprint by the route in
++  `SUPPLIER.md` — not by a link in an advisory.
++* That the advisories are correct, complete or timely. A supplier who has not
++  noticed a vulnerability publishes nothing, and no amount of signing detects
++  silence.
++* **That the feed on disk is current.** This watch learns of an advisory when
++  the subscribed file changes. Whatever puts the supplier's feed there is
++  outside this system, and a sync that silently stopped looks exactly like a
++  supplier with nothing to report. Make the thing that fetches it fail loudly.
+diff --git a/src/assurance/watch/__init__.py b/src/assurance/watch/__init__.py
+index 19e1b11..d5ace44 100644
+--- a/src/assurance/watch/__init__.py
++++ b/src/assurance/watch/__init__.py
+@@ -7,7 +7,19 @@ Everything else in this package is invoked by somebody who already suspects
+ something. This is the component that finds a change on the day it happened.
+ """
+ 
+-from assurance.watch.config import WatchConfig, WatchError, WatchTarget
++from assurance.watch.advisories import (
++    ADVISORY_KIND,
++    AdvisoryFinding,
++    AdvisoryPass,
++    FeedOutcome,
++    check_feeds,
++)
++from assurance.watch.config import (
++    FeedSubscription,
++    WatchConfig,
++    WatchError,
++    WatchTarget,
++)
+ from assurance.watch.runner import (
+     OBSERVATION_KIND,
+     RUN_KIND,
+@@ -18,6 +30,12 @@ from assurance.watch.runner import (
+ )
+ 
+ __all__ = [
++    "ADVISORY_KIND",
++    "AdvisoryFinding",
++    "AdvisoryPass",
++    "FeedOutcome",
++    "FeedSubscription",
++    "check_feeds",
+     "OBSERVATION_KIND",
+     "RUN_KIND",
+     "MachineOutcome",
+diff --git a/src/assurance/watch/advisories.py b/src/assurance/watch/advisories.py
+new file mode 100644
+index 0000000..272b72f
+--- /dev/null
++++ b/src/assurance/watch/advisories.py
+@@ -0,0 +1,358 @@
++"""Watching the suppliers, not just the machines.
++
++The machine watch answers "did anything on my floor change". This answers the
++other half, and it is the half that wakes somebody up: **did the world change
++underneath machines that did not**.
++
++A supplier publishes a signed advisory at 09:00. Nothing on the plant floor
++moved. Every manifest still matches. The machine watch reports QUIET, correctly,
++and the integrator learns on the day their insurer asks. That gap is the reason
++a tool becomes a subscription: a thing that tells you about a problem you did
++not know to look for is worth paying for every month, and a thing you have to
++remember to run is not.
++
++Four judgements, and each is a place this could have been built wrong:
++
++**New is not the same as outstanding.** An advisory reported last week is not
++reported again as new, but it does not disappear either — it stays outstanding
++until the fleet stops matching it or the supplier withdraws it. A watch that
++re-reports everything trains the reader to skim, and a watch that reports
++something once and forgets lets it rot.
++
++**A feed that cannot be verified is DEGRADED, never silence.** "I could not
++check" and "nothing new" must not share an exit code, for the same reason
++"I could not look at the machine" and "the machine did not change" must not.
++This is where a signed-advisory mechanism most easily becomes decoration: fetch
++fails, verification is skipped, the run reports quiet, and the absence of alarms
++is read as the absence of danger.
++
++**A withdrawal is a finding.** If an advisory that affected this fleet is
++withdrawn, somebody here very likely changed a machine because of it. Nothing
++else in this industry tells them. "The advisory you acted on in March has been
++withdrawn, and here is the reason the supplier gave" is a first-class finding,
++not a footnote.
++
++**A severity that means stop is said first.** An advisory the supplier marked
++``stop_use`` against a machine that matched is not one line among forty; it is
++the reason this ran.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Sequence
++from dataclasses import dataclass, field
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++from ..attest.keys import SigningKeyError, VerifyingKey
++from ..core.errors import AssuranceError
++from ..fleet.advisory import ComponentAdvisory
++from ..fleet.impact import ImpactReport, assess_impact
++from ..fleet.registry import Fleet
++from ..supplier.publish import (
++    AdvisoryFeed,
++    PublishError,
++    SignedAdvisory,
++    verify_feed,
++)
++from .config import FeedSubscription
++
++__all__ = [
++    "ADVISORY_KIND",
++    "AdvisoryFinding",
++    "AdvisoryPass",
++    "FeedOutcome",
++    "check_feeds",
++]
++
++ADVISORY_KIND = "watch.advisory"
++
++
++@dataclass(frozen=True)
++class FeedOutcome:
++    """What happened when this watch looked at one supplier's feed."""
++
++    supplier_id: str
++    #: ``verified`` | ``unverifiable`` | ``unreadable`` | ``absent``
++    status: str
++    records: int = 0
++    new: tuple[str, ...] = ()
++    newly_withdrawn: tuple[str, ...] = ()
++    problems: tuple[str, ...] = ()
++    detail: str = ""
++
++    @property
++    def is_degraded(self) -> bool:
++        """A feed that could not be checked degrades the whole run.
++
++        Not a finding — a finding means something was found. This means the
++        watch was blind to one supplier, and the reader has to know the
++        difference.
++        """
++        return self.status != "verified"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "supplier_id": self.supplier_id, "status": self.status,
++            "records": self.records, "new": list(self.new),
++            "newly_withdrawn": list(self.newly_withdrawn),
++            "problems": list(self.problems), "detail": self.detail,
++        }
++
++
++@dataclass(frozen=True)
++class AdvisoryFinding:
++    """One advisory, and what it means for this fleet today."""
++
++    advisory_id: str
++    supplier_id: str
++    severity: str
++    title: str
++    remedy: str
++    reference: str
++    #: ``new`` on the first run that saw it, ``outstanding`` afterwards,
++    #: ``withdrawn`` when the supplier has retracted it.
++    state: str
++    #: The impact engine's own verdict: ``clear`` | ``needs_review`` | ``affected``.
++    impact: str
++    machines: tuple[str, ...] = ()
++    functions_in_question: tuple[str, ...] = ()
++    withdrawal_reason: str = ""
++
++    @property
++    def stops_use(self) -> bool:
++        return self.severity == "stop_use" and bool(self.machines)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "advisory_id": self.advisory_id, "supplier_id": self.supplier_id,
++            "severity": self.severity, "title": self.title,
++            "remedy": self.remedy, "reference": self.reference,
++            "state": self.state, "impact": self.impact,
++            "machines": list(self.machines),
++            "functions_in_question": list(self.functions_in_question),
++            "withdrawal_reason": self.withdrawal_reason,
++        }
++
++
++@dataclass(frozen=True)
++class AdvisoryPass:
++    """Everything one look at the subscribed feeds established."""
++
++    feeds: tuple[FeedOutcome, ...] = ()
++    findings: tuple[AdvisoryFinding, ...] = ()
++    checks_skipped: tuple[str, ...] = field(default_factory=tuple)
++
++    @property
++    def degraded(self) -> tuple[FeedOutcome, ...]:
++        return tuple(f for f in self.feeds if f.is_degraded)
++
++    @property
++    def new(self) -> tuple[AdvisoryFinding, ...]:
++        return tuple(f for f in self.findings if f.state == "new")
++
++    @property
++    def withdrawn(self) -> tuple[AdvisoryFinding, ...]:
++        return tuple(f for f in self.findings if f.state == "withdrawn")
++
++    @property
++    def stop_use(self) -> tuple[AdvisoryFinding, ...]:
++        return tuple(f for f in self.findings if f.stops_use)
++
++    @property
++    def is_finding(self) -> bool:
++        """Anything that has not been reported before, or a retraction."""
++        return bool(self.new or self.withdrawn)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "feeds": [f.to_dict() for f in self.feeds],
++            "findings": [f.to_dict() for f in self.findings],
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        if not self.feeds:
++            return "no supplier feeds subscribed"
++        parts = []
++        if self.stop_use:
++            parts.append(
++                f"{len(self.stop_use)} STOP-USE advisory(ies) match this fleet")
++        if self.new:
++            parts.append(f"{len(self.new)} new")
++        if self.withdrawn:
++            parts.append(f"{len(self.withdrawn)} withdrawn")
++        if self.degraded:
++            parts.append(
++                f"{len(self.degraded)} feed(s) could not be checked")
++        return "; ".join(parts) if parts else (
++            f"{len(self.feeds)} feed(s) checked, nothing new")
++
++
++def _read_feed(
++    supplier_id: str, feed_path: str, key_path: str,
++) -> tuple[list[SignedAdvisory], FeedOutcome | None, list[str]]:
++    """Read and verify one feed, or explain why it could not be."""
++    path = Path(feed_path)
++    if not path.exists():
++        return [], FeedOutcome(
++            supplier_id=supplier_id, status="absent",
++            detail=f"{path} does not exist. The watch is blind to this supplier; "
++                   "that is not the same as this supplier having nothing to say."
++        ), []
++
++    try:
++        records = AdvisoryFeed(path).read()
++    except (PublishError, OSError) as exc:
++        return [], FeedOutcome(
++            supplier_id=supplier_id, status="unreadable",
++            detail=f"{path} could not be read: {exc}"), []
++
++    try:
++        key = VerifyingKey.from_file(key_path)
++    except (SigningKeyError, OSError) as exc:
++        return [], FeedOutcome(
++            supplier_id=supplier_id, status="unreadable", records=len(records),
++            detail=f"the public key for {supplier_id} could not be read: {exc}"), []
++
++    verdict = verify_feed(records, key, expect_supplier=supplier_id)
++    if not verdict.ok:
++        return [], FeedOutcome(
++            supplier_id=supplier_id, status="unverifiable", records=len(records),
++            problems=tuple(verdict.problems),
++            detail="this feed does not verify, so nothing in it was acted on. "
++                   "An advisory that cannot be authenticated must not drive a "
++                   "change to a safety system."), list(verdict.checks_skipped)
++
++    return list(records), None, list(verdict.checks_skipped)
++
++
++def check_feeds(
++    subscriptions: Sequence[FeedSubscription],
++    fleet: Fleet,
++    *,
++    previously_seen: dict[str, str] | None = None,
++    now: datetime | None = None,
++) -> AdvisoryPass:
++    """Look at every subscribed feed and say what is new for *this* fleet.
++
++    ``previously_seen`` maps advisory id to the state it was last reported in,
++    so that an advisory already known is carried as ``outstanding`` rather than
++    announced twice — and so that a withdrawal of something this fleet was told
++    about is announced exactly once.
++    """
++    seen = dict(previously_seen or {})
++    outcomes: list[FeedOutcome] = []
++    findings: list[AdvisoryFinding] = []
++    caveats: list[str] = []
++
++    for sub in subscriptions:
++        records, failure, notes = _read_feed(
++            sub.supplier_id, sub.feed, sub.public_key)
++        caveats.extend(notes)
++        if failure is not None:
++            outcomes.append(failure)
++            continue
++
++        standing: dict[str, SignedAdvisory] = {}
++        withdrawals: dict[str, str] = {}
++        for record in records:
++            if record.is_withdrawal:
++                standing.pop(record.withdraws, None)
++                withdrawals[record.withdraws] = record.withdrawal_reason
++            else:
++                standing[record.advisory_id] = record
++
++        new_ids: list[str] = []
++        withdrawn_ids: list[str] = []
++
++        for advisory_id, record in standing.items():
++            try:
++                advisory = record.component()
++            except AssuranceError as exc:
++                caveats.append(
++                    f"{sub.supplier_id} {advisory_id} could not be read as an "
++                    f"advisory ({exc}); it was skipped, and skipping is not "
++                    "clearing.")
++                continue
++            report = assess_impact(advisory, fleet)
++            if report.verdict == "clear":
++                # Not carried as a finding, and deliberately not silent either:
++                # the feed outcome still counts it, so "we checked and it does
++                # not touch you" is recorded rather than merely implied.
++                continue
++            state = "outstanding" if advisory_id in seen else "new"
++            if state == "new":
++                new_ids.append(advisory_id)
++            findings.append(_finding(
++                advisory, sub.supplier_id, state, report))
++
++        for advisory_id, reason in withdrawals.items():
++            if advisory_id not in seen:
++                # Withdrawn before this fleet was ever told. Nothing was acted
++                # on here, so announcing it would be noise.
++                continue
++            if seen.get(advisory_id) == "withdrawn":
++                continue
++            withdrawn_ids.append(advisory_id)
++            original = next((r for r in records
++                             if r.advisory_id == advisory_id
++                             and not r.is_withdrawal), None)
++            title = str(original.advisory.get("title", "")) if original else ""
++            findings.append(AdvisoryFinding(
++                advisory_id=advisory_id, supplier_id=sub.supplier_id,
++                severity=str(original.advisory.get("severity", "")) if original else "",
++                title=title, remedy="", reference="",
++                state="withdrawn", impact="withdrawn",
++                withdrawal_reason=reason,
++            ))
++
++        outcomes.append(FeedOutcome(
++            supplier_id=sub.supplier_id, status="verified", records=len(records),
++            new=tuple(new_ids), newly_withdrawn=tuple(withdrawn_ids),
++            detail=f"{len(standing)} advisory(ies) stand in this feed"))
++
++    if outcomes:
++        caveats.append(
++            "an advisory affects what is in the latest sealed manifest for each "
++            "machine. A machine that has changed since its last observation, or "
++            "was never enrolled, is absent from these findings — and absence "
++            "here is not evidence of safety."
++        )
++        caveats.append(
++            "this watch learns of an advisory when the subscribed feed file "
++            "changes. Whatever puts the supplier's feed in that file is outside "
++            "this system, and a sync that silently stopped looks exactly like a "
++            "supplier with nothing to report."
++        )
++
++    return AdvisoryPass(
++        feeds=tuple(outcomes),
++        findings=tuple(findings),
++        checks_skipped=tuple(dict.fromkeys(caveats)),
++    )
++
++
++def _finding(
++    advisory: ComponentAdvisory, supplier_id: str, state: str,
++    report: ImpactReport,
++) -> AdvisoryFinding:
++    machines = list(report.machines_affected)
++    functions: list[str] = []
++    for exposure in report.exposures:
++        for function in exposure.newly_in_question:
++            if function.function_id not in functions:
++                functions.append(function.function_id)
++    return AdvisoryFinding(
++        advisory_id=advisory.advisory_id,
++        supplier_id=supplier_id,
++        severity=advisory.severity.value,
++        title=advisory.title,
++        remedy=advisory.remedy,
++        reference=advisory.reference,
++        state=state,
++        impact=report.verdict,
++        machines=tuple(machines),
++        functions_in_question=tuple(functions),
++    )
+diff --git a/src/assurance/watch/cli.py b/src/assurance/watch/cli.py
+index 95ef6c3..9a29f05 100644
+--- a/src/assurance/watch/cli.py
++++ b/src/assurance/watch/cli.py
+@@ -69,6 +69,41 @@ def _cmd_run(args: argparse.Namespace) -> int:
+         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
+     else:
+         print(run.summary())
++
++        adv = run.advisories
++        if adv.feeds:
++            print(f"\n  suppliers: {adv.summary()}")
++            # Stop-use first and alone. An advisory the supplier marked stop_use
++            # against a machine that matched is not one line among forty; it is
++            # the reason this ran.
++            for finding in adv.stop_use:
++                print(f"\n  ** STOP USE ** {finding.advisory_id} "
++                      f"({finding.supplier_id}) — {finding.title}")
++                print(f"       machines: {', '.join(finding.machines)}")
++                if finding.remedy:
++                    print(f"       remedy:   {finding.remedy}")
++                if finding.reference:
++                    print(f"       source:   {finding.reference}")
++            for finding in adv.new:
++                if finding.stops_use:
++                    continue
++                print(f"    new        {finding.advisory_id:<16} "
++                      f"[{finding.impact}] {finding.title[:48]}")
++                if finding.machines:
++                    print(f"               {', '.join(finding.machines)}")
++            for finding in adv.withdrawn:
++                print(f"    WITHDRAWN  {finding.advisory_id:<16} "
++                      f"{finding.title[:48]}")
++                print(f"               reason: {finding.withdrawal_reason}")
++                print("               You were told about this one. If somebody "
++                      "changed a machine because")
++                print("               of it, that change now rests on a "
++                      "retracted advisory.")
++            for feed in adv.degraded:
++                print(f"    !! {feed.supplier_id}: {feed.status} — {feed.detail}")
++                for problem in feed.problems:
++                    print(f"       {problem}")
++
+         if run.sealed:
+             print(f"\n  sealed: {', '.join(run.sealed)}")
+         elif not args.dry_run:
+diff --git a/src/assurance/watch/config.py b/src/assurance/watch/config.py
+index f0bd62c..391e64c 100644
+--- a/src/assurance/watch/config.py
++++ b/src/assurance/watch/config.py
+@@ -70,12 +70,55 @@ class WatchTarget:
+         )
+ 
+ 
++@dataclass(frozen=True)
++class FeedSubscription:
++    """One supplier feed this watch reads, and the key it is checked against.
++
++    The key is a separate path on purpose. A feed that carries its own key
++    authenticates nothing: the forged feed will carry one too. This has to be a
++    file the operator put there, obtained from the supplier by a route the
++    advisories do not travel on.
++    """
++
++    supplier_id: str
++    feed: str
++    public_key: str
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.supplier_id.strip():
++            raise WatchError("a feed subscription needs a supplier_id.")
++        if not self.feed.strip() or not self.public_key.strip():
++            raise WatchError(
++                f"subscription to {self.supplier_id!r} needs both a feed and a "
++                "public_key. Without the key nothing can be verified, and an "
++                "unverified advisory must not drive a change to a safety system."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"supplier_id": self.supplier_id, "feed": self.feed,
++                "public_key": self.public_key, "notes": self.notes}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> FeedSubscription:
++        return cls(
++            supplier_id=str(d.get("supplier_id", "")),
++            feed=str(d.get("feed", "")),
++            public_key=str(d.get("public_key", "")),
++            notes=str(d.get("notes", "")),
++        )
++
++
+ @dataclass(frozen=True)
+ class WatchConfig:
+     """A standing instruction to keep looking."""
+ 
+     watch_id: str
+     targets: tuple[WatchTarget, ...]
++    #: Supplier feeds this watch reads on every pass. The machine targets answer
++    #: "did anything here change"; these answer "did the world change underneath
++    #: machines that did not", which is the half nobody notices in time.
++    feeds: tuple[FeedSubscription, ...] = ()
+     #: Who the watch runs as. Every record it seals is attributed here, and an
+     #: automated actor is marked as automation rather than dressed as a person.
+     operator: str = "assurance-watch"
+@@ -102,6 +145,13 @@ class WatchConfig:
+                 raise WatchError(
+                     f"watch {self.watch_id!r} lists serial {t.serial!r} twice.")
+             seen.add(t.serial)
++        suppliers: set[str] = set()
++        for f in self.feeds:
++            if f.supplier_id in suppliers:
++                raise WatchError(
++                    f"watch {self.watch_id!r} subscribes to supplier "
++                    f"{f.supplier_id!r} twice.")
++            suppliers.add(f.supplier_id)
+ 
+     @property
+     def targets_without_country(self) -> tuple[WatchTarget, ...]:
+@@ -119,6 +169,8 @@ class WatchConfig:
+             "notes": self.notes,
+             "targets": [t.to_dict() for t in
+                         sorted(self.targets, key=lambda t: t.serial)],
++            "feeds": [f.to_dict() for f in
++                      sorted(self.feeds, key=lambda f: f.supplier_id)],
+         }
+ 
+     def content_hash(self) -> str:
+@@ -132,6 +184,8 @@ class WatchConfig:
+         return cls(
+             watch_id=str(d["watch_id"]),
+             targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
++            feeds=tuple(FeedSubscription.from_dict(f)
++                        for f in (d.get("feeds") or ())),
+             operator=str(d.get("operator", "assurance-watch")),
+             organisation=str(d.get("organisation", "")),
+             max_age_hours=float(d.get("max_age_hours", 168.0)),
+@@ -162,4 +216,15 @@ class WatchConfig:
+                 )
+                 for t in config.targets
+             ),
++            feeds=tuple(
++                FeedSubscription(
++                    supplier_id=f.supplier_id,
++                    feed=str((base / f.feed).resolve())
++                    if not Path(f.feed).is_absolute() else f.feed,
++                    public_key=str((base / f.public_key).resolve())
++                    if not Path(f.public_key).is_absolute() else f.public_key,
++                    notes=f.notes,
++                )
++                for f in config.feeds
++            ),
+         )
+diff --git a/src/assurance/watch/runner.py b/src/assurance/watch/runner.py
+index 8cece84..da63772 100644
+--- a/src/assurance/watch/runner.py
++++ b/src/assurance/watch/runner.py
+@@ -47,6 +47,7 @@ from assurance.core.evidence import (
+ )
+ from assurance.core.identity import format_utc, parse_utc, utc_now
+ from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.registry import Fleet
+ from assurance.machinery.divergence import Severity, compare
+ from assurance.machinery.manifest import ManifestSource
+ from assurance.machinery.record import (
+@@ -60,6 +61,7 @@ from assurance.machinery.staleness import (
+     VerificationRecord,
+     assess_coverage,
+ )
++from assurance.watch.advisories import AdvisoryPass, check_feeds
+ from assurance.watch.config import WatchConfig, WatchTarget
+ 
+ __all__ = [
+@@ -133,6 +135,8 @@ class WatchRun:
+     outcomes: tuple[MachineOutcome, ...]
+     #: Machines whose most recent observation is older than the declared cadence.
+     stale_observations: tuple[str, ...]
++    #: What the subscribed supplier feeds said. Empty when none are subscribed.
++    advisories: AdvisoryPass = field(default_factory=AdvisoryPass)
+     previous_run_hash: str = ""
+     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
+     sealed: tuple[str, ...] = field(default_factory=tuple)
+@@ -151,10 +155,19 @@ class WatchRun:
+ 
+     @property
+     def verdict(self) -> str:
+-        """``quiet`` | ``findings`` | ``degraded``."""
+-        if self.uncollectable or self.stale_observations:
++        """``quiet`` | ``findings`` | ``degraded``.
++
++        A feed that could not be checked degrades the run exactly as a machine
++        that could not be collected does. Being blind to a supplier and hearing
++        nothing from one are different states, and the exit code has to say so:
++        otherwise a sync that quietly stopped reads as a quiet month.
++        """
++        if self.uncollectable or self.stale_observations \
++                or self.advisories.degraded:
+             return "degraded"
+-        return "findings" if self.findings else "quiet"
++        if self.findings or self.advisories.is_finding:
++            return "findings"
++        return "quiet"
+ 
+     def to_dict(self) -> dict[str, Any]:
+         return {
+@@ -168,6 +181,7 @@ class WatchRun:
+             "machines": len(self.outcomes),
+             "outcomes": [o.to_dict() for o in self.outcomes],
+             "stale_observations": list(self.stale_observations),
++            "advisories": self.advisories.to_dict(),
+             "sealed": list(self.sealed),
+             "checks_skipped": list(self.checks_skipped),
+         }
+@@ -255,6 +269,24 @@ def last_run(ledger: EvidenceLedger, watch_id: str) -> dict[str, Any] | None:
+     return None
+ 
+ 
++def _previously_reported(run: dict[str, Any] | None) -> dict[str, str]:
++    """Advisory id -> the state it was last reported in.
++
++    This is what makes "new" mean new. Without it every run announces every
++    standing advisory again, and a reader who is told the same four things every
++    Monday stops reading on the third Monday — at which point the watch has
++    become an expensive way to generate silence.
++    """
++    if not run:
++        return {}
++    body = run.get("advisories") or {}
++    return {
++        str(f.get("advisory_id", "")): str(f.get("state", ""))
++        for f in body.get("findings", ())
++        if f.get("advisory_id")
++    }
++
++
+ def _previous_state(run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+     if not run:
+         return {}
+@@ -398,6 +430,20 @@ def run_watch(
+         if last_seen is None or last_seen < cutoff:
+             stale.append(target.serial)
+ 
++    # The advisory pass runs after the machines, because it asks its questions
++    # against the manifests this run has just sealed. Asking first would report
++    # yesterday's fleet against today's advisories, which is the one combination
++    # guaranteed to be wrong.
++    advisories = AdvisoryPass()
++    if config.feeds:
++        advisories = check_feeds(
++            list(config.feeds),
++            Fleet.from_ledger(ledger),
++            previously_seen=_previously_reported(previous),
++            now=started,
++        )
++        caveats.extend(advisories.checks_skipped)
++
+     caveats.extend([
+         "a watch reports what its plans look for in the folders it was pointed "
+         "at. A machine not listed in the configuration is not watched, and its "
+@@ -419,6 +465,7 @@ def run_watch(
+         finished_at=format_utc(started if injected else utc_now()),
+         outcomes=tuple(outcomes),
+         stale_observations=tuple(sorted(stale)),
++        advisories=advisories,
+         previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
+         checks_skipped=tuple(dict.fromkeys(caveats)),
+         sealed=tuple(sealed),
+diff --git a/tests/test_assurance_watch_advisories.py b/tests/test_assurance_watch_advisories.py
+new file mode 100644
+index 0000000..0586fcb
+--- /dev/null
++++ b/tests/test_assurance_watch_advisories.py
+@@ -0,0 +1,293 @@
++"""Watching the suppliers: the half that wakes somebody up.
++
++The machine watch answers "did anything on my floor change". These tests are
++about the other half — the world changing underneath machines that did not —
++and specifically about the four ways a feature like this is usually built wrong:
++re-announcing everything until nobody reads it, forgetting what it already said,
++treating a broken sync as a quiet week, and never mentioning that an advisory
++somebody acted on has been retracted.
++"""
++
++from __future__ import annotations
++
++import json
++
++import pytest
++
++from assurance.attest.keys import SigningKey
++from assurance.core.identity import parse_utc
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import (
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++)
++from assurance.supplier import AdvisoryFeed, SupplierIdentity, publish, withdraw
++from assurance.watch.advisories import check_feeds
++from assurance.watch.config import FeedSubscription, WatchConfig, WatchError
++from assurance.watch.runner import run_watch
++
++from .test_assurance_collect import plan_dict, write_export
++
++IDENTITY = SupplierIdentity(supplier_id="controlco", legal_name="ControlCo GmbH",
++                            key_contact="the 2025 supply contract")
++
++
++def _advisory(advisory_id: str = "CTRL-2026-11", **over) -> ComponentAdvisory:
++    body: dict = {
++        "advisory_id": advisory_id,
++        "issued_by": "controlco",
++        "issued_at": parse_utc("2026-09-10T08:00:00Z"),
++        "title": "Authentication bypass in safety controller firmware",
++        "summary": "A crafted frame permits a safety parameter write.",
++        "severity": AdvisorySeverity.STOP_USE,
++        "reference": "https://controlco.example/psirt/CTRL-2026-11",
++        "remedy": "Update to 3.9.1.",
++        "affected": (AffectedArtefact(supplier="ControlCo",
++                                      name="Safety controller firmware",
++                                      versions=("3.8.2", "3.9.0")),),
++    }
++    body.update(over)
++    return ComponentAdvisory(**body)
++
++
++@pytest.fixture()
++def plant(tmp_path):
++    """Two enrolled machines, a supplier key, and a signed feed."""
++    plan = plan_dict()
++    plan["manufacturer"], plan["model"] = "Grimaldi", "AR-7"
++    for item in plan["items"]:
++        item["supplier"] = {
++            "ITM-ZONES": "ScanCo", "ITM-PARAMS": "RoboCo",
++            "ITM-PLC": "ControlCo", "ITM-FW": "ControlCo"}[item["item_id"]]
++    (tmp_path / "plans").mkdir()
++    (tmp_path / "plans" / "cell.json").write_text(json.dumps(plan))
++
++    for n, serial in enumerate(("CELL-0412", "CELL-0501")):
++        write_export(tmp_path / "exports" / serial,
++                     stamp="2026-09-14T06:02:11Z", operator="ci", seq=f"004{n}")
++
++    key = SigningKey.generate()
++    (tmp_path / "controlco.pub").write_text(key.verifying.pem())
++    feed = AdvisoryFeed(tmp_path / "feed.jsonl")
++
++    config = {
++        "watch_id": "plant-1",
++        "organisation": "Grimaldi Engineering S.r.l.",
++        "targets": [
++            {"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
++             "site": "Plant 1", "country": "IT"}
++            for s in ("CELL-0412", "CELL-0501")
++        ],
++        "feeds": [{"supplier_id": "controlco", "feed": "feed.jsonl",
++                   "public_key": "controlco.pub"}],
++    }
++    (tmp_path / "watch.json").write_text(json.dumps(config))
++    return {"dir": tmp_path, "key": key, "feed": feed,
++            "ledger": EvidenceLedger(tmp_path / "evidence.db")}
++
++
++def _run(plant, **kw):
++    return run_watch(WatchConfig.from_json(plant["dir"] / "watch.json"),
++                     plant["ledger"], **kw)
++
++
++# =====================================================================
++class TestConfig:
++    def test_a_subscription_without_a_key_is_refused(self):
++        with pytest.raises(WatchError, match="public_key"):
++            FeedSubscription(supplier_id="controlco", feed="f.jsonl",
++                             public_key="")
++
++    def test_a_supplier_cannot_be_subscribed_twice(self, plant):
++        body = json.loads((plant["dir"] / "watch.json").read_text())
++        body["feeds"].append(dict(body["feeds"][0]))
++        (plant["dir"] / "watch.json").write_text(json.dumps(body))
++        with pytest.raises(WatchError, match="twice"):
++            WatchConfig.from_json(plant["dir"] / "watch.json")
++
++    def test_feed_paths_resolve_against_the_config(self, plant):
++        config = WatchConfig.from_json(plant["dir"] / "watch.json")
++        assert config.feeds[0].feed == str(plant["dir"] / "feed.jsonl")
++        assert config.feeds[0].public_key == str(plant["dir"] / "controlco.pub")
++
++    def test_a_watch_with_no_feeds_still_works(self, plant):
++        body = json.loads((plant["dir"] / "watch.json").read_text())
++        body.pop("feeds")
++        (plant["dir"] / "watch.json").write_text(json.dumps(body))
++        run = _run(plant)
++        assert run.advisories.feeds == ()
++        assert run.verdict in ("quiet", "findings")
++
++
++# =====================================================================
++class TestTheFourJudgements:
++    def test_an_advisory_that_matches_a_still_machine_is_a_finding(self, plant):
++        _run(plant)  # enrol
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        run = _run(plant)
++
++        assert run.verdict == "findings"
++        assert len(run.advisories.new) == 1
++        finding = run.advisories.new[0]
++        assert finding.advisory_id == "CTRL-2026-11"
++        assert finding.stops_use
++        assert len(finding.machines) == 2
++
++    def test_the_same_advisory_is_not_announced_twice(self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        first = _run(plant)
++        assert first.advisories.new
++
++        second = _run(plant)
++        assert second.advisories.new == ()
++        assert second.verdict == "quiet"
++        # It has not been forgotten either: it is still carried, as outstanding.
++        assert [f.state for f in second.advisories.findings] == ["outstanding"]
++
++    def test_a_withdrawal_is_announced_once_and_says_why_it_matters(self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        _run(plant)
++        withdraw("CTRL-2026-11", "3.9.0 is not affected; the range was wrong",
++                 IDENTITY, plant["key"], plant["feed"])
++
++        run = _run(plant)
++        assert run.verdict == "findings"
++        assert len(run.advisories.withdrawn) == 1
++        assert "range was wrong" in run.advisories.withdrawn[0].withdrawal_reason
++
++        again = _run(plant)
++        assert again.advisories.withdrawn == ()
++        assert again.verdict == "quiet"
++
++    def test_a_withdrawal_nobody_was_told_about_is_not_announced(self, plant):
++        """Published and retracted between two runs. Nothing was acted on here,
++        so saying anything would be noise."""
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        withdraw("CTRL-2026-11", "wrong range", IDENTITY, plant["key"],
++                 plant["feed"])
++        run = _run(plant)
++        assert run.advisories.withdrawn == ()
++        assert run.advisories.new == ()
++
++    def test_a_missing_feed_is_degraded_not_quiet(self, plant):
++        """A sync that silently stopped must never read as a quiet week."""
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        _run(plant)
++        plant["feed"].path.unlink()
++
++        run = _run(plant)
++        assert run.verdict == "degraded"
++        assert len(run.advisories.degraded) == 1
++        assert run.advisories.degraded[0].status == "absent"
++        assert "not the same as" in run.advisories.degraded[0].detail
++
++    def test_a_feed_that_does_not_verify_is_degraded_and_acted_on_by_nothing(
++            self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        raw = json.loads(plant["feed"].path.read_text().splitlines()[0])
++        raw["advisory"]["remedy"] = "Flash http://evil.example/fw.bin."
++        plant["feed"].path.write_text(json.dumps(raw) + "\n")
++
++        run = _run(plant)
++        assert run.verdict == "degraded"
++        assert run.advisories.degraded[0].status == "unverifiable"
++        assert run.advisories.findings == ()
++
++    def test_the_wrong_key_is_degraded_rather_than_silently_clear(self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        (plant["dir"] / "controlco.pub").write_text(
++            SigningKey.generate().verifying.pem())
++        run = _run(plant)
++        assert run.verdict == "degraded"
++        assert run.advisories.findings == ()
++
++
++# =====================================================================
++class TestWhatItSaysAboutItself:
++    def test_an_advisory_that_touches_nothing_is_not_a_finding(self, plant):
++        _run(plant)
++        publish(_advisory("OTHER-1", affected=(AffectedArtefact(
++            supplier="SomebodyElse", name="Unrelated part",
++            versions=("1.0",)),)), IDENTITY, plant["key"], plant["feed"])
++        run = _run(plant)
++        assert run.advisories.findings == ()
++        assert run.advisories.feeds[0].status == "verified"
++        assert run.verdict == "quiet"
++
++    def test_the_run_names_the_sync_it_cannot_see(self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        run = _run(plant)
++        joined = " ".join(run.checks_skipped)
++        assert "a sync that silently stopped" in joined
++        assert "belongs to this supplier was not checked" in joined
++
++    def test_the_advisory_pass_is_sealed_into_the_ledger(self, plant):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        _run(plant)
++        runs = list(plant["ledger"].entries(kind="watch.run"))
++        body = runs[-1].evidence().body
++        assert body["advisories"]["findings"][0]["advisory_id"] == "CTRL-2026-11"
++
++    def test_check_feeds_alone_needs_no_ledger_writes(self, plant):
++        from assurance.fleet.registry import Fleet
++
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        config = WatchConfig.from_json(plant["dir"] / "watch.json")
++        result = check_feeds(list(config.feeds),
++                             Fleet.from_ledger(plant["ledger"]))
++        assert result.is_finding
++        assert result.stop_use
++
++
++# =====================================================================
++class TestCli:
++    def _cli(self, *argv) -> int:
++        from assurance.watch.cli import main
++
++        return main(list(argv))
++
++    def test_stop_use_is_printed_first_and_alone(self, plant, capsys):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        capsys.readouterr()
++        rc = self._cli("run", str(plant["dir"] / "watch.json"),
++                       "--ledger", str(plant["dir"] / "evidence.db"))
++        out = capsys.readouterr().out
++        assert rc == 1
++        assert "** STOP USE **" in out
++        assert "Update to 3.9.1." in out
++        assert "https://controlco.example" in out
++
++    def test_a_broken_sync_exits_two(self, plant, capsys):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        _run(plant)
++        plant["feed"].path.unlink()
++        capsys.readouterr()
++        rc = self._cli("run", str(plant["dir"] / "watch.json"),
++                       "--ledger", str(plant["dir"] / "evidence.db"))
++        assert rc == 2
++        assert "blind to this supplier" in capsys.readouterr().out
++
++    def test_the_withdrawal_warning_names_the_consequence(self, plant, capsys):
++        _run(plant)
++        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
++        _run(plant)
++        withdraw("CTRL-2026-11", "the range was wrong", IDENTITY,
++                 plant["key"], plant["feed"])
++        capsys.readouterr()
++        self._cli("run", str(plant["dir"] / "watch.json"),
++                  "--ledger", str(plant["dir"] / "evidence.db"))
++        out = capsys.readouterr().out
++        assert "WITHDRAWN" in out
++        assert "rests on a retracted advisory" in out
+-- 
+2.43.0
+
