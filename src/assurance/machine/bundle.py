@@ -32,7 +32,7 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import content_hash_of
+from assurance.core.identity import content_hash_of, format_utc
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.envelope import SafetyEnvelope
@@ -99,7 +99,7 @@ class EvidenceBundle:
 
 
 def _body(result: VerificationResult, envelope: SafetyEnvelope,
-          limits: LimitsTable | None) -> dict[str, Any]:
+          limits: LimitsTable | None, trace: Trace) -> dict[str, Any]:
     return {
         "schema": BUNDLE_SCHEMA,
         "product": envelope.product,
@@ -107,6 +107,10 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         "envelope_hash": result.envelope_hash,
         "trace_hash": result.trace_hash,
         "trace_id": result.trace_id,
+        # When the machine was in the state this verification describes. A run
+        # captured in February and filed in June is evidence about February, and
+        # staleness is computed against this, never against the filing time.
+        "trace_started_at": format_utc(trace.started_at),
         "provenance": result.provenance,
         "engine_version": result.engine_version,
         "limits_hash": limits.content_hash() if limits else "",
@@ -124,12 +128,19 @@ def build_bundle(
     limits: LimitsTable | None = None,
     ledger: EvidenceLedger | None = None,
     result: VerificationResult | None = None,
+    subject: str = "",
 ) -> EvidenceBundle:
     """Verify, seal, and optionally append to the ledger.
 
     ``actor`` is required and unattributed bundles are refused by
     :meth:`Evidence.seal`. A safety verification that nobody signed is a file,
     not evidence.
+
+    ``subject`` sets the ledger subject. It defaults to ``product@version``,
+    which is right for a manufacturer verifying a product line. Pass a machine
+    key (``MachineIdentity.key``) when the verification is about one specific
+    unit, so that :mod:`assurance.machinery.staleness` can find it alongside
+    that unit's intervention records.
     """
     res = result if result is not None else verify(envelope, trace, limits=limits)
 
@@ -145,7 +156,7 @@ def build_bundle(
 
     evidence = Evidence(
         kind=BUNDLE_KIND,
-        body=_body(res, envelope, limits),
+        body=_body(res, envelope, limits, trace),
         actor=actor,
         origin=Origin(
             system="assurance.machine",
@@ -165,7 +176,10 @@ def build_bundle(
     ).seal()
 
     if ledger is not None:
-        ledger.append(evidence, subject=f"{envelope.product}@{envelope.product_version}")
+        ledger.append(
+            evidence,
+            subject=subject or f"{envelope.product}@{envelope.product_version}",
+        )
 
     return EvidenceBundle(evidence=evidence, result=res, envelope=envelope)
 

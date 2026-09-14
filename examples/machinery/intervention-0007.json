@@ -1,0 +1,22 @@
+{
+  "intervention_id": "INT-0007",
+  "machine_key": "Grimaldi/AR-7#0412",
+  "item_id": "ITM-FW",
+  "kind": "update",
+  "occurred_at": "2026-03-14T09:30:00Z",
+  "performed_by": {
+    "identifier": "m.tech",
+    "role": "service technician",
+    "kind": "person"
+  },
+  "reason": "Vendor advisory CTRL-2026-11: watchdog timeout under bus load.",
+  "from_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "to_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "affects_functions": [
+    "SF-01",
+    "SF-02"
+  ],
+  "authorization": null,
+  "revalidation": null,
+  "notes": "Recorded from the service report. Nothing was re-run afterwards."
+}

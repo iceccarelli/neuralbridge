@@ -7,6 +7,7 @@ import sys
 _DOMAINS = {
     "art14": "assurance.security.art14.cli",
     "machine": "assurance.machine.cli",
+    "machinery": "assurance.machinery.cli",
 }
 
 

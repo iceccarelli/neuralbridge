@@ -22,6 +22,7 @@ from .. import __version__
 from .billing_routes import billing_router
 from .deps import auth_mode
 from .machine_routes import machine_router
+from .machinery_routes import machinery_router
 from .routes import free_router, public_router, router
 
 __all__ = ["create_app", "app"]
@@ -68,6 +69,11 @@ def create_app(**kwargs: Any) -> FastAPI:
                                                      "envelope. The separation "
                                                      "calculator and the bundle "
                                                      "re-checker need no account."},
+            {"name": "machinery", "description": "Machinery Regulation Annex III "
+                                                 "1.1.9: safety software identity, "
+                                                 "evidence of intervention, and which "
+                                                 "safety functions still have valid "
+                                                 "evidence."},
             {"name": "billing", "description": "Plans, checkout, and your own account."},
             {"name": "service", "description": "Liveness and configuration."},
         ],
@@ -86,6 +92,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(billing_router)
     application.include_router(free_router)
     application.include_router(machine_router)
+    application.include_router(machinery_router)
     application.include_router(router)
     return application
 

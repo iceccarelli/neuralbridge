@@ -1,0 +1,99 @@
+{
+  "manifest_id": "MAN-CE-2026",
+  "machine": {
+    "manufacturer": "Grimaldi",
+    "model": "AR-7",
+    "serial": "0412",
+    "year": "2026",
+    "site": "Plant 2, Line 4"
+  },
+  "source": "as_declared",
+  "taken_at": "2026-01-20T09:00:00Z",
+  "taken_by": {
+    "identifier": "a.integrator",
+    "role": "safety engineer",
+    "kind": "person"
+  },
+  "method": "configuration recorded at CE marking",
+  "notes": "The configuration this machine was placed on the market with.",
+  "items": [
+    {
+      "item_id": "ITM-FW",
+      "kind": "firmware",
+      "name": "Safety controller firmware",
+      "version": "3.8.2",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hash_source": "read_from_machine",
+      "supplier": "ControlCo",
+      "implements": [
+        "SF-01",
+        "SF-02"
+      ],
+      "modifiable_in_field": false,
+      "notes": "Read from the controller service port with the vendor tool."
+    },
+    {
+      "item_id": "ITM-ZONES",
+      "kind": "safety_configuration",
+      "name": "Safety scanner zone set",
+      "version": "r4",
+      "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hash_source": "read_from_machine",
+      "supplier": "ScanCo",
+      "implements": [
+        "SF-01"
+      ],
+      "modifiable_in_field": true,
+      "notes": "A technician with the scanner tool can change this on site."
+    },
+    {
+      "item_id": "ITM-ESTOP",
+      "kind": "safety_program",
+      "name": "E-stop logic block",
+      "version": "1.0",
+      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "hash_source": "read_from_machine",
+      "implements": [
+        "SF-03"
+      ],
+      "modifiable_in_field": false
+    },
+    {
+      "item_id": "ITM-HMI",
+      "kind": "library",
+      "name": "HMI runtime",
+      "version": "9.1",
+      "content_hash": "",
+      "hash_source": "declared",
+      "supplier": "PanelCo",
+      "implements": [],
+      "modifiable_in_field": false,
+      "notes": "Not hashed: the vendor ships no artefact we can read. A change to this would be invisible to every comparison."
+    }
+  ],
+  "functions": [
+    {
+      "function_id": "SF-01",
+      "description": "Protective stop on zone intrusion",
+      "required_performance": "PL d",
+      "verified_by": [
+        "ssm_separation",
+        "stop_characterisation"
+      ]
+    },
+    {
+      "function_id": "SF-02",
+      "description": "Speed limit in collaborative operation",
+      "required_performance": "PL d",
+      "verified_by": [
+        "speed_limit"
+      ]
+    },
+    {
+      "function_id": "SF-03",
+      "description": "Emergency stop, category 1",
+      "required_performance": "PL d",
+      "verified_by": []
+    }
+  ]
+}

@@ -10,13 +10,12 @@ from __future__ import annotations
 import pytest
 
 from neuralbridge.security.sandbox import (
-    IsolationLevel,
     POLICY_STRICT,
+    IsolationLevel,
     SandboxEngine,
     SandboxPolicy,
     SandboxResult,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────
 
