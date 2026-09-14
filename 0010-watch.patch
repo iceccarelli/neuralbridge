@@ -1,0 +1,1438 @@
+From 24160b376fbfdbdb8eb74c5fb69d8aff04618c4d Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 15:44:25 +0000
+Subject: [PATCH] assurance.watch: the component that runs when nobody is
+ looking
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WHY
+  Every other domain here is invoked by somebody who already suspects
+  something. Nothing in this package does anything between invocations, which
+  means nothing in it justifies a monthly price. A watch finds a change on the
+  day it happened rather than the day somebody remembered to look, and that is
+  the difference between a tool licence and a subscription.
+
+WHAT
+  src/assurance/watch/config.py  the standing instruction: these machines,
+                                  these plans, these folders, this cadence
+  src/assurance/watch/runner.py  one pass — collect, compare, seal only what
+                                  moved, report only what is new
+  src/assurance/watch/cli.py     run / status, with exit codes as the interface
+  deploy/assurance/WATCH.md      the four judgements and a real three weeks
+
+CUSTOMER VALUE
+  Week 2's export headers moved on every machine — new timestamp, new
+  operator, new sequence number, four items each — and the run reads QUIET.
+  Week 3 one protective zone was reshaped and the run names the item, the
+  safety function and the machine. A report that is silent when nothing
+  happened is the only kind anybody still reads in month six.
+
+RISK
+  Four decisions, because this is the surface where a wrong default turns into
+  a report nobody opens:
+
+  Seal only on change, but record every look. Forty identical manifests a week
+  would drown the real ones; a ledger with no record at all cannot tell "we
+  looked and it was the same" from "we never looked", and those are opposite
+  facts. Every run seals a lightweight observation; a manifest only when the
+  configuration actually moved.
+
+  New is not outstanding. A finding already reported is demoted, not repeated,
+  and does not make the run a finding.
+
+  Uncollectable is not unchanged. A missing export folder is an absence of
+  observation, not an observation of absence, and it exits 2, never 0.
+
+  Silence expires. A watch that stopped running looks exactly like a fleet that
+  stopped changing. max_age_hours turns that ambiguity into an alarm.
+
+  A run also never ends before it began: when the clock is injected the whole
+  run reads from it.
+
+ROLLBACK
+  git revert this commit. Outside assurance/watch it touches one CLI domain
+  and one ruff ignore.
+
+TESTS
+  596 passed (36 new), ruff clean. Asserted: a week where only the export
+  headers moved is quiet and seals no manifest but still records the look; a
+  real change is reported the week it happens with its item and its safety
+  function; a repeated finding is demoted; a removed export folder degrades the
+  run; and a machine nobody could collect goes stale rather than silent.
+
+SUCCESS CONDITION
+  One customer's Monday morning email is empty for three weeks running, and on
+  the fourth it names a serial number they had not been told about.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/WATCH.md       | 109 ++++++++
+ pyproject.toml                  |   1 +
+ src/assurance/cli.py            |   1 +
+ src/assurance/watch/__init__.py |  30 +++
+ src/assurance/watch/cli.py      | 121 +++++++++
+ src/assurance/watch/config.py   | 165 ++++++++++++
+ src/assurance/watch/runner.py   | 458 ++++++++++++++++++++++++++++++++
+ tests/test_assurance_watch.py   | 405 ++++++++++++++++++++++++++++
+ 8 files changed, 1290 insertions(+)
+ create mode 100644 deploy/assurance/WATCH.md
+ create mode 100644 src/assurance/watch/__init__.py
+ create mode 100644 src/assurance/watch/cli.py
+ create mode 100644 src/assurance/watch/config.py
+ create mode 100644 src/assurance/watch/runner.py
+ create mode 100644 tests/test_assurance_watch.py
+
+diff --git a/deploy/assurance/WATCH.md b/deploy/assurance/WATCH.md
+new file mode 100644
+index 0000000..23bad97
+--- /dev/null
++++ b/deploy/assurance/WATCH.md
+@@ -0,0 +1,109 @@
++# The watch
++
++Everything else here is invoked by somebody who already suspects something. This
++is the component that finds a change on the day it happened rather than the day
++somebody remembered to look — and it is what makes €1,290/month a subscription
++rather than a tool licence.
++
++```bash
++assurance watch run watch.json --ledger register.db
++assurance watch status watch.json --ledger register.db
++```
++
++```cron
++0 6 * * 1  assurance watch run watch.json --ledger register.db || mail -s "fleet" ...
++```
++
++**Exit codes are the interface.** `0` quiet, `1` something changed since the last
++pass, `2` the watch could not see part of the fleet. *"I could not look"* and
++*"nothing moved"* must never share an exit code.
++
++## Four judgements that decide whether anybody reads it
++
++**Seal only on change — but record every look.** A weekly watch over forty
++machines that sealed forty identical manifests would add two thousand records a
++year saying nothing, and the real changes would drown. But a ledger with *no*
++record cannot tell "we looked and it was the same" from "we never looked", and
++those are opposite facts. So every run seals one lightweight **observation**
++naming what was seen, and a full manifest only when the configuration moved.
++
++**New is not the same as outstanding.** A watch that reports the same stale
++function every week trains its reader to skim. Each run diffs against the last:
++
++```
++  [DRIFT] 0501  configuration moved 849a1dd1a879 → e3881c29e874: ITM-ZONES content_changed
++           still uncovered (reported before): SF-01, SF-02
++  [ok   ] 0412  unchanged at 492476c2676e
++```
++
++`NEWLY UNCOVERED` leads. `still uncovered (reported before)` is demoted. A
++function that came back is reported as `recovered`.
++
++**A machine that could not be collected is not unchanged.** A missing export
++folder is an absence of observation, not an observation of absence:
++
++```
++  [BLIND] 0501  could not be collected: ...
++           ! an absent export is not an unchanged machine.
++```
++
++**Silence expires.** A watch that stopped running looks exactly like a fleet that
++stopped changing, and the second is the comfortable reading. `max_age_hours`
++declares the cadence, and any machine whose last successful look is older becomes
++a finding in itself:
++
++```
++  NOT LOOKED AT RECENTLY ENOUGH: 0501
++  A watch that stopped running looks exactly like a fleet that stopped changing.
++```
++
++## A real three weeks
++
++```
++=== week 1 — first look ===
++  [NEW  ] 0412  first observation; configuration 492476c2676e, 4 item(s)
++           NEWLY UNCOVERED: SF-01, SF-02
++
++=== week 2 — only the export headers moved ===
++WATCH-PLANT2 — QUIET — every machine was looked at and nothing moved
++  [ok   ] 0412  unchanged at 492476c2676e
++  [ok   ] 0501  unchanged at 849a1dd1a879
++
++=== week 3 — somebody reshaped 0501's protective zone ===
++  [DRIFT] 0501  ITM-ZONES content_changed   affects SF-01
++  [ok   ] 0412  unchanged at 492476c2676e
++```
++
++Week 2's export headers moved on **both** machines — new timestamp, new operator,
++new sequence number, on four items each. Zero reported. That is the
++`assurance.collect` normalisation doing its job, and it is why week 3 gets read.
++
++## The configuration
++
++```json
++{
++  "watch_id": "WATCH-PLANT2",
++  "max_age_hours": 168,
++  "targets": [
++    {"serial": "0412", "plan": "plan.json", "root": "exports/0412",
++     "site": "Plant 2, Line 4", "country": "DE"}
++  ]
++}
++```
++
++Plan and root are resolved relative to the config file, because a watch outlives
++whatever directory it was first run from. A target missing a serial, plan or
++root is **refused** rather than skipped — a silently skipped target reads exactly
++like a machine that never changes.
++
++`country` is flagged on every machine that lacks it, because a unit with no
++territory recorded cannot be named in a CRA Article 14 filing's Member State
++list, and 03:00 on the day the clock starts is not when to find that out.
++
++## What it will not tell you
++
++A machine not listed in the configuration is not watched, and its silence means
++nothing. The configuration is compared against the last manifest **sealed** for
++that machine, so a change made and reverted between two runs leaves no trace.
++And the watch reports that verification evidence is in doubt after a
++safety-relevant drift — it cannot re-run the verification, and it says so.
+diff --git a/pyproject.toml b/pyproject.toml
+index 8fe5ff9..50b2ba7 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -121,6 +121,7 @@ ignore = [
+ "src/assurance/collect/cli.py" = ["T20"]
+ "src/assurance/report/cli.py" = ["T20"]
+ "src/assurance/bridge/cli.py" = ["T20"]
++"src/assurance/watch/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index 11a71cd..dd41653 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -12,6 +12,7 @@ _DOMAINS = {
+     "machinery": "assurance.machinery.cli",
+     "fleet": "assurance.fleet.cli",
+     "bridge": "assurance.bridge.cli",
++    "watch": "assurance.watch.cli",
+ }
+ 
+ 
+diff --git a/src/assurance/watch/__init__.py b/src/assurance/watch/__init__.py
+new file mode 100644
+index 0000000..19e1b11
+--- /dev/null
++++ b/src/assurance/watch/__init__.py
+@@ -0,0 +1,30 @@
++"""The watch: what runs when nobody is looking.
++
++    config   the standing instruction — these machines, this cadence
++    runner   one pass: collect, compare, seal only what moved, report what is new
++
++Everything else in this package is invoked by somebody who already suspects
++something. This is the component that finds a change on the day it happened.
++"""
++
++from assurance.watch.config import WatchConfig, WatchError, WatchTarget
++from assurance.watch.runner import (
++    OBSERVATION_KIND,
++    RUN_KIND,
++    MachineOutcome,
++    WatchRun,
++    last_run,
++    run_watch,
++)
++
++__all__ = [
++    "OBSERVATION_KIND",
++    "RUN_KIND",
++    "MachineOutcome",
++    "WatchConfig",
++    "WatchError",
++    "WatchRun",
++    "WatchTarget",
++    "last_run",
++    "run_watch",
++]
+diff --git a/src/assurance/watch/cli.py b/src/assurance/watch/cli.py
+new file mode 100644
+index 0000000..95ef6c3
+--- /dev/null
++++ b/src/assurance/watch/cli.py
+@@ -0,0 +1,121 @@
++"""``assurance watch`` — keep looking, and say only what is new.
++
++    run     one pass over every target: collect, compare, seal what moved
++    status  what the last run found, without looking again
++
++``run`` exits 0 when the fleet is quiet, 1 when something changed since the
++last pass, and 2 when the watch could not see part of the fleet — because
++"I could not look" and "nothing moved" must never share an exit code.
++
++Put it on a timer:
++
++    0 6 * * 1  assurance watch run watch.json --ledger register.db || mail -s ...
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++from assurance.core.errors import AssuranceError
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.watch.config import WatchConfig
++from assurance.watch.runner import last_run, run_watch
++
++__all__ = ["build_parser", "main"]
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance watch",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    r = verbs.add_parser("run", help="one pass over every target")
++    r.add_argument("config", type=Path)
++    r.add_argument("--ledger", required=True, type=Path)
++    r.add_argument("--dry-run", action="store_true",
++                   help="look and report without sealing anything")
++    r.add_argument("--out", type=Path, default=None)
++    r.add_argument("--json", action="store_true")
++
++    s = verbs.add_parser("status", help="what the last run found")
++    s.add_argument("config", type=Path)
++    s.add_argument("--ledger", required=True, type=Path)
++    s.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _exit_code(verdict: str) -> int:
++    return {"quiet": 0, "findings": 1, "degraded": 2}[verdict]
++
++
++def _cmd_run(args: argparse.Namespace) -> int:
++    config = WatchConfig.from_json(args.config)
++    ledger = EvidenceLedger(args.ledger)
++    run = run_watch(config, ledger, seal=not args.dry_run)
++
++    if args.out:
++        Path(args.out).write_text(
++            json.dumps(run.to_dict(), indent=2, sort_keys=True) + "\n",
++            encoding="utf-8")
++
++    if args.json:
++        print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
++    else:
++        print(run.summary())
++        if run.sealed:
++            print(f"\n  sealed: {', '.join(run.sealed)}")
++        elif not args.dry_run:
++            print("\n  nothing sealed beyond the observations: nothing moved.")
++        if args.dry_run:
++            print("\n  DRY RUN — nothing was sealed, so the next real run will "
++                  "report these same findings as new.")
++        if run.checks_skipped:
++            print("\n  not checked:")
++            for c in run.checks_skipped:
++                print(f"    - {c}")
++    return _exit_code(run.verdict)
++
++
++def _cmd_status(args: argparse.Namespace) -> int:
++    config = WatchConfig.from_json(args.config)
++    body = last_run(EvidenceLedger(args.ledger), config.watch_id)
++    if body is None:
++        print(f"{config.watch_id}: this watch has never run against this ledger.",
++              file=sys.stderr)
++        return 2
++    if args.json:
++        print(json.dumps(body, indent=2, sort_keys=True))
++    else:
++        print(f"{config.watch_id} — last run {body.get('started_at')} — "
++              f"{str(body.get('verdict', '')).upper()}")
++        for o in body.get("outcomes", []):
++            print(f"  {o.get('status', ''):<14} {o.get('serial', '')}  "
++                  f"{o.get('detail', '')}")
++        if body.get("stale_observations"):
++            print("  not looked at recently enough: "
++                  + ", ".join(body["stale_observations"]))
++    return _exit_code(str(body.get("verdict", "degraded")))
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {"run": _cmd_run, "status": _cmd_status}
++    try:
++        return handlers[args.command](args)
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/watch/config.py b/src/assurance/watch/config.py
+new file mode 100644
+index 0000000..f0bd62c
+--- /dev/null
++++ b/src/assurance/watch/config.py
+@@ -0,0 +1,165 @@
++"""What a watch looks at, and how often somebody expects it to.
++
++A watch is a standing declaration: these machines, these plans, these export
++folders, checked on this cadence. It is written once and then nobody touches it
++again, which is exactly why it has to carry the things that are easy to get
++wrong at three in the morning eighteen months later — which plan, which
++territory, and how stale an observation is allowed to get before its silence
++becomes a finding in itself.
++
++``max_age_hours`` is the field that makes a watch worth paying for. A watch that
++stopped running is indistinguishable from a fleet that stopped changing, and the
++second is the comfortable interpretation. Declaring the expected cadence turns
++that ambiguity into an alarm.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import content_hash_of
++
++__all__ = ["WatchConfig", "WatchError", "WatchTarget"]
++
++
++class WatchError(AssuranceError):
++    """A watch is malformed, or would watch nothing."""
++
++
++@dataclass(frozen=True)
++class WatchTarget:
++    """One machine, and where this run should look for it."""
++
++    serial: str
++    #: Path to the collection plan for this machine's type.
++    plan: str
++    #: Folder the machine's exports are dropped into.
++    root: str
++    site: str = ""
++    #: ISO 3166-1 alpha-2. Absent here means a filing under CRA Article 14
++    #: cannot name this unit's territory, so the watch reports it as a gap.
++    country: str = ""
++    year: str = ""
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.serial or not self.plan or not self.root:
++            raise WatchError(
++                "a watch target needs a serial, a plan and a root. A target "
++                "missing any of them would be silently skipped every run, which "
++                "reads exactly like a machine that never changes."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "serial": self.serial, "plan": self.plan, "root": self.root,
++            "site": self.site, "country": self.country, "year": self.year,
++            "notes": self.notes,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> WatchTarget:
++        return cls(
++            serial=str(d["serial"]), plan=str(d["plan"]), root=str(d["root"]),
++            site=str(d.get("site", "")), country=str(d.get("country", "")).upper(),
++            year=str(d.get("year", "")), notes=str(d.get("notes", "")),
++        )
++
++
++@dataclass(frozen=True)
++class WatchConfig:
++    """A standing instruction to keep looking."""
++
++    watch_id: str
++    targets: tuple[WatchTarget, ...]
++    #: Who the watch runs as. Every record it seals is attributed here, and an
++    #: automated actor is marked as automation rather than dressed as a person.
++    operator: str = "assurance-watch"
++    organisation: str = ""
++    #: How old an observation may be before the watch itself is a finding.
++    #: A watch nobody notices has stopped is worse than no watch, because the
++    #: absence of alarms gets read as the absence of change.
++    max_age_hours: float = 168.0
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.watch_id:
++            raise WatchError("a watch needs an id.")
++        if not self.targets:
++            raise WatchError(
++                f"watch {self.watch_id!r} has no targets: it would report "
++                "'nothing changed' forever, about nothing."
++            )
++        if self.max_age_hours <= 0:
++            raise WatchError("max_age_hours must be positive.")
++        seen: set[str] = set()
++        for t in self.targets:
++            if t.serial in seen:
++                raise WatchError(
++                    f"watch {self.watch_id!r} lists serial {t.serial!r} twice.")
++            seen.add(t.serial)
++
++    @property
++    def targets_without_country(self) -> tuple[WatchTarget, ...]:
++        return tuple(t for t in self.targets if not t.country)
++
++    def target(self, serial: str) -> WatchTarget | None:
++        return next((t for t in self.targets if t.serial == serial), None)
++
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "watch_id": self.watch_id,
++            "operator": self.operator,
++            "organisation": self.organisation,
++            "max_age_hours": self.max_age_hours,
++            "notes": self.notes,
++            "targets": [t.to_dict() for t in
++                        sorted(self.targets, key=lambda t: t.serial)],
++        }
++
++    def content_hash(self) -> str:
++        return content_hash_of(self.hashable_payload())
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> WatchConfig:
++        return cls(
++            watch_id=str(d["watch_id"]),
++            targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
++            operator=str(d.get("operator", "assurance-watch")),
++            organisation=str(d.get("organisation", "")),
++            max_age_hours=float(d.get("max_age_hours", 168.0)),
++            notes=str(d.get("notes", "")),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> WatchConfig:
++        p = Path(path)
++        config = cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
++        # Plan and root paths are written relative to the config, because a
++        # watch outlives whatever directory it was first run from.
++        base = p.parent
++        return WatchConfig(
++            watch_id=config.watch_id,
++            operator=config.operator,
++            organisation=config.organisation,
++            max_age_hours=config.max_age_hours,
++            notes=config.notes,
++            targets=tuple(
++                WatchTarget(
++                    serial=t.serial,
++                    plan=str((base / t.plan).resolve()) if not Path(t.plan).is_absolute()
++                    else t.plan,
++                    root=str((base / t.root).resolve()) if not Path(t.root).is_absolute()
++                    else t.root,
++                    site=t.site, country=t.country, year=t.year, notes=t.notes,
++                )
++                for t in config.targets
++            ),
++        )
+diff --git a/src/assurance/watch/runner.py b/src/assurance/watch/runner.py
+new file mode 100644
+index 0000000..8cece84
+--- /dev/null
++++ b/src/assurance/watch/runner.py
+@@ -0,0 +1,458 @@
++"""The thing that runs when nobody is looking.
++
++Everything else in this package is invoked by a person who already suspects
++something. A watch is what turns that into a subscription: it looks every week
++whether or not anybody suspects anything, and it is the only component that can
++find a change on the day it happened rather than the day somebody remembered.
++
++Four decisions make the difference between a watch that gets read and a watch
++that gets filtered to a folder.
++
++**Seal only on change, but record every look.** A weekly watch over forty
++machines that sealed forty identical manifests would add two thousand records a
++year saying nothing, and the real changes would drown. But a ledger with no
++record at all cannot tell "we looked and it was the same" from "we never looked"
++— and those are opposite facts. So every run seals one lightweight observation
++naming what was seen, and a full manifest only when the configuration actually
++moved.
++
++**New is not the same as outstanding.** A watch that reports the same stale
++function every week trains its reader to skim. Each run diffs against the last,
++and the findings it leads with are the ones that appeared since.
++
++**A machine that could not be collected is not unchanged.** A missing export
++folder is an absence of observation, not an observation of absence, and it is
++reported in its own column.
++
++**Silence expires.** A watch that stopped running looks exactly like a fleet
++that stopped changing, and the second is the comfortable reading.
++:attr:`WatchRun.stale_observations` names every machine whose last look is older
++than the cadence the watch declared.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from datetime import datetime, timedelta
++from typing import Any
++
++from assurance.collect.collector import CollectionError, collect
++from assurance.collect.plan import CollectionPlan
++from assurance.core.evidence import (
++    Actor,
++    Confidence,
++    Evidence,
++    Origin,
++    ValidationState,
++)
++from assurance.core.identity import format_utc, parse_utc, utc_now
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.divergence import Severity, compare
++from assurance.machinery.manifest import ManifestSource
++from assurance.machinery.record import (
++    interventions_from_ledger,
++    manifests_from_ledger,
++    record_divergence,
++    record_manifest,
++)
++from assurance.machinery.staleness import (
++    Coverage,
++    VerificationRecord,
++    assess_coverage,
++)
++from assurance.watch.config import WatchConfig, WatchTarget
++
++__all__ = [
++    "OBSERVATION_KIND",
++    "RUN_KIND",
++    "MachineOutcome",
++    "WatchRun",
++    "last_run",
++    "run_watch",
++]
++
++OBSERVATION_KIND = "watch.observation"
++RUN_KIND = "watch.run"
++RUN_SCHEMA = "assurance.watch.run/1"
++
++
++@dataclass(frozen=True)
++class MachineOutcome:
++    """What one look at one machine found."""
++
++    serial: str
++    machine_key: str
++    #: observed | changed | uncollectable | first_seen
++    status: str
++    configuration_hash: str = ""
++    previous_configuration: str = ""
++    #: Safety functions that stopped being current since the last run.
++    newly_uncovered: tuple[str, ...] = ()
++    #: Functions not current now and not current last time either.
++    still_uncovered: tuple[str, ...] = ()
++    #: Functions that came back since the last run.
++    recovered: tuple[str, ...] = ()
++    #: Set when the observed configuration differs from the last sealed one.
++    drift_severity: str = ""
++    drift_items: tuple[str, ...] = ()
++    affected_functions: tuple[str, ...] = ()
++    detail: str = ""
++    warnings: tuple[str, ...] = ()
++
++    @property
++    def is_finding(self) -> bool:
++        """Whether a person needs to look at this machine because of this run."""
++        return (self.status in ("changed", "uncollectable")
++                or bool(self.newly_uncovered))
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "serial": self.serial, "machine": self.machine_key,
++            "status": self.status,
++            "configuration_hash": self.configuration_hash,
++            "previous_configuration": self.previous_configuration,
++            "newly_uncovered": list(self.newly_uncovered),
++            "still_uncovered": list(self.still_uncovered),
++            "recovered": list(self.recovered),
++            "drift_severity": self.drift_severity,
++            "drift_items": list(self.drift_items),
++            "affected_functions": list(self.affected_functions),
++            "detail": self.detail,
++            "warnings": list(self.warnings),
++        }
++
++
++@dataclass(frozen=True)
++class WatchRun:
++    """One pass of the watch, and what it changed about what anybody knows."""
++
++    watch_id: str
++    config_hash: str
++    started_at: str
++    finished_at: str
++    outcomes: tuple[MachineOutcome, ...]
++    #: Machines whose most recent observation is older than the declared cadence.
++    stale_observations: tuple[str, ...]
++    previous_run_hash: str = ""
++    checks_skipped: tuple[str, ...] = field(default_factory=tuple)
++    sealed: tuple[str, ...] = field(default_factory=tuple)
++
++    @property
++    def findings(self) -> tuple[MachineOutcome, ...]:
++        return tuple(o for o in self.outcomes if o.is_finding)
++
++    @property
++    def changed(self) -> tuple[MachineOutcome, ...]:
++        return tuple(o for o in self.outcomes if o.status == "changed")
++
++    @property
++    def uncollectable(self) -> tuple[MachineOutcome, ...]:
++        return tuple(o for o in self.outcomes if o.status == "uncollectable")
++
++    @property
++    def verdict(self) -> str:
++        """``quiet`` | ``findings`` | ``degraded``."""
++        if self.uncollectable or self.stale_observations:
++            return "degraded"
++        return "findings" if self.findings else "quiet"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "schema": RUN_SCHEMA,
++            "watch_id": self.watch_id,
++            "config_hash": self.config_hash,
++            "started_at": self.started_at,
++            "finished_at": self.finished_at,
++            "previous_run_hash": self.previous_run_hash,
++            "verdict": self.verdict,
++            "machines": len(self.outcomes),
++            "outcomes": [o.to_dict() for o in self.outcomes],
++            "stale_observations": list(self.stale_observations),
++            "sealed": list(self.sealed),
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        head = {
++            "quiet": "QUIET — every machine was looked at and nothing moved",
++            "findings": "FINDINGS — something changed since the last run",
++            "degraded": "DEGRADED — the watch could not see part of the fleet",
++        }[self.verdict]
++        lines = [f"{self.watch_id} — {head}",
++                 f"  {self.started_at} → {self.finished_at}  "
++                 f"{len(self.outcomes)} machine(s)"]
++        mark = {"changed": "DRIFT", "uncollectable": "BLIND", "first_seen": "NEW  ",
++                "observed": "ok   "}
++        order = {"uncollectable": 0, "changed": 1, "first_seen": 2, "observed": 3}
++        for o in sorted(self.outcomes, key=lambda o: (order[o.status], o.serial)):
++            lines.append(f"  [{mark[o.status]}] {o.serial}  {o.detail}")
++            if o.newly_uncovered:
++                lines.append("           NEWLY UNCOVERED: "
++                             + ", ".join(o.newly_uncovered))
++            if o.recovered:
++                lines.append("           recovered: " + ", ".join(o.recovered))
++            if o.still_uncovered:
++                lines.append("           still uncovered (reported before): "
++                             + ", ".join(o.still_uncovered))
++            for w in o.warnings:
++                lines.append(f"           ! {w}")
++        if self.stale_observations:
++            lines.append("")
++            lines.append("  NOT LOOKED AT RECENTLY ENOUGH: "
++                         + ", ".join(self.stale_observations))
++            lines.append("  A watch that stopped running looks exactly like a fleet "
++                         "that stopped changing.")
++        return "\n".join(lines)
++
++
++def _seal_observation(
++    ledger: EvidenceLedger, target: WatchTarget, machine_key: str,
++    configuration_hash: str, status: str, actor: Actor, detail: str,
++) -> Evidence:
++    """Record that this machine was looked at, whatever the look found.
++
++    Sealed on every run including the quiet ones, because a gap in the record
++    would otherwise be ambiguous between "unchanged" and "never checked", and
++    only one of those is reassuring.
++    """
++    evidence = Evidence(
++        kind=OBSERVATION_KIND,
++        body={
++            "serial": target.serial,
++            "machine": machine_key,
++            "status": status,
++            "configuration_hash": configuration_hash,
++            "plan": target.plan,
++            "root": target.root,
++            "detail": detail,
++        },
++        actor=actor,
++        origin=Origin(system="assurance.watch", reference=machine_key,
++                      method=f"scheduled collection from {target.root}"),
++        validation_state=ValidationState.VERIFIED if status != "uncollectable"
++        else ValidationState.INDETERMINATE,
++        confidence=Confidence.HIGH if status != "uncollectable" else Confidence.NONE,
++        checks_skipped=(
++            ("the exports could not be collected, so this records an attempt and "
++             "not an observation. Nothing here says the machine is unchanged.",)
++            if status == "uncollectable" else
++            ("this records the configuration the plan looked for. Safety-relevant "
++             "software the plan does not name is outside it.",)
++        ),
++    ).seal()
++    ledger.append(evidence, subject=machine_key)
++    return evidence
++
++
++def last_run(ledger: EvidenceLedger, watch_id: str) -> dict[str, Any] | None:
++    """The most recent sealed run of this watch, or None."""
++    for entry in reversed(ledger.entries(kind=RUN_KIND)):
++        evidence = entry.evidence()
++        if not evidence.verify():
++            continue
++        if evidence.body.get("watch_id") == watch_id:
++            return evidence.body
++    return None
++
++
++def _previous_state(run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
++    if not run:
++        return {}
++    return {o["serial"]: o for o in run.get("outcomes", [])}
++
++
++def run_watch(
++    config: WatchConfig,
++    ledger: EvidenceLedger,
++    *,
++    now: datetime | None = None,
++    seal: bool = True,
++) -> WatchRun:
++    """Look at every target once, seal what changed, and report what is new."""
++    # When a caller supplies the clock, the whole run reads from it. Mixing an
++    # injected start with a wall-clock finish produces a run that appears to end
++    # before it began, which is the kind of detail an auditor notices first.
++    injected = now is not None
++    started = now or utc_now()
++    actor = Actor(identifier=config.operator, role="scheduled watch",
++                  kind="automation")
++    previous = last_run(ledger, config.watch_id)
++    prior = _previous_state(previous)
++
++    outcomes: list[MachineOutcome] = []
++    sealed: list[str] = []
++    caveats: list[str] = []
++
++    for target in config.targets:
++        machine_key = ""
++        try:
++            plan = CollectionPlan.from_json(target.plan)
++            machine_key = f"{plan.manufacturer}/{plan.model}#{target.serial}"
++            result = collect(
++                plan, target.root, serial=target.serial, taken_by=actor,
++                site=target.site, country=target.country, year=target.year,
++                source=ManifestSource.AS_FOUND, taken_at=started,
++            )
++        except (CollectionError, FileNotFoundError, OSError) as exc:
++            detail = f"could not be collected: {exc}"
++            outcomes.append(MachineOutcome(
++                serial=target.serial, machine_key=machine_key or target.serial,
++                status="uncollectable", detail=detail,
++                still_uncovered=tuple(
++                    prior.get(target.serial, {}).get("still_uncovered", ())
++                ),
++                warnings=("an absent export is not an unchanged machine.",),
++            ))
++            if seal and machine_key:
++                _seal_observation(ledger, target, machine_key, "", "uncollectable",
++                                  actor, detail)
++            continue
++
++        manifest = result.manifest
++        observed = manifest.configuration_hash()
++        history = manifests_from_ledger(ledger, machine_key)
++        baseline = history[-1] if history else None
++
++        status = "first_seen" if baseline is None else (
++            "changed" if baseline.configuration_hash() != observed else "observed")
++
++        drift_severity = ""
++        drift_items: tuple[str, ...] = ()
++        affected: tuple[str, ...] = ()
++        detail = ""
++
++        if status == "first_seen":
++            detail = (f"first observation; configuration {observed[:12]}, "
++                      f"{len(manifest.items)} item(s)")
++        elif status == "observed":
++            detail = f"unchanged at {observed[:12]}"
++        else:
++            divergence = compare(baseline, manifest)
++            worst = divergence.worst
++            drift_severity = worst.value if worst else ""
++            drift_items = tuple(c.item_id for c in divergence.changes)
++            affected = divergence.affected_functions
++            detail = (f"configuration moved {baseline.configuration_hash()[:12]} → "
++                      f"{observed[:12]}: " + ", ".join(
++                          f"{c.item_id} {c.kind.value}" for c in divergence.changes))
++            if seal:
++                record_divergence(ledger, divergence, actor=actor)
++                sealed.append(f"divergence {divergence.observed_id}")
++            if worst is Severity.SAFETY_RELEVANT:
++                caveats.append(
++                    f"{machine_key}: a safety-bearing item changed. Verification "
++                    "evidence for " + ", ".join(affected) + " is in doubt until it "
++                    "is re-run; the watch cannot re-run it.")
++
++        if seal and status in ("first_seen", "changed"):
++            record_manifest(ledger, manifest, actor=actor)
++            sealed.append(f"manifest {manifest.manifest_id}")
++
++        coverage = assess_coverage(
++            manifest,
++            VerificationRecord.from_ledger(ledger, subject=machine_key),
++            interventions_from_ledger(ledger, machine_key),
++        )
++        uncovered_now = {f.function_id for f in coverage.functions
++                         if f.coverage is not Coverage.CURRENT}
++        before = prior.get(target.serial, {})
++        uncovered_before = set(before.get("still_uncovered", [])) | set(
++            before.get("newly_uncovered", []))
++
++        newly = tuple(sorted(uncovered_now - uncovered_before))
++        still = tuple(sorted(uncovered_now & uncovered_before))
++        recovered = tuple(sorted(uncovered_before - uncovered_now))
++
++        warnings: list[str] = []
++        if not result.complete:
++            warnings.append(
++                f"{len(result.missing)} required item(s) were not found, so this "
++                "configuration hash covers less than the plan describes.")
++        if not target.country:
++            warnings.append(
++                "no country recorded: this unit cannot be named in a CRA Article "
++                "14 filing's Member State list.")
++
++        outcomes.append(MachineOutcome(
++            serial=target.serial, machine_key=machine_key, status=status,
++            configuration_hash=observed,
++            previous_configuration=baseline.configuration_hash() if baseline else "",
++            newly_uncovered=newly, still_uncovered=still, recovered=recovered,
++            drift_severity=drift_severity, drift_items=drift_items,
++            affected_functions=affected, detail=detail, warnings=tuple(warnings),
++        ))
++
++        if seal:
++            _seal_observation(ledger, target, machine_key, observed, status,
++                              actor, detail)
++
++    # A machine whose last look is older than the declared cadence.
++    cutoff = started - timedelta(hours=config.max_age_hours)
++    stale: list[str] = []
++    for target in config.targets:
++        seen_now = any(o.serial == target.serial and o.status != "uncollectable"
++                       for o in outcomes)
++        if seen_now:
++            continue
++        last_seen = _last_observation_at(ledger, target.serial)
++        if last_seen is None or last_seen < cutoff:
++            stale.append(target.serial)
++
++    caveats.extend([
++        "a watch reports what its plans look for in the folders it was pointed "
++        "at. A machine not listed in the configuration is not watched, and its "
++        "silence here means nothing.",
++        "the configuration is compared against the last manifest sealed for this "
++        "machine. A change made and reverted between two runs leaves no trace.",
++    ])
++    if config.targets_without_country:
++        caveats.append(
++            "target(s) " + ", ".join(t.serial for t in
++                                     config.targets_without_country)
++            + " have no country recorded; a CRA Article 14 filing cannot name "
++              "their territory.")
++
++    run = WatchRun(
++        watch_id=config.watch_id,
++        config_hash=config.content_hash(),
++        started_at=format_utc(started),
++        finished_at=format_utc(started if injected else utc_now()),
++        outcomes=tuple(outcomes),
++        stale_observations=tuple(sorted(stale)),
++        previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
++        checks_skipped=tuple(dict.fromkeys(caveats)),
++        sealed=tuple(sealed),
++    )
++
++    if seal:
++        evidence = Evidence(
++            kind=RUN_KIND,
++            body=run.to_dict(),
++            actor=actor,
++            origin=Origin(system="assurance.watch", reference=config.watch_id,
++                          method=f"scheduled run over {len(config.targets)} target(s)"),
++            validation_state=ValidationState.VERIFIED if run.verdict == "quiet"
++            else ValidationState.INDETERMINATE,
++            confidence=Confidence.HIGH if run.verdict != "degraded"
++            else Confidence.LOW,
++            checks_skipped=run.checks_skipped,
++        ).seal()
++        ledger.append(evidence, subject=f"watch/{config.watch_id}")
++
++    return run
++
++
++def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None:
++    for entry in reversed(ledger.entries(kind=OBSERVATION_KIND)):
++        evidence = entry.evidence()
++        if not evidence.verify():
++            continue
++        if evidence.body.get("serial") != serial:
++            continue
++        if evidence.body.get("status") == "uncollectable":
++            continue
++        try:
++            return parse_utc(entry.at)
++        except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
++            return None
++    return None
+diff --git a/tests/test_assurance_watch.py b/tests/test_assurance_watch.py
+new file mode 100644
+index 0000000..242ea07
+--- /dev/null
++++ b/tests/test_assurance_watch.py
+@@ -0,0 +1,405 @@
++"""Tests for the watch.
++
++The watch is the component that decides what a customer reads on a Monday
++morning, so the tests are about the four judgements that make it readable: a
++quiet week is quiet even though every export header moved, a change is reported
++the week it happened, a finding already reported is demoted rather than
++repeated, and "I could not look" never shares an outcome with "nothing moved".
++"""
++
++from __future__ import annotations
++
++import json
++import shutil
++from datetime import UTC, datetime, timedelta
++from pathlib import Path
++
++import pytest
++
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.record import manifests_from_ledger
++from assurance.watch.config import WatchConfig, WatchError, WatchTarget
++from assurance.watch.runner import (
++    OBSERVATION_KIND,
++    RUN_KIND,
++    last_run,
++    run_watch,
++)
++
++from .test_assurance_collect import plan_dict, write_export
++
++T0 = datetime(2026, 9, 14, 6, tzinfo=UTC)
++
++
++@pytest.fixture
++def work(tmp_path) -> Path:
++    (tmp_path / "plan.json").write_text(json.dumps(plan_dict()))
++    for serial in ("0412", "0501"):
++        write_export(tmp_path / serial, stamp="2026-09-14T06:00:00Z",
++                     operator="m.tech", seq="4181")
++    (tmp_path / "watch.json").write_text(json.dumps({
++        "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
++        "targets": [
++            {"serial": "0412", "plan": "plan.json", "root": "0412",
++             "site": "Plant 2", "country": "DE"},
++            {"serial": "0501", "plan": "plan.json", "root": "0501",
++             "site": "Plant 7", "country": "IT"},
++        ],
++    }))
++    return tmp_path
++
++
++@pytest.fixture
++def config(work) -> WatchConfig:
++    return WatchConfig.from_json(work / "watch.json")
++
++
++@pytest.fixture
++def ledger(work) -> EvidenceLedger:
++    return EvidenceLedger(work / "register.db")
++
++
++def reexport(work: Path, serial: str, **over) -> None:
++    shutil.rmtree(work / serial)
++    kw = {"stamp": "2026-09-21T06:12:41Z", "operator": "a.integrator",
++          "seq": "4199"}
++    kw.update(over)
++    write_export(work / serial, **kw)
++
++
++# =====================================================================
++# the judgement that decides whether anybody reads it
++# =====================================================================
++
++class TestQuietWeeks:
++    def test_a_first_look_reports_every_machine_as_new(self, config, ledger):
++        run = run_watch(config, ledger, now=T0)
++        assert {o.status for o in run.outcomes} == {"first_seen"}
++        assert run.verdict == "findings"
++
++    def test_a_week_where_only_the_export_headers_moved_is_quiet(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert run.verdict == "quiet"
++        assert {o.status for o in run.outcomes} == {"observed"}
++        assert run.changed == ()
++
++    def test_a_quiet_week_seals_no_manifest(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        before = len(manifests_from_ledger(ledger, "Grimaldi/AR-7#0412"))
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert len(manifests_from_ledger(ledger, "Grimaldi/AR-7#0412")) == before
++
++    def test_but_it_still_records_that_somebody_looked(self, work, config, ledger):
++        """A gap in the record must not read as 'unchanged'."""
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run_watch(config, ledger, now=T0 + timedelta(days=7))
++        observations = [e for e in ledger.entries(kind=OBSERVATION_KIND)
++                        if e.evidence().body["serial"] == "0412"]
++        assert len(observations) == 2
++        assert observations[-1].evidence().body["status"] == "observed"
++
++    def test_a_real_change_is_reported_the_week_it_happens(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501", radius=1200)
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert run.verdict == "findings"
++        assert [o.serial for o in run.changed] == ["0501"]
++
++    def test_and_names_the_item_and_the_safety_function(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0501", radius=1200)
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        changed = run.changed[0]
++        assert changed.drift_items == ("ITM-ZONES",)
++        assert changed.affected_functions == ("SF-01",)
++        assert changed.drift_severity == "safety_relevant"
++
++    def test_a_changed_machine_seals_a_new_manifest_and_a_divergence(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0501", radius=1200)
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert len(manifests_from_ledger(ledger, "Grimaldi/AR-7#0501")) == 2
++        assert any("divergence" in s for s in run.sealed)
++
++    def test_the_unchanged_machine_in_the_same_run_stays_quiet(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501", radius=1200)
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert next(o for o in run.outcomes if o.serial == "0412").status == \
++            "observed"
++
++
++# =====================================================================
++# new is not the same as outstanding
++# =====================================================================
++
++class TestNewVersusOutstanding:
++    def test_a_finding_is_new_the_first_time(self, config, ledger):
++        run = run_watch(config, ledger, now=T0)
++        assert set(run.outcomes[0].newly_uncovered) == {"SF-01", "SF-02"}
++        assert run.outcomes[0].still_uncovered == ()
++
++    def test_and_demoted_to_outstanding_afterwards(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert run.outcomes[0].newly_uncovered == ()
++        assert set(run.outcomes[0].still_uncovered) == {"SF-01", "SF-02"}
++
++    def test_an_outstanding_finding_does_not_make_the_run_a_finding(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert run.verdict == "quiet"
++        assert run.findings == ()
++
++    def test_a_recovered_function_is_reported_as_recovered(
++            self, work, config, ledger, tmp_path):
++        """Coverage returns when a verification lands between two runs."""
++        from assurance.core.evidence import Actor
++        from assurance.machine.bundle import build_bundle
++        from assurance.machine.envelope import (
++            FigureBasis,
++            SafetyEnvelope,
++            SensingUncertainty,
++            StopPerformance,
++            Workspace,
++        )
++        from assurance.machine.trace import (
++            OperatingMode,
++            Provenance,
++            Sample,
++            Trace,
++        )
++
++        run_watch(config, ledger, now=T0)
++        env = SafetyEnvelope(
++            envelope_id="E", product="AR-7", product_version="1",
++            workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
++            max_tcp_speed_mm_s={OperatingMode.SSM: 400.0},
++            stop=StopPerformance(0.1, 0.25, 120.0, 500.0,
++                                 FigureBasis("measured", "S1", "2026-01-01")),
++            uncertainty=SensingUncertainty(100.0, 50.0,
++                                           FigureBasis("measured", "C1")),
++            intrusion_distance_mm=850.0)
++        trace = Trace(trace_id="R", provenance=Provenance.FIELD, source_system="fw",
++                      started_at=T0 + timedelta(days=1), sample_rate_hz=50.0,
++                      samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
++                                           tcp_speed=400.0, mode=OperatingMode.SSM,
++                                           separation=2200.0) for i in range(10)))
++        build_bundle(env, trace, actor=Actor("eng", "engineer"), ledger=ledger,
++                     subject="Grimaldi/AR-7#0412")
++
++        reexport(work, "0412")
++        reexport(work, "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        o = next(x for x in run.outcomes if x.serial == "0412")
++        assert set(o.recovered) == {"SF-01", "SF-02"}
++
++
++# =====================================================================
++# could not look is not nothing moved
++# =====================================================================
++
++class TestBlindSpots:
++    def test_a_missing_export_folder_is_uncollectable_not_unchanged(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        shutil.rmtree(work / "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        o = next(x for x in run.outcomes if x.serial == "0501")
++        assert o.status == "uncollectable"
++        assert any("not an unchanged machine" in w for w in o.warnings)
++
++    def test_and_degrades_the_whole_run(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        shutil.rmtree(work / "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert run.verdict == "degraded"
++
++    def test_an_uncollectable_machine_seals_the_attempt(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        shutil.rmtree(work / "0501")
++        run_watch(config, ledger, now=T0 + timedelta(days=7))
++        last = [e for e in ledger.entries(kind=OBSERVATION_KIND)
++                if e.evidence().body["serial"] == "0501"][-1].evidence()
++        assert last.body["status"] == "uncollectable"
++        assert any("not an observation" in c for c in last.checks_skipped)
++
++    def test_silence_expires_when_a_machine_is_never_collectable(
++            self, work, tmp_path, ledger):
++        """A watch that stopped seeing a machine must say so, not go quiet."""
++        shutil.rmtree(tmp_path / "0501")
++        config = WatchConfig.from_json(tmp_path / "watch.json")
++        run = run_watch(config, ledger, now=T0)
++        assert "0501" in run.stale_observations
++        assert run.verdict == "degraded"
++
++    def test_a_machine_seen_this_run_is_never_stale(self, config, ledger):
++        run = run_watch(config, ledger, now=T0)
++        assert run.stale_observations == ()
++
++    def test_an_old_observation_goes_stale_after_the_declared_cadence(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        shutil.rmtree(work / "0501")
++        run = run_watch(config, ledger, now=T0 + timedelta(days=30))
++        assert "0501" in run.stale_observations
++
++
++# =====================================================================
++# the record it leaves
++# =====================================================================
++
++class TestTheRecord:
++    def test_the_chain_verifies_after_several_runs(self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0501", radius=1200)
++        run_watch(config, ledger, now=T0 + timedelta(days=7))
++        reexport(work, "0501", radius=1200, stamp="2026-09-28T05:00:00Z")
++        run_watch(config, ledger, now=T0 + timedelta(days=14))
++        ok, problems = ledger.verify_chain()
++        assert ok, problems
++
++    def test_a_run_is_sealed_and_readable_afterwards(self, config, ledger):
++        run_watch(config, ledger, now=T0)
++        body = last_run(ledger, "WATCH-PLANT2")
++        assert body is not None
++        assert body["watch_id"] == "WATCH-PLANT2"
++        assert len(body["outcomes"]) == 2
++
++    def test_a_run_never_ends_before_it_began(self, config, ledger):
++        run = run_watch(config, ledger, now=T0)
++        assert run.finished_at >= run.started_at
++
++    def test_dry_run_seals_nothing(self, config, ledger):
++        before = len(ledger)
++        run = run_watch(config, ledger, now=T0, seal=False)
++        assert len(ledger) == before
++        assert run.outcomes
++        assert last_run(ledger, "WATCH-PLANT2") is None
++
++    def test_the_run_record_carries_its_own_limits(self, config, ledger):
++        run = run_watch(config, ledger, now=T0)
++        assert any("not watched" in c for c in run.checks_skipped)
++        assert any("made and reverted between two runs" in c
++                   for c in run.checks_skipped)
++
++    def test_a_safety_relevant_drift_is_raised_in_the_run_caveats(
++            self, work, config, ledger):
++        run_watch(config, ledger, now=T0)
++        reexport(work, "0501", radius=1200)
++        run = run_watch(config, ledger, now=T0 + timedelta(days=7))
++        assert any("in doubt until it is re-run" in c for c in run.checks_skipped)
++
++    def test_a_target_without_a_country_is_flagged_on_every_machine(
++            self, tmp_path, ledger):
++        (tmp_path / "watch.json").write_text(json.dumps({
++            "watch_id": "W", "targets": [
++                {"serial": "0412", "plan": "plan.json", "root": "0412"}]}))
++        config = WatchConfig.from_json(tmp_path / "watch.json")
++        run = run_watch(config, ledger, now=T0)
++        assert any("Article 14" in w for w in run.outcomes[0].warnings)
++
++    def test_the_run_kind_is_queryable(self, config, ledger):
++        run_watch(config, ledger, now=T0)
++        assert len(ledger.entries(kind=RUN_KIND)) == 1
++
++
++# =====================================================================
++# configuration
++# =====================================================================
++
++class TestConfig:
++    def test_a_watch_with_no_targets_is_refused(self):
++        with pytest.raises(WatchError, match="no targets"):
++            WatchConfig(watch_id="W", targets=())
++
++    def test_a_duplicate_serial_is_refused(self):
++        t = WatchTarget(serial="1", plan="p", root="r")
++        with pytest.raises(WatchError, match="twice"):
++            WatchConfig(watch_id="W", targets=(t, t))
++
++    def test_a_target_missing_a_root_is_refused(self):
++        with pytest.raises(WatchError, match="needs a serial"):
++            WatchTarget(serial="1", plan="p", root="")
++
++    def test_a_non_positive_cadence_is_refused(self):
++        with pytest.raises(WatchError, match="max_age_hours"):
++            WatchConfig(watch_id="W", max_age_hours=0,
++                        targets=(WatchTarget("1", "p", "r"),))
++
++    def test_paths_are_resolved_relative_to_the_config(self, work):
++        config = WatchConfig.from_json(work / "watch.json")
++        assert Path(config.targets[0].plan).is_absolute()
++        assert Path(config.targets[0].plan).exists()
++
++    def test_the_config_hash_moves_when_a_target_moves(self, work):
++        a = WatchConfig.from_json(work / "watch.json")
++        b = WatchConfig(watch_id=a.watch_id, targets=a.targets[:1])
++        assert a.content_hash() != b.content_hash()
++
++
++# =====================================================================
++# CLI
++# =====================================================================
++
++class TestCli:
++    def test_exit_codes_separate_quiet_findings_and_blind(
++            self, work, ledger, capsys):
++        from assurance.watch.cli import main
++
++        argv = ["run", str(work / "watch.json"), "--ledger", str(ledger.path)]
++        assert main(argv) == 1          # first look: everything new
++        capsys.readouterr()
++
++        reexport(work, "0412")
++        reexport(work, "0501")
++        assert main(argv) == 0          # quiet
++        capsys.readouterr()
++
++        shutil.rmtree(work / "0501")
++        assert main(argv) == 2          # could not look
++        assert "BLIND" in capsys.readouterr().out
++
++    def test_status_reads_the_last_run_without_looking_again(
++            self, work, ledger, capsys):
++        from assurance.watch.cli import main
++
++        main(["run", str(work / "watch.json"), "--ledger", str(ledger.path)])
++        capsys.readouterr()
++        before = len(ledger)
++        code = main(["status", str(work / "watch.json"),
++                     "--ledger", str(ledger.path)])
++        assert code == 1
++        assert len(ledger) == before
++        assert "WATCH-PLANT2" in capsys.readouterr().out
++
++    def test_status_on_a_watch_that_never_ran_is_not_a_clean_exit(
++            self, work, ledger):
++        from assurance.watch.cli import main
++        assert main(["status", str(work / "watch.json"),
++                     "--ledger", str(ledger.path)]) == 2
++
++    def test_a_dry_run_says_it_changed_nothing(self, work, ledger, capsys):
++        from assurance.watch.cli import main
++        main(["run", str(work / "watch.json"), "--ledger", str(ledger.path),
++              "--dry-run"])
++        assert "DRY RUN" in capsys.readouterr().out
++        assert last_run(ledger, "WATCH-PLANT2") is None
+-- 
+2.43.0
+
