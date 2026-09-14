@@ -1,45 +1,168 @@
-# NeuralBridge
+# Industrial Autonomous Assurance
+
 <p align="center">
-  <strong>A lightweight integration hub for AI workflows and external systems.</strong>
+  <strong>Evidence infrastructure for machines whose software can hurt someone.</strong>
 </p>
 <p align="center">
   <a href="https://github.com/iceccarelli/neuralbridge/actions/workflows/ci.yml"><img src="https://github.com/iceccarelli/neuralbridge/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
 </p>
 
-**NeuralBridge** is an open-source backend and integration layer for connecting AI-driven workflows to external systems through a smaller, more manageable set of services. It is being shaped around a simple idea: make it easier to expose useful tools, connections, and system actions through a consistent API and gateway layer without pretending that every enterprise integration problem is already solved.
-At this stage, NeuralBridge should be understood as a **working foundation** rather than a finished universal middleware platform. The immediate focus is on building a reliable default path: a backend that starts cleanly, a dashboard that is understandable, a connection model that is easy to work with, an MCP-facing gateway, a basic audit trail, and a limited set of adapters that are truly supported.
+A robot cell is sold with a Declaration of Conformity, a risk assessment and a
+sign-off. Then somebody updates the safety controller firmware, reshapes a
+scanner zone, or patches a PLC project — and every one of those documents
+quietly stops describing the machine that is actually on the floor. Nothing in
+the plant says so. The paperwork still looks correct, which is worse than it
+looking wrong.
 
-## Table of Contents
+Two regulations turned that from a quality problem into a legal one:
 
-- [What NeuralBridge Currently Focuses On](#what-neuralbridge-currently-focuses-on)
-- [What NeuralBridge Is Not Claiming Yet](#what-neuralbridge-is-not-claiming-yet)
-- [Current Supported Scope](#current-supported-scope)
-- [Product Direction](#product-direction)
-- [Architecture Overview](#architecture-overview)
-- [Request Flow](#request-flow)
-- [Core Components](#core-components)
-- [Adapter Strategy](#adapter-strategy)
-  - [Supported-Now Philosophy](#supported-now-philosophy)
-  - [Experimental or Future Areas](#experimental-or-future-areas)
-- [Installation](#installation)
-  - [Backend Setup](#backend-setup)
-  - [Dashboard Setup](#dashboard-setup)
-- [Quick Start](#quick-start)
-  - [1. Start the Backend](#1-start-the-backend)
-  - [2. Start the Dashboard](#2-start-the-dashboard)
-  - [3. Verify the Core Path](#3-verify-the-core-path)
-- [Example Interaction Model](#example-interaction-model)
-- [Configuration Philosophy](#configuration-philosophy)
-- [Security and Audit Positioning](#security-and-audit-positioning)
-- [Project Structure](#project-structure)
-- [Testing](#testing)
-- [Dashboard Role](#dashboard-role)
-- [Roadmap Direction](#roadmap-direction)
-- [Contributing](#contributing)
-- [Security](#security)
-- [License](#license)
-- [Closing Note](#closing-note)
+| | |
+|---|---|
+| **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning naming the Member States where the product is available. Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
+| **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
+
+Neither is satisfiable from a spreadsheet. Both are satisfiable from a
+hash-chained record of what is on each machine, what was verified against it,
+and when.
+
+That record is what this builds.
+
+---
+
+## Start here: one command, inside your plant, nothing uploaded
+
+```bash
+pip install -e '.[assurance-attest]'
+python -m assurance kit init plant/            # a runnable kit
+python -m assurance kit check plant/kit.json   # what it would open. Reads only
+python -m assurance kit run  plant/kit.json --out plant/out
+```
+
+You get `plant/out/report.html`, `plant/out/evidence.db` and
+`plant/out/attestation-request.json`. **Your ledger, your disk.** No account, no
+API key, no upload, nothing to procure.
+
+The run arms a guard over the process's socket layer, refuses every outbound
+connection — including name resolution, because resolving a name has already
+told a DNS server something — records any attempt *with the line of code that
+made it*, and seals that record into your own ledger. "It does not phone home"
+stops being a promise in a datasheet and becomes a hash in a file you hold.
+
+`check` is the command to hand your IT department. It lists every file a run
+would open and touches nothing.
+
+See [`deploy/assurance/KIT.md`](deploy/assurance/KIT.md).
+
+## What it does, and where each claim is enforced
+
+Every row below maps to code that runs. Nothing is listed here that the
+software does not do.
+
+| | Command | What it establishes |
+|---|---|---|
+| **Collect** | `assurance collect run` | A sealed manifest of the safety-relevant software on one machine, with normalisation rules so a vendor export's own timestamps do not read as drift. `collect probe` finds those noisy rules for you before they produce a year of false alarms. |
+| **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
+| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine *as it is today*. |
+| **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
+| **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |
+| **Attest** | `assurance attest sign` | A signature over the ledger head by a key the ledger's operator does not hold. A hash chain detects editing; only this detects **deletion**. |
+| **File** | `assurance art14` | The Article 14 register: awareness records with the reasoning that defends them, both deadline clocks computed correctly, triage with the grounds cited. |
+
+## The findings this produces that nothing else does
+
+- **A label that contradicts its own artefact.** The firmware says 3.9.0, the
+  supplier's published hash for 3.9.0 does not match the bytes on the machine.
+  Neither "affected" nor "clear" — and reported as exactly that.
+- **A sign-off stranded by a change.** A February verification, a March firmware
+  update, and the named safety functions whose evidence stopped applying on the
+  day it happened.
+- **A Declaration of Conformity that stopped describing the machine.** Bound to
+  a configuration hash, so the moment it stops matching is a date, not an
+  argument. Free to check, forever, because the person who most needs it is the
+  buyer, not the seller.
+- **A ledger that was quietly shortened.** Caught by joining a counter-signature
+  back to the chain.
+
+## Three rules this codebase is built on
+
+1. **If it is not gated in code, it is not on the pricing page.** An advertised
+   entitlement that nothing enforces is the same defect as a fabricated
+   compliance field.
+2. **Every engine declares what it did *not* check**, and that list is carried
+   verbatim into the report. A report that hides its own limits is worth less
+   than no report, because somebody will rely on it.
+3. **Assurance tiers are computed from the weakest input, never passed in.** A
+   figure read from a datasheet cannot be presented later as a figure that was
+   measured.
+
+## Plans
+
+| | Price | Includes |
+|---|---|---|
+| **Validator** | free | Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, attestation verification, and the offline enrolment kit |
+| **Register** | €390 / month | The Article 14 register for one manufacturer: unlimited cases, both clocks, hash-chained ledger with verifiable export, 25 product families |
+| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, and counter-signed head attestation |
+
+Verification is free at every tier and always will be: the audience for a piece
+of evidence is a regulator, an insurer or a customer's customer, none of whom
+will ever hold an API key here. Evidence only a paying customer can check is
+worth nothing.
+
+`GET /v1/plans` returns the same table, generated from the entitlements the
+software enforces.
+
+## Run the API
+
+```bash
+pip install -e '.[assurance-api]'
+uvicorn assurance.api.service:app --port 8000
+# http://127.0.0.1:8000/docs
+```
+
+Deployment notes, including why `max_machines_running = 1` is load-bearing —
+the ledger is a hash chain and a second writer forks it — are in
+[`deploy/assurance/`](deploy/assurance/).
+
+## Repository layout
+
+```
+src/assurance/        the product
+  core/               identity, evidence objects, assurance tiers
+  evidence/           the tamper-evident ledger
+  attest/             signed head attestations
+  kit/                the offline enrolment kit and the airgap guard
+  collect/            vendor exports -> sealed manifest
+  machine/            ISO/TS 15066 and safety-envelope verification
+  machinery/          Machinery Regulation Annex III 1.1.9
+  fleet/              advisories, impact, Declarations of Conformity
+  security/art14/     the CRA Article 14 register
+  watch/              the component that runs unattended
+  report/             the page a non-engineer reads
+  bridge/             supplier advisory -> Article 14 intake
+  api/                FastAPI surface, billing, entitlements
+src/neuralbridge/     the integration platform this grew out of (below)
+src/dashboard/        Next.js dashboard
+```
+
+```bash
+pytest tests/ -q        # 671 tests
+ruff check src/
+```
+
+## Working on this repository
+
+One branch — `main` — and no tags. `./nb doctor` reports the state, `./nb
+rebuild` reconstructs `main` from the patch files at the root as real commits,
+and `./nb apply <patch>` applies one patch, runs the full suite, and hard-resets
+if anything fails. A red suite never leaves a half-applied tree.
+
+---
+
+# NeuralBridge — the platform underneath
+
+The assurance product is built on NeuralBridge, the integration layer in this
+same repository. What follows describes that layer on its own terms.
 
 ## What NeuralBridge Currently Focuses On
 The project is intentionally being narrowed so that users can clone it, understand it, run it, and extend it with confidence.

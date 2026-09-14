@@ -1,0 +1,152 @@
+name: Assurance — cold start
+
+# The product is what a customer runs on a machine that has never seen this
+# repository before. Unit tests do not prove that: they run inside a tree that
+# is already installed, configured and warm. This job starts from a bare
+# checkout, installs the way the README tells a stranger to install, and runs
+# the offline enrolment kit end to end — the exact command a plant engineer
+# types. If this is red, the thing being sold does not work, whatever the unit
+# tests say.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cold-start:
+    name: Offline kit, from a bare checkout (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install exactly as the README says
+        run: pip install -e '.[assurance-attest]'
+
+      - name: Every CLI domain answers
+        run: |
+          for domain in report collect art14 machine machinery fleet bridge watch attest kit; do
+            python -m assurance "$domain" --help > /dev/null || {
+              echo "::error::assurance $domain does not start"; exit 1; }
+          done
+
+      - name: Write a kit, fill it, and run it offline
+        run: |
+          set -euo pipefail
+          python -m assurance kit init plant
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, "tests")
+          from test_assurance_collect import write_export
+
+          base = pathlib.Path("plant")
+          for n, serial in enumerate(("CELL-0412", "CELL-0501")):
+              write_export(base / "exports" / serial,
+                           stamp="2026-09-14T06:02:11Z", operator="ci",
+                           seq=f"004{n}")
+          (base / "exports" / "CELL-0412" / "PUT-EXPORTS-HERE.txt").unlink()
+
+          plan = json.loads((base / "plans" / "cell.json").read_text())
+          plan["manufacturer"] = "CI"
+          plan["model"] = "AR-7"
+          (base / "plans" / "cell.json").write_text(json.dumps(plan))
+
+          cfg = json.loads((base / "kit.json").read_text())
+          cfg.update(organisation="CI Run", site="Runner", country="IT",
+                     prepared_by="ci@example.com")
+          cfg["machines"] = [
+              {"serial": s, "plan": "plans/cell.json", "exports": f"exports/{s}"}
+              for s in ("CELL-0412", "CELL-0501")
+          ]
+          (base / "kit.json").write_text(json.dumps(cfg))
+          PY
+          python -m assurance kit check plant/kit.json
+          python -m assurance kit run plant/kit.json --out plant/out
+
+      - name: The run produced evidence, and it says nothing left the machine
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+
+          run = json.loads(pathlib.Path("plant/out/run.json").read_text())
+          problems = []
+          if run["verdict"] != "complete":
+              problems.append(f"verdict is {run['verdict']}")
+          if not run["airgap"]["held"]:
+              problems.append(f"airgap did not hold: {run['airgap']['attempts']}")
+          if len(run["machines"]) != 2:
+              problems.append("wrong number of machines")
+          if not run["checks_skipped"]:
+              problems.append("the run claims no limits, which is never true")
+
+          html = pathlib.Path("plant/out/report.html").read_text()
+          for needle in ("socket module", "does not establish"):
+              if needle not in html:
+                  problems.append(f"report is missing {needle!r}")
+
+          request = json.loads(
+              pathlib.Path("plant/out/attestation-request.json").read_text())
+          if len(request["head_link_hash"]) != 64:
+              problems.append("the attestation request carries no head hash")
+
+          for p in problems:
+              print(f"::error::{p}")
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: The ledger verifies, and a rewind of it does not
+        run: |
+          python - <<'PY'
+          import sqlite3, sys
+          from assurance.attest import (AttestationLog, LedgerHead, SigningKey,
+                                        attest, verify_log)
+          from assurance.evidence.ledger import EvidenceLedger
+
+          path = "plant/out/evidence.db"
+          ledger = EvidenceLedger(path)
+          ok, problems = ledger.verify_chain()
+          if not ok:
+              for p in problems:
+                  print(f"::error::{p}")
+              sys.exit(1)
+
+          # A second party signs the head without ever seeing the records.
+          key = SigningKey.generate()
+          log = AttestationLog("attest.jsonl")
+          entries = ledger.entries()
+          signed = attest(LedgerHead(length=len(entries),
+                                     head_seq=entries[-1].seq,
+                                     head_link_hash=entries[-1].link_hash),
+                          key, log, note="ci")
+          if not verify_log([signed], key.verifying, ledger=ledger).ok:
+              print("::error::a fresh counter-signature does not verify")
+              sys.exit(1)
+
+          # Now shorten the ledger the way an administrator could.
+          db = sqlite3.connect(path)
+          db.execute("DELETE FROM chain WHERE seq > 1")
+          db.commit()
+          db.close()
+          rewound = EvidenceLedger(path)
+          if not rewound.verify_chain()[0]:
+              print("::error::the rewind broke the chain; this test proves nothing")
+              sys.exit(1)
+          verdict = verify_log([signed], key.verifying, ledger=rewound)
+          if verdict.ok:
+              print("::error::a rewound ledger was not detected. The central "
+                    "claim of this product is false.")
+              sys.exit(1)
+          print("rewind detected:", verdict.problems[0])
+          PY
