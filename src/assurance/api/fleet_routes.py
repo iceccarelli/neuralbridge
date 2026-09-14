@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
@@ -196,6 +197,33 @@ async def advisory_impact(
     advisory = _advisory(body.advisory)
     fleet = Fleet.from_ledger(register.ledger)
     return assess_impact(advisory, fleet).to_dict()
+
+
+@fleet_router.get(
+    "/report",
+    response_class=HTMLResponse,
+    summary="The whole fleet on one page a plant manager can read",
+)
+async def report(
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+    organisation: str = "",
+    prepared_by: str = "",
+) -> HTMLResponse:
+    """One self-contained HTML page: no network, no scripts, and it prints.
+
+    Every other output here is JSON or terminal text, which means the only
+    people who ever see it are engineers. This is the surface for everyone who
+    signs the cheque — and it carries every ``checks_skipped`` line verbatim,
+    because a report that hides its own limits is worth less than no report.
+    """
+    from assurance.report.render import ReportInput, render_report
+
+    return HTMLResponse(render_report(ReportInput(
+        ledger=register.ledger,
+        organisation=organisation[:200],
+        prepared_by=prepared_by[:200],
+    )))
 
 
 @fleet_router.post("/declare", summary="Bind a declaration to a configuration")
