@@ -130,6 +130,7 @@ ignore = [
 "src/assurance/watch/cli.py" = ["T20"]
 "src/assurance/attest/cli.py" = ["T20"]
 "src/assurance/kit/cli.py" = ["T20"]
+"src/assurance/supplier/cli.py" = ["T20"]
 "src/assurance/api/service.py" = ["T20"]
 
 [tool.pytest.ini_options]

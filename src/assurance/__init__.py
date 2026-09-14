@@ -14,6 +14,8 @@ Layout
                         rewind cannot reach, because the key left the building
 ``assurance.kit``       the offline enrolment kit: one command inside a plant,
                         with a guard over the socket layer proving it stayed there
+``assurance.supplier``  signed component advisories — the other half of the
+                        market, and the forged-advisory attack it closes
 ``assurance.security``  product-security obligations. ``security.art14`` is the
                         EU CRA reporting duty that has applied since 2026-09-11.
 
