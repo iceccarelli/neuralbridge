@@ -104,6 +104,11 @@ PLANS: dict[Tier, Plan] = {
             "Always free: a bundle only a paying customer can check is worth nothing",
             "POST /v1/machinery/diff — whether a machine still matches the "
             "configuration it was CE-marked with",
+            "POST /v1/fleet/advisory/check — whether one supplier advisory affects "
+            "one machine",
+            "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
+            "still describes the machine you were sold. Always free: the person who "
+            "most needs this is the buyer, not the seller",
             "20 validations and 20 separation calculations per day, per address",
         ),
     ),
@@ -161,6 +166,11 @@ PLANS: dict[Tier, Plan] = {
             "intervention record, and the machine passport",
             "Coverage: which declared safety functions still have valid evidence, and "
             "which intervention invalidated the rest",
+            "Fleet: every enrolled machine ranked worst-first, and a supplier "
+            "advisory fanned out to serial numbers and the safety functions it "
+            "puts in question",
+            "Declarations of Conformity bound to a configuration hash, so a "
+            "declaration can be shown to have stopped describing the machine",
             "Unlimited product families and cases",
             "Signed head attestation for the evidence ledger",
             "Priority response",
