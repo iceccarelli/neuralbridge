@@ -71,11 +71,54 @@ class WatchTarget:
 
 
 @dataclass(frozen=True)
+class FeedSubscription:
+    """One supplier feed this watch reads, and the key it is checked against.
+
+    The key is a separate path on purpose. A feed that carries its own key
+    authenticates nothing: the forged feed will carry one too. This has to be a
+    file the operator put there, obtained from the supplier by a route the
+    advisories do not travel on.
+    """
+
+    supplier_id: str
+    feed: str
+    public_key: str
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.supplier_id.strip():
+            raise WatchError("a feed subscription needs a supplier_id.")
+        if not self.feed.strip() or not self.public_key.strip():
+            raise WatchError(
+                f"subscription to {self.supplier_id!r} needs both a feed and a "
+                "public_key. Without the key nothing can be verified, and an "
+                "unverified advisory must not drive a change to a safety system."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"supplier_id": self.supplier_id, "feed": self.feed,
+                "public_key": self.public_key, "notes": self.notes}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> FeedSubscription:
+        return cls(
+            supplier_id=str(d.get("supplier_id", "")),
+            feed=str(d.get("feed", "")),
+            public_key=str(d.get("public_key", "")),
+            notes=str(d.get("notes", "")),
+        )
+
+
+@dataclass(frozen=True)
 class WatchConfig:
     """A standing instruction to keep looking."""
 
     watch_id: str
     targets: tuple[WatchTarget, ...]
+    #: Supplier feeds this watch reads on every pass. The machine targets answer
+    #: "did anything here change"; these answer "did the world change underneath
+    #: machines that did not", which is the half nobody notices in time.
+    feeds: tuple[FeedSubscription, ...] = ()
     #: Who the watch runs as. Every record it seals is attributed here, and an
     #: automated actor is marked as automation rather than dressed as a person.
     operator: str = "assurance-watch"
@@ -102,6 +145,13 @@ class WatchConfig:
                 raise WatchError(
                     f"watch {self.watch_id!r} lists serial {t.serial!r} twice.")
             seen.add(t.serial)
+        suppliers: set[str] = set()
+        for f in self.feeds:
+            if f.supplier_id in suppliers:
+                raise WatchError(
+                    f"watch {self.watch_id!r} subscribes to supplier "
+                    f"{f.supplier_id!r} twice.")
+            suppliers.add(f.supplier_id)
 
     @property
     def targets_without_country(self) -> tuple[WatchTarget, ...]:
@@ -119,6 +169,8 @@ class WatchConfig:
             "notes": self.notes,
             "targets": [t.to_dict() for t in
                         sorted(self.targets, key=lambda t: t.serial)],
+            "feeds": [f.to_dict() for f in
+                      sorted(self.feeds, key=lambda f: f.supplier_id)],
         }
 
     def content_hash(self) -> str:
@@ -132,6 +184,8 @@ class WatchConfig:
         return cls(
             watch_id=str(d["watch_id"]),
             targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
+            feeds=tuple(FeedSubscription.from_dict(f)
+                        for f in (d.get("feeds") or ())),
             operator=str(d.get("operator", "assurance-watch")),
             organisation=str(d.get("organisation", "")),
             max_age_hours=float(d.get("max_age_hours", 168.0)),
@@ -161,5 +215,16 @@ class WatchConfig:
                     site=t.site, country=t.country, year=t.year, notes=t.notes,
                 )
                 for t in config.targets
+            ),
+            feeds=tuple(
+                FeedSubscription(
+                    supplier_id=f.supplier_id,
+                    feed=str((base / f.feed).resolve())
+                    if not Path(f.feed).is_absolute() else f.feed,
+                    public_key=str((base / f.public_key).resolve())
+                    if not Path(f.public_key).is_absolute() else f.public_key,
+                    notes=f.notes,
+                )
+                for f in config.feeds
             ),
         )

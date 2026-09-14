@@ -7,7 +7,19 @@ Everything else in this package is invoked by somebody who already suspects
 something. This is the component that finds a change on the day it happened.
 """
 
-from assurance.watch.config import WatchConfig, WatchError, WatchTarget
+from assurance.watch.advisories import (
+    ADVISORY_KIND,
+    AdvisoryFinding,
+    AdvisoryPass,
+    FeedOutcome,
+    check_feeds,
+)
+from assurance.watch.config import (
+    FeedSubscription,
+    WatchConfig,
+    WatchError,
+    WatchTarget,
+)
 from assurance.watch.runner import (
     OBSERVATION_KIND,
     RUN_KIND,
@@ -18,6 +30,12 @@ from assurance.watch.runner import (
 )
 
 __all__ = [
+    "ADVISORY_KIND",
+    "AdvisoryFinding",
+    "AdvisoryPass",
+    "FeedOutcome",
+    "FeedSubscription",
+    "check_feeds",
     "OBSERVATION_KIND",
     "RUN_KIND",
     "MachineOutcome",

@@ -69,6 +69,41 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
     else:
         print(run.summary())
+
+        adv = run.advisories
+        if adv.feeds:
+            print(f"\n  suppliers: {adv.summary()}")
+            # Stop-use first and alone. An advisory the supplier marked stop_use
+            # against a machine that matched is not one line among forty; it is
+            # the reason this ran.
+            for finding in adv.stop_use:
+                print(f"\n  ** STOP USE ** {finding.advisory_id} "
+                      f"({finding.supplier_id}) — {finding.title}")
+                print(f"       machines: {', '.join(finding.machines)}")
+                if finding.remedy:
+                    print(f"       remedy:   {finding.remedy}")
+                if finding.reference:
+                    print(f"       source:   {finding.reference}")
+            for finding in adv.new:
+                if finding.stops_use:
+                    continue
+                print(f"    new        {finding.advisory_id:<16} "
+                      f"[{finding.impact}] {finding.title[:48]}")
+                if finding.machines:
+                    print(f"               {', '.join(finding.machines)}")
+            for finding in adv.withdrawn:
+                print(f"    WITHDRAWN  {finding.advisory_id:<16} "
+                      f"{finding.title[:48]}")
+                print(f"               reason: {finding.withdrawal_reason}")
+                print("               You were told about this one. If somebody "
+                      "changed a machine because")
+                print("               of it, that change now rests on a "
+                      "retracted advisory.")
+            for feed in adv.degraded:
+                print(f"    !! {feed.supplier_id}: {feed.status} — {feed.detail}")
+                for problem in feed.problems:
+                    print(f"       {problem}")
+
         if run.sealed:
             print(f"\n  sealed: {', '.join(run.sealed)}")
         elif not args.dry_run:

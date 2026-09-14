@@ -107,3 +107,114 @@ nothing. The configuration is compared against the last manifest **sealed** for
 that machine, so a change made and reverted between two runs leaves no trace.
 And the watch reports that verification evidence is in doubt after a
 safety-relevant drift — it cannot re-run the verification, and it says so.
+
+
+---
+
+# Watching the suppliers, not just the machines
+
+The machine watch answers *"did anything on my floor change"*. Add `feeds` to
+the configuration and it answers the other half — **did the world change
+underneath machines that did not** — which is the half that wakes somebody up.
+
+A supplier publishes a signed advisory at 09:00. Nothing on the plant floor
+moved. Every manifest still matches. The machine watch reports QUIET, correctly,
+and the integrator learns about it when their insurer asks.
+
+```json
+{
+  "watch_id": "plant-1",
+  "targets": [ ... ],
+  "feeds": [
+    {
+      "supplier_id": "controlco",
+      "feed": "feeds/controlco.jsonl",
+      "public_key": "keys/controlco.pub",
+      "notes": "fingerprint confirmed against the 2025 supply contract"
+    }
+  ]
+}
+```
+
+The key is a separate file on purpose. A feed that carries its own key
+authenticates nothing — the forged feed will carry one too. It has to be a file
+the operator put there, obtained from the supplier by a route the advisories do
+not travel on. See `SUPPLIER.md`.
+
+## What one run looks like when it matters
+
+```
+plant-1 — FINDINGS — something changed since the last run
+  [ok   ] CELL-0412  unchanged at e0045e0e1110
+  [ok   ] CELL-0501  unchanged at 6ec7ca52368e
+
+  suppliers: 1 STOP-USE advisory(ies) match this fleet; 1 new
+
+  ** STOP USE ** CTRL-2026-11 (controlco) — Authentication bypass in safety controller firmware
+       machines: Grimaldi/AR-7#CELL-0412, Grimaldi/AR-7#CELL-0501
+       remedy:   Update to 3.9.1.
+       source:   https://controlco.example/psirt/CTRL-2026-11
+```
+
+Both machines are *unchanged*. That is the point.
+
+## Four judgements, and each is a way this is normally built wrong
+
+**New is not the same as outstanding.** Run it again and the same advisory does
+not reappear as new — but it has not been forgotten either; it is carried as
+`outstanding` until the fleet stops matching it or the supplier withdraws it. A
+watch that re-reports everything trains the reader to skim by the third Monday,
+at which point it has become an expensive way to generate silence.
+
+**A feed that cannot be checked is DEGRADED, never quiet.**
+
+```
+  suppliers: 1 feed(s) could not be checked
+    !! controlco: absent — feeds/controlco.jsonl does not exist. The watch is
+       blind to this supplier; that is not the same as this supplier having
+       nothing to say.
+```
+
+Exit 2, not 0. This is where a signed-advisory mechanism most easily turns into
+decoration: the fetch fails, verification is skipped, the run reports quiet, and
+the absence of alarms is read as the absence of danger. A feed that fails
+signature verification is treated the same way, and **nothing in it is acted
+on** — an advisory that cannot be authenticated must not drive a change to a
+safety system.
+
+**A withdrawal is a finding.**
+
+```
+    WITHDRAWN  CTRL-2026-11     Authentication bypass in safety controller firm
+               reason: 3.9.0 is not affected; the range was wrong
+               You were told about this one. If somebody changed a machine
+               because of it, that change now rests on a retracted advisory.
+```
+
+Announced exactly once, and only to a fleet that was actually told about the
+original — an advisory published and retracted between two runs is not
+mentioned, because nothing here was acted on. Nothing else in this industry
+tells an integrator that the bulletin they acted on in March has been retracted.
+
+**Stop-use is said first and alone.** An advisory the supplier marked
+`stop_use` against a machine that matched is not one line among forty.
+
+## Order of operations
+
+The advisory pass runs **after** the machine pass, against the manifests this
+run has just sealed. Asking first would report yesterday's fleet against today's
+advisories, which is the one combination guaranteed to be wrong.
+
+## What it does not establish
+
+Carried in `checks_skipped` on every run:
+
+* That the key belongs to the supplier. Confirm the fingerprint by the route in
+  `SUPPLIER.md` — not by a link in an advisory.
+* That the advisories are correct, complete or timely. A supplier who has not
+  noticed a vulnerability publishes nothing, and no amount of signing detects
+  silence.
+* **That the feed on disk is current.** This watch learns of an advisory when
+  the subscribed file changes. Whatever puts the supplier's feed there is
+  outside this system, and a sync that silently stopped looks exactly like a
+  supplier with nothing to report. Make the thing that fetches it fail loudly.
