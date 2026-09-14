@@ -15,10 +15,18 @@ from assurance.watch.advisories import (
     check_feeds,
 )
 from assurance.watch.config import (
+    Article14Duty,
     FeedSubscription,
     WatchConfig,
     WatchError,
     WatchTarget,
+)
+from assurance.watch.filings import (
+    ARTICLE_14_WINDOW,
+    FILING_KIND,
+    FilingPrompt,
+    FilingsPass,
+    draft_filings,
 )
 from assurance.watch.runner import (
     OBSERVATION_KIND,
@@ -31,6 +39,12 @@ from assurance.watch.runner import (
 
 __all__ = [
     "ADVISORY_KIND",
+    "ARTICLE_14_WINDOW",
+    "Article14Duty",
+    "FILING_KIND",
+    "FilingPrompt",
+    "FilingsPass",
+    "draft_filings",
     "AdvisoryFinding",
     "AdvisoryPass",
     "FeedOutcome",

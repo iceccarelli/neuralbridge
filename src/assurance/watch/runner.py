@@ -63,6 +63,7 @@ from assurance.machinery.staleness import (
 )
 from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
+from assurance.watch.filings import FilingsPass, draft_filings
 
 __all__ = [
     "OBSERVATION_KIND",
@@ -137,6 +138,8 @@ class WatchRun:
     stale_observations: tuple[str, ...]
     #: What the subscribed supplier feeds said. Empty when none are subscribed.
     advisories: AdvisoryPass = field(default_factory=AdvisoryPass)
+    #: Article 14 intakes drafted, and signals still awaiting an assessment.
+    filings: FilingsPass = field(default_factory=FilingsPass)
     previous_run_hash: str = ""
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
     sealed: tuple[str, ...] = field(default_factory=tuple)
@@ -165,7 +168,7 @@ class WatchRun:
         if self.uncollectable or self.stale_observations \
                 or self.advisories.degraded:
             return "degraded"
-        if self.findings or self.advisories.is_finding:
+        if self.findings or self.advisories.is_finding or self.filings.is_finding:
             return "findings"
         return "quiet"
 
@@ -182,6 +185,7 @@ class WatchRun:
             "outcomes": [o.to_dict() for o in self.outcomes],
             "stale_observations": list(self.stale_observations),
             "advisories": self.advisories.to_dict(),
+            "filings": self.filings.to_dict(),
             "sealed": list(self.sealed),
             "checks_skipped": list(self.checks_skipped),
         }
@@ -267,6 +271,76 @@ def last_run(ledger: EvidenceLedger, watch_id: str) -> dict[str, Any] | None:
         if evidence.body.get("watch_id") == watch_id:
             return evidence.body
     return None
+
+
+def _advisories_by_id(
+    advisories: AdvisoryPass, config: WatchConfig,
+) -> list[tuple[Any, Any]]:
+    """Pair each finding with the advisory object behind it.
+
+    Re-read from the feeds rather than carried through the advisory pass,
+    because the pass deliberately hands on findings — what an advisory means for
+    this fleet — and an intake needs the advisory itself.
+    """
+    from assurance.attest.keys import VerifyingKey
+    from assurance.core.errors import AssuranceError
+    from assurance.supplier.publish import AdvisoryFeed, verify_feed
+
+    out: list[tuple[Any, Any]] = []
+    wanted = {f.advisory_id for f in advisories.findings}
+    for sub in config.feeds:
+        try:
+            records = AdvisoryFeed(sub.feed).read()
+            verdict = verify_feed(records, VerifyingKey.from_file(sub.public_key),
+                                  expect_supplier=sub.supplier_id)
+        except (AssuranceError, OSError):
+            # The advisory pass has already read this feed and reported exactly
+            # why it could not be used, and that report is what degrades the
+            # run. Reporting it a second time here would double every message.
+            continue
+        if not verdict.ok:
+            continue
+        for record in verdict.live:
+            if record.advisory_id in wanted:
+                finding = next(f for f in advisories.findings
+                               if f.advisory_id == record.advisory_id)
+                out.append((finding, record.component()))
+    return out
+
+
+def _previously_received(run: dict[str, Any] | None) -> dict[str, str]:
+    """Advisory id -> when this operator first received it.
+
+    Carried forward so that the interval from receipt is measured from the run
+    that first saw it. Resetting it every run would turn the one number a market
+    surveillance authority asks about into a number that is always small.
+    """
+    if not run:
+        return {}
+    body = run.get("filings") or {}
+    return {
+        str(p.get("advisory_id", "")): str(p.get("received_at", ""))
+        for p in body.get("prompts", ())
+        if p.get("advisory_id") and p.get("received_at")
+    }
+
+
+def _already_assessed(ledger: EvidenceLedger) -> frozenset[str]:
+    """Advisories for which an awareness record already exists.
+
+    Once a person has made the determination, the register is where the clock
+    lives, and repeating the prompt here would be a second system nagging about
+    a decision that has been taken.
+    """
+    out: set[str] = set()
+    for entry in ledger.entries(kind="art14.awareness"):
+        evidence = entry.evidence()
+        if not evidence.verify():
+            continue
+        case_id = str(entry.subject or "")
+        if case_id.startswith("CASE-"):
+            out.add(case_id[len("CASE-"):])
+    return frozenset(out)
 
 
 def _previously_reported(run: dict[str, Any] | None) -> dict[str, str]:
@@ -444,6 +518,22 @@ def run_watch(
         )
         caveats.extend(advisories.checks_skipped)
 
+    # Intakes are drafted from the advisories this run just established, and
+    # only when the operator has declared the duty. See watch.filings.
+    filings = FilingsPass()
+    if config.feeds:
+        filings = draft_filings(
+            advisories.findings,
+            {f.advisory_id: a for f, a in _advisories_by_id(advisories, config)},
+            Fleet.from_ledger(ledger),
+            as_manufacturer=config.article_14.as_manufacturer,
+            received_by=config.article_14.received_by,
+            now=started,
+            previously_received=_previously_received(previous),
+            assessed=_already_assessed(ledger),
+        )
+        caveats.extend(filings.checks_skipped)
+
     caveats.extend([
         "a watch reports what its plans look for in the folders it was pointed "
         "at. A machine not listed in the configuration is not watched, and its "
@@ -466,6 +556,7 @@ def run_watch(
         outcomes=tuple(outcomes),
         stale_observations=tuple(sorted(stale)),
         advisories=advisories,
+        filings=filings,
         previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
         checks_skipped=tuple(dict.fromkeys(caveats)),
         sealed=tuple(sealed),

@@ -99,6 +99,56 @@ def _cmd_run(args: argparse.Namespace) -> int:
                       "changed a machine because")
                 print("               of it, that change now rests on a "
                       "retracted advisory.")
+            fil = run.filings
+            if fil.enabled and fil.prompts:
+                print(f"\n  Article 14: {fil.summary()}")
+                # Escalations first. An advisory received and never assessed is
+                # the finding; the draft is merely the help.
+                for prompt in fil.escalating:
+                    print(f"\n  ** UNASSESSED {prompt.hours_since_receipt:.0f}h ** "
+                          f"{prompt.advisory_id}")
+                    print("       Art. 14(2)(a) runs 24 hours from AWARENESS, not "
+                          "from receipt — but")
+                    print("       C(2026) 5252 Annex §214 requires the initial "
+                          "assessment to be prompt,")
+                    print(f"       and this has been outstanding since "
+                          f"{prompt.received_at}.")
+                    if prompt.draft:
+                        print(f"       draft: {len(prompt.draft.machines)} machine(s), "
+                              f"Member States "
+                              f"{', '.join(prompt.draft.member_states) or '—'}")
+                for prompt in fil.drafted:
+                    draft = prompt.draft
+                    print(f"    drafted    {prompt.advisory_id}  "
+                          f"received {prompt.received_at}")
+                    if draft is not None:
+                        # Confirmed and unconfirmed are printed separately and
+                        # always. "0 machines" on its own reads as "you are
+                        # fine"; it usually means the supplier published no
+                        # hashes, which is the opposite of fine.
+                        print(f"               {len(draft.machines)} confirmed "
+                              f"affected (matched by hash)")
+                        if draft.machines_needing_a_human:
+                            print(f"               {len(draft.machines_needing_a_human)}"
+                                  " machine(s) in NEITHER column — a person has "
+                                  "to look:")
+                            for key in draft.machines_needing_a_human:
+                                print(f"                 {key}")
+                        print(f"               field 5: "
+                              f"{', '.join(draft.member_states) or 'CANNOT BE COMPLETED'}")
+                        if draft.machines_without_country:
+                            print(f"               !! "
+                                  f"{len(draft.machines_without_country)} affected "
+                                  "machine(s) have no country recorded")
+                        print("               still to be decided by a person:")
+                        for decision in draft.decisions_required:
+                            print(f"                 - {decision}")
+                for prompt in fil.unassessed:
+                    if prompt.is_escalating:
+                        continue
+                    print(f"    unassessed {prompt.advisory_id}  "
+                          f"{prompt.hours_since_receipt:.1f}h since receipt")
+
             for feed in adv.degraded:
                 print(f"    !! {feed.supplier_id}: {feed.status} — {feed.detail}")
                 for problem in feed.problems:

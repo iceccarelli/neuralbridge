@@ -218,3 +218,96 @@ Carried in `checks_skipped` on every run:
   the subscribed file changes. Whatever puts the supplier's feed there is
   outside this system, and a sync that silently stopped looks exactly like a
   supplier with nothing to report. Make the thing that fetches it fail loudly.
+
+
+---
+
+# From an advisory to a drafted filing
+
+The watch finds a stop-use advisory against a still machine at 09:00. Then what?
+Without this: somebody reads the output, opens a spreadsheet, and starts working
+out which Member States the affected serial numbers went to. That is field 5 of
+the ENISA form, and it is the reason a 24-hour deadline is hard rather than
+merely short.
+
+Declare the duty — **explicitly, because it is a legal question about your role
+and not something a fleet can imply**:
+
+```json
+{
+  "watch_id": "plant-1",
+  "targets": [ ... ],
+  "feeds":   [ ... ],
+  "article_14": {
+    "as_manufacturer": true,
+    "received_by": "product.security@yourcompany.example"
+  }
+}
+```
+
+Only a manufacturer placing the product on the Union market carries the Art. 14
+duty. While `article_14` is absent, **no intake is drafted at all** — the safe
+direction to be wrong in.
+
+## What a run produces
+
+```
+  Article 14: 1 newly drafted
+    drafted    CTRL-2026-11  received 2026-09-14T18:45:36Z
+               0 confirmed affected (matched by hash)
+               2 machine(s) in NEITHER column — a person has to look:
+                 Grimaldi/AR-7#CELL-0412
+                 Grimaldi/AR-7#CELL-0501
+               field 5: CANNOT BE COMPLETED
+               still to be decided by a person:
+                 - Whether this is an actively exploited vulnerability, a severe
+                   incident, or neither...
+                 - Whether and when awareness was established, per C(2026) 5252
+                   Annex §213...
+```
+
+Confirmed and unconfirmed are printed separately and always. **`0 machines` on
+its own reads as "you are fine"**, and here it means ControlCo published no
+artefact hashes, so nothing is confirmed and field 5 cannot be completed — the
+opposite of fine. This is the same argument `SUPPLIER.md` makes to suppliers,
+arriving from the other end.
+
+## What it refuses to decide
+
+Awareness is a determination; the track is a decision. **This makes neither.**
+
+Art. 14(2)(a) runs twenty-four hours from *awareness*, not from receipt. A tool
+that quietly equated the two would either start a manufacturer's clock early —
+inventing a filing obligation — or start it late, which is worse. C(2026) 5252
+Annex §213 defines awareness as a reasonable degree of certainty after an
+initial assessment; §214 requires that assessment to be prompt. The word
+"prompt" is doing the work, and only a person can be prompt.
+
+So `srp_prefill()` still omits `notification_type` and `awareness_datetime`, and
+always will.
+
+## What it watches instead: the signal nobody assessed
+
+```
+  ** UNASSESSED 39h ** CTRL-2026-11
+       Art. 14(2)(a) runs 24 hours from AWARENESS, not from receipt — but
+       C(2026) 5252 Annex §214 requires the initial assessment to be prompt,
+       and this has been outstanding since 2026-09-14T18:45:36Z.
+```
+
+Nobody is told they are late. They are told what is outstanding, how long it has
+been, and the provision that makes it matter. That is the alarm worth paying
+for: not "you have a deadline", which everybody knows, but *"this one has been
+sitting for thirty-nine hours and nobody has made the determination."*
+
+Deliberately not called a breach: the window runs from awareness and awareness
+has not been established, so nothing is late yet.
+
+**Receipt is measured from the run that first saw the advisory**, carried
+forward between runs. Resetting it each run would turn the one number a market
+surveillance authority asks about first — the interval from receipt to awareness
+— into a number that is always small.
+
+**The prompt stops when a person records awareness.** From that moment the
+register holds the clock, and a second system nagging about a decision already
+taken is how people learn to close the tab.
