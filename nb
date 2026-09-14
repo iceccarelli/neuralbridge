@@ -77,6 +77,8 @@ cmd_normalise() {
   local commit=0
   [ "${1:-}" = "--yes" ] && commit=1
 
+  _sync_self
+
   # Tracked modifications only. Untracked files do not stop a branch or a tag
   # from being deleted, and refusing because of them sends you off to stash
   # things that were never in the repository.
@@ -85,7 +87,10 @@ cmd_normalise() {
 
   head_ "fetching"
   git fetch origin --prune --prune-tags --tags
-  git checkout "$MAIN" 2>/dev/null || die "no local $MAIN branch. Run: git checkout -b $MAIN origin/$MAIN"
+  if [ "$(git rev-parse --abbrev-ref HEAD)" != "$MAIN" ]; then
+    git checkout "$MAIN" 2>/dev/null \
+      || die "cannot switch to $MAIN from $(git rev-parse --abbrev-ref HEAD). Run ./nb rebuild."
+  fi
   git pull --ff-only origin "$MAIN"
 
   local tags_local tags_remote br_local br_remote
@@ -123,11 +128,31 @@ cmd_normalise() {
   fi
 
   head_ "deleting"
-  local x
-  for x in $tags_local;  do git tag -d "$x" >/dev/null && say "  tag    (local)  $x"; done
-  for x in $tags_remote; do git push --quiet origin ":refs/tags/$x" && say "  tag    (REMOTE) $x"; done
-  for x in $br_local;    do git branch -D "$x" >/dev/null && say "  branch (local)  $x"; done
-  for x in $br_remote;   do git push --quiet origin --delete "$x" && say "  branch (REMOTE) $x"; done
+  local x failed=0
+  for x in $tags_local; do
+    git tag -d "$x" >/dev/null && say "  tag    (local)  $x" || { warn "could not delete local tag $x"; failed=1; }
+  done
+  for x in $br_local; do
+    git branch -D "$x" >/dev/null && say "  branch (local)  $x" || { warn "could not delete local branch $x"; failed=1; }
+  done
+  # Remote deletions need a credential. A push that fails must say so: a silent
+  # skip here leaves tags on the remote while the command reports success, and
+  # the next fetch quietly brings them all back.
+  for x in $tags_remote; do
+    if git push --quiet origin ":refs/tags/$x" 2>/dev/null; then
+      say "  tag    (REMOTE) $x"
+    else
+      warn "could not delete REMOTE tag $x — no push access to origin"; failed=1
+    fi
+  done
+  for x in $br_remote; do
+    if git push --quiet origin --delete "$x" 2>/dev/null; then
+      say "  branch (REMOTE) $x"
+    else
+      warn "could not delete REMOTE branch $x — no push access to origin"; failed=1
+    fi
+  done
+  [ "$failed" -eq 1 ] && warn "some deletions did not happen; the verdict below is the truth"
   git remote set-head origin "$MAIN" >/dev/null 2>&1 || true
   cmd_lock
   cmd_doctor
@@ -143,6 +168,20 @@ cmd_lock() {
   git config fetch.prune true
   git config fetch.pruneTags true
   ok "git will not create a branch or push a tag behind your back"
+}
+
+# ------------------------------------------------------------ self-sync ----
+# This script is tracked, and a newer copy gets dropped in by hand constantly.
+# Left uncommitted it counts as "tracked files are modified" and blocks every
+# other command, which is a trap with no upside: commit it and move on.
+_sync_self() {
+  local me
+  me=$(basename "$0")
+  git ls-files --error-unmatch -- "$me" >/dev/null 2>&1 || return 0
+  git diff --quiet -- "$me" && return 0
+  git add -- "$me"
+  git commit -q -m "$me: refresh the repository script" -- "$me"
+  ok "committed the newer $me you dropped in"
 }
 
 # --------------------------------------------------------------- rebuild ----
@@ -182,8 +221,11 @@ cmd_rebuild() {
 
   head_ "resetting $MAIN to origin/$MAIN"
   git fetch origin --prune
-  git checkout "$MAIN" 2>/dev/null || git checkout -b "$MAIN" "origin/$MAIN"
-  git reset --hard "origin/$MAIN"
+  # -B creates the branch or moves it; -f discards local modifications, which is
+  # what rebuild is for and why the tarball above exists. The previous version
+  # tried `checkout || checkout -b` and died on "a branch named main already
+  # exists" whenever the tree was dirty — two failures wearing one message.
+  git checkout -f -B "$MAIN" "origin/$MAIN"
   if ! cmp -s "$self_copy" "$0"; then
     cp "$self_copy" "$0"
     chmod +x "$0"
@@ -298,6 +340,7 @@ cmd_verify() {
 
 # ------------------------------------------------------------------ ship ----
 cmd_ship() {
+  _sync_self
   [ "$(git rev-parse --abbrev-ref HEAD)" = "$MAIN" ] || die "not on $MAIN"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked files are modified"
   head_ "pushing $MAIN"
