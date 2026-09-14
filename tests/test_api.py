@@ -87,26 +87,24 @@ class TestComplianceEndpoints:
 
     def test_compliance_status(self, api_client: TestClient):
         response = api_client.get("/api/v1/compliance/status")
-        assert response.status_code == 200
-        data = response.json()
-        assert "overall_status" in data
-        assert "cra_deadline" in data
-        assert data["cra_deadline"] == "2026-09-11"
+        # Withdrawn in patch 002. These endpoints returned hardcoded literals:
+        # a readiness score computed from its own dict of the word "compliant",
+        # and a CRA report asserting vulnerabilities had been assessed and
+        # mitigated without consulting any. They now answer 410 and name the
+        # register that does the real work.
+        assert response.status_code == 410
+        detail = response.json()["detail"]
+        assert detail["error"] == "withdrawn"
+        assert "art14" in detail["use_instead"]["service"]
 
     def test_cra_report(self, api_client: TestClient):
         response = api_client.get("/api/v1/compliance/cra-report")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["report_type"] == "CRA Vulnerability Report"
+        assert response.status_code == 410
 
     def test_sbom_generation(self, api_client: TestClient):
         response = api_client.get("/api/v1/compliance/sbom")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["bomFormat"] == "CycloneDX"
+        assert response.status_code == 410
 
     def test_gdpr_register(self, api_client: TestClient):
         response = api_client.get("/api/v1/compliance/gdpr")
-        assert response.status_code == 200
-        data = response.json()
-        assert "gdpr_article_30_register" in data
+        assert response.status_code == 410
