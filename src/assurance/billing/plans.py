@@ -41,7 +41,8 @@ class Plan:
     cases_per_day: int | None = None
     #: May export a verifiable evidence bundle.
     export: bool = False
-    #: May request a signed head attestation.
+    #: May have the service counter-sign the head of their own ledger. The
+    #: verification side is deliberately outside this gate: see attest_routes.
     signed_attestation: bool = False
     #: May verify a machine trace against a declared safety envelope and seal
     #: the resulting evidence bundle. The separation calculator and the bundle
@@ -109,6 +110,9 @@ PLANS: dict[Tier, Plan] = {
             "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
             "still describes the machine you were sold. Always free: the person who "
             "most needs this is the buyer, not the seller",
+            "POST /v1/ledger/attest/verify and GET /v1/ledger/attest/key — check "
+            "anybody's signed head attestations. Always free: the audience for an "
+            "attestation is a regulator or an insurer, not an account holder",
             "20 validations and 20 separation calculations per day, per address",
         ),
     ),
@@ -172,7 +176,10 @@ PLANS: dict[Tier, Plan] = {
             "Declarations of Conformity bound to a configuration hash, so a "
             "declaration can be shown to have stopped describing the machine",
             "Unlimited product families and cases",
-            "Signed head attestation for the evidence ledger",
+            "Counter-signed head attestation: POST /v1/ledger/attest signs the "
+            "head of your ledger with a key you do not hold, so a rewind "
+            "contradicts a signed statement. Your ledger is never uploaded — "
+            "we sign three numbers and never see a record",
             "Priority response",
         ),
     ),

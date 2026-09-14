@@ -25,6 +25,9 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
   ASSURANCE_PORT = "8080"
   ASSURANCE_LEDGER = "/data/art14-register.db"
   ASSURANCE_ACCOUNTS = "/data/accounts.db"
+  # One attestation log per account. On the volume: it is the one
+  # artefact in this system that a ledger rewind cannot reach.
+  ASSURANCE_ATTEST_LOGS = "/data/attestations"
   ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
 
 [[mounts]]

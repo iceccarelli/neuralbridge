@@ -21,6 +21,10 @@ Configuration, all by environment variable:
 ``ASSURANCE_API_KEYS``  comma-separated operator keys; full access, no quota
 ``ASSURANCE_ALLOW_UNAUTHENTICATED``  ``1`` to run open for local evaluation
 ``ASSURANCE_PUBLIC_URL`` base URL used in checkout redirects
+``ASSURANCE_ATTEST_KEY_PEM``  the Ed25519 key the service counter-signs with
+``ASSURANCE_ATTEST_KEY``   a path to that key instead
+``ASSURANCE_ATTEST_PASSPHRASE``  passphrase for it, if encrypted
+``ASSURANCE_ATTEST_LOGS``  directory holding one attestation log per account
 ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
 """
 
@@ -40,6 +44,7 @@ __all__ = [
     "get_register",
     "get_accounts",
     "current_principal",
+    "require_attestation",
     "require_machine",
     "require_register",
     "spend",
@@ -239,6 +244,46 @@ async def require_machine(
     return principal
 
 
+async def require_attestation(
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The door to the counter-signature.
+
+    This gate exists because the Cell plan already said "signed head
+    attestation for the evidence ledger" while nothing in the codebase signed
+    anything. An entitlement that is advertised and not enforced is the same
+    defect as a compliance field that is fabricated: the pricing page makes a
+    claim the software does not back.
+    """
+    if auth_mode() == "open" and principal.account is None:
+        return Principal(account=_OPERATOR, key_prefix="open-mode")
+    if principal.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    if not principal.plan.signed_attestation:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "plan_does_not_include_signed_attestation",
+                "tier": principal.tier,
+                "account_status": principal.account.status,
+                "remedy": (
+                    "Counter-signed head attestation is included from the Cell "
+                    "plan upward. Verifying an attestation "
+                    "(POST /v1/ledger/attest/verify) and fetching the public key "
+                    "(GET /v1/ledger/attest/key) are free and always will be: an "
+                    "attestation only a paying customer can check is worth "
+                    "nothing. GET /v1/plans, then POST /v1/checkout."
+                ),
+            },
+        )
+    return principal
+
+
 Registered = Depends(require_register)
 Machine = Depends(require_machine)
+Attesting = Depends(require_attestation)
 Anyone = Depends(current_principal)

@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .. import __version__
+from .attest_routes import attest_router
 from .billing_routes import billing_router
 from .deps import auth_mode
 from .fleet_routes import fleet_router
@@ -99,6 +100,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(machine_router)
     application.include_router(machinery_router)
     application.include_router(fleet_router)
+    application.include_router(attest_router)
     application.include_router(router)
     return application
 
