@@ -1,0 +1,98 @@
+{
+  "plan_id": "PLAN-AR7",
+  "manufacturer": "Grimaldi",
+  "model": "AR-7",
+  "procedure": "Export from the scanner tool, RParam and the PLC IDE into one folder, then run the collection.",
+  "functions": [
+    {
+      "function_id": "SF-01",
+      "description": "Protective stop on zone intrusion",
+      "required_performance": "PL d",
+      "verified_by": [
+        "ssm_separation",
+        "stop_characterisation"
+      ]
+    },
+    {
+      "function_id": "SF-02",
+      "description": "Speed limit in collaborative operation",
+      "required_performance": "PL d",
+      "verified_by": [
+        "speed_limit"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "item_id": "ITM-ZONES",
+      "kind": "safety_configuration",
+      "name": "Safety scanner zone set",
+      "source": "scanner-zones.cfg",
+      "supplier": "ScanCo",
+      "implements": [
+        "SF-01"
+      ],
+      "modifiable_in_field": true,
+      "rule": {
+        "kind": "text_excluding",
+        "patterns": [
+          "^#\\s*Exported ",
+          "^#\\s*Export sequence no:"
+        ],
+        "note": "The scanner tool stamps the export time, the operator and a sequence number into a comment header. None of it is the zone configuration."
+      }
+    },
+    {
+      "item_id": "ITM-PARAMS",
+      "kind": "parameter_set",
+      "name": "Robot safety parameter set",
+      "source": "robot-params.json",
+      "supplier": "RoboCo",
+      "implements": [
+        "SF-01",
+        "SF-02"
+      ],
+      "rule": {
+        "kind": "json_excluding",
+        "keys": [
+          "export.timestamp",
+          "export.operator"
+        ],
+        "note": "RParam records who exported and when. The safety values are what the machine runs; the export block is what the laptop did."
+      },
+      "version": {
+        "kind": "json",
+        "value": "firmware.version"
+      }
+    },
+    {
+      "item_id": "ITM-PLC",
+      "kind": "safety_program",
+      "name": "Safety PLC project",
+      "source": "plc-project.zip",
+      "supplier": "ControlCo",
+      "implements": [
+        "SF-01"
+      ],
+      "rule": {
+        "kind": "zip_members",
+        "members": [
+          "program/main.st"
+        ],
+        "note": "The project archive's member timestamps move on every save, and meta/build.txt records the build. The program source is the machine."
+      }
+    },
+    {
+      "item_id": "ITM-FW",
+      "kind": "firmware",
+      "name": "Safety controller firmware",
+      "source": "controller-fw.bin",
+      "supplier": "ControlCo",
+      "implements": [
+        "SF-01",
+        "SF-02"
+      ]
+    }
+  ],
+  "notes": "Probed against two back-to-back exports of an unchanged cell and reported STABLE. Re-probe whenever a vendor tool is upgraded: a new export format is a new set of volatile bytes."
+}
