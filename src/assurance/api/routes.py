@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
+from ..billing.accounts import AccountStore, Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
 from ..core.evidence import Actor
 from ..security.art14.engine import Art14Register, CaseError
@@ -29,7 +30,15 @@ from ..security.art14.model import (
 )
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
-from .deps import auth_mode, get_register, ledger_path, require_api_key
+from .deps import (
+    auth_mode,
+    current_principal,
+    get_accounts,
+    get_register,
+    ledger_path,
+    require_register,
+    spend,
+)
 from .schemas import (
     ActorIn,
     AvailabilityIn,
@@ -48,7 +57,14 @@ from .schemas import (
 
 __all__ = ["router", "public_router"]
 
-router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_api_key)])
+#: The register. Every route here needs a plan that includes it.
+router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_register)])
+
+#: The free surface: the field specification and the dry-run validator. A
+#: prospect must be able to get value here without signing up for anything,
+#: because that is what makes the paid register worth buying.
+free_router = APIRouter(prefix="/v1", tags=["free"])
+
 public_router = APIRouter(tags=["service"])
 
 
@@ -354,20 +370,39 @@ def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[s
 # =====================================================================
 # specification — no register state, safe to expose widely
 # =====================================================================
-@router.get("/spec/fields", response_model=list, summary="The platform field specification")
+@free_router.get("/spec/fields", response_model=list, summary="The platform field specification")
 def get_fields(
     track: str = Query(..., pattern="^(actively_exploited_vulnerability|severe_incident)$"),
     stage: str = Query(..., pattern="^(early_warning|notification|final|intermediate)$"),
 ) -> list[dict[str, Any]]:
+    """Free, and deliberately so. The specification is not the product."""
     return [f.to_dict() for f in fields_for(Track(track), Stage(stage))]
 
 
-@router.post(
+@free_router.post(
     "/spec/validate",
     response_model=ValidationOut,
     summary="Validate a draft submission without recording it",
 )
-def post_validate(body: ValidateIn) -> ValidationOut:
+def post_validate(
+    body: ValidateIn,
+    response: Response,
+    principal: Principal = Depends(current_principal),
+    accounts: AccountStore = Depends(get_accounts),
+) -> ValidationOut:
+    """The free tier, and the demo that sells the register behind it.
+
+    Nothing is recorded. A prospect can paste a draft filing and immediately
+    see which of the 39 fields are missing, which exceed a character limit,
+    and which listed territories are not EU Member States.
+    """
+    limit = principal.plan.validations_per_day
+    spend(principal, "validate", limit, accounts)
+    response.headers["X-Assurance-Tier"] = principal.tier
+    if limit is not None:
+        used = accounts.usage_today(principal.subject).get("validate", 0)
+        response.headers["X-Assurance-Quota-Limit"] = str(limit)
+        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
     validation = validate_payload(body.payload, Track(body.track), Stage(body.stage))
     return ValidationOut(**validation.to_dict())
 
@@ -406,6 +441,9 @@ def root() -> dict[str, Any]:
             "interactive_docs": "/docs",
             "openapi_schema": "/openapi.json",
             "health": "/healthz",
+            "plans_and_pricing": "/v1/plans",
+            "subscribe": "POST /v1/checkout",
+            "your_account": "/v1/me",
             "try_without_an_account": {
                 "method": "POST",
                 "path": "/v1/spec/validate",
