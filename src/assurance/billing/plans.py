@@ -110,6 +110,11 @@ PLANS: dict[Tier, Plan] = {
             "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
             "still describes the machine you were sold. Always free: the person who "
             "most needs this is the buyer, not the seller",
+            "The offline enrolment kit — `assurance kit run` collects your "
+            "machines inside your own plant, into your own ledger, with a guard "
+            "over the socket layer proving nothing left. No account, no upload, "
+            "and free: if it needed a licence it would need a procurement "
+            "review, which is the thing it exists to avoid",
             "POST /v1/ledger/attest/verify and GET /v1/ledger/attest/key — check "
             "anybody's signed head attestations. Always free: the audience for an "
             "attestation is a regulator or an insurer, not an account holder",

@@ -65,6 +65,10 @@ class ReportInput:
     declarations: tuple[DeclarationOfConformity, ...] = ()
     #: A banner shown at the very top, e.g. the demonstration-data notice.
     notice: str = ""
+    #: Limits from outside the engines — the airgap guard, a collection kit,
+    #: anything else that knows something about this run that the fleet record
+    #: cannot. They join the numbered list verbatim, like every other limit.
+    extra_limits: tuple[str, ...] = ()
     generated_at: datetime | None = None
 
 
@@ -425,6 +429,10 @@ def render_report(data: ReportInput) -> str:
             if c not in seen:
                 seen.add(c)
                 limits.append(c)
+    for c in data.extra_limits:
+        if c not in seen:
+            seen.add(c)
+            limits.append(c)
 
     parts.append(f"<section><h2>{n + 2} · What this report does not establish</h2>")
     parts.append("<p class='lede'>Carried verbatim from the engines that produced "
