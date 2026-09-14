@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from .. import __version__
 from .billing_routes import billing_router
 from .deps import auth_mode
+from .machine_routes import machine_router
 from .routes import free_router, public_router, router
 
 __all__ = ["create_app", "app"]
@@ -62,6 +63,11 @@ def create_app(**kwargs: Any) -> FastAPI:
                                             "validator. No account needed."},
             {"name": "article 14", "description": "The register. Needs a plan that "
                                                   "includes it."},
+            {"name": "machine safety", "description": "Verify a recorded machine run "
+                                                     "against its declared safety "
+                                                     "envelope. The separation "
+                                                     "calculator and the bundle "
+                                                     "re-checker need no account."},
             {"name": "billing", "description": "Plans, checkout, and your own account."},
             {"name": "service", "description": "Liveness and configuration."},
         ],
@@ -79,6 +85,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(public_router)
     application.include_router(billing_router)
     application.include_router(free_router)
+    application.include_router(machine_router)
     application.include_router(router)
     return application
 

@@ -1,0 +1,3015 @@
+{
+  "trace_id": "RUN-2026-09-12-0431",
+  "provenance": "field",
+  "source_system": "AR-7 controller fw 3.8.2 / safety scanner log",
+  "started_at": "2026-09-12T04:31:00Z",
+  "sample_rate_hz": 50.0,
+  "conditions": {
+    "payload_kg": 12.5,
+    "tool": "vacuum gripper VG-4",
+    "work_order": "WO-88117",
+    "operator": "shift B"
+  },
+  "samples": [
+    {
+      "t": 0.0,
+      "tcp": [
+        0.0,
+        700.0,
+        900.0
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.02,
+      "tcp": [
+        14.4,
+        699.95,
+        907.8
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.04,
+      "tcp": [
+        28.8,
+        699.8,
+        915.59
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.06,
+      "tcp": [
+        43.18,
+        699.55,
+        923.38
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.08,
+      "tcp": [
+        57.56,
+        699.19,
+        931.14
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.1,
+      "tcp": [
+        71.92,
+        698.74,
+        938.89
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.12,
+      "tcp": [
+        86.27,
+        698.19,
+        946.61
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.14,
+      "tcp": [
+        100.59,
+        697.53,
+        954.3
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.16,
+      "tcp": [
+        114.89,
+        696.78,
+        961.95
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.18,
+      "tcp": [
+        129.15,
+        695.92,
+        969.56
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.2,
+      "tcp": [
+        143.39,
+        694.97,
+        977.12
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.22,
+      "tcp": [
+        157.58,
+        693.91,
+        984.64
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.24,
+      "tcp": [
+        171.74,
+        692.75,
+        992.09
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.26,
+      "tcp": [
+        185.85,
+        691.5,
+        999.48
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.28,
+      "tcp": [
+        199.92,
+        690.14,
+        1006.8
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.3,
+      "tcp": [
+        213.93,
+        688.69,
+        1014.06
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.32,
+      "tcp": [
+        227.89,
+        687.14,
+        1021.23
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.34,
+      "tcp": [
+        241.79,
+        685.48,
+        1028.32
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.36,
+      "tcp": [
+        255.63,
+        683.73,
+        1035.33
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.38,
+      "tcp": [
+        269.41,
+        681.88,
+        1042.25
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.4,
+      "tcp": [
+        283.11,
+        679.94,
+        1049.06
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.42,
+      "tcp": [
+        296.74,
+        677.89,
+        1055.78
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.44,
+      "tcp": [
+        310.3,
+        675.75,
+        1062.39
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.46,
+      "tcp": [
+        323.78,
+        673.51,
+        1068.9
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.48,
+      "tcp": [
+        337.17,
+        671.17,
+        1075.29
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.5,
+      "tcp": [
+        350.48,
+        668.74,
+        1081.56
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.52,
+      "tcp": [
+        363.69,
+        666.21,
+        1087.7
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.54,
+      "tcp": [
+        376.82,
+        663.58,
+        1093.72
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.56,
+      "tcp": [
+        389.85,
+        660.86,
+        1099.61
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.58,
+      "tcp": [
+        402.78,
+        658.04,
+        1105.37
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.6,
+      "tcp": [
+        415.6,
+        655.13,
+        1110.98
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.62,
+      "tcp": [
+        428.32,
+        652.12,
+        1116.46
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.64,
+      "tcp": [
+        440.93,
+        649.02,
+        1121.78
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.66,
+      "tcp": [
+        453.43,
+        645.83,
+        1126.96
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.68,
+      "tcp": [
+        465.81,
+        642.54,
+        1131.98
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.7,
+      "tcp": [
+        478.07,
+        639.16,
+        1136.85
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.72,
+      "tcp": [
+        490.21,
+        635.69,
+        1141.56
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.74,
+      "tcp": [
+        502.22,
+        632.13,
+        1146.1
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.76,
+      "tcp": [
+        514.1,
+        628.47,
+        1150.48
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.78,
+      "tcp": [
+        525.86,
+        624.73,
+        1154.69
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.8,
+      "tcp": [
+        537.48,
+        620.9,
+        1158.72
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.82,
+      "tcp": [
+        548.96,
+        616.97,
+        1162.58
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.84,
+      "tcp": [
+        560.3,
+        612.96,
+        1166.27
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.86,
+      "tcp": [
+        571.49,
+        608.86,
+        1169.77
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.88,
+      "tcp": [
+        582.54,
+        604.67,
+        1173.09
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.9,
+      "tcp": [
+        593.45,
+        600.4,
+        1176.23
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.92,
+      "tcp": [
+        604.2,
+        596.03,
+        1179.17
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.94,
+      "tcp": [
+        614.79,
+        591.59,
+        1181.94
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.96,
+      "tcp": [
+        625.23,
+        587.05,
+        1184.51
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 0.98,
+      "tcp": [
+        635.51,
+        582.44,
+        1186.88
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "automatic",
+      "separation": null,
+      "human_speed": null
+    },
+    {
+      "t": 1.0,
+      "tcp": [
+        645.62,
+        577.73,
+        1189.07
+      ],
+      "tcp_speed": 1800.0,
+      "mode": "ssm",
+      "separation": 2400.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.02,
+      "tcp": [
+        655.57,
+        572.95,
+        1191.06
+      ],
+      "tcp_speed": 1700.0,
+      "mode": "ssm",
+      "separation": 2382.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.04,
+      "tcp": [
+        665.35,
+        568.08,
+        1192.85
+      ],
+      "tcp_speed": 1600.0,
+      "mode": "ssm",
+      "separation": 2364.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.06,
+      "tcp": [
+        674.96,
+        563.13,
+        1194.44
+      ],
+      "tcp_speed": 1500.0,
+      "mode": "ssm",
+      "separation": 2346.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.08,
+      "tcp": [
+        684.4,
+        558.1,
+        1195.84
+      ],
+      "tcp_speed": 1400.0,
+      "mode": "ssm",
+      "separation": 2328.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.1,
+      "tcp": [
+        693.66,
+        552.99,
+        1197.03
+      ],
+      "tcp_speed": 1300.0,
+      "mode": "ssm",
+      "separation": 2310.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.12,
+      "tcp": [
+        702.75,
+        547.8,
+        1198.03
+      ],
+      "tcp_speed": 1200.0,
+      "mode": "ssm",
+      "separation": 2292.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.14,
+      "tcp": [
+        711.66,
+        542.54,
+        1198.82
+      ],
+      "tcp_speed": 1100.0,
+      "mode": "ssm",
+      "separation": 2274.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.16,
+      "tcp": [
+        720.38,
+        537.19,
+        1199.41
+      ],
+      "tcp_speed": 1000.0,
+      "mode": "ssm",
+      "separation": 2256.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.18,
+      "tcp": [
+        728.92,
+        531.76,
+        1199.8
+      ],
+      "tcp_speed": 900.0,
+      "mode": "ssm",
+      "separation": 2238.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.2,
+      "tcp": [
+        737.27,
+        526.26,
+        1199.98
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2220.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.22,
+      "tcp": [
+        745.44,
+        520.69,
+        1199.97
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2206.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.24,
+      "tcp": [
+        753.41,
+        515.04,
+        1199.75
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2192.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.26,
+      "tcp": [
+        761.19,
+        509.31,
+        1199.32
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2178.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.28,
+      "tcp": [
+        768.78,
+        503.51,
+        1198.7
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2164.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.3,
+      "tcp": [
+        776.16,
+        497.64,
+        1197.87
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2150.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.32,
+      "tcp": [
+        783.35,
+        491.7,
+        1196.84
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2136.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.34,
+      "tcp": [
+        790.34,
+        485.68,
+        1195.61
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2122.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.36,
+      "tcp": [
+        797.13,
+        479.6,
+        1194.19
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2108.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.38,
+      "tcp": [
+        803.71,
+        473.45,
+        1192.56
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2094.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.4,
+      "tcp": [
+        810.09,
+        467.22,
+        1190.73
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2080.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.42,
+      "tcp": [
+        816.26,
+        460.94,
+        1188.71
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2066.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.44,
+      "tcp": [
+        822.22,
+        454.58,
+        1186.49
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2052.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.46,
+      "tcp": [
+        827.97,
+        448.16,
+        1184.08
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2038.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.48,
+      "tcp": [
+        833.51,
+        441.68,
+        1181.48
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2024.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.5,
+      "tcp": [
+        838.84,
+        435.13,
+        1178.69
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 2010.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.52,
+      "tcp": [
+        843.95,
+        428.52,
+        1175.71
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1996.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.54,
+      "tcp": [
+        848.84,
+        421.84,
+        1172.54
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1982.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.56,
+      "tcp": [
+        853.52,
+        415.11,
+        1169.19
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1968.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.58,
+      "tcp": [
+        857.98,
+        408.32,
+        1165.65
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1954.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.6,
+      "tcp": [
+        862.21,
+        401.46,
+        1161.94
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1940.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.62,
+      "tcp": [
+        866.23,
+        394.55,
+        1158.05
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1926.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.64,
+      "tcp": [
+        870.03,
+        387.59,
+        1153.98
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1912.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.66,
+      "tcp": [
+        873.6,
+        380.56,
+        1149.75
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1898.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.68,
+      "tcp": [
+        876.95,
+        373.49,
+        1145.34
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1884.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.7,
+      "tcp": [
+        880.08,
+        366.36,
+        1140.77
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1870.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.72,
+      "tcp": [
+        882.98,
+        359.17,
+        1136.04
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1856.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.74,
+      "tcp": [
+        885.65,
+        351.94,
+        1131.14
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1842.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.76,
+      "tcp": [
+        888.1,
+        344.65,
+        1126.09
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1828.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.78,
+      "tcp": [
+        890.32,
+        337.31,
+        1120.89
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1814.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.8,
+      "tcp": [
+        892.31,
+        329.93,
+        1115.54
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1800.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.82,
+      "tcp": [
+        894.08,
+        322.5,
+        1110.04
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1786.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.84,
+      "tcp": [
+        895.61,
+        315.02,
+        1104.4
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1772.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.86,
+      "tcp": [
+        896.92,
+        307.5,
+        1098.62
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1758.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.88,
+      "tcp": [
+        897.99,
+        299.93,
+        1092.71
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1744.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.9,
+      "tcp": [
+        898.84,
+        292.32,
+        1086.67
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1730.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.92,
+      "tcp": [
+        899.46,
+        284.66,
+        1080.5
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1716.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.94,
+      "tcp": [
+        899.84,
+        276.97,
+        1074.21
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1702.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.96,
+      "tcp": [
+        900.0,
+        269.23,
+        1067.8
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1688.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 1.98,
+      "tcp": [
+        899.92,
+        261.46,
+        1061.28
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1674.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.0,
+      "tcp": [
+        899.62,
+        253.65,
+        1054.65
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1660.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.02,
+      "tcp": [
+        899.08,
+        245.8,
+        1047.92
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1646.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.04,
+      "tcp": [
+        898.31,
+        237.92,
+        1041.08
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1632.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.06,
+      "tcp": [
+        897.32,
+        230.0,
+        1034.15
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1618.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.08,
+      "tcp": [
+        896.09,
+        222.05,
+        1027.13
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1604.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.1,
+      "tcp": [
+        894.64,
+        214.07,
+        1020.02
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1590.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.12,
+      "tcp": [
+        892.96,
+        206.06,
+        1012.83
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1576.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.14,
+      "tcp": [
+        891.04,
+        198.02,
+        1005.57
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1562.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.16,
+      "tcp": [
+        888.9,
+        189.95,
+        998.23
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1548.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.18,
+      "tcp": [
+        886.53,
+        181.85,
+        990.83
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1534.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.2,
+      "tcp": [
+        883.94,
+        173.72,
+        983.37
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1520.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.22,
+      "tcp": [
+        881.12,
+        165.57,
+        975.85
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1506.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.24,
+      "tcp": [
+        878.07,
+        157.4,
+        968.27
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1492.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.26,
+      "tcp": [
+        874.8,
+        149.2,
+        960.66
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1478.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.28,
+      "tcp": [
+        871.3,
+        140.99,
+        953.0
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1464.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.3,
+      "tcp": [
+        867.58,
+        132.75,
+        945.3
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1450.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.32,
+      "tcp": [
+        863.64,
+        124.49,
+        937.58
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1436.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.34,
+      "tcp": [
+        859.48,
+        116.22,
+        929.83
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1422.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.36,
+      "tcp": [
+        855.1,
+        107.93,
+        922.06
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1408.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.38,
+      "tcp": [
+        850.5,
+        99.62,
+        914.27
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1394.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.4,
+      "tcp": [
+        845.68,
+        91.3,
+        906.48
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1380.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.42,
+      "tcp": [
+        840.65,
+        82.96,
+        898.68
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1366.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.44,
+      "tcp": [
+        835.4,
+        74.62,
+        890.88
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1352.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.46,
+      "tcp": [
+        829.93,
+        66.26,
+        883.09
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1338.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.48,
+      "tcp": [
+        824.26,
+        57.89,
+        875.31
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1324.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.5,
+      "tcp": [
+        818.37,
+        49.52,
+        867.54
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1310.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.52,
+      "tcp": [
+        812.27,
+        41.13,
+        859.8
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1296.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.54,
+      "tcp": [
+        805.97,
+        32.75,
+        852.08
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1282.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.56,
+      "tcp": [
+        799.45,
+        24.35,
+        844.4
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1268.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.58,
+      "tcp": [
+        792.74,
+        15.96,
+        836.76
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1254.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.6,
+      "tcp": [
+        785.82,
+        7.56,
+        829.15
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1240.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.62,
+      "tcp": [
+        778.7,
+        -0.84,
+        821.6
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1226.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.64,
+      "tcp": [
+        771.38,
+        -9.24,
+        814.1
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1212.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.66,
+      "tcp": [
+        763.86,
+        -17.64,
+        806.65
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1198.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.68,
+      "tcp": [
+        756.15,
+        -26.04,
+        799.27
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1184.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.7,
+      "tcp": [
+        748.25,
+        -34.43,
+        791.96
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1170.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.72,
+      "tcp": [
+        740.15,
+        -42.82,
+        784.72
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1156.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.74,
+      "tcp": [
+        731.86,
+        -51.2,
+        777.56
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1142.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.76,
+      "tcp": [
+        723.39,
+        -59.57,
+        770.48
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1128.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.78,
+      "tcp": [
+        714.73,
+        -67.94,
+        763.49
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1114.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.8,
+      "tcp": [
+        705.88,
+        -76.29,
+        756.59
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1100.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.82,
+      "tcp": [
+        696.86,
+        -84.63,
+        749.79
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1086.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.84,
+      "tcp": [
+        687.66,
+        -92.97,
+        743.09
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1072.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.86,
+      "tcp": [
+        678.28,
+        -101.29,
+        736.5
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1058.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.88,
+      "tcp": [
+        668.73,
+        -109.59,
+        730.01
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1044.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.9,
+      "tcp": [
+        659.01,
+        -117.88,
+        723.64
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1030.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.92,
+      "tcp": [
+        649.12,
+        -126.15,
+        717.39
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1016.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.94,
+      "tcp": [
+        639.06,
+        -134.4,
+        711.27
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 1002.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.96,
+      "tcp": [
+        628.84,
+        -142.64,
+        705.27
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 988.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 2.98,
+      "tcp": [
+        618.46,
+        -150.85,
+        699.4
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 974.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.0,
+      "tcp": [
+        607.92,
+        -159.04,
+        693.67
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 960.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.02,
+      "tcp": [
+        597.22,
+        -167.21,
+        688.08
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 946.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.04,
+      "tcp": [
+        586.37,
+        -175.35,
+        682.63
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 932.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.06,
+      "tcp": [
+        575.37,
+        -183.47,
+        677.33
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 918.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.08,
+      "tcp": [
+        564.23,
+        -191.57,
+        672.18
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 904.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.1,
+      "tcp": [
+        552.94,
+        -199.63,
+        667.18
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 890.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.12,
+      "tcp": [
+        541.5,
+        -207.67,
+        662.34
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 876.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.14,
+      "tcp": [
+        529.93,
+        -215.68,
+        657.66
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 862.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.16,
+      "tcp": [
+        518.23,
+        -223.65,
+        653.15
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 848.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.18,
+      "tcp": [
+        506.39,
+        -231.59,
+        648.8
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 834.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.2,
+      "tcp": [
+        494.42,
+        -239.5,
+        644.62
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 820.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.22,
+      "tcp": [
+        482.32,
+        -247.38,
+        640.61
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 806.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.24,
+      "tcp": [
+        470.11,
+        -255.22,
+        636.78
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 792.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.26,
+      "tcp": [
+        457.77,
+        -263.02,
+        633.13
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 778.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.28,
+      "tcp": [
+        445.31,
+        -270.79,
+        629.66
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 764.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.3,
+      "tcp": [
+        432.74,
+        -278.52,
+        626.37
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 750.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.32,
+      "tcp": [
+        420.06,
+        -286.2,
+        623.26
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 736.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.34,
+      "tcp": [
+        407.27,
+        -293.85,
+        620.34
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 722.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.36,
+      "tcp": [
+        394.38,
+        -301.45,
+        617.62
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 708.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.38,
+      "tcp": [
+        381.38,
+        -309.01,
+        615.08
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 694.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.4,
+      "tcp": [
+        368.29,
+        -316.52,
+        612.73
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 680.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.42,
+      "tcp": [
+        355.11,
+        -323.99,
+        610.58
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 666.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.44,
+      "tcp": [
+        341.83,
+        -331.42,
+        608.63
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 652.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.46,
+      "tcp": [
+        328.47,
+        -338.79,
+        606.87
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 638.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.48,
+      "tcp": [
+        315.02,
+        -346.12,
+        605.31
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 624.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.5,
+      "tcp": [
+        301.49,
+        -353.39,
+        603.95
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 610.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.52,
+      "tcp": [
+        287.88,
+        -360.62,
+        602.79
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 596.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.54,
+      "tcp": [
+        274.2,
+        -367.79,
+        601.83
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 582.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.56,
+      "tcp": [
+        260.45,
+        -374.91,
+        601.07
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 568.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.58,
+      "tcp": [
+        246.64,
+        -381.98,
+        600.51
+      ],
+      "tcp_speed": 750.0,
+      "mode": "ssm",
+      "separation": 554.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.6,
+      "tcp": [
+        232.76,
+        -388.99,
+        600.16
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.62,
+      "tcp": [
+        218.82,
+        -395.94,
+        600.01
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.64,
+      "tcp": [
+        204.82,
+        -402.84,
+        600.06
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.66,
+      "tcp": [
+        190.78,
+        -409.68,
+        600.31
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.68,
+      "tcp": [
+        176.68,
+        -416.47,
+        600.77
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.7,
+      "tcp": [
+        162.54,
+        -423.19,
+        601.43
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.72,
+      "tcp": [
+        148.35,
+        -429.85,
+        602.29
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.74,
+      "tcp": [
+        134.13,
+        -436.45,
+        603.35
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.76,
+      "tcp": [
+        119.88,
+        -442.98,
+        604.61
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.78,
+      "tcp": [
+        105.59,
+        -449.45,
+        606.08
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.8,
+      "tcp": [
+        91.28,
+        -455.86,
+        607.74
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.82,
+      "tcp": [
+        76.94,
+        -462.2,
+        609.6
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.84,
+      "tcp": [
+        62.58,
+        -468.48,
+        611.65
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.86,
+      "tcp": [
+        48.21,
+        -474.69,
+        613.9
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.88,
+      "tcp": [
+        33.83,
+        -480.82,
+        616.34
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.9,
+      "tcp": [
+        19.43,
+        -486.89,
+        618.98
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.92,
+      "tcp": [
+        5.03,
+        -492.89,
+        621.8
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.94,
+      "tcp": [
+        -9.37,
+        -498.82,
+        624.82
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.96,
+      "tcp": [
+        -23.76,
+        -504.68,
+        628.02
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 3.98,
+      "tcp": [
+        -38.16,
+        -510.46,
+        631.4
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.0,
+      "tcp": [
+        -52.54,
+        -516.18,
+        634.96
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.02,
+      "tcp": [
+        -66.9,
+        -521.81,
+        638.71
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.04,
+      "tcp": [
+        -81.26,
+        -527.37,
+        642.63
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.06,
+      "tcp": [
+        -95.59,
+        -532.86,
+        646.72
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.08,
+      "tcp": [
+        -109.89,
+        -538.27,
+        650.99
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.1,
+      "tcp": [
+        -124.17,
+        -543.6,
+        655.42
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.12,
+      "tcp": [
+        -138.42,
+        -548.85,
+        660.02
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.14,
+      "tcp": [
+        -152.63,
+        -554.03,
+        664.78
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.16,
+      "tcp": [
+        -166.8,
+        -559.12,
+        669.7
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.18,
+      "tcp": [
+        -180.93,
+        -564.13,
+        674.78
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.2,
+      "tcp": [
+        -195.01,
+        -569.07,
+        680.01
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.22,
+      "tcp": [
+        -209.04,
+        -573.92,
+        685.38
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.24,
+      "tcp": [
+        -223.02,
+        -578.68,
+        690.9
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.26,
+      "tcp": [
+        -236.94,
+        -583.37,
+        696.57
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.28,
+      "tcp": [
+        -250.8,
+        -587.97,
+        702.37
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.3,
+      "tcp": [
+        -264.6,
+        -592.49,
+        708.3
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.32,
+      "tcp": [
+        -278.33,
+        -596.92,
+        714.37
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.34,
+      "tcp": [
+        -291.99,
+        -601.26,
+        720.56
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.36,
+      "tcp": [
+        -305.57,
+        -605.52,
+        726.87
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.38,
+      "tcp": [
+        -319.07,
+        -609.69,
+        733.29
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.4,
+      "tcp": [
+        -332.5,
+        -613.77,
+        739.84
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.42,
+      "tcp": [
+        -345.83,
+        -617.77,
+        746.48
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.44,
+      "tcp": [
+        -359.08,
+        -621.67,
+        753.24
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.46,
+      "tcp": [
+        -372.24,
+        -625.49,
+        760.09
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.48,
+      "tcp": [
+        -385.3,
+        -629.22,
+        767.03
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.5,
+      "tcp": [
+        -398.27,
+        -632.85,
+        774.07
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.52,
+      "tcp": [
+        -411.13,
+        -636.39,
+        781.19
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.54,
+      "tcp": [
+        -423.89,
+        -639.85,
+        788.39
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.56,
+      "tcp": [
+        -436.53,
+        -643.21,
+        795.67
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.58,
+      "tcp": [
+        -449.07,
+        -646.48,
+        803.02
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.6,
+      "tcp": [
+        -461.49,
+        -649.65,
+        810.43
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.62,
+      "tcp": [
+        -473.8,
+        -652.73,
+        817.91
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.64,
+      "tcp": [
+        -485.98,
+        -655.72,
+        825.43
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.66,
+      "tcp": [
+        -498.03,
+        -658.61,
+        833.01
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.68,
+      "tcp": [
+        -509.96,
+        -661.41,
+        840.64
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.7,
+      "tcp": [
+        -521.76,
+        -664.11,
+        848.3
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.72,
+      "tcp": [
+        -533.43,
+        -666.72,
+        856.0
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.74,
+      "tcp": [
+        -544.96,
+        -669.23,
+        863.73
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.76,
+      "tcp": [
+        -556.35,
+        -671.65,
+        871.49
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.78,
+      "tcp": [
+        -567.6,
+        -673.96,
+        879.26
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.8,
+      "tcp": [
+        -578.7,
+        -676.19,
+        887.05
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.82,
+      "tcp": [
+        -589.65,
+        -678.31,
+        894.84
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.84,
+      "tcp": [
+        -600.46,
+        -680.34,
+        902.64
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.86,
+      "tcp": [
+        -611.11,
+        -682.26,
+        910.44
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.88,
+      "tcp": [
+        -621.6,
+        -684.09,
+        918.23
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.9,
+      "tcp": [
+        -631.93,
+        -685.82,
+        926.01
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.92,
+      "tcp": [
+        -642.1,
+        -687.46,
+        933.77
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.94,
+      "tcp": [
+        -652.11,
+        -688.99,
+        941.51
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.96,
+      "tcp": [
+        -661.95,
+        -690.42,
+        949.22
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    },
+    {
+      "t": 4.98,
+      "tcp": [
+        -671.62,
+        -691.76,
+        956.9
+      ],
+      "tcp_speed": 0.0,
+      "mode": "stopped",
+      "separation": 540.0,
+      "human_speed": 1400.0
+    }
+  ]
+}
