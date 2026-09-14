@@ -16,7 +16,7 @@ that ambiguity into an alarm.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +110,44 @@ class FeedSubscription:
 
 
 @dataclass(frozen=True)
+class Article14Duty:
+    """Whether this operator carries the Art. 14 reporting duty, stated explicitly.
+
+    Only a manufacturer placing the product on the Union market carries it. An
+    integrator who installs somebody else's cells may or may not be one, and
+    that is a legal question about a role, not something a fleet can imply. So
+    this is declared or it is absent, and while it is absent no regulatory
+    intake is drafted at all — which is the safe direction to be wrong in.
+    """
+
+    as_manufacturer: bool = False
+    #: Who receives supplier signals. The interval from receipt to awareness is
+    #: the number a market surveillance authority asks about first, and an
+    #: unattributed receipt cannot evidence it.
+    received_by: str = ""
+
+    def __post_init__(self) -> None:
+        if self.as_manufacturer and not self.received_by.strip():
+            raise WatchError(
+                "article_14.received_by is required when as_manufacturer is "
+                "true. A signal nobody received is not a signal, and the "
+                "interval between arrival and awareness cannot be "
+                "reconstructed from an unattributed record."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"as_manufacturer": self.as_manufacturer,
+                "received_by": self.received_by}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> Article14Duty:
+        if not d:
+            return cls()
+        return cls(as_manufacturer=bool(d.get("as_manufacturer", False)),
+                   received_by=str(d.get("received_by", "")))
+
+
+@dataclass(frozen=True)
 class WatchConfig:
     """A standing instruction to keep looking."""
 
@@ -119,6 +157,8 @@ class WatchConfig:
     #: "did anything here change"; these answer "did the world change underneath
     #: machines that did not", which is the half nobody notices in time.
     feeds: tuple[FeedSubscription, ...] = ()
+    #: Declared, never inferred. See Article14Duty.
+    article_14: Article14Duty = field(default_factory=Article14Duty)
     #: Who the watch runs as. Every record it seals is attributed here, and an
     #: automated actor is marked as automation rather than dressed as a person.
     operator: str = "assurance-watch"
@@ -171,6 +211,7 @@ class WatchConfig:
                         sorted(self.targets, key=lambda t: t.serial)],
             "feeds": [f.to_dict() for f in
                       sorted(self.feeds, key=lambda f: f.supplier_id)],
+            "article_14": self.article_14.to_dict(),
         }
 
     def content_hash(self) -> str:
@@ -186,6 +227,7 @@ class WatchConfig:
             targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
             feeds=tuple(FeedSubscription.from_dict(f)
                         for f in (d.get("feeds") or ())),
+            article_14=Article14Duty.from_dict(d.get("article_14")),
             operator=str(d.get("operator", "assurance-watch")),
             organisation=str(d.get("organisation", "")),
             max_age_hours=float(d.get("max_age_hours", 168.0)),
@@ -227,4 +269,5 @@ class WatchConfig:
                 )
                 for f in config.feeds
             ),
+            article_14=config.article_14,
         )
