@@ -1,0 +1,2646 @@
+From 676d40529c0c591dff14f23574e8fe75366ed71c Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 08:14:42 +0000
+Subject: [PATCH] assurance.fleet: advisory fan-out to serial numbers, and the
+ declaration binding
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WHY
+  A supplier publishes an advisory about one firmware version. It lands in an
+  inbox. The integrator who carries the CE liability for forty cells cannot
+  answer which of them is running it — the mailing list does not know what is
+  installed anywhere, the plant does not know what its cells are made of, and
+  the supplier does not know who bought what. The manifest fleet is the only
+  place that map exists, and because the manifest already maps item to safety
+  function to verification check, the answer reaches past serial numbers to the
+  evidence the advisory unsettles. This is the layer that gets more valuable
+  with every machine enrolled.
+
+WHAT
+  src/assurance/fleet/registry.py     every machine in the ledger, worst first
+  src/assurance/fleet/advisory.py     component advisories, and a matcher that
+                                       reports what the match rests on
+  src/assurance/fleet/impact.py       the fan-out: advisory x fleet -> serial
+                                       numbers -> safety functions -> coverage
+  src/assurance/fleet/declaration.py  the Declaration of Conformity, bound to a
+                                       configuration hash so it can be shown to
+                                       have stopped describing the machine
+  src/assurance/fleet/cli.py          list / advisory / declare / declaration
+  src/assurance/api/fleet_routes.py   five endpoints, two of them free
+  examples/fleet/                     a real advisory and a declaration
+  deploy/assurance/FLEET.md           how it matches and what it refuses to say
+
+CUSTOMER VALUE
+  "CTRL-2026-11: 4 of your 5 machines match. AR-7#0412 at Plant 2 Line 4 is
+  confirmed by hash, and SF-01 and SF-02 — verified 9 February, standing until
+  this morning — are now in question." Nobody can produce that today, and every
+  integrator shipping collaborative cells needs it before January 2027.
+
+  And the finding nothing else on the market can make: AR-7#0418 reports the
+  affected version and its artefact does not hash to what the supplier
+  published for it. Neither affected nor clear. Somebody has to go and look.
+
+RISK
+  Matching is where this goes wrong, so the basis is never flattened to a
+  boolean: hash / hash_mismatch / version / name_only, each with its confidence
+  and whether a human is needed. No version-range arithmetic — vendor schemes
+  are not semver and parsing them as if they were is how a cell gets cleared
+  that should have been stopped. A function already stale is not counted as
+  newly in question, because that would hide the machines that were fine until
+  this morning. And the declaration check makes no legal judgement: whether a
+  change is a substantial modification is for the manufacturer and their
+  notified body, and it says so in every output.
+
+ROLLBACK
+  git revert this commit. Outside assurance/fleet it touches plans.py copy,
+  one router in service.py, one CLI domain and one ruff ignore.
+
+TESTS
+  453 passed (53 new), ruff clean over src/assurance and the new tests.
+  The mixed-fleet case — confirmed, contradictory, part-stale, clear and
+  never-verified in one ledger — is asserted column by column.
+
+SUCCESS CONDITION
+  One integrator forwards a supplier bulletin into this and gets back serial
+  numbers they were going to find out about from a customer instead.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/FLEET.md                 | 133 +++++
+ examples/fleet/advisory-CTRL-2026-11.json |  31 ++
+ examples/fleet/declaration-DOC-0412.json  |  20 +
+ pyproject.toml                            |   1 +
+ src/assurance/api/fleet_routes.py         | 267 ++++++++++
+ src/assurance/api/service.py              |   6 +
+ src/assurance/billing/plans.py            |  10 +
+ src/assurance/cli.py                      |   1 +
+ src/assurance/fleet/__init__.py           |  56 +++
+ src/assurance/fleet/advisory.py           | 315 ++++++++++++
+ src/assurance/fleet/cli.py                | 176 +++++++
+ src/assurance/fleet/declaration.py        | 317 ++++++++++++
+ src/assurance/fleet/impact.py             | 297 +++++++++++
+ src/assurance/fleet/registry.py           | 200 ++++++++
+ tests/test_assurance_fleet.py             | 583 ++++++++++++++++++++++
+ 15 files changed, 2413 insertions(+)
+ create mode 100644 deploy/assurance/FLEET.md
+ create mode 100644 examples/fleet/advisory-CTRL-2026-11.json
+ create mode 100644 examples/fleet/declaration-DOC-0412.json
+ create mode 100644 src/assurance/api/fleet_routes.py
+ create mode 100644 src/assurance/fleet/__init__.py
+ create mode 100644 src/assurance/fleet/advisory.py
+ create mode 100644 src/assurance/fleet/cli.py
+ create mode 100644 src/assurance/fleet/declaration.py
+ create mode 100644 src/assurance/fleet/impact.py
+ create mode 100644 src/assurance/fleet/registry.py
+ create mode 100644 tests/test_assurance_fleet.py
+
+diff --git a/deploy/assurance/FLEET.md b/deploy/assurance/FLEET.md
+new file mode 100644
+index 0000000..0a0f7ef
+--- /dev/null
++++ b/deploy/assurance/FLEET.md
+@@ -0,0 +1,133 @@
++# The fleet layer
++
++`assurance machine` answers for one run. `assurance machinery` answers for one
++machine. This answers for everything an integrator is on the hook for at once —
++and it is the part that gets more valuable with every machine enrolled.
++
++```bash
++assurance fleet list      --ledger register.db
++assurance fleet advisory  advisory.json --ledger register.db
++assurance fleet declare   manifest.json --doc-id DOC-0412 --issued-by "..." \
++                          --legislation "Regulation (EU) 2023/1230" --out doc.json
++assurance fleet declaration doc.json --manifest manifest.json --ledger register.db
++```
++
++## Monday morning
++
++```
++machine                      site                   worst             stale  fns  config
++-----------------------------------------------------------------------------------------
++Grimaldi/AR-7#0501           Plant 7, Cell A        stale                 1    2  9c4dbacf06a9
++Grimaldi/AR-7#0733           Plant 9, Line 1        never_verified        0    2  b050efe446c3
++Grimaldi/AR-7#0412           Plant 2, Line 4        current               0    2  4d77ffb0f71b
++
++5 machine(s): 3 covered, 2 with gaps
++```
++
++Worst first, because that is the order somebody reads it in. Every row comes
++from the same `assess_coverage` that answers one machine — this is aggregation,
++not new inference, and that is deliberate.
++
++## The choke point
++
++A supplier publishes an advisory. Today it lands in an inbox and the integrator
++who carries the CE liability for forty cells cannot answer the only question
++that matters. The mailing list does not know what is installed anywhere. The
++plant does not know what its cells are made of. The supplier does not know who
++bought what.
++
++The manifest fleet does — and because the manifest already maps item → safety
++function → verification check → coverage, the advisory does not stop at *you
++have four affected machines*:
++
++```
++CTRL-2026-11 (ControlCo, safety_relevant) — EXPOSED
++  4 of 5 machine(s) match; 3 safety function(s) newly in question
++
++  Grimaldi/AR-7#0412   Plant 2, Line 4   [confirmed] ITM-FW 3.8.2
++      the artefact on this machine is byte-identical to one ControlCo named
++      as affected (111111111111).
++      SF-01  Protective stop on zone intrusion, verified 2026-02-09  → NOW IN QUESTION
++      SF-02  Speed limit in collaborative operation, verified 2026-02-09  → NOW IN QUESTION
++```
++
++## Matching: a label is not an artefact
++
++`assurance.machinery` already proves a firmware can be replaced without the
++version string moving. So an advisory is matched on the strongest available
++evidence and the basis is always reported, never flattened to a boolean:
++
++| basis | confidence | meaning |
++|---|---|---|
++| `hash` | confirmed | the artefact is byte-identical to one the supplier named |
++| `hash_mismatch` | **contradictory** | the label matches and the artefact does not |
++| `version` | probable | the label matches; the supplier published no hash |
++| `name_only` | possible | same component, version unknown or unlisted |
++
++`hash_mismatch` is the finding no other system on the market can produce:
++
++```
++  Grimaldi/AR-7#0418   Plant 2, Line 6   [contradictory] ITM-FW 3.8.2
++      this machine reports version '3.8.2', which the advisory names, but the
++      artefact hashes to 222222222222, which is not among the hashes ControlCo
++      published for that version. Either the supplier's figure is wrong or this
++      machine is not running what it says it is running. Both need a person.
++      SF-01  → UNRESOLVED (coverage: current)
++```
++
++It is counted in **neither** column. Not affected, not clear.
++
++**No version-range arithmetic.** Vendor version schemes are not semver, parsing
++them as if they were is how a cell gets cleared that should have been stopped,
++and an advisory that means "everything before 3.9" can enumerate the versions it
++means.
++
++## Already-lapsed is not newly in question
++
++A machine whose coverage was already `stale` is reported and is **not** counted
++as newly in question. An advisory does not make a lapsed function worse, and
++mixing the two hides the machines that were fine until this morning — which are
++the ones somebody has to go and look at today.
++
++## The Declaration of Conformity
++
++A DoC has never named the software configuration it was signed against, because
++until there was a configuration hash there was nothing to name. So it goes on
++describing a machine that stopped existing the day a technician updated the
++firmware, and nobody can point at the moment it stopped being true.
++
++```
++DOC-AR7-0412 — CONFIGURATION CHANGED
++  declaration DOC-AR7-0412, issued 2026-01-20 by Grimaldi Engineering, covers
++  configuration 108b15f43f26. Grimaldi/AR-7#0412 currently runs 6acb6ee2e14e.
++  The declaration does not describe this machine.
++```
++
++Two questions, reported separately because they have different remedies:
++
++- **`configuration_changed`** — the declaration is about software that is no
++  longer installed.
++- **`configuration_intact_evidence_lapsed`** — the software is right and the
++  demonstration behind it has lapsed.
++
++`assurance fleet declare` binds a declaration to the configuration in front of
++you, so every later manifest either matches it or does not.
++
++**This makes no legal judgement and says so in every output.** Whether a changed
++configuration amounts to a substantial modification requiring a new conformity
++assessment is a question for the manufacturer and their notified body. What this
++establishes is the fact that question rests on.
++
++## What is free, and why
++
++`POST /v1/fleet/advisory/check` — one advisory, one machine, no account, 10/day.
++A bulletin landed this morning; an integrator can answer *is this cell one of
++them* before finishing their coffee.
++
++`POST /v1/fleet/declaration/check` — free for anyone, forever. **The person who
++most needs to know a declaration has stopped describing a machine is the buyer,
++not the seller.** Gating it behind an account with the people who sold them the
++machine would make it worthless.
++
++The fan-out across an enrolled fleet is the paid product, because it requires
++the manifests to be in the ledger — which is exactly the thing worth paying for.
+diff --git a/examples/fleet/advisory-CTRL-2026-11.json b/examples/fleet/advisory-CTRL-2026-11.json
+new file mode 100644
+index 0000000..4f327f2
+--- /dev/null
++++ b/examples/fleet/advisory-CTRL-2026-11.json
+@@ -0,0 +1,31 @@
++{
++  "advisory_id": "CTRL-2026-11",
++  "issued_by": "ControlCo",
++  "issued_at": "2026-09-12T08:00:00Z",
++  "title": "Watchdog may not trip under sustained safety-bus load",
++  "summary": "Under sustained load on the safety bus the watchdog can fail to trigger the safety-rated stop within the specified reaction time. The declared stop performance is not achieved.",
++  "severity": "safety_relevant",
++  "affected": [
++    {
++      "supplier": "ControlCo",
++      "name": "Safety controller firmware",
++      "versions": [
++        "3.8.0",
++        "3.8.1",
++        "3.8.2"
++      ],
++      "content_hashes": [
++        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
++      ],
++      "version_note": "All 3.8.x releases before 3.9.0."
++    }
++  ],
++  "remedy": "Update to 3.9.0 and re-run the stop-performance test. The declared reaction time must be re-established, not assumed.",
++  "reference": "https://controlco.example/advisories/CTRL-2026-11",
++  "fixed_versions": [
++    "3.9.0"
++  ],
++  "fixed_hashes": [
++    "3333333333333333333333333333333333333333333333333333333333333333"
++  ]
++}
+diff --git a/examples/fleet/declaration-DOC-0412.json b/examples/fleet/declaration-DOC-0412.json
+new file mode 100644
+index 0000000..30e85e8
+--- /dev/null
++++ b/examples/fleet/declaration-DOC-0412.json
+@@ -0,0 +1,20 @@
++{
++  "doc_id": "DOC-AR7-0412",
++  "machine_key": "Grimaldi/AR-7#0412",
++  "issued_by": "Grimaldi Engineering",
++  "issued_at": "2026-01-20T09:00:00Z",
++  "configuration_hash": "REPLACE WITH THE configuration_hash OF THE MANIFEST THIS WAS SIGNED AGAINST \u2014 `assurance fleet declare` fills this in for you",
++  "legislation": [
++    "Regulation (EU) 2023/1230",
++    "Regulation (EU) 2024/2847"
++  ],
++  "standards": [
++    "EN ISO 10218-1:2025",
++    "EN ISO 10218-2:2025",
++    "EN ISO 13849-1:2023"
++  ],
++  "notified_body": "",
++  "notified_body_number": "",
++  "signatory": "V. Grimaldi",
++  "place": "Turin"
++}
+diff --git a/pyproject.toml b/pyproject.toml
+index 830bf94..2535d1c 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -117,6 +117,7 @@ ignore = [
+ "src/assurance/security/art14/cli.py" = ["T20"]
+ "src/assurance/machine/cli.py" = ["T20"]
+ "src/assurance/machinery/cli.py" = ["T20"]
++"src/assurance/fleet/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/api/fleet_routes.py b/src/assurance/api/fleet_routes.py
+new file mode 100644
+index 0000000..f5d7cb5
+--- /dev/null
++++ b/src/assurance/api/fleet_routes.py
+@@ -0,0 +1,267 @@
++"""The fleet, advisories, and declarations over HTTP.
++
++Free, no account: ``POST /v1/fleet/advisory/check`` takes one advisory and one
++manifest and says whether that machine matches. It is the demonstration — a
++supplier bulletin landed this morning and an integrator can answer *is this cell
++one of them* before finishing their coffee — and it needs nothing sealed.
++
++Paid: the fan-out. One advisory against the whole enrolled fleet, reaching
++serial numbers and the safety functions whose evidence it unsettles. That
++requires the manifests to be in the ledger, which is exactly the thing worth
++paying for, and the thing that gets more valuable with every machine enrolled.
++
++``POST /v1/fleet/declaration/check`` is free too. A customer handed a machine
++and a Declaration of Conformity must be able to check the declaration still
++describes what they were sold, without an account with the people who sold it.
++"""
++
++from __future__ import annotations
++
++from typing import Annotated, Any
++
++from fastapi import APIRouter, Depends, HTTPException, Response
++from pydantic import BaseModel, ConfigDict, Field
++
++from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
++from assurance.billing.accounts import AccountStore, Principal
++from assurance.core.errors import AssuranceError
++from assurance.fleet.advisory import ComponentAdvisory, match_item
++from assurance.fleet.declaration import DeclarationOfConformity, check_declaration
++from assurance.fleet.impact import assess_impact
++from assurance.fleet.registry import Fleet
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.record import interventions_from_ledger
++from assurance.machinery.staleness import VerificationRecord, assess_coverage
++
++__all__ = ["fleet_router"]
++
++fleet_router = APIRouter(prefix="/v1/fleet", tags=["fleet"])
++
++
++class AdvisoryCheckIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    advisory: dict[str, Any]
++    manifest: dict[str, Any]
++
++
++class AdvisoryIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    advisory: dict[str, Any]
++
++
++class DeclarationCheckIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    declaration: dict[str, Any]
++    manifest: dict[str, Any]
++    #: Assess the evidence as well as the configuration. Needs the ledger, so
++    #: it needs a plan; without it only the configuration is compared.
++    with_coverage: bool = False
++
++
++class DeclareIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    manifest: dict[str, Any]
++    doc_id: str = Field(min_length=1, max_length=200)
++    issued_by: str = Field(min_length=1, max_length=200)
++    legislation: list[str] = Field(min_length=1)
++    standards: list[str] = []
++    notified_body: str = ""
++    notified_body_number: str = ""
++    signatory: str = ""
++    place: str = ""
++
++
++def _bad(exc: Exception, what: str) -> HTTPException:
++    return HTTPException(
++        # 422: unprocessable content.
++        status_code=422,
++        detail={"error": f"invalid_{what}", "detail": str(exc)},
++    )
++
++
++def _manifest(raw: dict[str, Any]) -> SafetyManifest:
++    try:
++        return SafetyManifest.from_dict(raw)
++    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
++        raise _bad(exc, "manifest") from exc
++
++
++def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
++    try:
++        return ComponentAdvisory.from_dict(raw)
++    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
++        raise _bad(exc, "advisory") from exc
++
++
++@fleet_router.post(
++    "/advisory/check",
++    summary="Is this one machine affected by this advisory?",
++)
++async def advisory_check(
++    body: AdvisoryCheckIn,
++    response: Response,
++    principal: Annotated[Principal, Anyone],
++    accounts: Annotated[AccountStore, Depends(get_accounts)],
++) -> dict[str, Any]:
++    """One advisory, one manifest, no account.
++
++    The match basis is always reported. ``hash`` settles it; ``version`` rests on
++    a label, and this system has already shown a label can be wrong;
++    ``hash_mismatch`` means the machine's own label and artefact disagree against
++    the supplier's published figures, which is neither affected nor clear.
++    """
++    limit = principal.plan.diffs_per_day
++    spend(principal, "advisory_check", limit, accounts)
++    response.headers["X-Assurance-Tier"] = principal.tier
++    if limit is not None:
++        used = accounts.usage_today(principal.subject).get("advisory_check", 0)
++        response.headers["X-Assurance-Quota-Limit"] = str(limit)
++        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
++
++    advisory = _advisory(body.advisory)
++    manifest = _manifest(body.manifest)
++
++    matches = []
++    for item in manifest.items:
++        matched = match_item(advisory, item)
++        if matched is None:
++            continue
++        basis, detail = matched
++        matches.append({
++            "item_id": item.item_id,
++            "item_name": item.name,
++            "item_version": item.version,
++            "basis": basis.value,
++            "confidence": basis.confidence,
++            "needs_a_human": basis.needs_a_human,
++            "detail": detail,
++            "implements": list(item.implements),
++        })
++
++    skipped = [
++        "this compares one advisory against one manifest. It says nothing about "
++        "any other machine, and it does not assess whether the safety evidence for "
++        "the affected functions still stands — that needs the ledger.",
++    ]
++    if not advisory.publishes_hashes:
++        skipped.append(
++            f"{advisory.issued_by} published no artefact hashes, so any match here "
++            "rests on a version label.")
++    unhashed = [i.item_id for i in manifest.uncomparable_items]
++    if unhashed:
++        skipped.append(
++            "item(s) " + ", ".join(unhashed) + " carry no hash, so an affected "
++            "component hiding in them would not be found.")
++
++    return {
++        "advisory_id": advisory.advisory_id,
++        "issued_by": advisory.issued_by,
++        "severity": advisory.severity.value,
++        "reference": advisory.reference,
++        "machine": manifest.machine.key,
++        "affected": bool(matches),
++        "matches": matches,
++        "remedy": advisory.remedy,
++        "checks_skipped": skipped,
++    }
++
++
++@fleet_router.get("/machines", summary="Every enrolled machine, worst coverage first")
++async def machines(
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    return Fleet.from_ledger(register.ledger).to_dict()
++
++
++@fleet_router.post(
++    "/advisory",
++    summary="Which of your machines does this advisory touch?",
++)
++async def advisory_impact(
++    body: AdvisoryIn,
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    """The fan-out: one advisory, every enrolled machine, down to safety functions.
++
++    A machine whose coverage was already stale is reported, and is not counted
++    as newly in question — an advisory does not make it worse, and mixing the two
++    hides the machines that were fine until this morning.
++    """
++    advisory = _advisory(body.advisory)
++    fleet = Fleet.from_ledger(register.ledger)
++    return assess_impact(advisory, fleet).to_dict()
++
++
++@fleet_router.post("/declare", summary="Bind a declaration to a configuration")
++async def declare(
++    body: DeclareIn,
++    principal: Annotated[Principal, Machine],
++) -> dict[str, Any]:
++    from assurance.core.identity import utc_now
++
++    manifest = _manifest(body.manifest)
++    try:
++        declaration = DeclarationOfConformity.bind(
++            manifest, doc_id=body.doc_id, issued_by=body.issued_by,
++            issued_at=utc_now(), legislation=tuple(body.legislation),
++            standards=tuple(body.standards), notified_body=body.notified_body,
++            notified_body_number=body.notified_body_number,
++            signatory=body.signatory, place=body.place,
++        )
++    except (AssuranceError, ValueError) as exc:
++        raise _bad(exc, "declaration") from exc
++    return {
++        "declaration": declaration.to_dict(),
++        "content_hash": declaration.content_hash(),
++        "note": "This declaration is bound to a configuration hash, so any later "
++                "manifest of this machine either matches it or does not.",
++    }
++
++
++@fleet_router.post(
++    "/declaration/check",
++    summary="Does this declaration still describe the machine? Free for anyone.",
++)
++async def declaration_check(
++    body: DeclarationCheckIn,
++    principal: Annotated[Principal, Anyone],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    """Free, because the person who most needs this is the buyer, not the seller.
++
++    Whether a changed configuration amounts to a substantial modification is a
++    question for the manufacturer and their notified body. What this settles is
++    the fact that question rests on.
++    """
++    try:
++        declaration = DeclarationOfConformity.from_dict(body.declaration)
++    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
++        raise _bad(exc, "declaration") from exc
++    manifest = _manifest(body.manifest)
++
++    coverage = None
++    if body.with_coverage and principal.plan.machine_verification:
++        key = manifest.machine.key
++        coverage = assess_coverage(
++            manifest,
++            VerificationRecord.from_ledger(register.ledger, subject=key),
++            interventions_from_ledger(register.ledger, key),
++        )
++
++    status = check_declaration(declaration, manifest, coverage)
++    payload = status.to_dict()
++    payload["coverage_assessed"] = coverage is not None
++    if body.with_coverage and coverage is None:
++        payload["checks_skipped"] = [
++            "coverage was requested and not assessed: reading the evidence ledger "
++            "needs a plan that includes machine verification. The configuration "
++            "comparison above is unaffected.",
++            *payload["checks_skipped"],
++        ]
++    return payload
+diff --git a/src/assurance/api/service.py b/src/assurance/api/service.py
+index 8857c45..eb27c2f 100644
+--- a/src/assurance/api/service.py
++++ b/src/assurance/api/service.py
+@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
+ from .. import __version__
+ from .billing_routes import billing_router
+ from .deps import auth_mode
++from .fleet_routes import fleet_router
+ from .machine_routes import machine_router
+ from .machinery_routes import machinery_router
+ from .routes import free_router, public_router, router
+@@ -74,6 +75,10 @@ def create_app(**kwargs: Any) -> FastAPI:
+                                                  "evidence of intervention, and which "
+                                                  "safety functions still have valid "
+                                                  "evidence."},
++            {"name": "fleet", "description": "Every enrolled machine at once: "
++                                             "component advisories fanned out to "
++                                             "serial numbers, and Declarations of "
++                                             "Conformity bound to a configuration."},
+             {"name": "billing", "description": "Plans, checkout, and your own account."},
+             {"name": "service", "description": "Liveness and configuration."},
+         ],
+@@ -93,6 +98,7 @@ def create_app(**kwargs: Any) -> FastAPI:
+     application.include_router(free_router)
+     application.include_router(machine_router)
+     application.include_router(machinery_router)
++    application.include_router(fleet_router)
+     application.include_router(router)
+     return application
+ 
+diff --git a/src/assurance/billing/plans.py b/src/assurance/billing/plans.py
+index 73c90ba..aefed5e 100644
+--- a/src/assurance/billing/plans.py
++++ b/src/assurance/billing/plans.py
+@@ -104,6 +104,11 @@ PLANS: dict[Tier, Plan] = {
+             "Always free: a bundle only a paying customer can check is worth nothing",
+             "POST /v1/machinery/diff — whether a machine still matches the "
+             "configuration it was CE-marked with",
++            "POST /v1/fleet/advisory/check — whether one supplier advisory affects "
++            "one machine",
++            "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
++            "still describes the machine you were sold. Always free: the person who "
++            "most needs this is the buyer, not the seller",
+             "20 validations and 20 separation calculations per day, per address",
+         ),
+     ),
+@@ -161,6 +166,11 @@ PLANS: dict[Tier, Plan] = {
+             "intervention record, and the machine passport",
+             "Coverage: which declared safety functions still have valid evidence, and "
+             "which intervention invalidated the rest",
++            "Fleet: every enrolled machine ranked worst-first, and a supplier "
++            "advisory fanned out to serial numbers and the safety functions it "
++            "puts in question",
++            "Declarations of Conformity bound to a configuration hash, so a "
++            "declaration can be shown to have stopped describing the machine",
+             "Unlimited product families and cases",
+             "Signed head attestation for the evidence ledger",
+             "Priority response",
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index c7f271c..b805fa5 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -8,6 +8,7 @@ _DOMAINS = {
+     "art14": "assurance.security.art14.cli",
+     "machine": "assurance.machine.cli",
+     "machinery": "assurance.machinery.cli",
++    "fleet": "assurance.fleet.cli",
+ }
+ 
+ 
+diff --git a/src/assurance/fleet/__init__.py b/src/assurance/fleet/__init__.py
+new file mode 100644
+index 0000000..203356e
+--- /dev/null
++++ b/src/assurance/fleet/__init__.py
+@@ -0,0 +1,56 @@
++"""Across machines: the fleet, component advisories, and the declaration.
++
++:mod:`assurance.machine` answers for one run. :mod:`assurance.machinery` answers
++for one machine. This package answers for everything an integrator is on the
++hook for at once.
++
++    registry     every machine in the ledger, worst first
++    advisory     a supplier's statement that a component version is affected
++    impact       that advisory fanned out to serial numbers and safety functions
++    declaration  the Declaration of Conformity, bound to a configuration hash
++
++The advisory fan-out is the part that gets more valuable with every machine
++enrolled, and the part nobody else can build: it needs the manifest fleet, the
++item→function→check map, and a coverage position, and those only exist together
++here.
++"""
++
++from assurance.fleet.advisory import (
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++    MatchBasis,
++    match_item,
++)
++from assurance.fleet.declaration import (
++    DeclarationOfConformity,
++    DeclarationStatus,
++    DeclarationVerdict,
++    check_declaration,
++)
++from assurance.fleet.impact import (
++    Exposure,
++    FunctionExposure,
++    ImpactReport,
++    assess_impact,
++)
++from assurance.fleet.registry import Fleet, FleetSummary, MachineRecord
++
++__all__ = [
++    "AdvisorySeverity",
++    "AffectedArtefact",
++    "ComponentAdvisory",
++    "DeclarationOfConformity",
++    "DeclarationStatus",
++    "DeclarationVerdict",
++    "Exposure",
++    "Fleet",
++    "FleetSummary",
++    "FunctionExposure",
++    "ImpactReport",
++    "MachineRecord",
++    "MatchBasis",
++    "assess_impact",
++    "check_declaration",
++    "match_item",
++]
+diff --git a/src/assurance/fleet/advisory.py b/src/assurance/fleet/advisory.py
+new file mode 100644
+index 0000000..aedc5f6
+--- /dev/null
++++ b/src/assurance/fleet/advisory.py
+@@ -0,0 +1,315 @@
++"""Component advisories, and what it actually takes to match one to a machine.
++
++A robot cell is assembled from other people's software. The robot controller is
++one supplier's, the safety scanner another's, the safety PLC a third's. Each
++publishes advisories to a mailing list. The integrator who took the CE liability
++for the assembly receives them, and has no way on earth to answer the only
++question that matters: *which of my machines, in which of my customers' plants,
++is running the affected version?*
++
++Matching is where this goes wrong, and the failure is always the same: a version
++label is not an artefact. :mod:`assurance.machinery` already proves that a
++firmware can be replaced without the version string moving. So an advisory is
++matched on the strongest evidence available and the basis is reported, never
++flattened:
++
++``hash``
++    The artefact on the machine is byte-identical to one the supplier named.
++    There is nothing to argue about.
++
++``hash_mismatch``
++    The machine reports a version the advisory names, and the artefact does
++    **not** hash to what the supplier published for that version. Either the
++    supplier's figure is wrong or the machine is not running what it says. Both
++    are serious and neither is "affected" or "not affected" — this is its own
++    finding, and no other system on the market can produce it.
++
++``version``
++    The supplier, name and version label match. The supplier published no hash,
++    so this rests on a label.
++
++``name_only``
++    Same supplier and component, version unknown or not listed. A human has to
++    look.
++
++No version-range arithmetic. Vendor version schemes are not semver, parsing them
++as if they were is how a cell gets cleared that should have been stopped, and an
++advisory that means "everything before 3.9" can enumerate the versions it means.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from datetime import datetime
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import content_hash_of, format_utc, parse_utc
++from assurance.machinery.manifest import SafetyItem
++
++__all__ = [
++    "AdvisoryError",
++    "AdvisorySeverity",
++    "AffectedArtefact",
++    "ComponentAdvisory",
++    "MatchBasis",
++    "match_item",
++]
++
++
++class AdvisoryError(AssuranceError):
++    """An advisory is malformed, or identifies nothing it could be matched on."""
++
++
++class AdvisorySeverity(StrEnum):
++    #: Worth knowing. Does not by itself put a safety function in question.
++    INFORMATIONAL = "informational"
++    #: The supplier says a safety function may be compromised.
++    SAFETY_RELEVANT = "safety_relevant"
++    #: The supplier says the machine should not run until it is remedied.
++    STOP_USE = "stop_use"
++
++    @property
++    def rank(self) -> int:
++        return {"informational": 0, "safety_relevant": 1, "stop_use": 2}[self.value]
++
++    @property
++    def puts_functions_in_question(self) -> bool:
++        return self.rank >= AdvisorySeverity.SAFETY_RELEVANT.rank
++
++
++class MatchBasis(StrEnum):
++    """What the match rests on. Never flattened into a boolean."""
++
++    HASH = "hash"
++    HASH_MISMATCH = "hash_mismatch"
++    VERSION = "version"
++    NAME_ONLY = "name_only"
++
++    @property
++    def confidence(self) -> str:
++        return {
++            "hash": "confirmed",
++            "hash_mismatch": "contradictory",
++            "version": "probable",
++            "name_only": "possible",
++        }[self.value]
++
++    @property
++    def needs_a_human(self) -> bool:
++        return self in (MatchBasis.HASH_MISMATCH, MatchBasis.NAME_ONLY)
++
++
++@dataclass(frozen=True)
++class AffectedArtefact:
++    """One component version set an advisory names.
++
++    ``content_hashes`` is what a supplier should publish and mostly does not.
++    When they do, the match is beyond argument; when they do not, the advisory
++    still works on labels and every downstream statement says so.
++    """
++
++    supplier: str
++    name: str
++    versions: tuple[str, ...] = ()
++    content_hashes: tuple[str, ...] = ()
++    #: Free text where the supplier expressed a range. Displayed, never parsed.
++    version_note: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.supplier or not self.name:
++            raise AdvisoryError(
++                "an affected artefact needs a supplier and a component name; "
++                "without both it cannot be matched to anything."
++            )
++        if not self.versions and not self.content_hashes:
++            raise AdvisoryError(
++                f"{self.supplier} {self.name}: the advisory names neither a version "
++                "nor a hash, so it would match every version of this component ever "
++                "shipped. List the affected versions, or the hashes."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "supplier": self.supplier, "name": self.name,
++            "versions": list(self.versions),
++            "content_hashes": list(self.content_hashes),
++            "version_note": self.version_note,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> AffectedArtefact:
++        return cls(
++            supplier=str(d["supplier"]), name=str(d["name"]),
++            versions=tuple(str(v) for v in (d.get("versions") or ())),
++            content_hashes=tuple(str(h) for h in (d.get("content_hashes") or ())),
++            version_note=str(d.get("version_note", "")),
++        )
++
++
++@dataclass(frozen=True)
++class ComponentAdvisory:
++    """A supplier's statement that a component version is affected.
++
++    The advisory deliberately does **not** name the customer's safety functions.
++    It cannot know them. It says what is affected and whether the matter is
++    safety-relevant; which of *this* customer's functions are put in question is
++    derived from *their* manifest, which is the only place that mapping honestly
++    lives.
++    """
++
++    advisory_id: str
++    issued_by: str
++    issued_at: datetime
++    title: str
++    summary: str
++    severity: AdvisorySeverity
++    affected: tuple[AffectedArtefact, ...]
++    remedy: str = ""
++    #: Where a reader goes to check this against the source.
++    reference: str = ""
++    #: Versions or hashes the supplier says are not affected.
++    fixed_versions: tuple[str, ...] = ()
++    fixed_hashes: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        if not self.advisory_id or not self.issued_by:
++            raise AdvisoryError("an advisory needs an id and an issuer.")
++        if not self.affected:
++            raise AdvisoryError(
++                f"advisory {self.advisory_id!r} names no affected artefact."
++            )
++        if self.issued_at.tzinfo is None:
++            raise AdvisoryError(
++                f"advisory {self.advisory_id!r} issued_at has no timezone.")
++        if not self.reference:
++            raise AdvisoryError(
++                f"advisory {self.advisory_id!r} carries no reference. An advisory a "
++                "reader cannot trace to its source is a rumour."
++            )
++
++    @property
++    def publishes_hashes(self) -> bool:
++        return any(a.content_hashes for a in self.affected)
++
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "advisory_id": self.advisory_id,
++            "issued_by": self.issued_by,
++            "issued_at": format_utc(self.issued_at),
++            "title": self.title,
++            "summary": self.summary,
++            "severity": self.severity.value,
++            "affected": [a.to_dict() for a in self.affected],
++            "remedy": self.remedy,
++            "reference": self.reference,
++            "fixed_versions": list(self.fixed_versions),
++            "fixed_hashes": list(self.fixed_hashes),
++        }
++
++    def content_hash(self) -> str:
++        return content_hash_of(self.hashable_payload())
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> ComponentAdvisory:
++        return cls(
++            advisory_id=str(d["advisory_id"]),
++            issued_by=str(d["issued_by"]),
++            issued_at=parse_utc(str(d["issued_at"])),
++            title=str(d.get("title", "")),
++            summary=str(d.get("summary", "")),
++            severity=AdvisorySeverity(str(d["severity"])),
++            affected=tuple(AffectedArtefact.from_dict(a) for a in d["affected"]),
++            remedy=str(d.get("remedy", "")),
++            reference=str(d.get("reference", "")),
++            fixed_versions=tuple(str(v) for v in (d.get("fixed_versions") or ())),
++            fixed_hashes=tuple(str(h) for h in (d.get("fixed_hashes") or ())),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> ComponentAdvisory:
++        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
++
++
++def _same_component(artefact: AffectedArtefact, item: SafetyItem) -> bool:
++    """Supplier and component name, compared case-insensitively and trimmed.
++
++    Deliberately not fuzzy. "ControlCo" and "Control Co GmbH" are different
++    strings, and guessing they are the same supplier is how an advisory silently
++    fails to match, or matches something it should not.
++    """
++    return (artefact.supplier.strip().lower() == item.supplier.strip().lower()
++            and artefact.name.strip().lower() == item.name.strip().lower())
++
++
++def match_item(
++    advisory: ComponentAdvisory, item: SafetyItem,
++) -> tuple[MatchBasis, str] | None:
++    """Does this advisory touch this item? Returns ``(basis, detail)`` or ``None``.
++
++    The order of evidence is fixed: a hash that matches settles it; a version
++    label that matches while the hash contradicts the supplier's published value
++    is its own finding and outranks a plain label match.
++    """
++    for artefact in advisory.affected:
++        if not _same_component(artefact, item):
++            continue
++
++        if item.content_hash and item.content_hash in artefact.content_hashes:
++            return MatchBasis.HASH, (
++                f"the artefact on this machine is byte-identical to one "
++                f"{advisory.issued_by} named as affected "
++                f"({item.content_hash[:12]})."
++            )
++
++        label_matches = item.version and item.version in artefact.versions
++
++        if label_matches and artefact.content_hashes and item.content_hash:
++            # The supplier published hashes for this version and ours is not
++            # among them. This is not "affected" and not "clear".
++            if item.content_hash in advisory.fixed_hashes:
++                return MatchBasis.HASH_MISMATCH, (
++                    f"this machine reports version {item.version!r}, which the "
++                    f"advisory names, but the artefact hashes to a value "
++                    f"{advisory.issued_by} lists as FIXED "
++                    f"({item.content_hash[:12]}). The label is stale; the software "
++                    "may already be remedied. Confirm before acting."
++                )
++            return MatchBasis.HASH_MISMATCH, (
++                f"this machine reports version {item.version!r}, which the advisory "
++                f"names, but the artefact hashes to {item.content_hash[:12]}, which "
++                f"is not among the hashes {advisory.issued_by} published for that "
++                "version. Either the supplier's figure is wrong or this machine is "
++                "not running what it says it is running. Both need a person."
++            )
++
++        if label_matches:
++            return MatchBasis.VERSION, (
++                f"the version label {item.version!r} matches one the advisory names. "
++                f"{advisory.issued_by} published no artefact hash, so this rests on "
++                "a label, and a label is not an artefact."
++            )
++
++        if item.content_hash and item.content_hash in advisory.fixed_hashes:
++            continue  # demonstrably remedied
++
++        if item.version and (artefact.versions or advisory.fixed_versions):
++            if item.version in advisory.fixed_versions:
++                continue  # the supplier says this version is fixed
++            continue  # a known version that is not on the affected list
++
++        return MatchBasis.NAME_ONLY, (
++            f"this is {artefact.supplier} {artefact.name}, which the advisory "
++            "concerns, but the version on this machine is "
++            + (f"{item.version!r}, which the advisory does not list"
++               if item.version else "not recorded")
++            + ". Somebody has to look."
++        )
++
++    return None
+diff --git a/src/assurance/fleet/cli.py b/src/assurance/fleet/cli.py
+new file mode 100644
+index 0000000..2c600b7
+--- /dev/null
++++ b/src/assurance/fleet/cli.py
+@@ -0,0 +1,176 @@
++"""``assurance fleet`` — every machine at once, and what an advisory means for them.
++
++    list        every machine in the ledger, worst coverage first
++    advisory    fan a component advisory out across the fleet
++    declare     bind a Declaration of Conformity to the configuration in front of you
++    declaration check a declaration against what the machine runs today
++
++``advisory`` and ``declaration`` exit non-zero on a finding, so both belong in
++whatever runs when a supplier bulletin lands or before a machine ships.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import parse_utc, utc_now
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import ComponentAdvisory
++from assurance.fleet.declaration import (
++    DeclarationOfConformity,
++    check_declaration,
++)
++from assurance.fleet.impact import assess_impact
++from assurance.fleet.registry import Fleet
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.record import interventions_from_ledger
++from assurance.machinery.staleness import VerificationRecord, assess_coverage
++
++__all__ = ["build_parser", "main"]
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance fleet",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    ls = verbs.add_parser("list", help="every machine, worst coverage first")
++    ls.add_argument("--ledger", required=True, type=Path)
++    ls.add_argument("--json", action="store_true")
++
++    ad = verbs.add_parser("advisory", help="which machines does this advisory touch")
++    ad.add_argument("advisory", type=Path)
++    ad.add_argument("--ledger", required=True, type=Path)
++    ad.add_argument("--json", action="store_true")
++
++    dc = verbs.add_parser("declare",
++                          help="bind a declaration to a manifest's configuration")
++    dc.add_argument("manifest", type=Path)
++    dc.add_argument("--doc-id", required=True)
++    dc.add_argument("--issued-by", required=True)
++    dc.add_argument("--legislation", required=True, action="append",
++                    help="repeatable, e.g. --legislation 'Regulation (EU) 2023/1230'")
++    dc.add_argument("--standard", action="append", default=[])
++    dc.add_argument("--notified-body", default="")
++    dc.add_argument("--notified-body-number", default="")
++    dc.add_argument("--signatory", default="")
++    dc.add_argument("--place", default="")
++    dc.add_argument("--issued-at", default="",
++                    help="ISO timestamp; defaults to now")
++    dc.add_argument("--out", type=Path, default=None)
++
++    ck = verbs.add_parser("declaration",
++                          help="does the declaration still describe the machine")
++    ck.add_argument("declaration", type=Path)
++    ck.add_argument("--manifest", required=True, type=Path)
++    ck.add_argument("--ledger", type=Path, default=None,
++                    help="also assess whether the safety evidence still stands")
++    ck.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _cmd_list(args: argparse.Namespace) -> int:
++    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
++    if args.json:
++        print(json.dumps(fleet.to_dict(), indent=2))
++    else:
++        print(fleet.table())
++    return 0 if not fleet.with_gaps() else 1
++
++
++def _cmd_advisory(args: argparse.Namespace) -> int:
++    advisory = ComponentAdvisory.from_json(args.advisory)
++    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
++    report = assess_impact(advisory, fleet)
++    if args.json:
++        print(json.dumps(report.to_dict(), indent=2))
++    else:
++        print(report.summary())
++        if report.checks_skipped:
++            print("\n  not checked:")
++            for c in report.checks_skipped:
++                print(f"    - {c}")
++    return 0 if report.verdict == "clear" else 1
++
++
++def _cmd_declare(args: argparse.Namespace) -> int:
++    manifest = SafetyManifest.from_json(args.manifest)
++    issued = parse_utc(args.issued_at) if args.issued_at else utc_now()
++    declaration = DeclarationOfConformity.bind(
++        manifest, doc_id=args.doc_id, issued_by=args.issued_by, issued_at=issued,
++        legislation=tuple(args.legislation), standards=tuple(args.standard),
++        notified_body=args.notified_body,
++        notified_body_number=args.notified_body_number,
++        signatory=args.signatory, place=args.place,
++    )
++    payload = json.dumps(declaration.to_dict(), indent=2, sort_keys=True) + "\n"
++    if args.out:
++        Path(args.out).write_text(payload, encoding="utf-8")
++        print(f"declaration {declaration.doc_id} written to {args.out}")
++        print(f"  machine        {declaration.machine_key}")
++        print(f"  configuration  {declaration.configuration_hash[:16]}")
++        print(f"  identity       {declaration.content_hash()[:16]}")
++        print("  This declaration is now checkable: any later manifest of this "
++              "machine either matches that configuration or does not.")
++    else:
++        print(payload, end="")
++    return 0
++
++
++def _cmd_declaration(args: argparse.Namespace) -> int:
++    declaration = DeclarationOfConformity.from_json(args.declaration)
++    manifest = SafetyManifest.from_json(args.manifest)
++
++    coverage = None
++    if args.ledger:
++        ledger = EvidenceLedger(args.ledger)
++        key = manifest.machine.key
++        coverage = assess_coverage(
++            manifest,
++            VerificationRecord.from_ledger(ledger, subject=key),
++            interventions_from_ledger(ledger, key),
++        )
++
++    status = check_declaration(declaration, manifest, coverage)
++    if args.json:
++        print(json.dumps(status.to_dict(), indent=2))
++    else:
++        print(status.summary())
++        if status.checks_skipped:
++            print("\n  not checked:")
++            for c in status.checks_skipped:
++                print(f"    - {c}")
++        if coverage is None:
++            print("\n  Supply --ledger to check the evidence as well as the "
++                  "configuration.")
++    return 0 if status.is_sound else 1
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {
++        "list": _cmd_list,
++        "advisory": _cmd_advisory,
++        "declare": _cmd_declare,
++        "declaration": _cmd_declaration,
++    }
++    try:
++        return handlers[args.command](args)
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/fleet/declaration.py b/src/assurance/fleet/declaration.py
+new file mode 100644
+index 0000000..9bca1da
+--- /dev/null
++++ b/src/assurance/fleet/declaration.py
+@@ -0,0 +1,317 @@
++"""The Declaration of Conformity, bound to a configuration that can be checked.
++
++An EU Declaration of Conformity is the legal instrument. The manufacturer signs
++that a machine conforms to the applicable legislation. It names the machine, the
++legislation, the standards applied, and where relevant the notified body.
++
++What it has never named is *which software configuration it was signed against*,
++because until there was a configuration hash there was nothing to name. So the
++declaration silently goes on describing a machine that stopped existing the day
++a technician updated the firmware, and nobody can point at the moment it stopped
++being true.
++
++Binding a declaration to :meth:`SafetyManifest.configuration_hash` fixes that,
++and produces the one sentence an integrator's lawyer needs to see:
++
++    Your Declaration of Conformity covers configuration 108b15f43f26.
++    Serial 0412 currently runs 6acb6ee2e14e. The declaration does not
++    describe this machine.
++
++This module makes no legal judgement and says so. Whether a changed
++configuration amounts to a substantial modification requiring a new conformity
++assessment is a question for the manufacturer and their notified body. What this
++establishes is the fact the question rests on: the configuration is not the one
++that was declared.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from datetime import datetime
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import content_hash_of, format_utc, parse_utc
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.staleness import Coverage, CoverageReport
++
++__all__ = [
++    "DeclarationError",
++    "DeclarationOfConformity",
++    "DeclarationStatus",
++    "DeclarationVerdict",
++    "check_declaration",
++]
++
++
++class DeclarationError(AssuranceError):
++    """A declaration is incomplete or cannot be bound to a configuration."""
++
++
++class DeclarationVerdict(StrEnum):
++    #: The machine runs the configuration the declaration was signed against,
++    #: and the evidence for every declared safety function still stands.
++    DESCRIBES_THE_MACHINE = "describes_the_machine"
++    #: The configuration is the declared one; some safety evidence has lapsed.
++    CONFIGURATION_INTACT_EVIDENCE_LAPSED = "configuration_intact_evidence_lapsed"
++    #: The machine no longer runs the configuration that was declared.
++    CONFIGURATION_CHANGED = "configuration_changed"
++    #: The declaration is about a different machine.
++    WRONG_MACHINE = "wrong_machine"
++
++    @property
++    def is_sound(self) -> bool:
++        return self is DeclarationVerdict.DESCRIBES_THE_MACHINE
++
++
++@dataclass(frozen=True)
++class DeclarationOfConformity:
++    """A declaration, bound to the configuration it was signed against."""
++
++    doc_id: str
++    machine_key: str
++    issued_by: str
++    issued_at: datetime
++    #: The manifest configuration hash this declaration covers. This is the
++    #: field the whole module exists for; without it a declaration cannot be
++    #: checked against anything.
++    configuration_hash: str
++    #: e.g. "Regulation (EU) 2023/1230", "Regulation (EU) 2024/2847"
++    legislation: tuple[str, ...] = ()
++    #: Harmonised standards applied, as they appear on the declaration.
++    standards: tuple[str, ...] = ()
++    notified_body: str = ""
++    notified_body_number: str = ""
++    signatory: str = ""
++    place: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.doc_id or not self.machine_key:
++            raise DeclarationError(
++                "a declaration needs an identifier and the machine it is about.")
++        if not self.configuration_hash:
++            raise DeclarationError(
++                f"declaration {self.doc_id!r} names no configuration hash. A "
++                "declaration that is not bound to a configuration cannot be shown "
++                "to describe, or to stop describing, any particular machine — "
++                "which is the situation this module exists to end."
++            )
++        if self.issued_at.tzinfo is None:
++            raise DeclarationError(
++                f"declaration {self.doc_id!r} issued_at has no timezone.")
++        if not self.legislation:
++            raise DeclarationError(
++                f"declaration {self.doc_id!r} names no legislation. A declaration "
++                "of conformity to nothing in particular is not a declaration."
++            )
++
++    def covers(self, manifest: SafetyManifest) -> bool:
++        """Whether this declaration was signed against this exact configuration."""
++        return (manifest.machine.key == self.machine_key
++                and manifest.configuration_hash() == self.configuration_hash)
++
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "doc_id": self.doc_id,
++            "machine_key": self.machine_key,
++            "issued_by": self.issued_by,
++            "issued_at": format_utc(self.issued_at),
++            "configuration_hash": self.configuration_hash,
++            "legislation": list(self.legislation),
++            "standards": list(self.standards),
++            "notified_body": self.notified_body,
++            "notified_body_number": self.notified_body_number,
++            "signatory": self.signatory,
++            "place": self.place,
++        }
++
++    def content_hash(self) -> str:
++        return content_hash_of(self.hashable_payload())
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> DeclarationOfConformity:
++        return cls(
++            doc_id=str(d["doc_id"]),
++            machine_key=str(d["machine_key"]),
++            issued_by=str(d.get("issued_by", "")),
++            issued_at=parse_utc(str(d["issued_at"])),
++            configuration_hash=str(d.get("configuration_hash", "")),
++            legislation=tuple(str(x) for x in (d.get("legislation") or ())),
++            standards=tuple(str(x) for x in (d.get("standards") or ())),
++            notified_body=str(d.get("notified_body", "")),
++            notified_body_number=str(d.get("notified_body_number", "")),
++            signatory=str(d.get("signatory", "")),
++            place=str(d.get("place", "")),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> DeclarationOfConformity:
++        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
++
++    @classmethod
++    def bind(
++        cls, manifest: SafetyManifest, *, doc_id: str, issued_by: str,
++        issued_at: datetime, legislation: tuple[str, ...],
++        standards: tuple[str, ...] = (), notified_body: str = "",
++        notified_body_number: str = "", signatory: str = "", place: str = "",
++    ) -> DeclarationOfConformity:
++        """Create a declaration bound to the configuration in front of you."""
++        return cls(
++            doc_id=doc_id, machine_key=manifest.machine.key, issued_by=issued_by,
++            issued_at=issued_at,
++            configuration_hash=manifest.configuration_hash(),
++            legislation=legislation, standards=standards,
++            notified_body=notified_body, notified_body_number=notified_body_number,
++            signatory=signatory, place=place,
++        )
++
++
++@dataclass(frozen=True)
++class DeclarationStatus:
++    """Whether the declaration still describes the machine, and on what evidence."""
++
++    doc_id: str
++    machine_key: str
++    verdict: DeclarationVerdict
++    declared_configuration: str
++    current_configuration: str
++    lapsed_functions: tuple[str, ...]
++    statement: str
++    checks_skipped: tuple[str, ...]
++
++    @property
++    def is_sound(self) -> bool:
++        return self.verdict.is_sound
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "doc_id": self.doc_id,
++            "machine": self.machine_key,
++            "verdict": self.verdict.value,
++            "declared_configuration": self.declared_configuration,
++            "current_configuration": self.current_configuration,
++            "lapsed_functions": list(self.lapsed_functions),
++            "statement": self.statement,
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        lines = [f"{self.doc_id} — {self.verdict.value.replace('_', ' ').upper()}",
++                 f"  {self.statement}"]
++        if self.lapsed_functions:
++            lines.append(f"  lapsed: {', '.join(self.lapsed_functions)}")
++        return "\n".join(lines)
++
++
++def check_declaration(
++    declaration: DeclarationOfConformity,
++    manifest: SafetyManifest,
++    coverage: CoverageReport | None = None,
++) -> DeclarationStatus:
++    """Does this declaration still describe this machine?
++
++    Two separate questions, reported separately because they have different
++    remedies. *Is the configuration the declared one?* — if not, the declaration
++    is about software that is no longer installed. *Does the evidence for the
++    declared safety functions still stand?* — if not, the configuration is right
++    and the demonstration behind it has lapsed.
++    """
++    current = manifest.configuration_hash()
++    caveats: list[str] = [
++        "this establishes whether the configuration is the declared one. Whether a "
++        "change amounts to a substantial modification requiring a new conformity "
++        "assessment is a question for the manufacturer and, where one is involved, "
++        "the notified body. Nothing here is legal advice.",
++    ]
++
++    if manifest.machine.key != declaration.machine_key:
++        return DeclarationStatus(
++            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
++            verdict=DeclarationVerdict.WRONG_MACHINE,
++            declared_configuration=declaration.configuration_hash,
++            current_configuration=current, lapsed_functions=(),
++            statement=(
++                f"declaration {declaration.doc_id} is about "
++                f"{declaration.machine_key}, and this manifest is about "
++                f"{manifest.machine.key}. It says nothing about this machine."
++            ),
++            checks_skipped=tuple(caveats),
++        )
++
++    if manifest.uncomparable_items:
++        caveats.append(
++            f"{len(manifest.uncomparable_items)} item(s) in this manifest carry no "
++            "hash and therefore do not contribute to the configuration hash. A "
++            "change confined to those items leaves the configuration hash unmoved "
++            "and would not appear here."
++        )
++
++    lapsed: tuple[str, ...] = ()
++    if coverage is not None:
++        lapsed = tuple(f.function_id for f in coverage.functions
++                       if f.coverage is not Coverage.CURRENT)
++        undem = [f.function_id for f in coverage.functions
++                 if f.coverage is Coverage.NOT_DEMONSTRABLE]
++        if undem:
++            caveats.append(
++                "safety function(s) " + ", ".join(undem) + " declare no verification "
++                "check, so this says nothing about whether they are demonstrated. "
++                "They are counted as lapsed because 'not shown' is not 'shown'."
++            )
++    else:
++        caveats.append(
++            "no coverage assessment was supplied, so only the configuration was "
++            "compared. The declaration may name a configuration that is intact and "
++            "safety functions whose demonstration has lapsed."
++        )
++
++    if current != declaration.configuration_hash:
++        return DeclarationStatus(
++            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
++            verdict=DeclarationVerdict.CONFIGURATION_CHANGED,
++            declared_configuration=declaration.configuration_hash,
++            current_configuration=current, lapsed_functions=lapsed,
++            statement=(
++                f"declaration {declaration.doc_id}, issued "
++                f"{format_utc(declaration.issued_at)[:10]} by "
++                f"{declaration.issued_by or 'the manufacturer'}, covers configuration "
++                f"{declaration.configuration_hash[:12]}. "
++                f"{manifest.machine.key} currently runs {current[:12]}. The "
++                "declaration does not describe this machine."
++            ),
++            checks_skipped=tuple(caveats),
++        )
++
++    if lapsed:
++        return DeclarationStatus(
++            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
++            verdict=DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_LAPSED,
++            declared_configuration=declaration.configuration_hash,
++            current_configuration=current, lapsed_functions=lapsed,
++            statement=(
++                f"the configuration is the one declaration {declaration.doc_id} was "
++                f"signed against ({current[:12]}), and the evidence for "
++                + ", ".join(lapsed) + " no longer stands. The declaration names a "
++                "machine that is unchanged and a demonstration that has lapsed."
++            ),
++            checks_skipped=tuple(caveats),
++        )
++
++    return DeclarationStatus(
++        doc_id=declaration.doc_id, machine_key=manifest.machine.key,
++        verdict=DeclarationVerdict.DESCRIBES_THE_MACHINE,
++        declared_configuration=declaration.configuration_hash,
++        current_configuration=current, lapsed_functions=(),
++        statement=(
++            f"{manifest.machine.key} runs configuration {current[:12]}, which is the "
++            f"one declaration {declaration.doc_id} was signed against, and every "
++            "declared safety function has evidence that still stands."
++        ),
++        checks_skipped=tuple(caveats),
++    )
+diff --git a/src/assurance/fleet/impact.py b/src/assurance/fleet/impact.py
+new file mode 100644
+index 0000000..76a8acb
+--- /dev/null
++++ b/src/assurance/fleet/impact.py
+@@ -0,0 +1,297 @@
++"""An advisory arrives. Which machines, which functions, which serial numbers?
++
++This is the join the whole system was built to make.
++
++A supplier publishes: *firmware 3.8.2 has a watchdog defect.* Today that lands
++in an inbox and the integrator who carries the CE liability for forty cells has
++no way to answer the only question that matters. The mailing list does not know
++what is installed anywhere. The plant does not know what its cells are made of.
++The supplier does not know who bought what.
++
++The manifest fleet does. And because :mod:`assurance.machinery` already maps
++item → safety function → verification check → coverage, an advisory does not
++stop at *you have eleven affected machines*. It reaches all the way to:
++
++    AR-7#0412  Plant 2, Line 4   confirmed by hash
++        SF-01 was CURRENT, verified 9 February — now in question
++        SF-02 was CURRENT, verified 9 February — now in question
++
++A machine whose coverage was already stale is reported separately: an advisory
++does not make it worse, and mixing the two would hide the machines that were
++fine until this morning.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any
++
++from assurance.core.identity import format_utc, utc_now
++from assurance.fleet.advisory import AdvisorySeverity, ComponentAdvisory, MatchBasis, match_item
++from assurance.fleet.registry import Fleet
++from assurance.machinery.staleness import Coverage
++
++__all__ = ["Exposure", "FunctionExposure", "ImpactReport", "assess_impact"]
++
++
++@dataclass(frozen=True)
++class FunctionExposure:
++    """One safety function on one machine, and what the advisory does to it."""
++
++    function_id: str
++    description: str
++    coverage_before: Coverage
++    #: True when this function had standing evidence that the advisory unsettles.
++    newly_in_question: bool
++    last_verified_at: str = ""
++    last_verified_hash: str = ""
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "function_id": self.function_id,
++            "description": self.description,
++            "coverage_before": self.coverage_before.value,
++            "newly_in_question": self.newly_in_question,
++            "last_verified_at": self.last_verified_at,
++            "last_verified_hash": self.last_verified_hash,
++        }
++
++
++@dataclass(frozen=True)
++class Exposure:
++    """One machine, one item, one advisory."""
++
++    machine_key: str
++    site: str
++    item_id: str
++    item_name: str
++    item_version: str
++    basis: MatchBasis
++    detail: str
++    functions: tuple[FunctionExposure, ...]
++
++    @property
++    def confidence(self) -> str:
++        return self.basis.confidence
++
++    @property
++    def needs_a_human(self) -> bool:
++        return self.basis.needs_a_human
++
++    @property
++    def newly_in_question(self) -> tuple[FunctionExposure, ...]:
++        return tuple(f for f in self.functions if f.newly_in_question)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "machine": self.machine_key,
++            "site": self.site,
++            "item_id": self.item_id,
++            "item_name": self.item_name,
++            "item_version": self.item_version,
++            "basis": self.basis.value,
++            "confidence": self.confidence,
++            "needs_a_human": self.needs_a_human,
++            "detail": self.detail,
++            "functions": [f.to_dict() for f in self.functions],
++            "newly_in_question": [f.function_id for f in self.newly_in_question],
++        }
++
++
++@dataclass(frozen=True)
++class ImpactReport:
++    """Everything one advisory means for one fleet."""
++
++    advisory_id: str
++    advisory_hash: str
++    issued_by: str
++    severity: AdvisorySeverity
++    title: str
++    reference: str
++    assessed_at: str
++    machines_in_fleet: int
++    exposures: tuple[Exposure, ...]
++    checks_skipped: tuple[str, ...]
++
++    @property
++    def machines_affected(self) -> tuple[str, ...]:
++        out: list[str] = []
++        for e in self.exposures:
++            if e.machine_key not in out:
++                out.append(e.machine_key)
++        return tuple(out)
++
++    @property
++    def confirmed(self) -> tuple[Exposure, ...]:
++        return tuple(e for e in self.exposures if e.basis is MatchBasis.HASH)
++
++    @property
++    def contradictory(self) -> tuple[Exposure, ...]:
++        """Machines whose label and artefact disagree with the supplier's own figures."""
++        return tuple(e for e in self.exposures if e.basis is MatchBasis.HASH_MISMATCH)
++
++    @property
++    def needing_a_human(self) -> tuple[Exposure, ...]:
++        return tuple(e for e in self.exposures if e.needs_a_human)
++
++    @property
++    def functions_newly_in_question(self) -> int:
++        return sum(len(e.newly_in_question) for e in self.exposures)
++
++    @property
++    def verdict(self) -> str:
++        """``clear`` | ``exposed`` | ``needs_review``."""
++        if not self.exposures:
++            return "clear"
++        if any(e.newly_in_question for e in self.exposures):
++            return "exposed"
++        return "needs_review"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "advisory_id": self.advisory_id,
++            "advisory_hash": self.advisory_hash,
++            "issued_by": self.issued_by,
++            "severity": self.severity.value,
++            "title": self.title,
++            "reference": self.reference,
++            "assessed_at": self.assessed_at,
++            "verdict": self.verdict,
++            "machines_in_fleet": self.machines_in_fleet,
++            "machines_affected": list(self.machines_affected),
++            "functions_newly_in_question": self.functions_newly_in_question,
++            "exposures": [e.to_dict() for e in self.exposures],
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        head = {
++            "clear": "CLEAR — no machine in this fleet matches this advisory",
++            "exposed": "EXPOSED — standing safety evidence is now in question",
++            "needs_review": "NEEDS REVIEW — matches found, none with standing evidence",
++        }[self.verdict]
++        lines = [
++            f"{self.advisory_id} ({self.issued_by}, {self.severity.value}) — {head}",
++            f"  {self.title}",
++            f"  {len(self.machines_affected)} of {self.machines_in_fleet} machine(s) "
++            f"match; {self.functions_newly_in_question} safety function(s) newly in "
++            "question",
++        ]
++        order = {"hash": 0, "hash_mismatch": 1, "version": 2, "name_only": 3}
++        for e in sorted(self.exposures,
++                        key=lambda e: (order[e.basis.value], e.machine_key)):
++            lines.append("")
++            lines.append(f"  {e.machine_key}   {e.site or '—'}   "
++                         f"[{e.confidence}] {e.item_id} {e.item_version}")
++            lines.append(f"      {e.detail}")
++            for f in e.functions:
++                if f.newly_in_question:
++                    flag = "→ NOW IN QUESTION"
++                elif e.basis is MatchBasis.HASH_MISMATCH:
++                    # Neither column: we cannot say whether this machine is
++                    # affected, so we must not say its evidence is fine either.
++                    flag = (f"→ UNRESOLVED (coverage: "
++                            f"{f.coverage_before.value.replace('_', ' ')})")
++                else:
++                    flag = (f"(coverage already "
++                            f"{f.coverage_before.value.replace('_', ' ')})")
++                when = (f", verified {f.last_verified_at[:10]}"
++                        if f.last_verified_at else "")
++                lines.append(f"      {f.function_id}  {f.description}{when}  {flag}")
++        return "\n".join(lines)
++
++
++def assess_impact(advisory: ComponentAdvisory, fleet: Fleet) -> ImpactReport:
++    """Fan one advisory out across a fleet, all the way to safety functions."""
++    exposures: list[Exposure] = []
++    caveats: list[str] = []
++
++    for record in fleet.records:
++        for item in record.manifest.items:
++            matched = match_item(advisory, item)
++            if matched is None:
++                continue
++            basis, detail = matched
++
++            functions: list[FunctionExposure] = []
++            for fn in record.manifest.functions_of(item):
++                cov = next((c for c in record.coverage.functions
++                            if c.function_id == fn.function_id), None)
++                before = cov.coverage if cov else Coverage.NEVER_VERIFIED
++                functions.append(FunctionExposure(
++                    function_id=fn.function_id,
++                    description=fn.description,
++                    coverage_before=before,
++                    # An advisory only unsettles evidence that was standing.
++                    # Something already stale is not made worse by it.
++                    newly_in_question=(
++                        before is Coverage.CURRENT
++                        and advisory.severity.puts_functions_in_question
++                        and basis is not MatchBasis.HASH_MISMATCH
++                    ),
++                    last_verified_at=cov.last_verified_at if cov else "",
++                    last_verified_hash=cov.last_verified_hash if cov else "",
++                ))
++
++            exposures.append(Exposure(
++                machine_key=record.machine_key,
++                site=record.manifest.machine.site,
++                item_id=item.item_id,
++                item_name=item.name,
++                item_version=item.version,
++                basis=basis, detail=detail,
++                functions=tuple(functions),
++            ))
++
++            if basis is MatchBasis.HASH_MISMATCH:
++                caveats.append(
++                    f"{record.machine_key} / {item.item_id}: the version label and "
++                    "the artefact hash disagree against the supplier's own published "
++                    "figures. This machine is neither confirmed affected nor "
++                    "confirmed clear, and it is counted in neither column."
++                )
++            if basis is not MatchBasis.HASH and not item.content_hash:
++                caveats.append(
++                    f"{record.machine_key} / {item.item_id} carries no artefact hash, "
++                    "so this match rests entirely on labels."
++                )
++
++    if not advisory.publishes_hashes:
++        caveats.append(
++            f"{advisory.issued_by} published no artefact hashes with "
++            f"{advisory.advisory_id}, so every match above rests on a version label. "
++            "A label is not an artefact: this system has already shown firmware can "
++            "be replaced without the label moving."
++        )
++
++    unhashed_machines = [
++        r.machine_key for r in fleet.records
++        if any(not i.is_comparable for i in r.manifest.items)
++    ]
++    if unhashed_machines:
++        caveats.append(
++            f"{len(unhashed_machines)} machine(s) carry at least one item with no "
++            "hash. An affected component hiding in an unhashed item would not be "
++            "found by this assessment."
++        )
++    if not fleet.chain_verified:
++        caveats.insert(0, "THE LEDGER CHAIN DOES NOT VERIFY. Every statement here is "
++                          "drawn from a store whose integrity is in question.")
++    caveats.append(
++        "this matches the advisory against the latest sealed manifest for each "
++        "machine. A machine changed since its last manifest, or never enrolled, is "
++        "absent from this report — and absence here is not evidence of safety."
++    )
++
++    return ImpactReport(
++        advisory_id=advisory.advisory_id,
++        advisory_hash=advisory.content_hash(),
++        issued_by=advisory.issued_by,
++        severity=advisory.severity,
++        title=advisory.title,
++        reference=advisory.reference,
++        assessed_at=format_utc(utc_now()),
++        machines_in_fleet=len(fleet),
++        exposures=tuple(exposures),
++        checks_skipped=tuple(dict.fromkeys(caveats)),
++    )
+diff --git a/src/assurance/fleet/registry.py b/src/assurance/fleet/registry.py
+new file mode 100644
+index 0000000..f4807ce
+--- /dev/null
++++ b/src/assurance/fleet/registry.py
+@@ -0,0 +1,200 @@
++"""Every machine in the ledger, and where each one stands.
++
++``assurance machinery coverage`` answers one machine. An integrator has forty,
++in eleven plants, and the question they ask on a Monday morning is not *is cell
++0412 covered* but *which of my forty are not*.
++
++This is aggregation, not new inference — every row is produced by the same
++:func:`assurance.machinery.staleness.assess_coverage` that answers one machine —
++and that is the point. One store, one join, one answer per machine, and the
++fleet view is a sort.
++
++What makes it worth more than forty CLI runs is the next module: an advisory
++arrives naming one component version, and a fleet is the only thing that can
++turn that into a list of serial numbers.
++"""
++
++from __future__ import annotations
++
++from collections import Counter
++from dataclasses import dataclass
++from typing import Any
++
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.intervention import Intervention
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.record import MANIFEST_KIND
++from assurance.machinery.staleness import (
++    Coverage,
++    CoverageReport,
++    VerificationRecord,
++    assess_coverage,
++)
++
++__all__ = ["Fleet", "FleetSummary", "MachineRecord"]
++
++
++@dataclass(frozen=True)
++class MachineRecord:
++    """One machine's current position."""
++
++    machine_key: str
++    manifest: SafetyManifest
++    coverage: CoverageReport
++    interventions: tuple[Intervention, ...]
++    verifications: tuple[VerificationRecord, ...]
++
++    @property
++    def worst(self) -> Coverage | None:
++        """The weakest coverage state among declared functions."""
++        return min((f.coverage for f in self.coverage.functions),
++                   key=lambda c: c.rank, default=None)
++
++    @property
++    def uncovered_count(self) -> int:
++        return len(self.coverage.uncovered)
++
++    @property
++    def stale_count(self) -> int:
++        return len(self.coverage.stale)
++
++    @property
++    def site(self) -> str:
++        return self.manifest.machine.site
++
++    def to_row(self) -> dict[str, Any]:
++        return {
++            "machine": self.machine_key,
++            "site": self.site,
++            "manifest_id": self.manifest.manifest_id,
++            "configuration_hash": self.manifest.configuration_hash(),
++            "taken_at": self.manifest.taken_at.isoformat().replace("+00:00", "Z"),
++            "verdict": self.coverage.verdict,
++            "worst": self.worst.value if self.worst else None,
++            "functions": len(self.coverage.functions),
++            "stale": self.stale_count,
++            "uncovered": self.uncovered_count,
++            "interventions": len(self.interventions),
++            "verifications": len(self.verifications),
++            "tier_ceiling": self.manifest.tier_ceiling.value,
++        }
++
++
++@dataclass(frozen=True)
++class FleetSummary:
++    machines: int
++    covered: int
++    with_gaps: int
++    by_worst: dict[str, int]
++    sites: dict[str, int]
++    chain_verified: bool
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "machines": self.machines, "covered": self.covered,
++            "with_gaps": self.with_gaps, "by_worst": self.by_worst,
++            "sites": self.sites, "chain_verified": self.chain_verified,
++        }
++
++
++@dataclass(frozen=True)
++class Fleet:
++    """Every machine the ledger knows about, with its coverage position."""
++
++    records: tuple[MachineRecord, ...]
++    chain_verified: bool
++    chain_problems: tuple[str, ...] = ()
++
++    @classmethod
++    def from_ledger(cls, ledger: EvidenceLedger) -> Fleet:
++        """Build the fleet from whatever has been sealed.
++
++        A machine appears once its latest manifest is sealed. Manifests with a
++        broken seal are skipped rather than trusted — a tampered manifest must
++        not be able to put a machine in the covered column.
++        """
++        chain_ok, problems = ledger.verify_chain()
++
++        latest: dict[str, SafetyManifest] = {}
++        for entry in ledger.entries(kind=MANIFEST_KIND):
++            evidence = entry.evidence()
++            if not evidence.verify():
++                continue
++            manifest = SafetyManifest.from_dict(evidence.body["manifest"])
++            # Later entries win: the ledger is append-only and ordered by seq,
++            # so the last sealed manifest for a machine is the current one.
++            latest[manifest.machine.key] = manifest
++
++        records: list[MachineRecord] = []
++        for key, manifest in sorted(latest.items()):
++            from assurance.machinery.record import interventions_from_ledger
++
++            ivs = interventions_from_ledger(ledger, key)
++            vfs = VerificationRecord.from_ledger(ledger, subject=key)
++            records.append(MachineRecord(
++                machine_key=key, manifest=manifest,
++                coverage=assess_coverage(manifest, vfs, ivs),
++                interventions=tuple(ivs), verifications=tuple(vfs),
++            ))
++
++        return cls(records=tuple(records), chain_verified=chain_ok,
++                   chain_problems=tuple(problems))
++
++    def __len__(self) -> int:
++        return len(self.records)
++
++    def record(self, machine_key: str) -> MachineRecord | None:
++        return next((r for r in self.records if r.machine_key == machine_key), None)
++
++    def with_gaps(self) -> tuple[MachineRecord, ...]:
++        """Machines where at least one declared function is not currently covered."""
++        return tuple(r for r in self.records if r.coverage.verdict != "covered")
++
++    def summary(self) -> FleetSummary:
++        worst = Counter(r.worst.value for r in self.records if r.worst)
++        sites = Counter(r.site or "(no site recorded)" for r in self.records)
++        covered = sum(1 for r in self.records if r.coverage.verdict == "covered")
++        return FleetSummary(
++            machines=len(self.records),
++            covered=covered,
++            with_gaps=len(self.records) - covered,
++            by_worst=dict(sorted(worst.items())),
++            sites=dict(sorted(sites.items())),
++            chain_verified=self.chain_verified,
++        )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "summary": self.summary().to_dict(),
++            "machines": [r.to_row() for r in self.records],
++            "chain_verified": self.chain_verified,
++            "chain_problems": list(self.chain_problems),
++        }
++
++    def table(self) -> str:
++        """Worst first, because that is the order somebody reads it in."""
++        if not self.records:
++            return "no machines in this ledger."
++        rows = sorted(
++            self.records,
++            key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count,
++                           r.machine_key),
++        )
++        head = (f"{'machine':<28} {'site':<22} {'worst':<17} "
++                f"{'stale':>5} {'fns':>4}  config")
++        out = [head, "-" * len(head)]
++        for r in rows:
++            out.append(
++                f"{r.machine_key:<28} {(r.site or '—')[:22]:<22} "
++                f"{(r.worst.value if r.worst else '—'):<17} "
++                f"{r.stale_count:>5} {len(r.coverage.functions):>4}  "
++                f"{r.manifest.configuration_hash()[:12]}"
++            )
++        s = self.summary()
++        out.append("")
++        out.append(f"{s.machines} machine(s): {s.covered} covered, "
++                   f"{s.with_gaps} with gaps")
++        if not self.chain_verified:
++            out.append("THE LEDGER CHAIN DOES NOT VERIFY — every row above is drawn "
++                       "from a store whose integrity is in question.")
++        return "\n".join(out)
+diff --git a/tests/test_assurance_fleet.py b/tests/test_assurance_fleet.py
+new file mode 100644
+index 0000000..75d7755
+--- /dev/null
++++ b/tests/test_assurance_fleet.py
+@@ -0,0 +1,583 @@
++"""Tests for the fleet layer: advisories, impact, and the declaration binding.
++
++The tests that carry the product are the matching ones. An advisory matched on a
++version label when the artefact contradicts the supplier's own published hash
++must land in neither the affected column nor the clear one, and a machine whose
++evidence was already stale must not be counted as newly in question — otherwise
++the report hides the machines that were fine until this morning.
++"""
++
++from __future__ import annotations
++
++import json
++from datetime import UTC, datetime
++
++import pytest
++
++from assurance.core.evidence import Actor
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import (
++    AdvisoryError,
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++    MatchBasis,
++    match_item,
++)
++from assurance.fleet.declaration import (
++    DeclarationError,
++    DeclarationOfConformity,
++    DeclarationVerdict,
++    check_declaration,
++)
++from assurance.fleet.impact import assess_impact
++from assurance.fleet.registry import Fleet
++from assurance.machine.bundle import build_bundle
++from assurance.machine.envelope import (
++    FigureBasis,
++    SafetyEnvelope,
++    SensingUncertainty,
++    StopPerformance,
++    Workspace,
++)
++from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
++from assurance.machinery.intervention import Intervention, InterventionKind
++from assurance.machinery.manifest import (
++    HashSource,
++    ItemKind,
++    MachineIdentity,
++    ManifestSource,
++    SafetyFunction,
++    SafetyItem,
++    SafetyManifest,
++)
++from assurance.machinery.record import record_intervention, record_manifest
++from assurance.machinery.staleness import Coverage
++
++ENG = Actor("a.integrator", "safety engineer")
++TECH = Actor("m.tech", "service technician")
++
++GOOD_FW = "1" * 64      # what ControlCo published for 3.8.2
++OTHER_FW = "2" * 64     # a different artefact wearing the same label
++FIXED_FW = "3" * 64     # ControlCo's 3.9.0
++
++FUNCS = (
++    SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
++                   verified_by=("ssm_separation", "stop_characterisation")),
++    SafetyFunction("SF-02", "Speed limit in collaborative operation", "PL d",
++                   verified_by=("speed_limit",)),
++)
++
++
++def fw(content_hash=GOOD_FW, version="3.8.2", **over):
++    kw = {
++        "item_id": "ITM-FW", "kind": ItemKind.FIRMWARE,
++        "name": "Safety controller firmware", "version": version,
++        "content_hash": content_hash, "hash_source": HashSource.READ_FROM_MACHINE,
++        "supplier": "ControlCo", "implements": ("SF-01", "SF-02"),
++    }
++    kw.update(over)
++    return SafetyItem(**kw)
++
++
++def manifest(serial="0412", *items, site="Plant 2", **over):
++    machine = MachineIdentity("Grimaldi", "AR-7", serial, site=site)
++    kw = {
++        "manifest_id": f"MAN-{serial}", "machine": machine,
++        "source": ManifestSource.AS_FOUND,
++        "taken_at": datetime(2026, 9, 1, tzinfo=UTC), "taken_by": ENG,
++        "items": items or (fw(),), "functions": FUNCS,
++        "method": "read via controller service port",
++    }
++    kw.update(over)
++    return SafetyManifest(**kw)
++
++
++def advisory(**over):
++    kw = {
++        "advisory_id": "CTRL-2026-11", "issued_by": "ControlCo",
++        "issued_at": datetime(2026, 9, 12, 8, tzinfo=UTC),
++        "title": "Watchdog may not trip under sustained bus load",
++        "summary": "The watchdog can fail to trigger the safety-rated stop.",
++        "severity": AdvisorySeverity.SAFETY_RELEVANT,
++        "affected": (AffectedArtefact(
++            supplier="ControlCo", name="Safety controller firmware",
++            versions=("3.8.0", "3.8.1", "3.8.2"), content_hashes=(GOOD_FW,)),),
++        "remedy": "Update to 3.9.0 and re-run the stop-performance test.",
++        "reference": "https://controlco.example/advisories/CTRL-2026-11",
++        "fixed_versions": ("3.9.0",), "fixed_hashes": (FIXED_FW,),
++    }
++    kw.update(over)
++    return ComponentAdvisory(**kw)
++
++
++# =====================================================================
++# matching — the part that decides whether the report is worth anything
++# =====================================================================
++
++class TestMatching:
++    def test_a_hash_match_is_confirmed(self):
++        basis, detail = match_item(advisory(), fw())
++        assert basis is MatchBasis.HASH
++        assert basis.confidence == "confirmed"
++        assert "byte-identical" in detail
++
++    def test_a_label_that_the_artefact_contradicts_is_its_own_finding(self):
++        """Neither affected nor clear. The star finding of this module."""
++        basis, detail = match_item(advisory(), fw(content_hash=OTHER_FW))
++        assert basis is MatchBasis.HASH_MISMATCH
++        assert basis.confidence == "contradictory"
++        assert basis.needs_a_human
++        assert "not running what it says" in detail
++
++    def test_a_machine_already_carrying_the_fix_but_a_stale_label_says_so(self):
++        basis, detail = match_item(advisory(), fw(content_hash=FIXED_FW))
++        assert basis is MatchBasis.HASH_MISMATCH
++        assert "lists as FIXED" in detail
++
++    def test_a_label_match_with_no_published_hash_rests_on_a_label(self):
++        adv = advisory(affected=(AffectedArtefact(
++            supplier="ControlCo", name="Safety controller firmware",
++            versions=("3.8.2",)),))
++        basis, detail = match_item(adv, fw())
++        assert basis is MatchBasis.VERSION
++        assert basis.confidence == "probable"
++        assert "a label is not an artefact" in detail
++
++    def test_a_fixed_version_does_not_match(self):
++        assert match_item(advisory(), fw(content_hash=FIXED_FW,
++                                         version="3.9.0")) is None
++
++    def test_an_unlisted_version_does_not_match(self):
++        assert match_item(advisory(), fw(content_hash="9" * 64,
++                                         version="4.0.0")) is None
++
++    def test_a_component_with_no_version_recorded_needs_a_human(self):
++        basis, detail = match_item(advisory(), fw(content_hash="", version="",
++                                                  hash_source=HashSource.DECLARED))
++        assert basis is MatchBasis.NAME_ONLY
++        assert "Somebody has to look" in detail
++
++    def test_a_different_supplier_does_not_match(self):
++        assert match_item(advisory(), fw(supplier="OtherCo")) is None
++
++    def test_supplier_matching_is_case_and_space_insensitive_but_not_fuzzy(self):
++        assert match_item(advisory(), fw(supplier=" controlco ")) is not None
++        assert match_item(advisory(), fw(supplier="Control Co GmbH")) is None
++
++    def test_an_advisory_naming_neither_version_nor_hash_is_refused(self):
++        with pytest.raises(AdvisoryError, match="every version"):
++            AffectedArtefact(supplier="ControlCo", name="fw")
++
++    def test_an_advisory_with_no_reference_is_refused(self):
++        with pytest.raises(AdvisoryError, match="rumour"):
++            advisory(reference="")
++
++    def test_an_advisory_with_no_affected_artefact_is_refused(self):
++        with pytest.raises(AdvisoryError, match="no affected artefact"):
++            advisory(affected=())
++
++    def test_it_survives_json(self, tmp_path):
++        a = advisory()
++        p = tmp_path / "a.json"
++        p.write_text(json.dumps(a.to_dict()))
++        assert ComponentAdvisory.from_json(p).content_hash() == a.content_hash()
++
++
++# =====================================================================
++# the fleet and the fan-out
++# =====================================================================
++
++@pytest.fixture
++def ledger(tmp_path):
++    return EvidenceLedger(tmp_path / "fleet.db")
++
++
++def enrol(ledger, serial, *, fw_hash=GOOD_FW, fw_version="3.8.2",
++          verify=True, intervene=False, site="Plant 2"):
++    man = manifest(serial, fw(fw_hash, fw_version),
++                   SafetyItem("ITM-ZONES", ItemKind.SAFETY_CONFIGURATION,
++                              "Safety scanner zone set", "r4", "b" * 64,
++                              HashSource.READ_FROM_MACHINE, supplier="ScanCo",
++                              implements=("SF-01",), modifiable_in_field=True),
++                   site=site)
++    record_manifest(ledger, man)
++    if verify:
++        env = SafetyEnvelope(
++            envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
++            workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
++            max_tcp_speed_mm_s={OperatingMode.SSM: 400.0},
++            stop=StopPerformance(0.10, 0.25, 120.0, 500.0,
++                                 FigureBasis("measured", "STOP-11", "2026-01-18")),
++            uncertainty=SensingUncertainty(100.0, 50.0,
++                                           FigureBasis("measured", "CAL-003")),
++            intrusion_distance_mm=850.0)
++        run = Trace(trace_id=f"RUN-{serial}", provenance=Provenance.FIELD,
++                    source_system="AR-7 fw",
++                    started_at=datetime(2026, 2, 9, tzinfo=UTC), sample_rate_hz=50.0,
++                    samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
++                                         tcp_speed=400.0, mode=OperatingMode.SSM,
++                                         separation=2200.0) for i in range(10)))
++        build_bundle(env, run, actor=ENG, ledger=ledger, subject=man.machine.key)
++    if intervene:
++        record_intervention(ledger, Intervention(
++            intervention_id=f"INT-{serial}", machine_key=man.machine.key,
++            item_id="ITM-ZONES", kind=InterventionKind.PARAMETER_CHANGE,
++            occurred_at=datetime(2026, 8, 2, tzinfo=UTC), performed_by=TECH,
++            reason="Zone reshaped after a layout change.",
++            from_hash="b" * 64, to_hash="e" * 64, affects_functions=("SF-01",)))
++    return man
++
++
++class TestFleet:
++    def test_an_empty_ledger_is_an_empty_fleet(self, ledger):
++        assert len(Fleet.from_ledger(ledger)) == 0
++
++    def test_each_machine_appears_once(self, ledger):
++        enrol(ledger, "0412")
++        enrol(ledger, "0418")
++        assert len(Fleet.from_ledger(ledger)) == 2
++
++    def test_the_latest_manifest_wins(self, ledger):
++        enrol(ledger, "0412", fw_hash=GOOD_FW)
++        record_manifest(ledger, manifest("0412", fw(OTHER_FW),
++                                         manifest_id="MAN-LATER"))
++        fleet = Fleet.from_ledger(ledger)
++        assert len(fleet) == 1
++        assert fleet.records[0].manifest.manifest_id == "MAN-LATER"
++
++    def test_machines_with_gaps_are_separated(self, ledger):
++        enrol(ledger, "0412")
++        enrol(ledger, "0501", intervene=True)
++        fleet = Fleet.from_ledger(ledger)
++        assert [r.machine_key for r in fleet.with_gaps()] == ["Grimaldi/AR-7#0501"]
++
++    def test_the_summary_counts_by_worst_state(self, ledger):
++        enrol(ledger, "0412")
++        enrol(ledger, "0733", verify=False)
++        s = Fleet.from_ledger(ledger).summary()
++        assert s.machines == 2
++        assert s.by_worst["never_verified"] == 1
++        assert s.chain_verified
++
++    def test_the_table_puts_the_worst_first(self, ledger):
++        enrol(ledger, "0412")
++        enrol(ledger, "0501", intervene=True)
++        table = Fleet.from_ledger(ledger).table()
++        assert table.index("0501") < table.index("0412")
++
++    def test_sites_are_counted(self, ledger):
++        enrol(ledger, "0412", site="Plant 2")
++        enrol(ledger, "0620", site="Plant 7")
++        assert Fleet.from_ledger(ledger).summary().sites == {"Plant 2": 1,
++                                                             "Plant 7": 1}
++
++
++class TestImpact:
++    def test_an_advisory_nobody_matches_is_clear(self, ledger):
++        enrol(ledger, "0620", fw_hash=FIXED_FW, fw_version="3.9.0")
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert r.verdict == "clear"
++        assert r.machines_affected == ()
++
++    def test_it_reaches_serial_numbers(self, ledger):
++        enrol(ledger, "0412")
++        enrol(ledger, "0620", fw_hash=FIXED_FW, fw_version="3.9.0")
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert r.machines_affected == ("Grimaldi/AR-7#0412",)
++
++    def test_it_reaches_the_safety_functions_that_were_covered(self, ledger):
++        enrol(ledger, "0412")
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert r.verdict == "exposed"
++        assert r.functions_newly_in_question == 2
++        names = {f.function_id for e in r.exposures for f in e.newly_in_question}
++        assert names == {"SF-01", "SF-02"}
++
++    def test_a_function_already_stale_is_not_counted_as_newly_in_question(self, ledger):
++        """An advisory does not make an already-lapsed function worse."""
++        enrol(ledger, "0501", intervene=True)
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        e = r.exposures[0]
++        by_id = {f.function_id: f for f in e.functions}
++        assert by_id["SF-01"].coverage_before is Coverage.STALE
++        assert by_id["SF-01"].newly_in_question is False
++        assert by_id["SF-02"].newly_in_question is True
++
++    def test_a_never_verified_function_is_not_newly_in_question_either(self, ledger):
++        enrol(ledger, "0733", verify=False)
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert r.functions_newly_in_question == 0
++        assert r.verdict == "needs_review"
++
++    def test_a_contradictory_match_is_counted_in_neither_column(self, ledger):
++        enrol(ledger, "0418", fw_hash=OTHER_FW)
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert len(r.contradictory) == 1
++        assert r.functions_newly_in_question == 0
++        assert r.confirmed == ()
++        assert any("neither column" in c for c in r.checks_skipped)
++
++    def test_an_informational_advisory_puts_nothing_in_question(self, ledger):
++        enrol(ledger, "0412")
++        r = assess_impact(advisory(severity=AdvisorySeverity.INFORMATIONAL),
++                          Fleet.from_ledger(ledger))
++        assert r.exposures
++        assert r.functions_newly_in_question == 0
++        assert r.verdict == "needs_review"
++
++    def test_a_stop_use_advisory_is_ranked_above_safety_relevant(self):
++        assert AdvisorySeverity.STOP_USE.rank > AdvisorySeverity.SAFETY_RELEVANT.rank
++        assert AdvisorySeverity.STOP_USE.puts_functions_in_question
++
++    def test_it_says_when_the_supplier_published_no_hashes(self, ledger):
++        enrol(ledger, "0412")
++        adv = advisory(affected=(AffectedArtefact(
++            supplier="ControlCo", name="Safety controller firmware",
++            versions=("3.8.2",)),))
++        r = assess_impact(adv, Fleet.from_ledger(ledger))
++        assert any("rests on a version label" in c for c in r.checks_skipped)
++
++    def test_absence_is_never_reported_as_safety(self, ledger):
++        enrol(ledger, "0412")
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert any("absence here is not evidence of safety" in c
++                   for c in r.checks_skipped)
++
++    def test_the_full_mixed_fleet_lands_in_the_right_columns(self, ledger):
++        enrol(ledger, "0412")                                    # confirmed, covered
++        enrol(ledger, "0418", fw_hash=OTHER_FW)                  # contradictory
++        enrol(ledger, "0501", intervene=True)                    # confirmed, part stale
++        enrol(ledger, "0620", fw_hash=FIXED_FW, fw_version="3.9.0")  # clear
++        enrol(ledger, "0733", verify=False)                      # confirmed, no evidence
++        r = assess_impact(advisory(), Fleet.from_ledger(ledger))
++        assert r.machines_in_fleet == 5
++        assert len(r.machines_affected) == 4
++        assert len(r.confirmed) == 3
++        assert len(r.contradictory) == 1
++        assert r.functions_newly_in_question == 3   # 0412 both, 0501 one
++
++
++# =====================================================================
++# declarations
++# =====================================================================
++
++class TestDeclaration:
++    def _doc(self, man, **over):
++        kw = {
++            "doc_id": "DOC-0412", "issued_by": "Grimaldi Engineering",
++            "issued_at": datetime(2026, 1, 20, tzinfo=UTC),
++            "legislation": ("Regulation (EU) 2023/1230",),
++            "standards": ("EN ISO 10218-2:2025",),
++        }
++        kw.update(over)
++        return DeclarationOfConformity.bind(man, **kw)
++
++    def test_a_declaration_with_no_configuration_hash_is_refused(self):
++        with pytest.raises(DeclarationError, match="no configuration hash"):
++            DeclarationOfConformity(
++                doc_id="D", machine_key="k", issued_by="x",
++                issued_at=datetime(2026, 1, 1, tzinfo=UTC),
++                configuration_hash="", legislation=("x",))
++
++    def test_a_declaration_of_conformity_to_nothing_is_refused(self):
++        with pytest.raises(DeclarationError, match="names no legislation"):
++            DeclarationOfConformity(
++                doc_id="D", machine_key="k", issued_by="x",
++                issued_at=datetime(2026, 1, 1, tzinfo=UTC),
++                configuration_hash="a" * 64, legislation=())
++
++    def test_an_unchanged_machine_is_still_described(self):
++        man = manifest()
++        status = check_declaration(self._doc(man), man)
++        assert status.verdict is DeclarationVerdict.DESCRIBES_THE_MACHINE
++
++    def test_a_changed_configuration_is_the_finding(self):
++        man = manifest()
++        later = manifest(items=(fw(content_hash=OTHER_FW),))
++        status = check_declaration(self._doc(man), later)
++        assert status.verdict is DeclarationVerdict.CONFIGURATION_CHANGED
++        assert "does not describe this machine" in status.statement
++
++    def test_a_declaration_about_another_machine_says_nothing(self):
++        status = check_declaration(self._doc(manifest("0412")), manifest("9999"))
++        assert status.verdict is DeclarationVerdict.WRONG_MACHINE
++
++    def test_an_intact_configuration_with_lapsed_evidence_is_separate(self, ledger):
++        man = enrol(ledger, "0501", intervene=True)
++        from assurance.machinery.record import interventions_from_ledger
++        from assurance.machinery.staleness import VerificationRecord, assess_coverage
++        coverage = assess_coverage(
++            man,
++            VerificationRecord.from_ledger(ledger, subject=man.machine.key),
++            interventions_from_ledger(ledger, man.machine.key))
++        status = check_declaration(self._doc(man), man, coverage)
++        assert status.verdict is \
++            DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_LAPSED
++        assert "SF-01" in status.lapsed_functions
++
++    def test_it_refuses_to_give_legal_advice_in_writing(self):
++        man = manifest()
++        status = check_declaration(self._doc(man), man)
++        assert any("Nothing here is legal advice" in c for c in status.checks_skipped)
++
++    def test_without_coverage_it_says_only_the_configuration_was_compared(self):
++        man = manifest()
++        status = check_declaration(self._doc(man), man)
++        assert any("only the configuration was compared" in c
++                   for c in status.checks_skipped)
++
++    def test_unhashed_items_are_declared_as_outside_the_configuration_hash(self):
++        man = manifest("0412", fw(),
++                       SafetyItem("ITM-HMI", ItemKind.LIBRARY, "HMI", "9", "",
++                                  HashSource.DECLARED, implements=()))
++        status = check_declaration(self._doc(man), man)
++        assert any("leaves the configuration hash unmoved" in c
++                   for c in status.checks_skipped)
++
++    def test_it_survives_json(self, tmp_path):
++        d = self._doc(manifest())
++        p = tmp_path / "d.json"
++        p.write_text(json.dumps(d.to_dict()))
++        assert DeclarationOfConformity.from_json(p).content_hash() == d.content_hash()
++
++
++# =====================================================================
++# HTTP
++# =====================================================================
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    from fastapi.testclient import TestClient
++
++    from assurance.api import deps
++
++    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "l.db"))
++    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "a.db"))
++    monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
++    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++    from assurance.api.service import create_app
++
++    with TestClient(create_app()) as c:
++        yield c
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++
++
++@pytest.fixture
++def store(client):
++    from assurance.api import deps
++    return deps.get_accounts()
++
++
++@pytest.fixture
++def api_ledger(client):
++    from assurance.api import deps
++    return deps.get_register().ledger
++
++
++def keyed(store, tier):
++    account = store.upsert_account(email=f"{tier}-fleet@example.de", tier=tier)
++    return {"X-API-Key": store.issue_key(account.id)}
++
++
++class TestHttp:
++    def test_the_single_machine_check_needs_no_account(self, client):
++        r = client.post("/v1/fleet/advisory/check", json={
++            "advisory": advisory().to_dict(), "manifest": manifest().to_dict()})
++        assert r.status_code == 200
++        assert r.json()["affected"] is True
++        assert r.json()["matches"][0]["basis"] == "hash"
++
++    def test_it_is_metered_on_the_free_tier(self, client):
++        r = client.post("/v1/fleet/advisory/check", json={
++            "advisory": advisory().to_dict(), "manifest": manifest().to_dict()})
++        assert r.headers["x-assurance-quota-limit"] == "10"
++
++    def test_a_clear_machine_is_reported_as_clear(self, client):
++        r = client.post("/v1/fleet/advisory/check", json={
++            "advisory": advisory().to_dict(),
++            "manifest": manifest("0620", fw(FIXED_FW, "3.9.0")).to_dict()})
++        assert r.json()["affected"] is False
++
++    def test_a_contradiction_is_surfaced_over_http_too(self, client):
++        r = client.post("/v1/fleet/advisory/check", json={
++            "advisory": advisory().to_dict(),
++            "manifest": manifest("0418", fw(OTHER_FW)).to_dict()})
++        m = r.json()["matches"][0]
++        assert m["basis"] == "hash_mismatch"
++        assert m["needs_a_human"] is True
++
++    def test_the_fan_out_is_a_402_without_the_cell_plan(self, client, store):
++        r = client.post("/v1/fleet/advisory",
++                        json={"advisory": advisory().to_dict()},
++                        headers=keyed(store, "register"))
++        assert r.status_code == 402
++
++    def test_the_fan_out_needs_a_key(self, client):
++        assert client.post("/v1/fleet/advisory",
++                           json={"advisory": advisory().to_dict()}).status_code == 401
++
++    def test_the_cell_plan_gets_the_fan_out(self, client, store, api_ledger):
++        enrol(api_ledger, "0412")
++        enrol(api_ledger, "0620", fw_hash=FIXED_FW, fw_version="3.9.0")
++        r = client.post("/v1/fleet/advisory",
++                        json={"advisory": advisory().to_dict()},
++                        headers=keyed(store, "cell"))
++        assert r.status_code == 200, r.text
++        d = r.json()
++        assert d["verdict"] == "exposed"
++        assert d["machines_in_fleet"] == 2
++        assert d["machines_affected"] == ["Grimaldi/AR-7#0412"]
++        assert d["functions_newly_in_question"] == 2
++
++    def test_the_machine_list_is_gated_and_ordered(self, client, store, api_ledger):
++        enrol(api_ledger, "0412")
++        enrol(api_ledger, "0501", intervene=True)
++        r = client.get("/v1/fleet/machines", headers=keyed(store, "cell"))
++        assert r.status_code == 200
++        assert r.json()["summary"]["machines"] == 2
++        assert r.json()["summary"]["with_gaps"] == 1
++
++    def test_the_declaration_check_is_free(self, client):
++        man = manifest()
++        doc = DeclarationOfConformity.bind(
++            man, doc_id="DOC-1", issued_by="Grimaldi",
++            issued_at=datetime(2026, 1, 20, tzinfo=UTC),
++            legislation=("Regulation (EU) 2023/1230",))
++        r = client.post("/v1/fleet/declaration/check", json={
++            "declaration": doc.to_dict(),
++            "manifest": manifest("0412", fw(OTHER_FW)).to_dict()})
++        assert r.status_code == 200
++        assert r.json()["verdict"] == "configuration_changed"
++
++    def test_coverage_on_the_declaration_check_needs_a_plan_and_says_so(self, client):
++        man = manifest()
++        doc = DeclarationOfConformity.bind(
++            man, doc_id="DOC-1", issued_by="Grimaldi",
++            issued_at=datetime(2026, 1, 20, tzinfo=UTC),
++            legislation=("Regulation (EU) 2023/1230",))
++        r = client.post("/v1/fleet/declaration/check", json={
++            "declaration": doc.to_dict(), "manifest": man.to_dict(),
++            "with_coverage": True})
++        assert r.json()["coverage_assessed"] is False
++        assert any("needs a plan" in c for c in r.json()["checks_skipped"])
++
++    def test_declare_binds_to_the_configuration_in_front_of_you(self, client, store):
++        man = manifest()
++        r = client.post("/v1/fleet/declare", json={
++            "manifest": man.to_dict(), "doc_id": "DOC-9",
++            "issued_by": "Grimaldi Engineering",
++            "legislation": ["Regulation (EU) 2023/1230"]},
++            headers=keyed(store, "cell"))
++        assert r.status_code == 200, r.text
++        assert r.json()["declaration"]["configuration_hash"] == \
++            man.configuration_hash()
++
++    def test_the_cell_plan_advertises_the_fleet(self, client):
++        plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
++        assert any("Fleet:" in i for i in plans["cell"]["includes"])
++        assert any("Declaration of Conformity" in i
++                   for i in plans["free"]["includes"])
+-- 
+2.43.0
+
