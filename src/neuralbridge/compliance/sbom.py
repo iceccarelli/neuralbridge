@@ -13,7 +13,6 @@ enriches it with component metadata, and serializes it into a valid SBOM.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -205,11 +204,17 @@ class SBOMGenerator:
             An SBOMComponent object.
         """
         purl = f"pkg:pypi/{name}@{version}"
-        hashes = {
-            "SHA-256": hashlib.sha256(
-                f"{name}{version}".encode(),
-            ).hexdigest(),
-        }
+
+        # No hash is emitted. The previous implementation recorded
+        # sha256(name + version) -- the hash of a concatenated string, not of
+        # any artifact. In CycloneDX the `hashes` field means integrity: a
+        # consumer uses it to verify the bytes they received are the bytes the
+        # producer described. A value that cannot do that is worse than an
+        # absent one, because it looks like it can.
+        #
+        # To populate this honestly, hash the distribution actually installed
+        # (the wheel or sdist on disk, or the digest the index published) and
+        # record which of those you used.
 
         return SBOMComponent(
             name=name,
@@ -217,7 +222,7 @@ class SBOMGenerator:
             purl=purl,
             supplier="PyPI",
             license_id="UNKNOWN",
-            hashes=hashes,
+            hashes={},
         )
 
     def _build_sbom_document(

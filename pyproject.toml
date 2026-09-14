@@ -54,6 +54,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The assurance package itself has no runtime dependencies. The HTTP register
+# needs a web server; everything else works from the CLI and the library.
+assurance-api = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -80,6 +86,8 @@ Changelog = "https://github.com/iceccarelli/neuralbridge/releases"
 [project.scripts]
 neuralbridge = "neuralbridge.main:cli"
 
+assurance = "assurance.cli:main"
+assurance-api = "assurance.api.service:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -104,11 +112,15 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
+# A command line writes to stdout; that is the interface, not a stray debug print.
+"src/assurance/cli.py" = ["T20"]
+"src/assurance/security/art14/cli.py" = ["T20"]
+"src/assurance/api/service.py" = ["T20"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=neuralbridge --cov-report=term-missing --cov-report=html"
+addopts = "--cov=neuralbridge --cov=assurance --cov-report=term-missing --cov-report=html"
 
 [tool.mypy]
 python_version = "3.11"

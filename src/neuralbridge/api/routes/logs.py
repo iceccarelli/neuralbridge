@@ -90,11 +90,25 @@ async def export_logs(
         end_time=end_time,
     )
 
+    # Actually verify, rather than asserting that we did. The previous
+    # implementation returned the string "hash_chain_verified" while
+    # verify_integrity() was never called from anywhere in the codebase --
+    # a verification badge over an unverified export.
+    chain_ok = await audit.verify_integrity()
+
     return {
         "format": file_format,
         "file_path": tmp.name,
         "exported_at": datetime.now(tz=UTC).isoformat(),
-        "integrity": "hash_chain_verified",
+        "integrity": {
+            "hash_chain_verified": chain_ok,
+            "method": "recomputed over the full chain at export time",
+            "limitation": (
+                "A self-recomputable chain detects accident and casual tampering. It does "
+                "not defeat an actor with write access to the store; that needs a signature "
+                "over the head, or an external anchor, held outside this service."
+            ),
+        },
     }
 
 
