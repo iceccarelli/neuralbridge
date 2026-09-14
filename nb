@@ -17,6 +17,11 @@ set -Eeuo pipefail
 
 ROOT="${ROOT:-/workspaces/neuralbridge}"
 MAIN="main"
+# Branches that are published artefacts rather than somebody's work. gh-pages is
+# rewritten by `mkdocs gh-deploy --force` in CI on every push to main: deleting
+# it takes the docs site down until the next push and then it comes straight
+# back, so "one branch" has never meant this one.
+PROTECTED="gh-pages"
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
 say()  { printf '%s\n' "$*"; }
@@ -40,8 +45,13 @@ cmd_doctor() {
   local locals remotes
   locals=$(git for-each-ref --format='%(refname:short)' refs/heads/ || true)
   remotes=$(git for-each-ref --format='%(refname:short)' refs/remotes/origin/ | sed 's|^origin/||' | grep -vx -e HEAD -e origin || true)
+  local working
+  working=$(printf '%s\n' "$remotes" | grep -vx $(printf -- '-e %s ' $PROTECTED) || true)
   say "  local   ${locals//$'\n'/ }"
   say "  remote  ${remotes//$'\n'/ }"
+  for x in $PROTECTED; do
+    printf '%s\n' "$remotes" | grep -qx "$x" && say "          ($x is published by CI, not a working branch)"
+  done
 
   head_ "tags"
   local n_local n_remote
@@ -83,6 +93,16 @@ cmd_normalise() {
   tags_remote=$( { git ls-remote --tags origin 2>/dev/null || true; } | awk '{print $2}' | grep -v '\^{}' | sed 's|refs/tags/||' || true)
   br_local=$(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -vx "$MAIN" || true)
   br_remote=$(git for-each-ref --format='%(refname:short)' refs/remotes/origin/ | sed 's|^origin/||' | grep -vx -e "$MAIN" -e HEAD -e origin || true)
+  local kept=""
+  for x in $PROTECTED; do
+    if printf '%s\n' $br_remote | grep -qx "$x"; then
+      kept="$kept $x"
+      br_remote=$(printf '%s\n' $br_remote | grep -vx "$x" || true)
+    fi
+  done
+
+  [ -n "$kept" ] && { head_ "left alone"; for x in $kept; do
+      say "  branch (REMOTE) $x   — published by CI, not a working branch"; done; }
 
   head_ "what is in the way"
   [ -n "$tags_local"  ] && printf '  tag    (local)  %s\n' $tags_local
@@ -91,13 +111,6 @@ cmd_normalise() {
   [ -n "$br_remote"   ] && printf '  branch (REMOTE) %s\n' $br_remote
   if [ -z "$tags_local$tags_remote$br_local$br_remote" ]; then
     ok "already one branch, no tags"; cmd_lock; return 0
-  fi
-
-  # Named explicitly, because deleting it takes a published site offline and
-  # no amount of "we work on one branch" is worth finding that out afterwards.
-  if printf '%s\n' $br_remote | grep -qx gh-pages; then
-    warn "gh-pages is a REMOTE branch. GitHub Pages serves a site from it."
-    warn "Deleting it takes that site down. If you do not publish one, proceed."
   fi
 
   if [ "$commit" -eq 0 ]; then
@@ -160,11 +173,27 @@ cmd_rebuild() {
   tar czf "$backup" --exclude=node_modules --exclude=.git --exclude=.next . 2>/dev/null || true
   ok "$(cd .. && pwd)/$(basename "$backup")  — delete it when you are happy"
 
+  # This script is tracked, so `git reset --hard` would replace the copy that is
+  # running with whatever version the remote has — silently downgrading the tool
+  # in the middle of its own job. Keep the running copy and put it back.
+  local self_copy
+  self_copy=$(mktemp)
+  cp "$0" "$self_copy"
+
   head_ "resetting $MAIN to origin/$MAIN"
   git fetch origin --prune
   git checkout "$MAIN" 2>/dev/null || git checkout -b "$MAIN" "origin/$MAIN"
   git reset --hard "origin/$MAIN"
-  git clean -fd -e node_modules -e .next >/dev/null
+  if ! cmp -s "$self_copy" "$0"; then
+    cp "$self_copy" "$0"
+    chmod +x "$0"
+    say "  kept the newer $(basename "$0") you are running, not the one on the remote"
+  fi
+  rm -f "$self_copy"
+  # Never clean away a patch file or this script. A patch you uploaded ten
+  # seconds ago is untracked by definition, and deleting the input to the very
+  # command you are running is the kind of helpfulness that loses work.
+  git clean -fd -e node_modules -e .next -e '*.patch' -e nb >/dev/null
   ok "$(git log --oneline -1)"
 
   head_ "ignoring generated files"
@@ -185,6 +214,7 @@ cmd_rebuild() {
   cmd_verify || die "the rebuilt tree does not verify. Nothing was pushed."
   say ""
   ok "rebuilt. Now: ./nb normalise --yes   then: ./nb ship"
+  return 0
 }
 
 cmd_ignore() {
@@ -196,9 +226,19 @@ cmd_ignore() {
     say "  + $rule"
     added=1
   done
+  # If the running script is newer than the committed one, commit it here too —
+  # otherwise the next reset drags it backwards again.
+  local also=""
+  if ! git diff --quiet -- "$(basename "$0")" 2>/dev/null; then
+    git add -- "$(basename "$0")"
+    also=" and the repository script"
+    added=1
+    say "  + $(basename "$0")  (newer than the committed copy)"
+  fi
+
   if [ "$added" -eq 1 ]; then
     git add .gitignore
-    git commit -q -m "gitignore: keep build output and generated evidence out of the tree
+    git commit -q -m "gitignore: keep build output and generated evidence out of the tree${also:+, refresh nb}
 
 A generated ledger, a rendered report and a node_modules tree are outputs, not
 sources. Committing them makes every diff unreadable and puts a customer's
@@ -253,6 +293,7 @@ cmd_verify() {
   head_ "surface"
   python -m assurance | sed 's/^/  /'
   ok "verified"
+  return 0
 }
 
 # ------------------------------------------------------------------ ship ----
