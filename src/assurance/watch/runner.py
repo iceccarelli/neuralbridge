@@ -47,6 +47,7 @@ from assurance.core.evidence import (
 )
 from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
 from assurance.machinery.manifest import ManifestSource
 from assurance.machinery.record import (
@@ -60,6 +61,7 @@ from assurance.machinery.staleness import (
     VerificationRecord,
     assess_coverage,
 )
+from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
 
 __all__ = [
@@ -133,6 +135,8 @@ class WatchRun:
     outcomes: tuple[MachineOutcome, ...]
     #: Machines whose most recent observation is older than the declared cadence.
     stale_observations: tuple[str, ...]
+    #: What the subscribed supplier feeds said. Empty when none are subscribed.
+    advisories: AdvisoryPass = field(default_factory=AdvisoryPass)
     previous_run_hash: str = ""
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
     sealed: tuple[str, ...] = field(default_factory=tuple)
@@ -151,10 +155,19 @@ class WatchRun:
 
     @property
     def verdict(self) -> str:
-        """``quiet`` | ``findings`` | ``degraded``."""
-        if self.uncollectable or self.stale_observations:
+        """``quiet`` | ``findings`` | ``degraded``.
+
+        A feed that could not be checked degrades the run exactly as a machine
+        that could not be collected does. Being blind to a supplier and hearing
+        nothing from one are different states, and the exit code has to say so:
+        otherwise a sync that quietly stopped reads as a quiet month.
+        """
+        if self.uncollectable or self.stale_observations \
+                or self.advisories.degraded:
             return "degraded"
-        return "findings" if self.findings else "quiet"
+        if self.findings or self.advisories.is_finding:
+            return "findings"
+        return "quiet"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,6 +181,7 @@ class WatchRun:
             "machines": len(self.outcomes),
             "outcomes": [o.to_dict() for o in self.outcomes],
             "stale_observations": list(self.stale_observations),
+            "advisories": self.advisories.to_dict(),
             "sealed": list(self.sealed),
             "checks_skipped": list(self.checks_skipped),
         }
@@ -253,6 +267,24 @@ def last_run(ledger: EvidenceLedger, watch_id: str) -> dict[str, Any] | None:
         if evidence.body.get("watch_id") == watch_id:
             return evidence.body
     return None
+
+
+def _previously_reported(run: dict[str, Any] | None) -> dict[str, str]:
+    """Advisory id -> the state it was last reported in.
+
+    This is what makes "new" mean new. Without it every run announces every
+    standing advisory again, and a reader who is told the same four things every
+    Monday stops reading on the third Monday — at which point the watch has
+    become an expensive way to generate silence.
+    """
+    if not run:
+        return {}
+    body = run.get("advisories") or {}
+    return {
+        str(f.get("advisory_id", "")): str(f.get("state", ""))
+        for f in body.get("findings", ())
+        if f.get("advisory_id")
+    }
 
 
 def _previous_state(run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -398,6 +430,20 @@ def run_watch(
         if last_seen is None or last_seen < cutoff:
             stale.append(target.serial)
 
+    # The advisory pass runs after the machines, because it asks its questions
+    # against the manifests this run has just sealed. Asking first would report
+    # yesterday's fleet against today's advisories, which is the one combination
+    # guaranteed to be wrong.
+    advisories = AdvisoryPass()
+    if config.feeds:
+        advisories = check_feeds(
+            list(config.feeds),
+            Fleet.from_ledger(ledger),
+            previously_seen=_previously_reported(previous),
+            now=started,
+        )
+        caveats.extend(advisories.checks_skipped)
+
     caveats.extend([
         "a watch reports what its plans look for in the folders it was pointed "
         "at. A machine not listed in the configuration is not watched, and its "
@@ -419,6 +465,7 @@ def run_watch(
         finished_at=format_utc(started if injected else utc_now()),
         outcomes=tuple(outcomes),
         stale_observations=tuple(sorted(stale)),
+        advisories=advisories,
         previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
         checks_skipped=tuple(dict.fromkeys(caveats)),
         sealed=tuple(sealed),
