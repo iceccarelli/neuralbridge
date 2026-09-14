@@ -1,11 +1,15 @@
 name: Publish Docker Image to GHCR
 
+# Deliberately NOT on every push to main. A container image is a published
+# artefact: pushing one for every commit spends compute to publish software
+# nobody has decided is finished, and gives a reader of the registry a version
+# number that means nothing. Images are cut from releases and version tags.
 on:
   release:
     types: [published]
   push:
-    branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
