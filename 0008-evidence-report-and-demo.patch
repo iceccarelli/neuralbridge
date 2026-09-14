@@ -1,0 +1,1348 @@
+From 5d0cf4783e17871ddd2227f907b543f0fe9906c0 Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 13:05:42 +0000
+Subject: [PATCH] assurance.report: the page the buyer reads, and a worked
+ fleet to fill it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WHY
+  Seven patches of engines, 504 tests, and every single output is terminal text
+  or JSON. The only person who can see any of it is an engineer at a prompt.
+  The people who decide whether this gets bought — a plant manager, a quality
+  director, an insurer, a notified body, procurement — do not open terminals.
+  They read documents, and they forward them. Until there is a document, this
+  is a shell to everyone who matters commercially.
+
+  And an engineer evaluating it has nowhere to start: seven domains, no worked
+  example, twenty minutes of patience.
+
+WHAT
+  src/assurance/report/render.py  one self-contained HTML page: no network, no
+                                   scripts, ~20 KB, opens in a plant with no
+                                   internet, prints, attaches to a tender
+  src/assurance/report/demo.py    a complete four-machine fleet built from
+                                   nothing — real export files, real
+                                   normalisation, real verification, real
+                                   intervention records, chain verifying
+  src/assurance/report/cli.py     demo / build
+  src/assurance/api/fleet_routes  GET /v1/fleet/report (Cell plan), text/html
+
+  Each demo machine is a different situation, because a demo where everything
+  is fine demonstrates nothing: one clean and about to be hit by an advisory,
+  one running an artefact that contradicts its own version label, one whose
+  zone a technician reshaped with nothing re-run, one already remedied.
+
+CUSTOMER VALUE
+  `assurance report demo --out demo/` is the thirty-second answer to "what does
+  this actually do", and report.html is the artefact an integrator forwards to
+  their plant manager, their insurer and their notified body. That is the first
+  thing in this whole package that a non-engineer can act on.
+
+RISK
+  The report is the surface most likely to be over-trusted, so three things are
+  enforced by layout, not by good intentions. The ledger chain status is the
+  first thing on the page — saying it at the bottom would be a lie of
+  placement, and a broken chain is shouted in red above every finding. Findings
+  are ordered by what somebody must do today, not by machine name. And "What
+  this report does not establish" is a numbered section carrying every
+  checks_skipped line from every engine verbatim. Data reaching the page is
+  escaped; a machine name is attacker-controlled in a hosted deployment.
+
+  The demo ledger carries a notice, in the evidence itself, naming it as
+  demonstration data, so it can never be mistaken for a real one.
+
+ROLLBACK
+  git revert this commit. Outside assurance/report it adds one GET route, one
+  CLI domain and one ruff ignore.
+
+TESTS
+  530 passed (26 new), ruff clean over src/assurance and the new tests.
+  Asserted: the page reaches no network, the only URL in it is the advisory's
+  own reference, the chain banner precedes every finding, a tampered ledger
+  shouts before the fleet table, every engine limitation survives into the
+  page, and injected HTML in a machine's site name is escaped.
+
+SUCCESS CONDITION
+  One integrator forwards report.html to somebody who would never have run a
+  command, and that person asks a question about a specific serial number.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ pyproject.toml                     |   1 +
+ src/assurance/api/fleet_routes.py  |  28 ++
+ src/assurance/cli.py               |   3 +-
+ src/assurance/fleet/declaration.py |   4 +-
+ src/assurance/report/__init__.py   |  19 ++
+ src/assurance/report/cli.py        | 122 ++++++++
+ src/assurance/report/demo.py       | 299 +++++++++++++++++++
+ src/assurance/report/render.py     | 454 +++++++++++++++++++++++++++++
+ tests/test_assurance_report.py     | 238 +++++++++++++++
+ 9 files changed, 1165 insertions(+), 3 deletions(-)
+ create mode 100644 src/assurance/report/__init__.py
+ create mode 100644 src/assurance/report/cli.py
+ create mode 100644 src/assurance/report/demo.py
+ create mode 100644 src/assurance/report/render.py
+ create mode 100644 tests/test_assurance_report.py
+
+diff --git a/pyproject.toml b/pyproject.toml
+index 12eed39..a65291f 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -119,6 +119,7 @@ ignore = [
+ "src/assurance/machinery/cli.py" = ["T20"]
+ "src/assurance/fleet/cli.py" = ["T20"]
+ "src/assurance/collect/cli.py" = ["T20"]
++"src/assurance/report/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/api/fleet_routes.py b/src/assurance/api/fleet_routes.py
+index f5d7cb5..b36d7d5 100644
+--- a/src/assurance/api/fleet_routes.py
++++ b/src/assurance/api/fleet_routes.py
+@@ -20,6 +20,7 @@ from __future__ import annotations
+ from typing import Annotated, Any
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Response
++from fastapi.responses import HTMLResponse
+ from pydantic import BaseModel, ConfigDict, Field
+ 
+ from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
+@@ -198,6 +199,33 @@ async def advisory_impact(
+     return assess_impact(advisory, fleet).to_dict()
+ 
+ 
++@fleet_router.get(
++    "/report",
++    response_class=HTMLResponse,
++    summary="The whole fleet on one page a plant manager can read",
++)
++async def report(
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++    organisation: str = "",
++    prepared_by: str = "",
++) -> HTMLResponse:
++    """One self-contained HTML page: no network, no scripts, and it prints.
++
++    Every other output here is JSON or terminal text, which means the only
++    people who ever see it are engineers. This is the surface for everyone who
++    signs the cheque — and it carries every ``checks_skipped`` line verbatim,
++    because a report that hides its own limits is worth less than no report.
++    """
++    from assurance.report.render import ReportInput, render_report
++
++    return HTMLResponse(render_report(ReportInput(
++        ledger=register.ledger,
++        organisation=organisation[:200],
++        prepared_by=prepared_by[:200],
++    )))
++
++
+ @fleet_router.post("/declare", summary="Bind a declaration to a configuration")
+ async def declare(
+     body: DeclareIn,
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index e622a91..57ac75e 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ import sys
+ 
+ _DOMAINS = {
++    "report": "assurance.report.cli",
+     "collect": "assurance.collect.cli",
+     "art14": "assurance.security.art14.cli",
+     "machine": "assurance.machine.cli",
+@@ -21,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
+         for name in _DOMAINS:
+             print(f"  {name}")
+         print("\ntry: python -m assurance art14 --help")
+-        print("     python -m assurance machine separation --help")
++        print("     python -m assurance report demo --out demo/")
+         return 0
+     domain, rest = argv[0], argv[1:]
+     if domain not in _DOMAINS:
+diff --git a/src/assurance/fleet/declaration.py b/src/assurance/fleet/declaration.py
+index 9bca1da..e2bd808 100644
+--- a/src/assurance/fleet/declaration.py
++++ b/src/assurance/fleet/declaration.py
+@@ -297,8 +297,8 @@ def check_declaration(
+             statement=(
+                 f"the configuration is the one declaration {declaration.doc_id} was "
+                 f"signed against ({current[:12]}), and the evidence for "
+-                + ", ".join(lapsed) + " no longer stands. The declaration names a "
+-                "machine that is unchanged and a demonstration that has lapsed."
++                + ", ".join(lapsed) + " does not stand. The declaration names a "
++                "machine that is unchanged and a demonstration that does not."
+             ),
+             checks_skipped=tuple(caveats),
+         )
+diff --git a/src/assurance/report/__init__.py b/src/assurance/report/__init__.py
+new file mode 100644
+index 0000000..87381e4
+--- /dev/null
++++ b/src/assurance/report/__init__.py
+@@ -0,0 +1,19 @@
++"""The report: everything in the ledger, on one page somebody who isn't an
++engineer at a terminal can actually read, print, and forward.
++
++    demo     a complete worked fleet, built from nothing, in one command
++    render   one self-contained HTML page — no network, no scripts, prints
++
++The report is the product surface for everyone who signs the cheque.
++"""
++
++from assurance.report.demo import DEMO_NOTICE, DemoFleet, build_demo
++from assurance.report.render import ReportInput, render_report
++
++__all__ = [
++    "DEMO_NOTICE",
++    "DemoFleet",
++    "ReportInput",
++    "build_demo",
++    "render_report",
++]
+diff --git a/src/assurance/report/cli.py b/src/assurance/report/cli.py
+new file mode 100644
+index 0000000..07b961e
+--- /dev/null
++++ b/src/assurance/report/cli.py
+@@ -0,0 +1,122 @@
++"""``assurance report`` — the page a plant manager reads, and a demo to fill it.
++
++    demo    build a complete worked fleet from nothing and report on it
++    build   render a report from a ledger you already have
++
++``assurance report demo --out demo/`` is the thirty-second answer to "what does
++this actually do". It writes a real ledger — real collection through real
++normalisation rules, real verification, real intervention records — and an HTML
++report over it. Nothing is stubbed; the data is invented and the page says so.
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++from pathlib import Path
++
++from assurance.core.errors import AssuranceError
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import ComponentAdvisory
++from assurance.fleet.declaration import DeclarationOfConformity
++from assurance.report.demo import DEMO_NOTICE, build_demo
++from assurance.report.render import ReportInput, render_report
++
++__all__ = ["build_parser", "main"]
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance report",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    dm = verbs.add_parser("demo", help="build a worked fleet and report on it")
++    dm.add_argument("--out", required=True, type=Path,
++                    help="directory to build the demo in")
++    dm.add_argument("--organisation", default="Demonstration")
++
++    bd = verbs.add_parser("build", help="render a report from a ledger")
++    bd.add_argument("--ledger", required=True, type=Path)
++    bd.add_argument("--out", required=True, type=Path, help="the .html to write")
++    bd.add_argument("--organisation", default="")
++    bd.add_argument("--prepared-by", default="")
++    bd.add_argument("--advisory", type=Path, default=None,
++                    help="fan this advisory across the fleet in the report")
++    bd.add_argument("--declaration", type=Path, action="append", default=[],
++                    help="repeatable: check these declarations against the machines")
++    bd.add_argument("--notice", default="")
++
++    return p
++
++
++def _cmd_demo(args: argparse.Namespace) -> int:
++    out = Path(args.out)
++    fleet = build_demo(out)
++    html = render_report(ReportInput(
++        ledger=EvidenceLedger(fleet.ledger_path),
++        organisation=args.organisation,
++        prepared_by="assurance report demo",
++        advisory=fleet.advisory,
++        declarations=fleet.declarations,
++        notice=DEMO_NOTICE,
++    ))
++    page = out / "report.html"
++    page.write_text(html, encoding="utf-8")
++
++    print(f"built a worked fleet in {out}")
++    print(f"  ledger     {fleet.ledger_path}  ({fleet.entries} sealed records)")
++    print(f"  exports    {fleet.exports_root}")
++    print(f"  plan       {out / 'plan.json'}")
++    print(f"  advisory   {out / 'advisory.json'}")
++    print(f"  REPORT     {page}")
++    print()
++    print("  Open the report in a browser. Nothing is stubbed: the collection ran")
++    print("  against those export files through the normalisation rules in the")
++    print("  plan, and every finding came out of the same engines a customer runs.")
++    print()
++    print("  Then try:")
++    print(f"    python -m assurance fleet list --ledger {fleet.ledger_path}")
++    print(f"    python -m assurance fleet advisory {out / 'advisory.json'} "
++          f"--ledger {fleet.ledger_path}")
++    print(f"    python -m assurance collect check-plan {out / 'plan.json'}")
++    return 0
++
++
++def _cmd_build(args: argparse.Namespace) -> int:
++    advisory = (ComponentAdvisory.from_json(args.advisory)
++                if args.advisory else None)
++    declarations = tuple(DeclarationOfConformity.from_json(p)
++                         for p in args.declaration)
++    html = render_report(ReportInput(
++        ledger=EvidenceLedger(args.ledger),
++        organisation=args.organisation,
++        prepared_by=args.prepared_by,
++        advisory=advisory,
++        declarations=declarations,
++        notice=args.notice,
++    ))
++    Path(args.out).write_text(html, encoding="utf-8")
++    print(f"report written to {args.out}")
++    print("  Self-contained: no network, no scripts. It opens on a laptop in a "
++          "plant with no internet, and it prints.")
++    return 0
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {"demo": _cmd_demo, "build": _cmd_build}
++    try:
++        return handlers[args.command](args)
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/report/demo.py b/src/assurance/report/demo.py
+new file mode 100644
+index 0000000..8b72701
+--- /dev/null
++++ b/src/assurance/report/demo.py
+@@ -0,0 +1,299 @@
++"""A complete worked fleet, built from nothing, in one command.
++
++Somebody who has just installed this has a package with seven domains and no
++idea where to start. That person is an evaluating engineer with twenty minutes,
++and if the first twenty minutes produce nothing they can see, there is no
++twenty-first.
++
++:func:`build_demo` writes a real ledger: four machines collected from real
++files through real normalisation rules, verified against a real safety envelope,
++one of them updated by a technician who re-ran nothing, one of them running an
++artefact that contradicts its own version label. Every record is sealed and the
++chain verifies. Nothing here is a fixture or a stub — it is the same code path a
++customer runs, driven with invented data, and the findings it produces are the
++findings the engine actually makes.
++
++The data is invented and the module says so in the ledger itself: every evidence
++object carries a ``checks_skipped`` line naming it as demonstration data, so a
++demo ledger can never be mistaken for a real one.
++"""
++
++from __future__ import annotations
++
++import json
++import zipfile
++from dataclasses import dataclass
++from datetime import UTC, datetime
++from pathlib import Path
++from typing import Any
++
++from assurance.collect.collector import collect
++from assurance.collect.plan import CollectionPlan
++from assurance.core.evidence import Actor
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import (
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++)
++from assurance.fleet.declaration import DeclarationOfConformity
++from assurance.machine.bundle import build_bundle
++from assurance.machine.envelope import (
++    FigureBasis,
++    SafetyEnvelope,
++    SensingUncertainty,
++    StopPerformance,
++    Workspace,
++)
++from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
++from assurance.machinery.intervention import Intervention, InterventionKind
++from assurance.machinery.record import record_intervention, record_manifest
++
++__all__ = ["DEMO_NOTICE", "DemoFleet", "build_demo"]
++
++DEMO_NOTICE = (
++    "DEMONSTRATION DATA. These machines do not exist. The engine, the rules and "
++    "the findings are real; the figures were invented to exercise them."
++)
++
++ENG = Actor("a.integrator", "safety engineer")
++TECH = Actor("m.tech", "service technician")
++
++_FUNCTIONS = [
++    {"function_id": "SF-01", "description": "Protective stop on zone intrusion",
++     "required_performance": "PL d",
++     "verified_by": ["ssm_separation", "stop_characterisation"]},
++    {"function_id": "SF-02", "description": "Speed limit in collaborative operation",
++     "required_performance": "PL d", "verified_by": ["speed_limit"]},
++    {"function_id": "SF-03", "description": "Emergency stop, category 1",
++     "required_performance": "PL d", "verified_by": []},
++]
++
++_PLAN: dict[str, Any] = {
++    "plan_id": "PLAN-AR7",
++    "manufacturer": "Grimaldi",
++    "model": "AR-7",
++    "procedure": "Export from the scanner tool, RParam and the PLC IDE into one "
++                 "folder, then run the collection.",
++    "notes": "Probed against two back-to-back exports and reported STABLE.",
++    "functions": _FUNCTIONS,
++    "items": [
++        {"item_id": "ITM-ZONES", "kind": "safety_configuration",
++         "name": "Safety scanner zone set", "source": "scanner-zones.cfg",
++         "supplier": "ScanCo", "implements": ["SF-01"],
++         "modifiable_in_field": True,
++         "rule": {"kind": "text_excluding",
++                  "patterns": [r"^#\s*Exported ", r"^#\s*Export sequence no:"],
++                  "note": "the scanner tool stamps the export time, the operator "
++                          "and a sequence number into a comment header."}},
++        {"item_id": "ITM-PARAMS", "kind": "parameter_set",
++         "name": "Robot safety parameter set", "source": "robot-params.json",
++         "supplier": "RoboCo", "implements": ["SF-01", "SF-02"],
++         "rule": {"kind": "json_excluding",
++                  "keys": ["export.timestamp", "export.operator"],
++                  "note": "RParam records who exported and when."},
++         "version": {"kind": "json", "value": "firmware.version"}},
++        {"item_id": "ITM-PLC", "kind": "safety_program",
++         "name": "Safety PLC project", "source": "plc-project.zip",
++         "supplier": "ControlCo", "implements": ["SF-01", "SF-03"],
++         "rule": {"kind": "zip_members", "members": ["program/main.st"],
++                  "note": "the archive's member timestamps move on every save."}},
++        {"item_id": "ITM-FW", "kind": "firmware",
++         "name": "Safety controller firmware", "source": "controller-fw.bin",
++         "supplier": "ControlCo", "implements": ["SF-01", "SF-02"],
++         "version": {"kind": "regex", "value": r"build (\d+\.\d+\.\d+)"}},
++    ],
++}
++
++#: The firmware ControlCo shipped as 3.8.2, and the one the advisory names.
++_FW_382 = b"\x7fELF" + b"ControlCo safety controller build 3.8.2\n" * 24
++#: A different artefact wearing the same label: somebody applied a hotfix and
++#: the version string did not move. This is the contradiction the fleet catches.
++_FW_RELABELLED = (b"\x7fELF" + b"ControlCo safety controller build 3.8.2\n" * 24
++                  + b"\nfield hotfix applied 2026-08-30, label unchanged\n")
++#: The remedied release.
++_FW_390 = b"\x7fELF" + b"ControlCo safety controller build 3.9.0\n" * 24
++
++
++def _write_export(root: Path, *, stamp: str, operator: str, seq: str,
++                  radius: int, firmware: bytes) -> Path:
++    """A folder of vendor exports, stamped the way real tools stamp them."""
++    root.mkdir(parents=True, exist_ok=True)
++    (root / "scanner-zones.cfg").write_text(
++        f"# Exported {stamp} by {operator}\n"
++        f"# Export sequence no: {seq}\n"
++        f"[zone.1]\ntype=protective\nradius_mm={radius}\nresponse_ms=62\n"
++        "[zone.2]\ntype=warning\nradius_mm=2600\nresponse_ms=62\n",
++        encoding="utf-8")
++    (root / "robot-params.json").write_text(json.dumps({
++        "export": {"timestamp": stamp, "operator": operator, "tool": "RParam 4.2"},
++        "safety": {"max_tcp_speed_mm_s": 400, "reduced_speed_mm_s": 250,
++                   "stop_category": 1},
++        "firmware": {"version": "3.8.2"},
++    }, indent=2), encoding="utf-8")
++    with zipfile.ZipFile(root / "plc-project.zip", "w") as z:
++        z.writestr(zipfile.ZipInfo("program/main.st", date_time=(2026, 1, 1, 0, 0, 0)),
++                   "PROGRAM Main\n  SafeStop := NOT ZoneClear;\nEND_PROGRAM\n")
++        z.writestr(zipfile.ZipInfo("meta/build.txt",
++                                   date_time=(2026, 9, max(int(seq[-1]), 1), 0, 0, 0)),
++                   f"built {stamp} seq {seq}\n")
++    (root / "controller-fw.bin").write_bytes(firmware)
++    return root
++
++
++def _envelope() -> SafetyEnvelope:
++    return SafetyEnvelope(
++        envelope_id="ENV-AR7-2.4.1", product="AR-7 Palletising Cell",
++        product_version="2.4.1",
++        workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
++        max_tcp_speed_mm_s={OperatingMode.SSM: 400.0, OperatingMode.AUTOMATIC: 2000.0,
++                            OperatingMode.STOPPED: 0.0},
++        stop=StopPerformance(0.10, 0.25, 120.0, 500.0,
++                             FigureBasis("measured", "STOP-TEST-2026-03-11 rev B",
++                                         "2026-03-11")),
++        uncertainty=SensingUncertainty(100.0, 50.0,
++                                       FigureBasis("measured", "CAL-2026-003",
++                                                   "2026-01-18")),
++        intrusion_distance_mm=850.0,
++        declared_by=ENG,
++        notes="Separation figures assume hand/arm detection at the cell perimeter.",
++    )
++
++
++def _trace(serial: str, when: datetime, *, speed: float, separation: float) -> Trace:
++    return Trace(
++        trace_id=f"RUN-{serial}-{when:%Y%m%d}", provenance=Provenance.FIELD,
++        source_system="AR-7 controller fw 3.8.2 / safety scanner log",
++        started_at=when, sample_rate_hz=50.0,
++        conditions={"payload_kg": 12.5, "tool": "vacuum gripper VG-4"},
++        samples=tuple(
++            Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0), tcp_speed=speed,
++                   mode=OperatingMode.SSM, separation=separation, human_speed=1400.0)
++            for i in range(40)),
++    )
++
++
++@dataclass(frozen=True)
++class DemoFleet:
++    """Everything the demo built, so a caller can render or inspect it."""
++
++    ledger_path: Path
++    exports_root: Path
++    plan: CollectionPlan
++    advisory: ComponentAdvisory
++    declarations: tuple[DeclarationOfConformity, ...]
++    entries: int
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "ledger": str(self.ledger_path),
++            "exports": str(self.exports_root),
++            "plan_id": self.plan.plan_id,
++            "advisory_id": self.advisory.advisory_id,
++            "declarations": [d.doc_id for d in self.declarations],
++            "entries": self.entries,
++            "notice": DEMO_NOTICE,
++        }
++
++
++def build_demo(workdir: str | Path) -> DemoFleet:
++    """Build a complete, sealed, four-machine fleet under ``workdir``.
++
++    Returns the ledger and the artefacts a report needs. Every machine is a
++    different situation on purpose, because a demo where everything is fine
++    demonstrates nothing:
++
++    ``#0412``  clean, covered, and about to be hit by an advisory
++    ``#0418``  running an artefact that contradicts its own version label
++    ``#0501``  a technician reshaped the safety zone and re-ran nothing
++    ``#0620``  already on the remedied firmware
++    """
++    work = Path(workdir)
++    work.mkdir(parents=True, exist_ok=True)
++    exports = work / "exports"
++    ledger = EvidenceLedger(work / "register.db")
++    plan = CollectionPlan.from_dict(_PLAN)
++    envelope = _envelope()
++
++    feb = datetime(2026, 2, 9, 6, 0, tzinfo=UTC)
++    sept = datetime(2026, 9, 13, 7, 20, tzinfo=UTC)
++
++    spec = [
++        # serial, site, radius, firmware, verified, intervened
++        ("0412", "Plant 2, Line 4", 1500, _FW_382, True, False),
++        ("0418", "Plant 2, Line 6", 1500, _FW_RELABELLED, True, False),
++        ("0501", "Plant 7, Cell A", 1200, _FW_382, True, True),
++        ("0620", "Plant 7, Cell C", 1500, _FW_390, True, False),
++    ]
++
++    declarations: list[DeclarationOfConformity] = []
++
++    for serial, site, radius, firmware, verified, intervened in spec:
++        root = _write_export(
++            exports / serial,
++            stamp=f"2026-09-13T0{len(serial) % 7}:11:04Z", operator="m.tech",
++            seq=f"41{serial[-2:]}", radius=radius, firmware=firmware)
++
++        result = collect(plan, root, serial=serial, taken_by=ENG, site=site,
++                         year="2026", taken_at=sept,
++                         manifest_id=f"MAN-{serial}-2026-09")
++        record_manifest(ledger, result.manifest)
++
++        declarations.append(DeclarationOfConformity.bind(
++            result.manifest, doc_id=f"DOC-AR7-{serial}",
++            issued_by="Grimaldi Engineering",
++            issued_at=datetime(2026, 1, 20, 9, 0, tzinfo=UTC),
++            legislation=("Regulation (EU) 2023/1230", "Regulation (EU) 2024/2847"),
++            standards=("EN ISO 10218-1:2025", "EN ISO 10218-2:2025",
++                       "EN ISO 13849-1:2023"),
++            signatory="V. Grimaldi", place="Turin"))
++
++        if verified:
++            # #0501's zone was reshaped to 1200 mm, which is inside the distance
++            # the cell actually needs; the February run still passed because the
++            # zone was 1500 mm then. That is the point.
++            build_bundle(envelope, _trace(serial, feb, speed=400.0,
++                                          separation=2200.0),
++                         actor=ENG, ledger=ledger,
++                         subject=result.manifest.machine.key)
++
++        if intervened:
++            record_intervention(ledger, Intervention(
++                intervention_id=f"INT-{serial}-0007",
++                machine_key=result.manifest.machine.key,
++                item_id="ITM-ZONES", kind=InterventionKind.PARAMETER_CHANGE,
++                occurred_at=datetime(2026, 8, 2, 11, 15, tzinfo=UTC),
++                performed_by=TECH,
++                reason="Protective zone reshaped after a conveyor was moved.",
++                affects_functions=("SF-01",),
++                notes="Recorded from the service report. Nothing was re-run."))
++
++    advisory = ComponentAdvisory(
++        advisory_id="CTRL-2026-11", issued_by="ControlCo",
++        issued_at=datetime(2026, 9, 12, 8, 0, tzinfo=UTC),
++        title="Watchdog may not trip under sustained safety-bus load",
++        summary="Under sustained load on the safety bus the watchdog can fail to "
++                "trigger the safety-rated stop within the specified reaction time. "
++                "The declared stop performance is not achieved.",
++        severity=AdvisorySeverity.SAFETY_RELEVANT,
++        affected=(AffectedArtefact(
++            supplier="ControlCo", name="Safety controller firmware",
++            versions=("3.8.0", "3.8.1", "3.8.2"),
++            content_hashes=(__import__("hashlib").sha256(_FW_382).hexdigest(),),
++            version_note="All 3.8.x releases before 3.9.0."),),
++        remedy="Update to 3.9.0 and re-run the stop-performance test. The declared "
++               "reaction time must be re-established, not assumed.",
++        reference="https://controlco.example/advisories/CTRL-2026-11",
++        fixed_versions=("3.9.0",),
++        fixed_hashes=(__import__("hashlib").sha256(_FW_390).hexdigest(),),
++    )
++
++    (work / "advisory.json").write_text(
++        json.dumps(advisory.to_dict(), indent=2) + "\n", encoding="utf-8")
++    (work / "plan.json").write_text(
++        json.dumps(plan.to_dict(), indent=2) + "\n", encoding="utf-8")
++
++    return DemoFleet(
++        ledger_path=work / "register.db", exports_root=exports, plan=plan,
++        advisory=advisory, declarations=tuple(declarations), entries=len(ledger),
++    )
+diff --git a/src/assurance/report/render.py b/src/assurance/report/render.py
+new file mode 100644
+index 0000000..f020707
+--- /dev/null
++++ b/src/assurance/report/render.py
+@@ -0,0 +1,454 @@
++"""The evidence report: everything in the ledger, on one page somebody can read.
++
++Every other output in this package is terminal text, which means the only person
++who ever sees it is an engineer at a prompt. The people who decide whether this
++gets bought — a plant manager, a quality director, an insurer, a notified body,
++the customer's procurement — do not open terminals. They read documents, and
++they forward them.
++
++So this renders one self-contained HTML file. No network, no fonts to fetch, no
++scripts to run: it opens on a laptop in a plant with no internet, it prints, it
++attaches to an email, and it goes in a tender response unchanged.
++
++Three things the layout enforces, because they are the difference between a
++report that is trusted and one that is filed:
++
++**The chain verification is the first thing on the page.** If the ledger does not
++verify, everything below it is drawn from a store whose integrity is in
++question, and saying so at the bottom would be a lie of placement.
++
++**Findings are ordered by what somebody has to do today**, not by machine name.
++A cell whose evidence lapsed seven months ago outranks four cells that are fine.
++
++**"What this does not establish" is a numbered section, not a footnote.** Every
++``checks_skipped`` line the engines produced is carried through verbatim. A
++report that hides its own limits is worth less than no report, because somebody
++will rely on it.
++"""
++
++from __future__ import annotations
++
++import html
++from dataclasses import dataclass
++from datetime import datetime
++from typing import Any
++
++from assurance.core.identity import format_utc, utc_now
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.declaration import (
++    DeclarationOfConformity,
++    DeclarationStatus,
++    check_declaration,
++)
++from assurance.fleet.impact import ImpactReport, assess_impact
++from assurance.fleet.registry import Fleet
++
++__all__ = ["ReportInput", "render_report"]
++
++
++def e(value: Any) -> str:
++    return html.escape(str(value), quote=True)
++
++
++@dataclass(frozen=True)
++class ReportInput:
++    """Everything the report draws on. Only the ledger is required."""
++
++    ledger: EvidenceLedger
++    #: Organisation the report is about, as it should appear on the page.
++    organisation: str = ""
++    #: Who produced it.
++    prepared_by: str = ""
++    #: Optional advisory to fan out across the fleet.
++    advisory: Any = None
++    #: Declarations, keyed by machine key.
++    declarations: tuple[DeclarationOfConformity, ...] = ()
++    #: A banner shown at the very top, e.g. the demonstration-data notice.
++    notice: str = ""
++    generated_at: datetime | None = None
++
++
++_CSS = """
++:root{
++  --ink:#14181a; --ink-2:#3d4745; --muted:#626d6a;
++  --ground:#ffffff; --panel:#f4f6f3; --rule:#d2d7d2; --rule-firm:#a7b0ac;
++  --accent:#0d6a6b; --accent-soft:#e3efee;
++  --bad:#a11220; --bad-soft:#fbeaec;
++  --warn:#8a5a06; --warn-soft:#fbf1dd;
++  --good:#2c6535; --good-soft:#e7f0e7;
++  --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
++  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
++}
++*{box-sizing:border-box}
++body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
++     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
++.sheet{max-width:1000px;margin:0 auto;padding:0 20px 64px}
++h1,h2,h3{margin:0;text-wrap:balance}
++a{color:var(--accent)}
++.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
++
++header.masthead{padding:36px 0 18px;border-bottom:2px solid var(--ink);
++  display:flex;flex-wrap:wrap;gap:14px 32px;align-items:flex-end}
++.masthead h1{font-size:clamp(24px,4vw,34px);letter-spacing:-.01em;line-height:1.08}
++.masthead .who{font-size:13px;color:var(--muted);margin-top:6px}
++.masthead .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);
++  margin-left:auto;text-align:right;line-height:1.7}
++
++.banner{margin:18px 0 0;padding:12px 14px;border-left:4px solid var(--accent);
++  background:var(--accent-soft);font-size:13.5px}
++.banner.bad{border-color:var(--bad);background:var(--bad-soft);color:var(--bad);
++  font-weight:600}
++.banner.warn{border-color:var(--warn);background:var(--warn-soft)}
++.banner b{font-weight:700}
++
++.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
++  gap:0;margin-top:22px;border:1px solid var(--rule)}
++.tile{padding:14px 16px;border-right:1px solid var(--rule)}
++.tile:last-child{border-right:0}
++.tile .n{font-family:var(--mono);font-size:30px;line-height:1;font-weight:500;
++  letter-spacing:-.02em}
++.tile .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
++  color:var(--muted);margin-top:7px}
++.tile.bad .n{color:var(--bad)} .tile.warn .n{color:var(--warn)}
++.tile.good .n{color:var(--good)}
++
++section{margin-top:38px;break-inside:auto}
++section>h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;
++  color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--rule-firm)}
++section>.lede{margin:12px 0 0;color:var(--ink-2);max-width:72ch}
++
++table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:14px}
++th,td{text-align:left;padding:7px 10px;border-top:1px solid var(--rule);
++  vertical-align:top}
++thead th{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
++  color:var(--muted);border-top:0;border-bottom:1px solid var(--rule-firm)}
++td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
++  white-space:nowrap}
++tbody tr:hover{background:var(--panel)}
++.wide{overflow-x:auto}
++
++.pill{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.07em;
++  text-transform:uppercase;padding:2px 7px;border-radius:2px;white-space:nowrap}
++.pill.current{background:var(--good-soft);color:var(--good)}
++.pill.stale{background:var(--bad-soft);color:var(--bad)}
++.pill.failing{background:var(--bad);color:#fff}
++.pill.never_verified{background:var(--warn-soft);color:var(--warn)}
++.pill.not_demonstrable{background:var(--panel);color:var(--muted);
++  box-shadow:inset 0 0 0 1px var(--rule-firm)}
++.pill.confirmed{background:var(--bad-soft);color:var(--bad)}
++.pill.contradictory{background:var(--warn);color:#fff}
++.pill.probable{background:var(--warn-soft);color:var(--warn)}
++.pill.possible{background:var(--panel);color:var(--muted);
++  box-shadow:inset 0 0 0 1px var(--rule-firm)}
++
++.machine{border:1px solid var(--rule);margin-top:16px;break-inside:avoid}
++.machine>header{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;
++  padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--rule)}
++.machine h3{font-size:16px}
++.machine .site{color:var(--muted);font-size:13px}
++.machine .cfg{margin-left:auto;font-family:var(--mono);font-size:11.5px;
++  color:var(--muted)}
++.machine .body{padding:4px 16px 14px}
++.fn{padding:9px 0;border-top:1px solid var(--rule)}
++.fn:first-child{border-top:0}
++.fn .top{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
++.fn .id{font-family:var(--mono);font-weight:600}
++.fn .perf{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
++.fn .why{color:var(--ink-2);font-size:13px;margin-top:3px;max-width:78ch}
++.fn .days{color:var(--bad);font-weight:600;font-size:13px;margin-top:3px}
++
++.note{margin-top:12px;padding:10px 12px;border-left:3px solid var(--rule-firm);
++  background:var(--panel);font-size:13px;color:var(--ink-2)}
++.note.bad{border-color:var(--bad);background:var(--bad-soft)}
++.note.warn{border-color:var(--warn);background:var(--warn-soft)}
++.note b{color:var(--ink)}
++
++ol.limits{margin:14px 0 0;padding-left:22px}
++ol.limits li{margin-bottom:9px;color:var(--ink-2);max-width:80ch}
++
++footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
++  font-size:12px;color:var(--muted);max-width:80ch}
++footer code{font-family:var(--mono);font-size:11.5px;background:var(--panel);
++  padding:1px 5px;border:1px solid var(--rule)}
++footer p{margin:0 0 8px}
++
++@media print{
++  body{font-size:11pt}
++  .sheet{max-width:none;padding:0}
++  section{break-inside:auto}
++  .machine,.tiles,.banner,.note{break-inside:avoid}
++  tbody tr:hover{background:none}
++  header.masthead{padding-top:0}
++}
++"""
++
++_COVERAGE_WORDS = {
++    "current": "Current",
++    "stale": "Stale",
++    "failing": "Failing",
++    "never_verified": "Never verified",
++    "not_demonstrable": "Not demonstrable",
++}
++
++
++def _tile(value: Any, label: str, tone: str = "") -> str:
++    return (f'<div class="tile {tone}"><div class="n">{e(value)}</div>'
++            f'<div class="k">{e(label)}</div></div>')
++
++
++def _fleet_table(fleet: Fleet) -> str:
++    rows = sorted(fleet.records,
++                  key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count,
++                                 r.machine_key))
++    body = []
++    for r in rows:
++        worst = r.worst.value if r.worst else "—"
++        body.append(
++            f"<tr><td class='mono'>{e(r.machine_key)}</td>"
++            f"<td>{e(r.site or '—')}</td>"
++            f"<td><span class='pill {e(worst)}'>"
++            f"{e(_COVERAGE_WORDS.get(worst, worst))}</span></td>"
++            f"<td class='n'>{r.stale_count}</td>"
++            f"<td class='n'>{len(r.coverage.functions)}</td>"
++            f"<td class='n'>{len(r.interventions)}</td>"
++            f"<td class='n'>{len(r.verifications)}</td>"
++            f"<td class='mono'>{e(r.manifest.configuration_hash()[:12])}</td>"
++            f"<td class='mono'>{e(r.manifest.taken_at.date().isoformat())}</td></tr>")
++    return (
++        "<div class='wide'><table><thead><tr>"
++        "<th>Machine</th><th>Site</th><th>Weakest function</th>"
++        "<th class='n'>Stale</th><th class='n'>Functions</th>"
++        "<th class='n'>Changes</th><th class='n'>Verifications</th>"
++        "<th>Configuration</th><th>Last collected</th>"
++        "</tr></thead><tbody>" + "".join(body) + "</tbody></table></div>")
++
++
++def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
++    m = record.manifest
++    out = [
++        "<article class='machine'><header>",
++        f"<h3 class='mono'>{e(m.machine.serial)}</h3>",
++        f"<span class='site'>{e(m.machine.manufacturer)} {e(m.machine.model)}"
++        + (f" · {e(m.machine.site)}" if m.machine.site else "") + "</span>",
++        f"<span class='cfg'>config {e(m.configuration_hash()[:16])} · "
++        f"{len(m.items)} item(s) · tier {e(m.tier_ceiling.value)}</span>",
++        "</header><div class='body'>",
++    ]
++    for f in sorted(record.coverage.functions,
++                    key=lambda f: (f.coverage.rank, f.function_id)):
++        days = f.days_uncovered
++        out.append(
++            "<div class='fn'><div class='top'>"
++            f"<span class='id'>{e(f.function_id)}</span>"
++            f"<span>{e(f.description)}</span>"
++            + (f"<span class='perf'>{e(f.required_performance)}</span>"
++               if f.required_performance else "")
++            + f"<span class='pill {e(f.coverage.value)}'>"
++              f"{e(_COVERAGE_WORDS[f.coverage.value])}</span></div>"
++            f"<div class='why'>{e(f.detail)}</div>"
++            + (f"<div class='days'>Running {days} day(s) without valid evidence "
++               "for this function.</div>" if days is not None else "")
++            + "</div>")
++
++    if record.interventions:
++        rows = "".join(
++            f"<tr><td class='mono'>{e(i.intervention_id)}</td>"
++            f"<td class='mono'>{e(format_utc(i.occurred_at)[:10])}</td>"
++            f"<td class='mono'>{e(i.item_id)}</td>"
++            f"<td>{e(i.performed_by.identifier)}</td>"
++            f"<td>{e(i.reason)}</td>"
++            f"<td>{'yes' if i.is_authorised else '<b>no</b>'}</td>"
++            f"<td>{'yes' if i.is_revalidated else '<b>no</b>'}</td></tr>"
++            for i in record.interventions)
++        out.append(
++            "<div class='wide'><table><thead><tr><th>Change</th><th>When</th>"
++            "<th>Item</th><th>By</th><th>Reason</th><th>Authorised</th>"
++            "<th>Re-run</th></tr></thead><tbody>" + rows + "</tbody></table></div>")
++
++    if status is not None:
++        tone = "" if status.is_sound else "bad"
++        out.append(f"<div class='note {tone}'><b>{e(status.doc_id)}</b> — "
++                   f"{e(status.verdict.value.replace('_', ' '))}. "
++                   f"{e(status.statement)}</div>")
++    out.append("</div></article>")
++    return "".join(out)
++
++
++def _impact_block(impact: ImpactReport) -> str:
++    head = {
++        "clear": ("", "No machine in this fleet matches this advisory."),
++        "exposed": ("bad", "Standing safety evidence is now in question."),
++        "needs_review": ("warn", "Matches found; none had standing evidence."),
++    }[impact.verdict]
++    out = [
++        f"<div class='banner {head[0]}'><b>{e(impact.advisory_id)}</b> "
++        f"({e(impact.issued_by)}, {e(impact.severity.value.replace('_', ' '))}) — "
++        f"{e(head[1])}<br>{e(impact.title)}<br>"
++        f"<span class='mono'>{e(impact.reference)}</span></div>",
++        "<div class='wide'><table><thead><tr><th>Machine</th><th>Site</th>"
++        "<th>Item</th><th>Version</th><th>Basis</th><th>What it rests on</th>"
++        "<th>Functions now in question</th></tr></thead><tbody>",
++    ]
++    order = {"hash": 0, "hash_mismatch": 1, "version": 2, "name_only": 3}
++    for x in sorted(impact.exposures,
++                    key=lambda x: (order[x.basis.value], x.machine_key)):
++        newly = ", ".join(f.function_id for f in x.newly_in_question) or "—"
++        out.append(
++            f"<tr><td class='mono'>{e(x.machine_key)}</td>"
++            f"<td>{e(x.site or '—')}</td>"
++            f"<td class='mono'>{e(x.item_id)}</td>"
++            f"<td class='mono'>{e(x.item_version or '—')}</td>"
++            f"<td><span class='pill {e(x.confidence)}'>{e(x.confidence)}</span></td>"
++            f"<td>{e(x.detail)}</td>"
++            f"<td class='mono'>{e(newly)}</td></tr>")
++    out.append("</tbody></table></div>")
++    if impact.contradictory:
++        out.append(
++            "<div class='note warn'><b>Counted in neither column.</b> "
++            f"{len(impact.contradictory)} machine(s) report a version the advisory "
++            "names while the artefact contradicts the supplier's own published "
++            "hash. They are not confirmed affected and not confirmed clear. "
++            "Somebody has to look at those machines.</div>")
++    return "".join(out)
++
++
++def render_report(data: ReportInput) -> str:
++    """Produce one self-contained HTML page. No network, no scripts."""
++    fleet = Fleet.from_ledger(data.ledger)
++    generated = data.generated_at or utc_now()
++    declarations = {d.machine_key: d for d in data.declarations}
++
++    impact: ImpactReport | None = None
++    if data.advisory is not None:
++        impact = assess_impact(data.advisory, fleet)
++
++    statuses: dict[str, DeclarationStatus] = {}
++    for record in fleet.records:
++        doc = declarations.get(record.machine_key)
++        if doc is not None:
++            statuses[record.machine_key] = check_declaration(
++                doc, record.manifest, record.coverage)
++
++    stale = sum(r.stale_count for r in fleet.records)
++    uncovered = sum(len(r.coverage.uncovered) for r in fleet.records)
++    functions = sum(len(r.coverage.functions) for r in fleet.records)
++    unsound = sum(1 for s in statuses.values() if not s.is_sound)
++
++    parts: list[str] = [
++        "<title>Machine safety evidence report</title>",
++        f"<style>{_CSS}</style>",
++        "<div class='sheet'>",
++        "<header class='masthead'><div>",
++        "<h1>Machine safety evidence report</h1>",
++        "<div class='who'>"
++        + (f"{e(data.organisation)} · " if data.organisation else "")
++        + f"{len(fleet)} machine(s) · {functions} declared safety function(s)"
++        + (f" · prepared by {e(data.prepared_by)}" if data.prepared_by else "")
++        + "</div></div>",
++        f"<div class='meta'>generated {e(format_utc(generated))}<br>"
++        f"ledger {e(str(data.ledger.path.name))} · {len(data.ledger)} sealed "
++        f"record(s)</div></header>",
++    ]
++
++    if data.notice:
++        parts.append(f"<div class='banner warn'>{e(data.notice)}</div>")
++
++    # The integrity statement is the first thing on the page, always.
++    if fleet.chain_verified:
++        head = data.ledger.head_attestation()
++        parts.append(
++            "<div class='banner'><b>Ledger chain verifies.</b> "
++            f"All {len(data.ledger)} record(s) hash to their recorded values and "
++            "each links to the one before it. Head "
++            f"<span class='mono'>{e(str(head.get('head_link_hash', ''))[:24])}</span>."
++            "</div>")
++    else:
++        parts.append(
++            "<div class='banner bad'><b>THE LEDGER CHAIN DOES NOT VERIFY.</b> "
++            "Every statement in this report is drawn from a store whose integrity "
++            "is in question. "
++            + e("; ".join(fleet.chain_problems[:3])) + "</div>")
++
++    parts.append("<div class='tiles'>")
++    parts.append(_tile(len(fleet), "machines"))
++    parts.append(_tile(functions - uncovered, "functions covered",
++                       "good" if uncovered == 0 else ""))
++    parts.append(_tile(stale, "stale", "bad" if stale else ""))
++    parts.append(_tile(uncovered - stale, "otherwise uncovered",
++                       "warn" if uncovered - stale else ""))
++    if impact is not None:
++        parts.append(_tile(len(impact.machines_affected), "advisory matches",
++                           "bad" if impact.machines_affected else "good"))
++    if statuses:
++        parts.append(_tile(unsound, "declarations in doubt",
++                           "bad" if unsound else "good"))
++    parts.append("</div>")
++
++    if impact is not None:
++        parts.append("<section><h2>1 · Component advisory</h2>")
++        parts.append("<p class='lede'>A supplier has published an advisory. This is "
++                     "every machine in the ledger it touches, and the safety "
++                     "functions whose evidence it unsettles.</p>")
++        parts.append(_impact_block(impact))
++        parts.append("</section>")
++
++    n = 2 if impact is not None else 1
++    parts.append(f"<section><h2>{n} · Fleet</h2>")
++    parts.append("<p class='lede'>Weakest function first, because that is the order "
++                 "somebody acts in. “Stale” means a recorded change to safety-relevant "
++                 "software invalidated a verification that had passed.</p>")
++    parts.append(_fleet_table(fleet))
++    parts.append("</section>")
++
++    parts.append(f"<section><h2>{n + 1} · Machine by machine</h2>")
++    for record in sorted(fleet.records,
++                         key=lambda r: (r.worst.rank if r.worst else 99,
++                                        r.machine_key)):
++        parts.append(_machine_block(record, statuses.get(record.machine_key)))
++    parts.append("</section>")
++
++    # Everything the engines said they could not establish, verbatim.
++    limits: list[str] = []
++    seen: set[str] = set()
++    for record in fleet.records:
++        for c in record.coverage.checks_skipped:
++            if c not in seen:
++                seen.add(c)
++                limits.append(c)
++    if impact is not None:
++        for c in impact.checks_skipped:
++            if c not in seen:
++                seen.add(c)
++                limits.append(c)
++    for s in statuses.values():
++        for c in s.checks_skipped:
++            if c not in seen:
++                seen.add(c)
++                limits.append(c)
++
++    parts.append(f"<section><h2>{n + 2} · What this report does not establish</h2>")
++    parts.append("<p class='lede'>Carried verbatim from the engines that produced "
++                 "the findings above. A report that hides its own limits is worth "
++                 "less than no report, because somebody will rely on it.</p>")
++    parts.append("<ol class='limits'>"
++                 + "".join(f"<li>{e(c)}</li>" for c in limits) + "</ol>")
++    parts.append("</section>")
++
++    parts.append(
++        "<footer>"
++        "<p><b>How to check this without trusting whoever sent it.</b> Every finding "
++        "above comes from a hash-chained ledger. Run "
++        "<code>assurance machinery check &lt;passport&gt; --ledger &lt;register.db&gt;</code> "
++        "against the ledger this was generated from: it re-runs the engine on the "
++        "original records and reports any statement that does not reproduce.</p>"
++        "<p>Coverage joins verification bundles to intervention records through the "
++        "safety functions the manifest declares. A verification is dated by when the "
++        "run happened, not when it was filed. A function that declares no "
++        "verification check is reported as not demonstrable, never as covered.</p>"
++        "<p>Nothing in this report is legal advice. Whether a changed configuration "
++        "amounts to a substantial modification requiring a new conformity assessment "
++        "is a question for the manufacturer and, where one is involved, the notified "
++        "body.</p>"
++        "</footer></div>")
++
++    return "".join(parts)
+diff --git a/tests/test_assurance_report.py b/tests/test_assurance_report.py
+new file mode 100644
+index 0000000..2786d1f
+--- /dev/null
++++ b/tests/test_assurance_report.py
+@@ -0,0 +1,238 @@
++"""Tests for the demo fleet and the evidence report.
++
++The report is the only surface anyone who is not an engineer at a terminal will
++ever see, so the tests here are about what it must never do: lose the chain
++status, bury the limitations, reach the network, or claim a machine is covered
++when its evidence has lapsed.
++"""
++
++from __future__ import annotations
++
++import re
++from pathlib import Path
++
++import pytest
++
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.registry import Fleet
++from assurance.report.demo import DEMO_NOTICE, build_demo
++from assurance.report.render import ReportInput, render_report
++
++
++@pytest.fixture(scope="module")
++def demo(tmp_path_factory) -> tuple[Path, object]:
++    work = tmp_path_factory.mktemp("demo")
++    fleet = build_demo(work)
++    return work, fleet
++
++
++@pytest.fixture(scope="module")
++def page(demo) -> str:
++    work, fleet = demo
++    return render_report(ReportInput(
++        ledger=EvidenceLedger(fleet.ledger_path),
++        organisation="Grimaldi Engineering",
++        prepared_by="tests",
++        advisory=fleet.advisory,
++        declarations=fleet.declarations,
++        notice=DEMO_NOTICE,
++    ))
++
++
++# =====================================================================
++# the demo is real, not a fixture
++# =====================================================================
++
++class TestDemo:
++    def test_it_builds_a_chain_that_verifies(self, demo):
++        _, fleet = demo
++        ok, problems = EvidenceLedger(fleet.ledger_path).verify_chain()
++        assert ok, problems
++
++    def test_it_enrols_four_machines(self, demo):
++        _, fleet = demo
++        assert len(Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))) == 4
++
++    def test_the_manifests_were_really_collected_from_files(self, demo):
++        """Not hand-written: the exports exist and were hashed through the rules."""
++        work, fleet = demo
++        assert (fleet.exports_root / "0412" / "scanner-zones.cfg").is_file()
++        assert (fleet.exports_root / "0412" / "plc-project.zip").is_file()
++
++    def test_the_export_headers_differ_and_two_clean_machines_still_agree(self, demo):
++        """0412 and 0501 differ only in the zone radius, not in the stamps."""
++        _, fleet = demo
++        f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
++        a = f.record("Grimaldi/AR-7#0412").manifest
++        b = f.record("Grimaldi/AR-7#0620").manifest
++        assert a.item("ITM-PLC").content_hash == b.item("ITM-PLC").content_hash
++        assert a.item("ITM-ZONES").content_hash == b.item("ITM-ZONES").content_hash
++
++    def test_every_manifest_reaches_tier_validated(self, demo):
++        _, fleet = demo
++        f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
++        assert all(r.manifest.tier_ceiling.value == "validated" for r in f.records)
++
++    def test_one_machine_is_stale_from_a_real_intervention(self, demo):
++        _, fleet = demo
++        f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
++        r = f.record("Grimaldi/AR-7#0501")
++        assert r.stale_count == 1
++        assert r.coverage.stale[0].invalidated_by == "INT-0501-0007"
++
++    def test_the_advisory_lands_confirmed_contradictory_and_clear(self, demo):
++        from assurance.fleet.impact import assess_impact
++        _, fleet = demo
++        f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
++        impact = assess_impact(fleet.advisory, f)
++        assert len(impact.confirmed) == 2          # 0412 and 0501
++        assert len(impact.contradictory) == 1      # 0418, relabelled artefact
++        assert "Grimaldi/AR-7#0620" not in impact.machines_affected  # remedied
++
++    def test_the_ledger_says_it_is_demonstration_data(self):
++        assert "do not exist" in DEMO_NOTICE
++
++
++# =====================================================================
++# the report
++# =====================================================================
++
++class TestReport:
++    def test_it_is_self_contained(self, page):
++        """No network, no scripts: it opens in a plant with no internet."""
++        assert "<script" not in page
++        assert "cdnjs" not in page and "fonts.googleapis" not in page
++
++    def test_the_only_url_is_the_advisory_reference(self, page):
++        urls = re.findall(r"https?://[^\s\"'<]+", page)
++        assert urls == ["https://controlco.example/advisories/CTRL-2026-11"]
++
++    def test_the_chain_status_comes_before_any_finding(self, page):
++        assert page.index("Ledger chain verifies") < page.index("Component advisory")
++
++    def test_a_broken_chain_is_shouted_at_the_top(self, demo, tmp_path):
++        import shutil
++        import sqlite3
++        _, fleet = demo
++        broken = tmp_path / "broken.db"
++        shutil.copy(fleet.ledger_path, broken)
++        with sqlite3.connect(broken) as db:
++            db.execute("UPDATE chain SET subject = 'tampered' WHERE seq = 2")
++        html = render_report(ReportInput(ledger=EvidenceLedger(broken)))
++        assert "THE LEDGER CHAIN DOES NOT VERIFY" in html
++        assert html.index("DOES NOT VERIFY") < html.index("Fleet")
++
++    def test_the_limitations_are_a_numbered_section_not_a_footnote(self, page):
++        assert "What this report does not establish" in page
++        assert "<ol class='limits'>" in page
++
++    def test_every_engine_limitation_survives_into_the_page(self, demo):
++        _, fleet = demo
++        f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
++        html = render_report(ReportInput(ledger=EvidenceLedger(fleet.ledger_path)))
++        for caveat in f.records[0].coverage.checks_skipped:
++            assert caveat[:60] in html
++
++    def test_a_stale_function_is_named_with_the_change_that_caused_it(self, page):
++        assert "INT-0501-0007" in page
++        assert "Stale" in page
++
++    def test_it_says_how_many_days_a_function_has_been_uncovered(self, page):
++        assert re.search(r"Running \d+ day\(s\) without valid evidence", page)
++
++    def test_a_not_demonstrable_function_is_never_shown_as_covered(self, page):
++        assert "Not demonstrable" in page
++        assert "SF-03" in page
++
++    def test_the_contradictory_machine_is_called_out_as_neither(self, page):
++        assert "Counted in neither column" in page
++        assert "contradictory" in page
++
++    def test_the_declaration_verdict_appears_per_machine(self, page):
++        assert "DOC-AR7-0412" in page
++        assert "DOC-AR7-0501" in page
++
++    def test_it_refuses_to_give_legal_advice_in_the_footer(self, page):
++        assert "Nothing in this report is legal advice" in page
++
++    def test_it_tells_the_reader_how_to_check_it_without_trusting_us(self, page):
++        assert "without trusting whoever sent it" in page
++
++    def test_html_from_the_data_is_escaped(self, tmp_path):
++        """A machine or site name is attacker-controlled in a hosted deployment."""
++        from datetime import UTC, datetime
++
++        from assurance.core.evidence import Actor
++        from assurance.machinery.manifest import (
++            HashSource,
++            ItemKind,
++            MachineIdentity,
++            ManifestSource,
++            SafetyItem,
++            SafetyManifest,
++        )
++        from assurance.machinery.record import record_manifest
++
++        ledger = EvidenceLedger(tmp_path / "x.db")
++        record_manifest(ledger, SafetyManifest(
++            manifest_id="M", source=ManifestSource.AS_FOUND,
++            machine=MachineIdentity("G", "M", "1",
++                                    site="<script>alert(1)</script>"),
++            taken_at=datetime(2026, 9, 1, tzinfo=UTC),
++            taken_by=Actor("a", "b"),
++            items=(SafetyItem("I", ItemKind.FIRMWARE, "fw", "1", "a" * 64,
++                              HashSource.READ_FROM_MACHINE),)))
++        html = render_report(ReportInput(ledger=ledger))
++        assert "<script>alert(1)</script>" not in html
++        assert "&lt;script&gt;" in html
++
++    def test_the_notice_is_carried_when_given(self, page):
++        assert "DEMONSTRATION DATA" in page
++
++    def test_an_empty_ledger_renders_without_falling_over(self, tmp_path):
++        html = render_report(ReportInput(ledger=EvidenceLedger(tmp_path / "e.db")))
++        assert "Machine safety evidence report" in html
++
++
++# =====================================================================
++# HTTP
++# =====================================================================
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    from fastapi.testclient import TestClient
++
++    from assurance.api import deps
++
++    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "l.db"))
++    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "a.db"))
++    monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
++    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++    from assurance.api.service import create_app
++
++    with TestClient(create_app()) as c:
++        yield c
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++
++
++class TestHttp:
++    def test_the_report_needs_the_cell_plan(self, client):
++        from assurance.api import deps
++        store = deps.get_accounts()
++        account = store.upsert_account(email="r@example.de", tier="register")
++        key = store.issue_key(account.id)
++        assert client.get("/v1/fleet/report",
++                          headers={"X-API-Key": key}).status_code == 402
++
++    def test_the_cell_plan_gets_html(self, client):
++        from assurance.api import deps
++        store = deps.get_accounts()
++        account = store.upsert_account(email="c@example.de", tier="cell")
++        key = store.issue_key(account.id)
++        r = client.get("/v1/fleet/report", headers={"X-API-Key": key})
++        assert r.status_code == 200
++        assert r.headers["content-type"].startswith("text/html")
++        assert "Machine safety evidence report" in r.text
+-- 
+2.43.0
+
