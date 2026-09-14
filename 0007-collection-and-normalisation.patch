@@ -1,0 +1,2297 @@
+From 470eff5a1ed5f9157f05741ca672ec36c4be4b98 Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 12:51:31 +0000
+Subject: [PATCH] assurance.collect: the on-ramp, and the noise problem that
+ kills drift tools
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WHY
+  Everything built so far assumes a manifest exists, and until now that meant
+  hand-writing JSON — so nobody would have used any of it. But a collector is
+  only worth having if it solves the problem that quietly ruins every
+  configuration-drift tool in this industry: vendor exports are not
+  byte-stable. They stamp themselves with the export time, the operator, a
+  sequence number, a checksum of themselves. Hash the file as it is and every
+  weekly collection reports drift on every machine, the customer stops reading
+  the report inside a fortnight, and the week the firmware really did change is
+  the week nobody looks.
+
+WHAT
+  src/assurance/collect/normalise.py  four declared rules — raw, text_excluding,
+                                       json_excluding, zip_members — each
+                                       reporting exactly what it dropped
+  src/assurance/collect/plan.py       what to look for, where, and how to hash
+                                       it: written once per machine type
+  src/assurance/collect/collector.py  run the plan, produce the manifest
+  src/assurance/collect/volatility.py collect twice, find the rules that report
+                                       the export's own noise, and suggest the
+                                       patterns that fix them
+  src/assurance/collect/cli.py        check-plan / probe / run
+  examples/collect/plan-ar7.json      a probed, stable plan
+  deploy/assurance/COLLECT.md         the method, and what it refuses to do
+
+CUSTOMER VALUE
+  An engineer drops the exports in a folder and runs one command; a sealed
+  manifest exists for that serial number, at tier validated, ready for
+  machinery and fleet with no further work. One plan covers forty units.
+
+  And the probe: three of four items in the shipped example would have produced
+  false drift every single week. It found all three, showed the lines that
+  moved, and suggested the exclusions. No drift tool ships this step and every
+  one of them needs it.
+
+RISK
+  A rule that drops bytes must say why, or it is refused — an unexplained
+  exclusion cannot be told apart from hiding a change. A declared pattern that
+  matched nothing is a warning, not a success. The rule's fingerprint is part of
+  the item's identity, so a digest taken under a changed rule is visibly a
+  different measurement. A required item that is not found is LEFT OUT of the
+  manifest and reported loudly, never invented. There is no scanner mode: a tool
+  that guesses what is safety-relevant guesses wrong in both directions.
+
+ROLLBACK
+  git revert this commit. Outside assurance/collect it touches one CLI domain
+  and one ruff ignore. Nothing else in the package changes.
+
+TESTS
+  504 passed (51 new), ruff clean over src/assurance and the new tests.
+  The end-to-end case is asserted both ways: two exports of an unchanged
+  machine produce an identical configuration hash, and a 1500 -> 1200 mm zone
+  change produces exactly one finding carrying SF-01 — while three other items'
+  export headers moved in the same collection and none is reported.
+
+SUCCESS CONDITION
+  One integrator runs the probe against their own exports, sees which of their
+  files are stamped, and realises nobody has ever been able to tell them that.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/COLLECT.md         | 124 +++++++
+ examples/collect/plan-ar7.json      |  98 ++++++
+ pyproject.toml                      |   1 +
+ src/assurance/cli.py                |   1 +
+ src/assurance/collect/__init__.py   |  48 +++
+ src/assurance/collect/cli.py        | 186 ++++++++++
+ src/assurance/collect/collector.py  | 313 +++++++++++++++++
+ src/assurance/collect/normalise.py  | 333 ++++++++++++++++++
+ src/assurance/collect/plan.py       | 255 ++++++++++++++
+ src/assurance/collect/volatility.py | 243 +++++++++++++
+ tests/test_assurance_collect.py     | 523 ++++++++++++++++++++++++++++
+ 11 files changed, 2125 insertions(+)
+ create mode 100644 deploy/assurance/COLLECT.md
+ create mode 100644 examples/collect/plan-ar7.json
+ create mode 100644 src/assurance/collect/__init__.py
+ create mode 100644 src/assurance/collect/cli.py
+ create mode 100644 src/assurance/collect/collector.py
+ create mode 100644 src/assurance/collect/normalise.py
+ create mode 100644 src/assurance/collect/plan.py
+ create mode 100644 src/assurance/collect/volatility.py
+ create mode 100644 tests/test_assurance_collect.py
+
+diff --git a/deploy/assurance/COLLECT.md b/deploy/assurance/COLLECT.md
+new file mode 100644
+index 0000000..abfb8ab
+--- /dev/null
++++ b/deploy/assurance/COLLECT.md
+@@ -0,0 +1,124 @@
++# Collection: getting a real machine into the system
++
++Everything else here assumes a manifest exists. Before this, that meant
++hand-writing JSON, which meant nobody did it.
++
++```bash
++assurance collect check-plan plan.json
++assurance collect probe      plan.json --first mon/ --second tue/
++assurance collect run        plan.json --root tue/ --serial 0412 \
++                             --actor a.person --ledger register.db
++```
++
++That order is the method, and it is not optional. Write the plan once for a
++machine **type**, probe it until it says STABLE, then run it for every unit. An
++integrator with forty AR-7 cells writes one plan; every cell after that is a
++two-minute job.
++
++## The problem this solves
++
++A safety PLC export, a scanner configuration, a robot parameter dump: almost
++none of them are byte-stable. They carry the time of export, the name of the
++engineer who pressed the button, a sequence number, a checksum of themselves.
++
++Export the same unchanged machine twice and the bytes differ. Hash the file as
++it is and **every weekly collection reports drift on every machine**, the
++customer stops reading the report inside a fortnight, and the one week the
++firmware really did change is the week nobody looks.
++
++This is why configuration-drift tools fail in this industry. It is not a hard
++problem to describe and it is the whole game.
++
++## The probe
++
++```
++plan PLAN-AR7 — VOLATILE — these rules will report drift that did not happen
++  [MOVE] ITM-ZONES  (raw)
++          the digest moved between two exports of an unchanged machine.
++          ~ # Exported 2026-09-14T07:12:03Z by m.tech
++          ~ # Export sequence no: 4181
++          suggest: \d{4}-\d{2}-\d{2}   (a date)
++          suggest: (?i)\b(serial|sequence|session|run)[_ ]?(no|number|id)\b   (a sequence number)
++  [MOVE] ITM-PLC  (raw)
++          ... The file is not text, so the differing bytes cannot be shown;
++          a zip_members rule is usually the answer for an archive.
++  [ok  ] ITM-FW  (raw)
++```
++
++Three of four items would have produced false drift every week. The probe found
++all three, showed the lines that moved, and the exclusion pattern writes itself.
++`probe` exits non-zero while any rule is volatile, so it belongs in whatever
++reviews a change to a plan.
++
++## The four rules
++
++| rule | for | what it does |
++|---|---|---|
++| `raw` | firmware images, opaque blobs | hashes the bytes as they are |
++| `text_excluding` | exports with a stamped header | drops lines matching declared patterns |
++| `json_excluding` | exports with an export-metadata block | removes dotted keys, canonicalises |
++| `zip_members` | project archives | hashes named members, ignores archive metadata |
++
++Three constraints keep them honest:
++
++- **A rule that drops bytes must say why.** An unexplained exclusion cannot be
++  told apart from hiding a change, so `note` is required and the rule is refused
++  without it.
++- **A declared pattern that matched nothing is a warning.** Either the rule is
++  wrong or the vendor changed their format; both mean the digest is not what the
++  author intended.
++- **The rule is part of the identity.** Each item records the normalisation
++  fingerprint that produced its hash, so a digest taken under a changed rule is
++  visibly a different measurement rather than an invisible change of machine.
++  The `note` does not affect the fingerprint — wording is not measurement.
++
++## What collection refuses to do
++
++**A required item that is not there is not in the manifest.** It is a loud
++warning and a non-zero exit instead. A manifest listing an item nobody hashed
++would assert the machine has software that was never seen, and every comparison
++made from it afterwards would be wrong in the safest-looking direction.
++
++**It does not guess what is safety-relevant.** There is no scanner mode. A tool
++that guesses will guess wrong in both directions: it will miss the parameter set
++that implements the protective stop, and it will fill the manifest with noise
++that makes the real findings invisible. A human who knows the machine says what
++matters, once.
++
++**It does not invent a version.** `version: unknown` is the default and a
++first-class answer. A plan that invents a label produces a manifest that will
++later match a supplier advisory on a version nobody ever read off the machine.
++
++**A multi-file item is the set, not the first match.** A safety PLC project is a
++directory; its identity is the digest of every member's digest keyed by relative
++path, so adding a file to the project changes the item.
++
++## What it delivers
++
++```
++Grimaldi/AR-7#0412 — COMPLETE
++  plan PLAN-AR7 (7caded60db89)  root tue/
++  configuration c67b502e01e4fb3d
++  tier ceiling  validated
++  [ok  ] ITM-ZONES   521c177197fe  (version unknown)  1 file(s)
++  [ok  ] ITM-PARAMS  e07850c516b7  v3.8.2             1 file(s)
++  [ok  ] ITM-PLC     829608aefc80  (version unknown)  1 file(s)
++  [ok  ] ITM-FW      5b2d0285aa4a  (version unknown)  1 file(s)
++```
++
++`tier ceiling validated` because every digest was read from the machine — which
++is what `--ledger` then seals, and what `assurance machinery` and
++`assurance fleet` consume without any further work.
++
++The proof it is worth having:
++
++```
++Grimaldi/AR-7#0412: SAFETY-RELEVANT DRIFT
++  !! ITM-ZONES: the artefact changed: 521c177197fe → 8e2de1351359
++       affects SF-01
++
++items compared: 4   changes found: 1
++```
++
++The protective zone was reshaped from 1500 mm to 1200 mm. The export header
++moved on that collection too, on all four items. One change reported.
+diff --git a/examples/collect/plan-ar7.json b/examples/collect/plan-ar7.json
+new file mode 100644
+index 0000000..103bded
+--- /dev/null
++++ b/examples/collect/plan-ar7.json
+@@ -0,0 +1,98 @@
++{
++  "plan_id": "PLAN-AR7",
++  "manufacturer": "Grimaldi",
++  "model": "AR-7",
++  "procedure": "Export from the scanner tool, RParam and the PLC IDE into one folder, then run the collection.",
++  "functions": [
++    {
++      "function_id": "SF-01",
++      "description": "Protective stop on zone intrusion",
++      "required_performance": "PL d",
++      "verified_by": [
++        "ssm_separation",
++        "stop_characterisation"
++      ]
++    },
++    {
++      "function_id": "SF-02",
++      "description": "Speed limit in collaborative operation",
++      "required_performance": "PL d",
++      "verified_by": [
++        "speed_limit"
++      ]
++    }
++  ],
++  "items": [
++    {
++      "item_id": "ITM-ZONES",
++      "kind": "safety_configuration",
++      "name": "Safety scanner zone set",
++      "source": "scanner-zones.cfg",
++      "supplier": "ScanCo",
++      "implements": [
++        "SF-01"
++      ],
++      "modifiable_in_field": true,
++      "rule": {
++        "kind": "text_excluding",
++        "patterns": [
++          "^#\\s*Exported ",
++          "^#\\s*Export sequence no:"
++        ],
++        "note": "The scanner tool stamps the export time, the operator and a sequence number into a comment header. None of it is the zone configuration."
++      }
++    },
++    {
++      "item_id": "ITM-PARAMS",
++      "kind": "parameter_set",
++      "name": "Robot safety parameter set",
++      "source": "robot-params.json",
++      "supplier": "RoboCo",
++      "implements": [
++        "SF-01",
++        "SF-02"
++      ],
++      "rule": {
++        "kind": "json_excluding",
++        "keys": [
++          "export.timestamp",
++          "export.operator"
++        ],
++        "note": "RParam records who exported and when. The safety values are what the machine runs; the export block is what the laptop did."
++      },
++      "version": {
++        "kind": "json",
++        "value": "firmware.version"
++      }
++    },
++    {
++      "item_id": "ITM-PLC",
++      "kind": "safety_program",
++      "name": "Safety PLC project",
++      "source": "plc-project.zip",
++      "supplier": "ControlCo",
++      "implements": [
++        "SF-01"
++      ],
++      "rule": {
++        "kind": "zip_members",
++        "members": [
++          "program/main.st"
++        ],
++        "note": "The project archive's member timestamps move on every save, and meta/build.txt records the build. The program source is the machine."
++      }
++    },
++    {
++      "item_id": "ITM-FW",
++      "kind": "firmware",
++      "name": "Safety controller firmware",
++      "source": "controller-fw.bin",
++      "supplier": "ControlCo",
++      "implements": [
++        "SF-01",
++        "SF-02"
++      ]
++    }
++  ],
++  "notes": "Probed against two back-to-back exports of an unchanged cell and reported STABLE. Re-probe whenever a vendor tool is upgraded: a new export format is a new set of volatile bytes."
++}
+diff --git a/pyproject.toml b/pyproject.toml
+index 2535d1c..12eed39 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -118,6 +118,7 @@ ignore = [
+ "src/assurance/machine/cli.py" = ["T20"]
+ "src/assurance/machinery/cli.py" = ["T20"]
+ "src/assurance/fleet/cli.py" = ["T20"]
++"src/assurance/collect/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index b805fa5..e622a91 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ import sys
+ 
+ _DOMAINS = {
++    "collect": "assurance.collect.cli",
+     "art14": "assurance.security.art14.cli",
+     "machine": "assurance.machine.cli",
+     "machinery": "assurance.machinery.cli",
+diff --git a/src/assurance/collect/__init__.py b/src/assurance/collect/__init__.py
+new file mode 100644
+index 0000000..d57e682
+--- /dev/null
++++ b/src/assurance/collect/__init__.py
+@@ -0,0 +1,48 @@
++"""Getting a real machine's software into the system.
++
++Everything else in this package assumes a manifest exists. This is how one comes
++to exist without anybody typing JSON.
++
++    plan         what to look for, where, and how to hash it — once per machine type
++    normalise    hashing a vendor export without the export's own noise
++    collector    run the plan against a folder of exports, produce the manifest
++    volatility   prove the rules work before trusting the reports they produce
++
++The normalisation rules are the hard part and the defensible one. A vendor
++export that stamps itself with the time and the operator is not byte-stable, and
++a tool that hashes it as-is reports drift on every machine every week until its
++customer stops reading the report.
++"""
++
++from assurance.collect.collector import (
++    CollectionError,
++    CollectionResult,
++    ItemOutcome,
++    collect,
++)
++from assurance.collect.normalise import (
++    NormalisationResult,
++    Normaliser,
++    Rule,
++    normalise_file,
++)
++from assurance.collect.plan import CollectionPlan, ItemSpec, PlanError, VersionSource
++from assurance.collect.volatility import ItemVolatility, VolatilityReport, probe
++
++__all__ = [
++    "CollectionError",
++    "CollectionPlan",
++    "CollectionResult",
++    "ItemOutcome",
++    "ItemSpec",
++    "ItemVolatility",
++    "NormalisationResult",
++    "Normaliser",
++    "PlanError",
++    "Rule",
++    "VersionSource",
++    "VolatilityReport",
++    "collect",
++    "normalise_file",
++    "probe",
++]
+diff --git a/src/assurance/collect/cli.py b/src/assurance/collect/cli.py
+new file mode 100644
+index 0000000..745429d
+--- /dev/null
++++ b/src/assurance/collect/cli.py
+@@ -0,0 +1,186 @@
++"""``assurance collect`` — turn a folder of vendor exports into a sealed manifest.
++
++    check-plan   read a plan and say what it would and would not catch
++    probe        two exports of an unchanged machine: which rules report noise
++    run          collect one machine, and optionally seal it into the ledger
++
++The intended order is exactly that. Write the plan once for a machine type,
++probe it until it says STABLE, then run it for every unit — and never the other
++way round, because a plan that has not been probed produces drift reports that
++are mostly noise and a customer who stops reading them.
++
++``probe`` exits non-zero while any rule is volatile, so it belongs in whatever
++reviews a change to a plan.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++from assurance.collect.collector import collect
++from assurance.collect.plan import CollectionPlan
++from assurance.collect.volatility import probe
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.core.identity import parse_utc
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.manifest import ManifestSource
++from assurance.machinery.record import record_manifest
++
++__all__ = ["build_parser", "main"]
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance collect",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    cp = verbs.add_parser("check-plan", help="what would this plan catch, and miss")
++    cp.add_argument("plan", type=Path)
++    cp.add_argument("--json", action="store_true")
++
++    pr = verbs.add_parser("probe", help="which rules report the export's own noise")
++    pr.add_argument("plan", type=Path)
++    pr.add_argument("--first", required=True, type=Path,
++                    help="folder of the first export")
++    pr.add_argument("--second", required=True, type=Path,
++                    help="folder of a second export of the SAME unchanged machine")
++    pr.add_argument("--json", action="store_true")
++
++    rn = verbs.add_parser("run", help="collect one machine")
++    rn.add_argument("plan", type=Path)
++    rn.add_argument("--root", required=True, type=Path,
++                    help="folder holding this machine's exports")
++    rn.add_argument("--serial", required=True)
++    rn.add_argument("--actor", required=True)
++    rn.add_argument("--role", default="safety engineer")
++    rn.add_argument("--site", default="")
++    rn.add_argument("--year", default="")
++    rn.add_argument("--manifest-id", default="")
++    rn.add_argument("--taken-at", default="", help="ISO timestamp; defaults to now")
++    rn.add_argument("--as-declared", action="store_true",
++                    help="this is a baseline built from a release, not a machine")
++    rn.add_argument("--out", type=Path, default=None)
++    rn.add_argument("--ledger", type=Path, default=None,
++                    help="seal the manifest into this evidence ledger")
++    rn.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _cmd_check_plan(args: argparse.Namespace) -> int:
++    plan = CollectionPlan.from_json(args.plan)
++    if args.json:
++        print(json.dumps(plan.to_dict(), indent=2))
++        return 0
++    print(f"{plan.plan_id} — {plan.manufacturer} {plan.model}  "
++          f"({plan.content_hash()[:12]})")
++    print(f"  {len(plan.items)} item(s), {len(plan.functions)} safety function(s)")
++    for item in plan.items:
++        fns = ", ".join(item.implements) or "—"
++        req = "" if item.required else "  (optional)"
++        print(f"  {item.item_id:<14} {item.rule.kind.value:<16} {item.source}{req}")
++        print(f"                 implements {fns}   version from "
++              f"{item.version.kind}")
++        if item.rule.note:
++            print(f"                 excludes: {item.rule.note}")
++    if plan.unmapped_items:
++        print()
++        print("  items credited to no safety function — a change to these will show "
++              "as drift and invalidate no verification:")
++        for item in plan.unmapped_items:
++            print(f"    - {item.item_id}")
++    if plan.undemonstrable_functions:
++        print()
++        print("  safety functions with no verification check — nothing can ever "
++              "demonstrate these:")
++        for fn in plan.undemonstrable_functions:
++            print(f"    - {fn.function_id}  {fn.description}")
++    raw = [i for i in plan.items if i.rule.kind.value == "raw"]
++    if raw:
++        print()
++        print("  items hashed raw. Correct for an opaque firmware image; wrong for "
++              "any export that stamps itself. Probe before you trust them:")
++        for item in raw:
++            print(f"    - {item.item_id}  {item.source}")
++    return 0
++
++
++def _cmd_probe(args: argparse.Namespace) -> int:
++    plan = CollectionPlan.from_json(args.plan)
++    report = probe(plan, args.first, args.second)
++    if args.json:
++        print(json.dumps(report.to_dict(), indent=2))
++    else:
++        print(report.summary())
++        if report.checks_skipped:
++            print("\n  not checked:")
++            for c in report.checks_skipped:
++                print(f"    - {c}")
++    return 0 if report.verdict == "stable" else 1
++
++
++def _cmd_run(args: argparse.Namespace) -> int:
++    plan = CollectionPlan.from_json(args.plan)
++    result = collect(
++        plan, args.root, serial=args.serial,
++        taken_by=Actor(identifier=args.actor, role=args.role, kind="person"),
++        site=args.site, year=args.year, manifest_id=args.manifest_id,
++        source=ManifestSource.AS_DECLARED if args.as_declared
++        else ManifestSource.AS_FOUND,
++        taken_at=parse_utc(args.taken_at) if args.taken_at else None,
++    )
++
++    if args.out:
++        Path(args.out).write_text(
++            json.dumps(result.manifest.to_dict(), indent=2, sort_keys=True) + "\n",
++            encoding="utf-8")
++
++    sealed = ""
++    if args.ledger:
++        ledger = EvidenceLedger(args.ledger)
++        evidence = record_manifest(ledger, result.manifest)
++        sealed = f"{evidence.content_hash[:16]} as entry {len(ledger)}"
++
++    if args.json:
++        payload = result.to_dict()
++        payload["sealed"] = sealed
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(result.summary())
++        if args.out:
++            print(f"\n  manifest written to {args.out}")
++        if sealed:
++            print(f"  sealed {sealed}")
++        if not result.complete:
++            print("\n  This collection is INCOMPLETE. The missing items are absent "
++                  "from the manifest, so nothing derived from it says anything "
++                  "about them.")
++    return 0 if result.complete else 1
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {
++        "check-plan": _cmd_check_plan,
++        "probe": _cmd_probe,
++        "run": _cmd_run,
++    }
++    try:
++        return handlers[args.command](args)
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/collect/collector.py b/src/assurance/collect/collector.py
+new file mode 100644
+index 0000000..fb2838a
+--- /dev/null
++++ b/src/assurance/collect/collector.py
+@@ -0,0 +1,313 @@
++"""Run a plan against a folder of exports and produce a manifest.
++
++This is the on-ramp. Before it, using any of this meant hand-writing a manifest,
++which meant nobody used it. After it, an engineer drops the exports in a folder,
++runs one command, and a sealed manifest exists for that serial number.
++
++Three rules keep the output honest.
++
++**A required item that is not there is not in the manifest.** It is a loud
++warning instead. A manifest that lists an item the collector never found would
++assert the machine has software that was never hashed, and every comparison made
++from it afterwards would be wrong in the safest-looking direction.
++
++**A multi-file item is the set, not the first match.** A safety PLC project is a
++directory. Its identity is the digest of every member's digest, keyed by
++relative path, so adding a file to the project changes the item — which is
++correct, and which a "hash the first match" collector misses entirely.
++
++**The rule travels with the digest.** Each item records the normalisation
++fingerprint that produced its hash, so a digest taken under a changed rule is
++visibly a different measurement rather than an invisible change of machine.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++from assurance.collect.normalise import (
++    NormalisationError,
++    NormalisationResult,
++    normalise_file,
++)
++from assurance.collect.plan import CollectionPlan, ItemSpec
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.core.identity import content_hash_of, format_utc, utc_now
++from assurance.machinery.manifest import (
++    HashSource,
++    MachineIdentity,
++    ManifestSource,
++    SafetyItem,
++    SafetyManifest,
++)
++
++__all__ = ["CollectionError", "CollectionResult", "ItemOutcome", "collect"]
++
++
++class CollectionError(AssuranceError):
++    """A collection cannot be performed as specified."""
++
++
++@dataclass(frozen=True)
++class ItemOutcome:
++    """What happened to one item spec during a collection."""
++
++    item_id: str
++    status: str            # collected | missing | unreadable
++    files: tuple[str, ...] = ()
++    digest: str = ""
++    rule_fingerprint: str = ""
++    version: str = ""
++    bytes_in: int = 0
++    bytes_hashed: int = 0
++    applied: dict[str, int] = field(default_factory=dict)
++    warnings: tuple[str, ...] = ()
++    detail: str = ""
++
++    @property
++    def ok(self) -> bool:
++        return self.status == "collected"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "item_id": self.item_id, "status": self.status,
++            "files": list(self.files), "digest": self.digest,
++            "rule_fingerprint": self.rule_fingerprint, "version": self.version,
++            "bytes_in": self.bytes_in, "bytes_hashed": self.bytes_hashed,
++            "applied": dict(sorted(self.applied.items())),
++            "warnings": list(self.warnings), "detail": self.detail,
++        }
++
++
++@dataclass(frozen=True)
++class CollectionResult:
++    """The manifest, and everything that went wrong getting it."""
++
++    manifest: SafetyManifest
++    plan_id: str
++    plan_hash: str
++    root: str
++    outcomes: tuple[ItemOutcome, ...]
++    warnings: tuple[str, ...]
++
++    @property
++    def missing(self) -> tuple[ItemOutcome, ...]:
++        return tuple(o for o in self.outcomes if o.status == "missing")
++
++    @property
++    def unreadable(self) -> tuple[ItemOutcome, ...]:
++        return tuple(o for o in self.outcomes if o.status == "unreadable")
++
++    @property
++    def complete(self) -> bool:
++        """Whether every required item in the plan was actually hashed."""
++        return not self.missing and not self.unreadable
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "plan_id": self.plan_id,
++            "plan_hash": self.plan_hash,
++            "root": self.root,
++            "complete": self.complete,
++            "manifest": self.manifest.to_dict(),
++            "configuration_hash": self.manifest.configuration_hash(),
++            "outcomes": [o.to_dict() for o in self.outcomes],
++            "warnings": list(self.warnings),
++        }
++
++    def summary(self) -> str:
++        lines = [
++            f"{self.manifest.machine.key} — "
++            f"{'COMPLETE' if self.complete else 'INCOMPLETE'}",
++            f"  plan {self.plan_id} ({self.plan_hash[:12]})  root {self.root}",
++            f"  configuration {self.manifest.configuration_hash()[:16]}",
++            f"  tier ceiling  {self.manifest.tier_ceiling.value}",
++        ]
++        for o in self.outcomes:
++            mark = {"collected": "ok  ", "missing": "MISS", "unreadable": "FAIL"}
++            extra = f"  {o.digest[:12]}" if o.digest else ""
++            ver = f"  v{o.version}" if o.version else "  (version unknown)"
++            lines.append(f"  [{mark[o.status]}] {o.item_id}{extra}{ver}"
++                         f"  {len(o.files)} file(s)")
++            if o.detail:
++                lines.append(f"          {o.detail}")
++            for w in o.warnings:
++                lines.append(f"          ! {w}")
++        for w in self.warnings:
++            lines.append(f"  ! {w}")
++        return "\n".join(lines)
++
++
++def _matches(root: Path, spec: ItemSpec) -> list[Path]:
++    """Every file the spec's glob matches, sorted, directories excluded."""
++    return sorted(p for p in root.glob(spec.source) if p.is_file())
++
++
++def _collect_item(root: Path, spec: ItemSpec) -> ItemOutcome:
++    files = _matches(root, spec)
++    rel = tuple(str(p.relative_to(root)) for p in files)
++
++    if not files:
++        return ItemOutcome(
++            item_id=spec.item_id, status="missing",
++            detail=(
++                f"nothing matched {spec.source!r} under the collection root. "
++                + ("This item is required by the plan and has been LEFT OUT of the "
++                   "manifest rather than invented — the machine is not asserted to "
++                   "have software nobody hashed."
++                   if spec.required else
++                   "The plan marks this item optional, so its absence is expected.")
++            ),
++        )
++
++    digests: list[tuple[str, str]] = []
++    applied: dict[str, int] = {}
++    warnings: list[str] = []
++    bytes_in = 0
++    bytes_hashed = 0
++    version = ""
++    fingerprint = spec.rule.fingerprint()
++
++    for path, name in zip(files, rel, strict=True):
++        try:
++            result: NormalisationResult = normalise_file(path, spec.rule)
++        except NormalisationError as exc:
++            return ItemOutcome(
++                item_id=spec.item_id, status="unreadable", files=rel,
++                detail=str(exc),
++            )
++        digests.append((name, result.digest))
++        bytes_in += result.bytes_in
++        bytes_hashed += result.bytes_hashed
++        for k, v in result.applied.items():
++            applied[k] = applied.get(k, 0) + v
++        warnings.extend(result.warnings)
++        if result.dropped_everything:
++            warnings.append(
++                f"{name}: normalisation removed every byte, so this digest "
++                "distinguishes nothing. Check the rule."
++            )
++        if not version and spec.version.kind != "unknown":
++            version = spec.version.read(path.read_bytes())
++
++    if len(digests) == 1:
++        digest = digests[0][1]
++    else:
++        # The identity of a multi-file item is the set, keyed by relative path,
++        # so adding or removing a member changes the item.
++        digest = content_hash_of({"members": sorted(digests)})
++
++    if spec.version.kind != "unknown" and not version:
++        warnings.append(
++            f"the plan expects a {spec.version.kind} version and none was found. The "
++            "item is recorded with no version, which is honest and which means a "
++            "supplier advisory matching on labels will not match it."
++        )
++
++    return ItemOutcome(
++        item_id=spec.item_id, status="collected", files=rel, digest=digest,
++        rule_fingerprint=fingerprint, version=version, bytes_in=bytes_in,
++        bytes_hashed=bytes_hashed, applied=applied, warnings=tuple(warnings),
++        detail=(f"{len(files)} files, hashed as a set" if len(files) > 1 else ""),
++    )
++
++
++def collect(
++    plan: CollectionPlan,
++    root: str | Path,
++    *,
++    serial: str,
++    taken_by: Actor,
++    site: str = "",
++    year: str = "",
++    manifest_id: str = "",
++    source: ManifestSource = ManifestSource.AS_FOUND,
++    taken_at: datetime | None = None,
++    notes: str = "",
++) -> CollectionResult:
++    """Run a plan against a folder of exports.
++
++    ``source`` defaults to ``as_found`` because that is what a collection is: a
++    record of what was in the folder, and the folder came off a machine. A plan
++    run against a build output to establish a baseline should say ``as_declared``
++    explicitly, so that the manifest does not later claim somebody looked at a
++    machine when they looked at a release.
++    """
++    base = Path(root)
++    if not base.is_dir():
++        raise CollectionError(f"{base} is not a directory.")
++
++    outcomes = [_collect_item(base, spec) for spec in plan.items]
++
++    items: list[SafetyItem] = []
++    warnings: list[str] = []
++
++    for spec, outcome in zip(plan.items, outcomes, strict=True):
++        if not outcome.ok:
++            if spec.required:
++                warnings.append(
++                    f"{spec.item_id} is required by plan {plan.plan_id} and was "
++                    f"{outcome.status}. It is absent from this manifest, so no "
++                    "comparison made from this manifest says anything about it."
++                )
++            continue
++        items.append(SafetyItem(
++            item_id=spec.item_id, kind=spec.kind, name=spec.name,
++            version=outcome.version, content_hash=outcome.digest,
++            hash_source=HashSource.READ_FROM_MACHINE,
++            supplier=spec.supplier, implements=spec.implements,
++            modifiable_in_field=spec.modifiable_in_field,
++            notes=(f"{spec.notes} " if spec.notes else "")
++                  + f"[collected by plan {plan.plan_id} "
++                    f"{plan.content_hash()[:12]}, rule {outcome.rule_fingerprint}"
++                  + (f", {spec.rule.note}" if spec.rule.note else "") + "]",
++        ))
++
++    if not items:
++        raise CollectionError(
++            f"plan {plan.plan_id} matched nothing at all under {base}. Either the "
++            "exports are not there or the plan's paths are wrong; a manifest with no "
++            "items would assert this machine has no safety-relevant software."
++        )
++
++    for spec in plan.unmapped_items:
++        warnings.append(
++            f"{spec.item_id} is credited to no safety function, so a change to it "
++            "will be reported as drift and will invalidate no verification. If it "
++            "does implement one, say so in the plan."
++        )
++    for fn in plan.undemonstrable_functions:
++        warnings.append(
++            f"safety function {fn.function_id} declares no verification check, so "
++            "nothing can ever demonstrate it."
++        )
++    warnings.append(
++        "a collection records what the plan looked for. Safety-relevant software "
++        "the plan does not name is absent from this manifest and from everything "
++        "derived from it."
++    )
++
++    manifest = SafetyManifest(
++        manifest_id=manifest_id or f"{plan.plan_id}-{serial}-"
++                                   f"{format_utc(taken_at or utc_now())[:10]}",
++        machine=MachineIdentity(manufacturer=plan.manufacturer, model=plan.model,
++                                serial=serial, year=year, site=site),
++        source=source,
++        taken_at=taken_at or utc_now(),
++        taken_by=taken_by,
++        items=tuple(items),
++        functions=plan.functions,
++        method=f"collected by plan {plan.plan_id} ({plan.content_hash()[:12]}) "
++               f"from {base.name}"
++               + (f"; {plan.procedure}" if plan.procedure else ""),
++        notes=notes,
++    )
++
++    return CollectionResult(
++        manifest=manifest, plan_id=plan.plan_id, plan_hash=plan.content_hash(),
++        root=str(base), outcomes=tuple(outcomes), warnings=tuple(warnings),
++    )
+diff --git a/src/assurance/collect/normalise.py b/src/assurance/collect/normalise.py
+new file mode 100644
+index 0000000..268c33d
+--- /dev/null
++++ b/src/assurance/collect/normalise.py
+@@ -0,0 +1,333 @@
++"""Hashing a vendor export without the export's own noise.
++
++This module solves the problem that quietly ruins every configuration-drift
++tool ever built for industrial software.
++
++A safety PLC export, a scanner configuration, a robot parameter dump: almost
++none of them are byte-stable. They carry the time of export, the name of the
++engineer who pressed the button, a sequence number, a checksum of themselves.
++Export the same unchanged machine twice and the bytes differ. Hash the file as
++it is and every weekly collection reports drift on every machine, the customer
++stops reading the report within a fortnight, and the one week the firmware
++really did change is the week nobody looks.
++
++The fix is not to hash less carefully. It is to declare, per item, exactly which
++bytes are the machine and which are the export, and then to make that
++declaration part of the item's identity — so two digests are only ever compared
++when they were produced by the same rule, and a silently changed rule is as
++visible as a silently changed artefact.
++
++Every normaliser reports what it dropped. A declared rule that matched nothing
++is a warning, not a success: either the rule is wrong or the vendor changed
++their format, and both mean the digest is not what the author intended.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++import zipfile
++from dataclasses import dataclass, field
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import canonical_json, content_hash_of
++
++__all__ = [
++    "NormalisationError",
++    "NormalisationResult",
++    "Normaliser",
++    "Rule",
++    "normalise_file",
++]
++
++
++class NormalisationError(AssuranceError):
++    """A normalisation rule is malformed, or cannot be applied to this file."""
++
++
++class Normaliser(StrEnum):
++    """How to reduce a file to the bytes that are actually the machine."""
++
++    #: Hash the file exactly as it is. Correct for firmware images and anything
++    #: else the vendor ships as an opaque, stable blob.
++    RAW = "raw"
++    #: Read as text, drop every line matching a declared pattern, hash the rest.
++    #: For exports that stamp a header with the time and the operator.
++    TEXT_EXCLUDING = "text_excluding"
++    #: Parse as JSON, remove declared keys by dotted path, hash canonically.
++    #: Key order and whitespace stop mattering, which is usually what you want.
++    JSON_EXCLUDING = "json_excluding"
++    #: Hash named members of an archive, ignoring the archive's own metadata.
++    #: A project export is a zip whose timestamps change on every save.
++    ZIP_MEMBERS = "zip_members"
++
++    @property
++    def drops_content(self) -> bool:
++        """Whether this rule can remove bytes, and so needs stating in the manifest."""
++        return self is not Normaliser.RAW
++
++
++@dataclass(frozen=True)
++class Rule:
++    """One declared normalisation. Part of the item's identity, not a setting."""
++
++    kind: Normaliser = Normaliser.RAW
++    #: Regular expressions; a line matching any of them is dropped.
++    patterns: tuple[str, ...] = ()
++    #: Dotted paths, e.g. ``export.timestamp`` or ``meta.operator``.
++    keys: tuple[str, ...] = ()
++    #: Archive member names to hash. Everything else in the archive is ignored.
++    members: tuple[str, ...] = ()
++    encoding: str = "utf-8"
++    #: Why these bytes are the export rather than the machine. Required when the
++    #: rule drops anything: an unexplained exclusion is indistinguishable from
++    #: hiding a change.
++    note: str = ""
++
++    def __post_init__(self) -> None:
++        if self.kind is Normaliser.TEXT_EXCLUDING and not self.patterns:
++            raise NormalisationError(
++                "text_excluding with no patterns drops nothing; use raw instead so "
++                "the manifest does not claim a normalisation that did not happen."
++            )
++        if self.kind is Normaliser.JSON_EXCLUDING and not self.keys and not self.note:
++            raise NormalisationError(
++                "json_excluding with no keys still canonicalises the document, which "
++                "is a real change to what is hashed. List the keys you meant to drop, "
++                "or say in `note` that canonicalisation alone is the intent."
++            )
++        if self.kind is Normaliser.ZIP_MEMBERS and not self.members:
++            raise NormalisationError(
++                "zip_members with no members would hash nothing at all."
++            )
++        if self.kind.drops_content and not self.note:
++            raise NormalisationError(
++                f"a {self.kind.value} rule removes bytes before hashing and carries no "
++                "note. An unexplained exclusion cannot be told apart from hiding a "
++                "change. Say which bytes belong to the export rather than the machine."
++            )
++        for p in self.patterns:
++            try:
++                re.compile(p)
++            except re.error as exc:
++                raise NormalisationError(f"pattern {p!r} is not a regex: {exc}") from exc
++
++    def fingerprint(self) -> str:
++        """Identity of the rule itself.
++
++        Recorded alongside every digest it produces. Two digests are comparable
++        only if this matches: a digest produced under a changed rule is a
++        different measurement, not a changed machine.
++        """
++        return content_hash_of({
++            "kind": self.kind.value,
++            "patterns": sorted(self.patterns),
++            "keys": sorted(self.keys),
++            "members": sorted(self.members),
++            "encoding": self.encoding,
++        })[:16]
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "kind": self.kind.value, "patterns": list(self.patterns),
++            "keys": list(self.keys), "members": list(self.members),
++            "encoding": self.encoding, "note": self.note,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any] | None) -> Rule:
++        if not d:
++            return cls()
++        return cls(
++            kind=Normaliser(str(d.get("kind", "raw"))),
++            patterns=tuple(str(p) for p in (d.get("patterns") or ())),
++            keys=tuple(str(k) for k in (d.get("keys") or ())),
++            members=tuple(str(m) for m in (d.get("members") or ())),
++            encoding=str(d.get("encoding", "utf-8")),
++            note=str(d.get("note", "")),
++        )
++
++
++@dataclass(frozen=True)
++class NormalisationResult:
++    """A digest, and an honest account of how it was arrived at."""
++
++    digest: str
++    rule_fingerprint: str
++    kind: Normaliser
++    bytes_in: int
++    bytes_hashed: int
++    #: Per pattern/key/member: how many times it actually applied.
++    applied: dict[str, int] = field(default_factory=dict)
++    warnings: tuple[str, ...] = ()
++
++    @property
++    def dropped_everything(self) -> bool:
++        return self.bytes_hashed == 0
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "digest": self.digest,
++            "rule_fingerprint": self.rule_fingerprint,
++            "kind": self.kind.value,
++            "bytes_in": self.bytes_in,
++            "bytes_hashed": self.bytes_hashed,
++            "applied": dict(sorted(self.applied.items())),
++            "warnings": list(self.warnings),
++        }
++
++
++def _sha(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def _prune(obj: Any, parts: list[str]) -> tuple[Any, int]:
++    """Remove one dotted path from a parsed JSON document. Returns (obj, hits)."""
++    if not parts:
++        return obj, 0
++    head, rest = parts[0], parts[1:]
++    hits = 0
++    if isinstance(obj, dict):
++        if not rest:
++            if head in obj:
++                obj = {k: v for k, v in obj.items() if k != head}
++                hits += 1
++            return obj, hits
++        if head in obj:
++            child, h = _prune(obj[head], rest)
++            hits += h
++            obj = {**obj, head: child}
++        return obj, hits
++    if isinstance(obj, list):
++        out = []
++        for element in obj:
++            child, h = _prune(element, parts)
++            hits += h
++            out.append(child)
++        return out, hits
++    return obj, hits
++
++
++def normalise_bytes(data: bytes, rule: Rule, *, label: str = "") -> NormalisationResult:
++    """Apply a rule to bytes already in hand."""
++    warnings: list[str] = []
++    applied: dict[str, int] = {}
++    where = f"{label}: " if label else ""
++
++    if rule.kind is Normaliser.RAW:
++        return NormalisationResult(
++            digest=_sha(data), rule_fingerprint=rule.fingerprint(),
++            kind=rule.kind, bytes_in=len(data), bytes_hashed=len(data),
++        )
++
++    if rule.kind is Normaliser.TEXT_EXCLUDING:
++        try:
++            text = data.decode(rule.encoding)
++        except UnicodeDecodeError as exc:
++            raise NormalisationError(
++                f"{where}cannot read as {rule.encoding} text: {exc}. A binary export "
++                "needs a raw or zip_members rule."
++            ) from exc
++        compiled = [(p, re.compile(p)) for p in rule.patterns]
++        kept: list[str] = []
++        for line in text.splitlines():
++            hit = next((p for p, rx in compiled if rx.search(line)), None)
++            if hit is None:
++                kept.append(line)
++            else:
++                applied[hit] = applied.get(hit, 0) + 1
++        for p, _ in compiled:
++            if p not in applied:
++                warnings.append(
++                    f"{where}pattern {p!r} matched no line. Either the rule is wrong "
++                    "or the vendor changed their export format; this digest is not "
++                    "what the rule's author intended."
++                )
++        body = "\n".join(kept).encode("utf-8")
++        return NormalisationResult(
++            digest=_sha(body), rule_fingerprint=rule.fingerprint(), kind=rule.kind,
++            bytes_in=len(data), bytes_hashed=len(body), applied=applied,
++            warnings=tuple(warnings),
++        )
++
++    if rule.kind is Normaliser.JSON_EXCLUDING:
++        try:
++            doc = json.loads(data.decode(rule.encoding))
++        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++            raise NormalisationError(
++                f"{where}cannot parse as JSON: {exc}."
++            ) from exc
++        for key in rule.keys:
++            doc, hits = _prune(doc, key.split("."))
++            applied[key] = hits
++            if hits == 0:
++                warnings.append(
++                    f"{where}key {key!r} was not present. Either the rule is wrong or "
++                    "the vendor changed their export format."
++                )
++        body = canonical_json(doc).encode("utf-8")
++        return NormalisationResult(
++            digest=_sha(body), rule_fingerprint=rule.fingerprint(), kind=rule.kind,
++            bytes_in=len(data), bytes_hashed=len(body), applied=applied,
++            warnings=tuple(warnings),
++        )
++
++    raise NormalisationError(
++        f"{rule.kind.value} needs a file on disk; use normalise_file()."
++    )
++
++
++def normalise_file(path: str | Path, rule: Rule) -> NormalisationResult:
++    """Apply a rule to a file.
++
++    ``zip_members`` is handled here because an archive is read member by member
++    rather than as one blob: the archive's own directory carries modification
++    times that change on every save and have nothing to do with the machine.
++    """
++    p = Path(path)
++    if rule.kind is not Normaliser.ZIP_MEMBERS:
++        return normalise_bytes(p.read_bytes(), rule, label=p.name)
++
++    size = p.stat().st_size
++    warnings: list[str] = []
++    applied: dict[str, int] = {}
++    parts: list[tuple[str, str]] = []
++    hashed = 0
++
++    try:
++        archive = zipfile.ZipFile(p)
++    except zipfile.BadZipFile as exc:
++        raise NormalisationError(f"{p.name}: not a readable archive: {exc}") from exc
++
++    with archive:
++        present = set(archive.namelist())
++        for member in rule.members:
++            if member not in present:
++                applied[member] = 0
++                warnings.append(
++                    f"{p.name}: member {member!r} is not in the archive. The digest "
++                    "below was computed without it, so it is not comparable with one "
++                    "taken when the member was present."
++                )
++                continue
++            data = archive.read(member)
++            applied[member] = 1
++            hashed += len(data)
++            parts.append((member, _sha(data)))
++
++    if not parts:
++        warnings.append(
++            f"{p.name}: none of the declared members were found, so nothing was "
++            "hashed."
++        )
++
++    digest = content_hash_of({"members": sorted(parts)})
++    return NormalisationResult(
++        digest=digest, rule_fingerprint=rule.fingerprint(), kind=rule.kind,
++        bytes_in=size, bytes_hashed=hashed, applied=applied,
++        warnings=tuple(warnings),
++    )
+diff --git a/src/assurance/collect/plan.py b/src/assurance/collect/plan.py
+new file mode 100644
+index 0000000..a56a3e9
+--- /dev/null
++++ b/src/assurance/collect/plan.py
+@@ -0,0 +1,255 @@
++"""A collection plan: what to look for, where, and how to hash it.
++
++A plan is written once per *machine type* and used for every unit of it. That is
++where the leverage is. An integrator with forty AR-7 cells writes one plan, and
++every cell thereafter is a two-minute job that produces a manifest nobody had to
++type.
++
++The plan is deliberately not a scanner. Nothing here goes looking for "anything
++that might be safety-relevant", because a tool that guesses what is
++safety-relevant will guess wrong in both directions: it will miss the parameter
++set that actually implements the protective stop, and it will fill the manifest
++with noise that makes the real findings invisible. A human who knows the machine
++says what matters, once, and the machine does the rest forty times.
++
++Every item spec carries the safety functions it implements, which is what makes
++:mod:`assurance.machinery` able to say later which verification a change
++invalidates. A plan that omits that mapping produces a manifest that can detect
++drift and cannot tell you what the drift costs.
++"""
++
++from __future__ import annotations
++
++import json
++import re
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any
++
++from assurance.collect.normalise import Rule
++from assurance.core.errors import AssuranceError
++from assurance.core.identity import content_hash_of
++from assurance.machinery.manifest import ItemKind, SafetyFunction
++
++__all__ = ["CollectionPlan", "ItemSpec", "PlanError", "VersionSource"]
++
++
++class PlanError(AssuranceError):
++    """A plan is malformed, or would produce a manifest that lies."""
++
++
++@dataclass(frozen=True)
++class VersionSource:
++    """Where the version label comes from, when it can be had at all.
++
++    ``unknown`` is a first-class answer and the default. A plan that invents a
++    version for an item whose export does not carry one produces a manifest that
++    will later match a supplier advisory on a label nobody ever read off the
++    machine.
++    """
++
++    kind: str = "unknown"     # unknown | literal | regex | json
++    value: str = ""           # the literal, the pattern (group 1), or the dotted key
++    encoding: str = "utf-8"
++
++    def __post_init__(self) -> None:
++        if self.kind not in ("unknown", "literal", "regex", "json"):
++            raise PlanError(
++                f"version source {self.kind!r} is not one of unknown, literal, "
++                "regex, json."
++            )
++        if self.kind != "unknown" and not self.value:
++            raise PlanError(f"a {self.kind} version source needs a value.")
++        if self.kind == "regex":
++            try:
++                if re.compile(self.value).groups < 1:
++                    raise PlanError(
++                        f"version pattern {self.value!r} has no capturing group; "
++                        "group 1 is what is read as the version."
++                    )
++            except re.error as exc:
++                raise PlanError(f"version pattern {self.value!r}: {exc}") from exc
++
++    def read(self, data: bytes) -> str:
++        """Extract the version from a file's bytes. Empty string when unknown."""
++        if self.kind == "unknown":
++            return ""
++        if self.kind == "literal":
++            return self.value
++        try:
++            text = data.decode(self.encoding, errors="replace")
++        except LookupError:
++            return ""
++        if self.kind == "regex":
++            m = re.search(self.value, text)
++            return m.group(1).strip() if m else ""
++        try:
++            doc: Any = json.loads(text)
++        except json.JSONDecodeError:
++            return ""
++        for part in self.value.split("."):
++            if not isinstance(doc, dict) or part not in doc:
++                return ""
++            doc = doc[part]
++        return str(doc) if not isinstance(doc, dict | list) else ""
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"kind": self.kind, "value": self.value, "encoding": self.encoding}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any] | None) -> VersionSource:
++        if not d:
++            return cls()
++        return cls(kind=str(d.get("kind", "unknown")), value=str(d.get("value", "")),
++                   encoding=str(d.get("encoding", "utf-8")))
++
++
++@dataclass(frozen=True)
++class ItemSpec:
++    """One safety-relevant item, and how to find and hash it."""
++
++    item_id: str
++    kind: ItemKind
++    name: str
++    #: Glob relative to the collection root. May match several files: a safety
++    #: PLC project is a directory, not a file, and its identity is the set.
++    source: str
++    supplier: str = ""
++    implements: tuple[str, ...] = ()
++    modifiable_in_field: bool = False
++    rule: Rule = field(default_factory=Rule)
++    version: VersionSource = field(default_factory=VersionSource)
++    #: When the file is absent, is that a finding or expected? An optional item
++    #: that is missing is reported quietly; a required one is a loud warning and
++    #: is left out of the manifest rather than invented.
++    required: bool = True
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.item_id or not self.name or not self.source:
++            raise PlanError(
++                "an item spec needs item_id, name and source.")
++        if Path(self.source).is_absolute() or ".." in Path(self.source).parts:
++            raise PlanError(
++                f"item {self.item_id!r} source {self.source!r} must be relative to the "
++                "collection root and must not climb out of it. A plan that reads "
++                "outside the root can hash a file that is not on this machine."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "item_id": self.item_id, "kind": self.kind.value, "name": self.name,
++            "source": self.source, "supplier": self.supplier,
++            "implements": list(self.implements),
++            "modifiable_in_field": self.modifiable_in_field,
++            "rule": self.rule.to_dict(), "version": self.version.to_dict(),
++            "required": self.required, "notes": self.notes,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> ItemSpec:
++        return cls(
++            item_id=str(d["item_id"]), kind=ItemKind(str(d["kind"])),
++            name=str(d["name"]), source=str(d["source"]),
++            supplier=str(d.get("supplier", "")),
++            implements=tuple(str(f) for f in (d.get("implements") or ())),
++            modifiable_in_field=bool(d.get("modifiable_in_field", False)),
++            rule=Rule.from_dict(d.get("rule")),
++            version=VersionSource.from_dict(d.get("version")),
++            required=bool(d.get("required", True)),
++            notes=str(d.get("notes", "")),
++        )
++
++
++@dataclass(frozen=True)
++class CollectionPlan:
++    """Written once per machine type. Used for every unit of it."""
++
++    plan_id: str
++    manufacturer: str
++    model: str
++    items: tuple[ItemSpec, ...]
++    functions: tuple[SafetyFunction, ...] = ()
++    #: Free text: where the exports come from, which tool produces them, what an
++    #: engineer has to do before running the collection.
++    procedure: str = ""
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.plan_id or not self.manufacturer or not self.model:
++            raise PlanError("a plan needs plan_id, manufacturer and model.")
++        if not self.items:
++            raise PlanError(
++                f"plan {self.plan_id!r} collects nothing.")
++        seen: set[str] = set()
++        for item in self.items:
++            if item.item_id in seen:
++                raise PlanError(f"plan {self.plan_id!r} defines {item.item_id!r} twice.")
++            seen.add(item.item_id)
++        known = {f.function_id for f in self.functions}
++        for item in self.items:
++            for fid in item.implements:
++                if fid not in known:
++                    raise PlanError(
++                        f"item {item.item_id!r} implements {fid!r}, which the plan "
++                        "does not declare. Add the safety function, or the manifest "
++                        "this plan produces will be refused."
++                    )
++
++    @property
++    def unmapped_items(self) -> tuple[ItemSpec, ...]:
++        """Items credited to no safety function.
++
++        Not an error — a HMI runtime genuinely implements none — but worth
++        seeing, because an item with no function cannot invalidate any
++        verification, and if that is wrong the whole chain goes quiet.
++        """
++        return tuple(i for i in self.items if not i.implements)
++
++    @property
++    def undemonstrable_functions(self) -> tuple[SafetyFunction, ...]:
++        return tuple(f for f in self.functions if not f.verified_by)
++
++    def item(self, item_id: str) -> ItemSpec | None:
++        return next((i for i in self.items if i.item_id == item_id), None)
++
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "plan_id": self.plan_id,
++            "manufacturer": self.manufacturer,
++            "model": self.model,
++            "procedure": self.procedure,
++            "notes": self.notes,
++            "items": [i.to_dict() for i in sorted(self.items, key=lambda i: i.item_id)],
++            "functions": [f.to_dict() for f in
++                          sorted(self.functions, key=lambda f: f.function_id)],
++        }
++
++    def content_hash(self) -> str:
++        """Identity of the plan. Recorded in every manifest it produces.
++
++        A manifest whose plan hash differs from another's was collected under
++        different rules, and the two are not straightforwardly comparable even
++        when the item digests look alike.
++        """
++        return content_hash_of(self.hashable_payload())
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> CollectionPlan:
++        return cls(
++            plan_id=str(d["plan_id"]),
++            manufacturer=str(d["manufacturer"]),
++            model=str(d["model"]),
++            items=tuple(ItemSpec.from_dict(i) for i in d["items"]),
++            functions=tuple(SafetyFunction.from_dict(f)
++                            for f in (d.get("functions") or ())),
++            procedure=str(d.get("procedure", "")),
++            notes=str(d.get("notes", "")),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> CollectionPlan:
++        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+diff --git a/src/assurance/collect/volatility.py b/src/assurance/collect/volatility.py
+new file mode 100644
+index 0000000..ec6d08c
+--- /dev/null
++++ b/src/assurance/collect/volatility.py
+@@ -0,0 +1,243 @@
++"""Prove the rules work before trusting the reports they produce.
++
++Collect the same unchanged machine twice. Every item whose digest moves has a
++normalisation rule that is not doing its job — it is hashing the export's own
++noise along with the machine — and every future weekly report will cry wolf
++about it until somebody fixes the rule or stops reading the report.
++
++This is the step no configuration-drift tool ships and every one of them needs.
++It costs one extra export and it is the difference between a drift report a
++safety engineer acts on and one they filter to a folder.
++
++The probe also does the tedious half of the fix: where the item is text, it
++shows the lines that actually differed, which is almost always a timestamp, an
++operator name or a sequence number, and from which the exclusion pattern writes
++itself.
++"""
++
++from __future__ import annotations
++
++import difflib
++import re
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from assurance.collect.normalise import NormalisationError, Normaliser, normalise_file
++from assurance.collect.plan import CollectionPlan, ItemSpec
++
++__all__ = ["ItemVolatility", "VolatilityReport", "probe"]
++
++#: Lines that differ between two exports of an unchanged machine are nearly
++#: always one of these. Offered as a starting point, never applied silently.
++_USUAL_SUSPECTS: tuple[tuple[str, str], ...] = (
++    (r"\d{4}-\d{2}-\d{2}", "a date"),
++    (r"\d{2}:\d{2}:\d{2}", "a time"),
++    (r"(?i)\b(timestamp|exported|export[_ ]?date|generated)\b", "an export stamp"),
++    (r"(?i)\b(user|operator|engineer|author|login)\b", "who exported it"),
++    (r"(?i)\b(checksum|crc|signature|hash)\b", "a checksum of the export itself"),
++    (r"(?i)\b(serial|sequence|session|run)[_ ]?(no|number|id)\b", "a sequence number"),
++)
++
++
++@dataclass(frozen=True)
++class ItemVolatility:
++    """Whether one item's digest survived two exports of an unchanged machine."""
++
++    item_id: str
++    stable: bool
++    digest_a: str
++    digest_b: str
++    rule_kind: Normaliser
++    #: Lines present in one export and not the other, trimmed to a readable few.
++    differing_lines: tuple[str, ...] = ()
++    #: Patterns that would have excluded those lines, with what they look like.
++    suggested_patterns: tuple[tuple[str, str], ...] = ()
++    detail: str = ""
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "item_id": self.item_id, "stable": self.stable,
++            "digest_a": self.digest_a, "digest_b": self.digest_b,
++            "rule_kind": self.rule_kind.value,
++            "differing_lines": list(self.differing_lines),
++            "suggested_patterns": [{"pattern": p, "looks_like": w}
++                                   for p, w in self.suggested_patterns],
++            "detail": self.detail,
++        }
++
++
++@dataclass(frozen=True)
++class VolatilityReport:
++    """Which of this plan's rules can be trusted to report real change."""
++
++    plan_id: str
++    plan_hash: str
++    root_a: str
++    root_b: str
++    items: tuple[ItemVolatility, ...]
++    checks_skipped: tuple[str, ...]
++
++    @property
++    def volatile(self) -> tuple[ItemVolatility, ...]:
++        return tuple(i for i in self.items if not i.stable)
++
++    @property
++    def verdict(self) -> str:
++        """``stable`` when every rule holds, otherwise ``volatile``."""
++        return "stable" if not self.volatile else "volatile"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "plan_id": self.plan_id, "plan_hash": self.plan_hash,
++            "root_a": self.root_a, "root_b": self.root_b,
++            "verdict": self.verdict,
++            "volatile_items": [i.item_id for i in self.volatile],
++            "items": [i.to_dict() for i in self.items],
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        head = {
++            "stable": "STABLE — every rule survived two exports of the same machine",
++            "volatile": "VOLATILE — these rules will report drift that did not happen",
++        }[self.verdict]
++        lines = [f"plan {self.plan_id} — {head}",
++                 f"  {self.root_a}  vs  {self.root_b}"]
++        for item in self.items:
++            mark = "ok  " if item.stable else "MOVE"
++            lines.append(f"  [{mark}] {item.item_id}  ({item.rule_kind.value})")
++            if item.detail:
++                lines.append(f"          {item.detail}")
++            for line in item.differing_lines:
++                lines.append(f"          ~ {line}")
++            for pattern, looks in item.suggested_patterns:
++                lines.append(f"          suggest: {pattern}   ({looks})")
++        if self.volatile:
++            lines.append("")
++            lines.append("  Add the suggested patterns to those items' rules and run "
++                         "this again. Until it says STABLE, every drift report from "
++                         "this plan contains noise.")
++        return "\n".join(lines)
++
++
++def _text_of(path: Path, spec: ItemSpec) -> list[str] | None:
++    """The item's lines after its own exclusions, or None if it is not text."""
++    try:
++        text = path.read_bytes().decode(spec.rule.encoding)
++    except (UnicodeDecodeError, LookupError, OSError):
++        return None
++    if spec.rule.kind is Normaliser.TEXT_EXCLUDING:
++        compiled = [re.compile(p) for p in spec.rule.patterns]
++        return [ln for ln in text.splitlines()
++                if not any(rx.search(ln) for rx in compiled)]
++    return text.splitlines()
++
++
++def _suggest(lines: list[str]) -> tuple[tuple[str, str], ...]:
++    out: list[tuple[str, str]] = []
++    for pattern, looks in _USUAL_SUSPECTS:
++        rx = re.compile(pattern)
++        if any(rx.search(ln) for ln in lines):
++            out.append((pattern, looks))
++    return tuple(out)
++
++
++def probe(
++    plan: CollectionPlan,
++    root_a: str | Path,
++    root_b: str | Path,
++    *,
++    max_lines: int = 6,
++) -> VolatilityReport:
++    """Compare two collections of a machine that did not change in between.
++
++    Both roots must be exports of the *same unchanged machine*. Nothing here can
++    check that — if the machine really did change between them, this will report
++    a correct digest difference as a volatile rule, which is why the report says
++    so in as many words rather than assuming the caller got it right.
++    """
++    a, b = Path(root_a), Path(root_b)
++    if not a.is_dir() or not b.is_dir():
++        raise NormalisationError(f"both roots must be directories: {a}, {b}")
++
++    items: list[ItemVolatility] = []
++    skipped: list[str] = [
++        "this assumes the two exports are of the same machine with nothing changed "
++        "between them. If the machine did change, a correct detection is reported "
++        "here as a volatile rule. Take both exports back to back.",
++    ]
++
++    for spec in plan.items:
++        files_a = sorted(p for p in a.glob(spec.source) if p.is_file())
++        files_b = sorted(p for p in b.glob(spec.source) if p.is_file())
++
++        if not files_a or not files_b:
++            skipped.append(
++                f"{spec.item_id}: matched "
++                f"{len(files_a)} file(s) in the first export and {len(files_b)} in the "
++                "second, so its rule was not exercised."
++            )
++            continue
++
++        names_a = [p.relative_to(a).as_posix() for p in files_a]
++        names_b = [p.relative_to(b).as_posix() for p in files_b]
++        if names_a != names_b:
++            items.append(ItemVolatility(
++                item_id=spec.item_id, stable=False, digest_a="", digest_b="",
++                rule_kind=spec.rule.kind,
++                detail=(f"the two exports contain different files for this item "
++                        f"({len(names_a)} vs {len(names_b)}). Either the machine "
++                        "changed or the glob is catching something it should not."),
++            ))
++            continue
++
++        try:
++            da = [normalise_file(p, spec.rule).digest for p in files_a]
++            db = [normalise_file(p, spec.rule).digest for p in files_b]
++        except NormalisationError as exc:
++            skipped.append(f"{spec.item_id}: {exc}")
++            continue
++
++        if da == db:
++            items.append(ItemVolatility(
++                item_id=spec.item_id, stable=True,
++                digest_a=da[0], digest_b=db[0], rule_kind=spec.rule.kind,
++            ))
++            continue
++
++        differing: list[str] = []
++        for pa, pb in zip(files_a, files_b, strict=True):
++            la, lb = _text_of(pa, spec), _text_of(pb, spec)
++            if la is None or lb is None:
++                continue
++            for line in difflib.unified_diff(la, lb, lineterm="", n=0):
++                if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
++                    differing.append(line[1:].strip()[:110])
++                if len(differing) >= max_lines:
++                    break
++            if len(differing) >= max_lines:
++                break
++
++        detail = (
++            "the digest moved between two exports of an unchanged machine. This rule "
++            "is hashing the export's own noise, and every drift report from it will "
++            "be wrong."
++        )
++        if not differing and spec.rule.kind is Normaliser.RAW:
++            detail += (" The file is not text, so the differing bytes cannot be shown; "
++                       "a zip_members rule is usually the answer for an archive.")
++
++        items.append(ItemVolatility(
++            item_id=spec.item_id, stable=False,
++            digest_a=da[0], digest_b=db[0], rule_kind=spec.rule.kind,
++            differing_lines=tuple(differing),
++            suggested_patterns=_suggest(differing),
++            detail=detail,
++        ))
++
++    return VolatilityReport(
++        plan_id=plan.plan_id, plan_hash=plan.content_hash(),
++        root_a=str(a), root_b=str(b), items=tuple(items),
++        checks_skipped=tuple(dict.fromkeys(skipped)),
++    )
+diff --git a/tests/test_assurance_collect.py b/tests/test_assurance_collect.py
+new file mode 100644
+index 0000000..b1e2703
+--- /dev/null
++++ b/tests/test_assurance_collect.py
+@@ -0,0 +1,523 @@
++"""Tests for collection: plans, normalisation, and the volatility probe.
++
++The test that carries this module is
++``test_the_export_header_moves_and_the_manifest_does_not``. Everything else
++exists so that a weekly drift report contains findings and not noise — because a
++report that cries wolf is one a safety engineer stops reading, and the week it
++matters is the week nobody looks.
++"""
++
++from __future__ import annotations
++
++import json
++import zipfile
++from datetime import UTC, datetime
++from pathlib import Path
++
++import pytest
++
++from assurance.collect.collector import CollectionError, collect
++from assurance.collect.normalise import (
++    NormalisationError,
++    Normaliser,
++    Rule,
++    normalise_bytes,
++    normalise_file,
++)
++from assurance.collect.plan import CollectionPlan, ItemSpec, PlanError, VersionSource
++from assurance.collect.volatility import probe
++from assurance.core.evidence import Actor
++from assurance.core.tiers import AssuranceTier
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.divergence import compare
++from assurance.machinery.manifest import HashSource, ItemKind, ManifestSource
++
++ENG = Actor("a.integrator", "safety engineer")
++
++FUNCS = [
++    {"function_id": "SF-01", "description": "Protective stop on zone intrusion",
++     "required_performance": "PL d",
++     "verified_by": ["ssm_separation", "stop_characterisation"]},
++    {"function_id": "SF-02", "description": "Speed limit in collaborative operation",
++     "required_performance": "PL d", "verified_by": ["speed_limit"]},
++]
++
++
++def write_export(root: Path, *, stamp: str, operator: str, seq: str,
++                 radius: int = 1500, fw: bytes = b"firmware 3.8.2") -> Path:
++    """A folder of vendor exports, with the volatile headers real tools stamp."""
++    root.mkdir(parents=True, exist_ok=True)
++    (root / "scanner-zones.cfg").write_text(
++        f"# Exported {stamp} by {operator}\n"
++        f"# Export sequence no: {seq}\n"
++        f"[zone.1]\ntype=protective\nradius_mm={radius}\nresponse_ms=62\n",
++        encoding="utf-8")
++    (root / "robot-params.json").write_text(json.dumps({
++        "export": {"timestamp": stamp, "operator": operator},
++        "safety": {"max_tcp_speed_mm_s": 400, "stop_category": 1},
++        "firmware": {"version": "3.8.2"},
++    }), encoding="utf-8")
++    with zipfile.ZipFile(root / "plc-project.zip", "w") as z:
++        z.writestr(zipfile.ZipInfo("program/main.st", date_time=(2026, 1, 1, 0, 0, 0)),
++                   "PROGRAM Main\n  SafeStop := NOT ZoneClear;\nEND_PROGRAM\n")
++        z.writestr(zipfile.ZipInfo("meta/build.txt",
++                                   date_time=(2026, 9, int(seq[-1]) or 1, 0, 0, 0)),
++                   f"built {stamp} seq {seq}\n")
++    (root / "controller-fw.bin").write_bytes(b"\x7fELF" + fw * 20)
++    return root
++
++
++def plan_dict(*, tuned: bool = True) -> dict:
++    items = [
++        {"item_id": "ITM-ZONES", "kind": "safety_configuration",
++         "name": "Safety scanner zone set", "source": "scanner-zones.cfg",
++         "supplier": "ScanCo", "implements": ["SF-01"],
++         "modifiable_in_field": True},
++        {"item_id": "ITM-PARAMS", "kind": "parameter_set",
++         "name": "Robot safety parameter set", "source": "robot-params.json",
++         "supplier": "RoboCo", "implements": ["SF-01", "SF-02"]},
++        {"item_id": "ITM-PLC", "kind": "safety_program",
++         "name": "Safety PLC project", "source": "plc-project.zip",
++         "supplier": "ControlCo", "implements": ["SF-01"]},
++        {"item_id": "ITM-FW", "kind": "firmware",
++         "name": "Safety controller firmware", "source": "controller-fw.bin",
++         "supplier": "ControlCo", "implements": ["SF-01", "SF-02"]},
++    ]
++    if tuned:
++        items[0]["rule"] = {
++            "kind": "text_excluding",
++            "patterns": [r"^#\s*Exported ", r"^#\s*Export sequence no:"],
++            "note": "the scanner tool stamps time, operator and sequence.",
++        }
++        items[1]["rule"] = {
++            "kind": "json_excluding",
++            "keys": ["export.timestamp", "export.operator"],
++            "note": "RParam records who exported and when.",
++        }
++        items[1]["version"] = {"kind": "json", "value": "firmware.version"}
++        items[2]["rule"] = {
++            "kind": "zip_members", "members": ["program/main.st"],
++            "note": "archive member timestamps move on every save.",
++        }
++    return {
++        "plan_id": "PLAN-AR7", "manufacturer": "Grimaldi", "model": "AR-7",
++        "procedure": "Export from the three vendor tools into one folder.",
++        "functions": FUNCS, "items": items,
++    }
++
++
++def plan(**kw) -> CollectionPlan:
++    return CollectionPlan.from_dict(plan_dict(**kw))
++
++
++# =====================================================================
++# normalisation
++# =====================================================================
++
++class TestNormalisation:
++    def test_raw_hashes_the_bytes_as_they_are(self):
++        r = normalise_bytes(b"hello", Rule())
++        assert r.bytes_hashed == 5
++        assert r.kind is Normaliser.RAW
++
++    def test_text_excluding_drops_the_matching_lines(self):
++        rule = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^# "],
++                    note="header")
++        a = normalise_bytes(b"# stamp one\nbody\n", rule)
++        b = normalise_bytes(b"# stamp two\nbody\n", rule)
++        assert a.digest == b.digest
++        assert a.applied[r"^# "] == 1
++
++    def test_a_pattern_that_matched_nothing_is_a_warning_not_a_success(self):
++        rule = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^ZZZ"], note="x")
++        r = normalise_bytes(b"body\n", rule)
++        assert any("matched no line" in w for w in r.warnings)
++
++    def test_json_excluding_ignores_key_order_and_whitespace(self):
++        rule = Rule(kind=Normaliser.JSON_EXCLUDING, keys=["meta.when"], note="stamp")
++        a = normalise_bytes(b'{"meta":{"when":"1"},"v":1}', rule)
++        b = normalise_bytes(b'{ "v" : 1 , "meta" : { "when" : "2" } }', rule)
++        assert a.digest == b.digest
++
++    def test_json_excluding_still_sees_a_real_change(self):
++        rule = Rule(kind=Normaliser.JSON_EXCLUDING, keys=["meta.when"], note="stamp")
++        a = normalise_bytes(b'{"meta":{"when":"1"},"v":1}', rule)
++        b = normalise_bytes(b'{"meta":{"when":"1"},"v":2}', rule)
++        assert a.digest != b.digest
++
++    def test_a_missing_json_key_is_a_warning(self):
++        rule = Rule(kind=Normaliser.JSON_EXCLUDING, keys=["nope"], note="x")
++        r = normalise_bytes(b'{"v":1}', rule)
++        assert any("was not present" in w for w in r.warnings)
++
++    def test_json_excluding_reaches_into_lists(self):
++        rule = Rule(kind=Normaliser.JSON_EXCLUDING, keys=["rows.when"], note="x")
++        a = normalise_bytes(b'{"rows":[{"when":"1","v":1},{"when":"2","v":2}]}', rule)
++        b = normalise_bytes(b'{"rows":[{"when":"9","v":1},{"when":"8","v":2}]}', rule)
++        assert a.digest == b.digest
++
++    def test_zip_members_ignores_everything_else_in_the_archive(self, tmp_path):
++        rule = Rule(kind=Normaliser.ZIP_MEMBERS, members=["program/main.st"],
++                    note="build metadata moves")
++        digests = []
++        for day in (1, 2):
++            p = tmp_path / f"p{day}.zip"
++            with zipfile.ZipFile(p, "w") as z:
++                z.writestr(zipfile.ZipInfo("program/main.st",
++                                           date_time=(2026, 1, day, 0, 0, 0)), "CODE")
++                z.writestr("meta/build.txt", f"built on day {day}")
++            digests.append(normalise_file(p, rule).digest)
++        assert digests[0] == digests[1]
++
++    def test_a_zip_member_that_is_not_there_is_a_warning_not_a_silent_pass(
++            self, tmp_path):
++        p = tmp_path / "p.zip"
++        with zipfile.ZipFile(p, "w") as z:
++            z.writestr("other.txt", "x")
++        r = normalise_file(p, Rule(kind=Normaliser.ZIP_MEMBERS,
++                                   members=["program/main.st"], note="x"))
++        assert any("is not in the archive" in w for w in r.warnings)
++
++    def test_a_rule_that_drops_bytes_must_say_why(self):
++        with pytest.raises(NormalisationError, match="carries no note"):
++            Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^#"])
++
++    def test_a_text_rule_with_no_patterns_is_refused(self):
++        with pytest.raises(NormalisationError, match="drops nothing"):
++            Rule(kind=Normaliser.TEXT_EXCLUDING, note="x")
++
++    def test_a_bad_regex_is_refused_at_declaration_time(self):
++        with pytest.raises(NormalisationError, match="not a regex"):
++            Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=["("], note="x")
++
++    def test_a_binary_file_under_a_text_rule_says_so(self, tmp_path):
++        p = tmp_path / "fw.bin"
++        p.write_bytes(b"\xff\xfe\x00binary")
++        with pytest.raises(NormalisationError, match="binary export"):
++            normalise_file(p, Rule(kind=Normaliser.TEXT_EXCLUDING,
++                                   patterns=[r"^#"], note="x"))
++
++    def test_the_rule_is_part_of_the_identity(self):
++        a = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^#"], note="x")
++        b = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^#", r"^;"], note="x")
++        assert a.fingerprint() != b.fingerprint()
++
++    def test_the_note_does_not_change_the_identity(self):
++        a = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^#"], note="one")
++        b = Rule(kind=Normaliser.TEXT_EXCLUDING, patterns=[r"^#"], note="two")
++        assert a.fingerprint() == b.fingerprint()
++
++
++# =====================================================================
++# plans
++# =====================================================================
++
++class TestPlan:
++    def test_a_plan_that_collects_nothing_is_refused(self):
++        d = plan_dict()
++        d["items"] = []
++        with pytest.raises(PlanError, match="collects nothing"):
++            CollectionPlan.from_dict(d)
++
++    def test_an_item_crediting_an_undeclared_function_is_refused(self):
++        d = plan_dict()
++        d["items"][0]["implements"] = ["SF-99"]
++        with pytest.raises(PlanError, match="does not declare"):
++            CollectionPlan.from_dict(d)
++
++    def test_a_duplicate_item_id_is_refused(self):
++        d = plan_dict()
++        d["items"].append(dict(d["items"][0]))
++        with pytest.raises(PlanError, match="twice"):
++            CollectionPlan.from_dict(d)
++
++    def test_a_source_that_climbs_out_of_the_root_is_refused(self):
++        with pytest.raises(PlanError, match="climb out"):
++            ItemSpec(item_id="X", kind=ItemKind.FIRMWARE, name="x",
++                     source="../secrets/key.bin")
++
++    def test_an_absolute_source_is_refused(self):
++        with pytest.raises(PlanError, match="relative to the collection root"):
++            ItemSpec(item_id="X", kind=ItemKind.FIRMWARE, name="x",
++                     source="/etc/passwd")
++
++    def test_the_plan_hash_moves_when_a_rule_changes(self):
++        a = plan()
++        d = plan_dict()
++        d["items"][0]["rule"]["patterns"].append(r"^;")
++        assert CollectionPlan.from_dict(d).content_hash() != a.content_hash()
++
++    def test_unmapped_items_are_surfaced(self):
++        d = plan_dict()
++        d["items"][3]["implements"] = []
++        assert [i.item_id for i in CollectionPlan.from_dict(d).unmapped_items] \
++            == ["ITM-FW"]
++
++    def test_version_unknown_is_the_default_and_is_honest(self):
++        assert VersionSource().read(b'{"v":"1"}') == ""
++
++    def test_a_regex_version_needs_a_capturing_group(self):
++        with pytest.raises(PlanError, match="no capturing group"):
++            VersionSource(kind="regex", value=r"version")
++
++    def test_a_regex_version_is_read_from_the_file(self):
++        v = VersionSource(kind="regex", value=r"version\s*=\s*(\S+)")
++        assert v.read(b"name=x\nversion = 3.8.2\n") == "3.8.2"
++
++    def test_a_json_version_is_read_by_dotted_path(self):
++        v = VersionSource(kind="json", value="firmware.version")
++        assert v.read(b'{"firmware":{"version":"3.9.0"}}') == "3.9.0"
++
++    def test_an_absent_version_reads_empty_rather_than_guessing(self):
++        v = VersionSource(kind="json", value="firmware.version")
++        assert v.read(b'{"other":1}') == ""
++
++    def test_it_survives_json(self, tmp_path):
++        p = tmp_path / "plan.json"
++        p.write_text(json.dumps(plan().to_dict()))
++        assert CollectionPlan.from_json(p).content_hash() == plan().content_hash()
++
++
++# =====================================================================
++# the probe
++# =====================================================================
++
++class TestProbe:
++    def test_an_untuned_plan_is_volatile_on_every_stamped_export(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
++                     operator="m.tech", seq="4181")
++        write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                     operator="a.integrator", seq="4199")
++        r = probe(plan(tuned=False), tmp_path / "mon", tmp_path / "tue")
++        assert r.verdict == "volatile"
++        assert {i.item_id for i in r.volatile} == {"ITM-ZONES", "ITM-PARAMS",
++                                                   "ITM-PLC"}
++
++    def test_the_opaque_firmware_is_stable_even_untuned(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="a", operator="x", seq="1")
++        write_export(tmp_path / "tue", stamp="b", operator="y", seq="2")
++        r = probe(plan(tuned=False), tmp_path / "mon", tmp_path / "tue")
++        fw = next(i for i in r.items if i.item_id == "ITM-FW")
++        assert fw.stable
++
++    def test_it_shows_the_lines_that_actually_moved(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
++                     operator="m.tech", seq="4181")
++        write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                     operator="a.integrator", seq="4199")
++        r = probe(plan(tuned=False), tmp_path / "mon", tmp_path / "tue")
++        zones = next(i for i in r.volatile if i.item_id == "ITM-ZONES")
++        assert any("Exported" in line for line in zones.differing_lines)
++
++    def test_it_suggests_patterns_for_the_usual_suspects(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
++                     operator="m.tech", seq="4181")
++        write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                     operator="a.integrator", seq="4199")
++        r = probe(plan(tuned=False), tmp_path / "mon", tmp_path / "tue")
++        zones = next(i for i in r.volatile if i.item_id == "ITM-ZONES")
++        looks = {w for _, w in zones.suggested_patterns}
++        assert "a date" in looks
++        assert "a sequence number" in looks
++
++    def test_a_tuned_plan_is_stable(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
++                     operator="m.tech", seq="4181")
++        write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                     operator="a.integrator", seq="4199")
++        r = probe(plan(), tmp_path / "mon", tmp_path / "tue")
++        assert r.verdict == "stable", r.summary()
++
++    def test_a_real_change_still_shows_as_volatile_and_says_why(self, tmp_path):
++        """The probe cannot know the machine was unchanged, and says so."""
++        write_export(tmp_path / "mon", stamp="s", operator="o", seq="1")
++        write_export(tmp_path / "tue", stamp="s", operator="o", seq="1",
++                     radius=1200)
++        r = probe(plan(), tmp_path / "mon", tmp_path / "tue")
++        assert r.verdict == "volatile"
++        assert any("If the machine did change" in c for c in r.checks_skipped)
++
++    def test_an_item_absent_from_both_exports_is_reported_not_passed(self, tmp_path):
++        write_export(tmp_path / "mon", stamp="s", operator="o", seq="1")
++        write_export(tmp_path / "tue", stamp="s", operator="o", seq="1")
++        (tmp_path / "mon" / "controller-fw.bin").unlink()
++        (tmp_path / "tue" / "controller-fw.bin").unlink()
++        r = probe(plan(), tmp_path / "mon", tmp_path / "tue")
++        assert "ITM-FW" not in {i.item_id for i in r.items}
++        assert any("ITM-FW" in c for c in r.checks_skipped)
++
++
++# =====================================================================
++# collection
++# =====================================================================
++
++class TestCollect:
++    def test_it_produces_a_usable_manifest(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG, site="Plant 2")
++        assert r.complete
++        assert r.manifest.machine.key == "Grimaldi/AR-7#0412"
++        assert len(r.manifest.items) == 4
++
++    def test_everything_is_read_from_the_machine_so_the_tier_is_validated(
++            self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        assert r.manifest.tier_ceiling is AssuranceTier.VALIDATED
++        assert all(i.hash_source is HashSource.READ_FROM_MACHINE
++                   for i in r.manifest.items)
++
++    def test_the_version_is_read_where_the_plan_says_how(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        assert r.manifest.item("ITM-PARAMS").version == "3.8.2"
++
++    def test_an_item_with_no_declared_version_source_is_left_blank(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        assert r.manifest.item("ITM-FW").version == ""
++
++    def test_a_required_item_that_is_missing_is_left_out_not_invented(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        (root / "controller-fw.bin").unlink()
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        assert not r.complete
++        assert r.manifest.item("ITM-FW") is None
++        assert any("LEFT OUT" in o.detail for o in r.missing)
++        assert any("says anything about it" in w for w in r.warnings)
++
++    def test_an_optional_item_that_is_missing_is_quiet(self, tmp_path):
++        d = plan_dict()
++        d["items"][3]["required"] = False
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        (root / "controller-fw.bin").unlink()
++        r = collect(CollectionPlan.from_dict(d), root, serial="0412", taken_by=ENG)
++        assert not any("ITM-FW" in w for w in r.warnings)
++
++    def test_a_plan_that_matches_nothing_at_all_is_refused(self, tmp_path):
++        empty = tmp_path / "empty"
++        empty.mkdir()
++        with pytest.raises(CollectionError, match="matched nothing at all"):
++            collect(plan(), empty, serial="0412", taken_by=ENG)
++
++    def test_a_multi_file_item_is_hashed_as_a_set(self, tmp_path):
++        root = tmp_path / "e"
++        (root / "prog").mkdir(parents=True)
++        (root / "prog" / "a.st").write_text("A")
++        (root / "prog" / "b.st").write_text("B")
++        d = {"plan_id": "P", "manufacturer": "G", "model": "M",
++             "items": [{"item_id": "ITM-PROG", "kind": "safety_program",
++                        "name": "prog", "source": "prog/*.st"}]}
++        one = collect(CollectionPlan.from_dict(d), root, serial="1", taken_by=ENG)
++        (root / "prog" / "c.st").write_text("C")
++        two = collect(CollectionPlan.from_dict(d), root, serial="1", taken_by=ENG)
++        assert one.manifest.item("ITM-PROG").content_hash != \
++            two.manifest.item("ITM-PROG").content_hash
++        assert two.outcomes[0].files == ("prog/a.st", "prog/b.st", "prog/c.st")
++
++    def test_the_manifest_records_which_plan_and_rule_made_each_digest(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        notes = r.manifest.item("ITM-ZONES").notes
++        assert "PLAN-AR7" in notes
++        assert "rule " in notes
++
++    def test_it_defaults_to_as_found_and_can_be_told_otherwise(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        assert collect(plan(), root, serial="1", taken_by=ENG).manifest.source \
++            is ManifestSource.AS_FOUND
++        assert collect(plan(), root, serial="1", taken_by=ENG,
++                       source=ManifestSource.AS_DECLARED).manifest.source \
++            is ManifestSource.AS_DECLARED
++
++    def test_it_never_claims_the_plan_was_complete(self, tmp_path):
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        assert any("the plan does not name" in w for w in r.warnings)
++
++
++# =====================================================================
++# the whole point
++# =====================================================================
++
++class TestEndToEnd:
++    def test_the_export_header_moves_and_the_manifest_does_not(self, tmp_path):
++        """Two exports, different stamps, unchanged machine: no drift reported."""
++        a = write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
++                         operator="m.tech", seq="4181")
++        b = write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                         operator="a.integrator", seq="4199")
++        p = plan()
++        m1 = collect(p, a, serial="0412", taken_by=ENG, manifest_id="M1",
++                     taken_at=datetime(2026, 9, 14, 8, tzinfo=UTC)).manifest
++        m2 = collect(p, b, serial="0412", taken_by=ENG, manifest_id="M2",
++                     taken_at=datetime(2026, 9, 15, 8, tzinfo=UTC)).manifest
++        assert m1.configuration_hash() == m2.configuration_hash()
++        assert compare(m1, m2).verdict == "matches"
++
++    def test_a_real_change_is_caught_and_carries_the_safety_function(self, tmp_path):
++        a = write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
++                         operator="a.integrator", seq="4199")
++        b = write_export(tmp_path / "wed", stamp="2026-09-16T14:02:10Z",
++                         operator="m.tech", seq="4231", radius=1200)
++        p = plan()
++        m1 = collect(p, a, serial="0412", taken_by=ENG, manifest_id="M1").manifest
++        m2 = collect(p, b, serial="0412", taken_by=ENG, manifest_id="M2").manifest
++        d = compare(m1, m2)
++        assert d.verdict == "safety_relevant_drift"
++        assert [c.item_id for c in d.changes] == ["ITM-ZONES"]
++        assert d.affected_functions == ("SF-01",)
++
++    def test_only_the_changed_item_is_reported(self, tmp_path):
++        """Three of four items also had their export headers move. None reported."""
++        a = write_export(tmp_path / "tue", stamp="s1", operator="o1", seq="1")
++        b = write_export(tmp_path / "wed", stamp="s2", operator="o2", seq="2",
++                         radius=1200)
++        p = plan()
++        m1 = collect(p, a, serial="0412", taken_by=ENG, manifest_id="M1").manifest
++        m2 = collect(p, b, serial="0412", taken_by=ENG, manifest_id="M2").manifest
++        assert len(compare(m1, m2).changes) == 1
++
++    def test_a_collected_manifest_seals_into_the_ledger_and_verifies(self, tmp_path):
++        from assurance.machinery.record import record_manifest
++        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
++        ledger = EvidenceLedger(tmp_path / "l.db")
++        r = collect(plan(), root, serial="0412", taken_by=ENG)
++        evidence = record_manifest(ledger, r.manifest)
++        ok, problems = ledger.verify_chain()
++        assert ok, problems
++        assert evidence.verify()
++
++    def test_a_collected_fleet_reaches_the_advisory_fan_out(self, tmp_path):
++        from assurance.fleet.advisory import (
++            AdvisorySeverity,
++            AffectedArtefact,
++            ComponentAdvisory,
++        )
++        from assurance.fleet.impact import assess_impact
++        from assurance.fleet.registry import Fleet
++        from assurance.machinery.record import record_manifest
++
++        ledger = EvidenceLedger(tmp_path / "l.db")
++        p = plan()
++        for serial in ("0412", "0418"):
++            root = write_export(tmp_path / serial, stamp="s", operator="o", seq="1")
++            record_manifest(ledger, collect(p, root, serial=serial,
++                                            taken_by=ENG).manifest)
++
++        fleet = Fleet.from_ledger(ledger)
++        assert len(fleet) == 2
++        collected_hash = fleet.records[0].manifest.item("ITM-PARAMS").content_hash
++
++        advisory = ComponentAdvisory(
++            advisory_id="ROBO-1", issued_by="RoboCo",
++            issued_at=datetime(2026, 9, 20, tzinfo=UTC),
++            title="Parameter set defect", summary="...",
++            severity=AdvisorySeverity.SAFETY_RELEVANT,
++            affected=(AffectedArtefact(supplier="RoboCo",
++                                       name="Robot safety parameter set",
++                                       content_hashes=(collected_hash,)),),
++            reference="https://roboco.example/1")
++        report = assess_impact(advisory, fleet)
++        assert len(report.machines_affected) == 2
++        assert report.confirmed
+-- 
+2.43.0
+
