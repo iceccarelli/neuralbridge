@@ -1,0 +1,2055 @@
+From cbe2e009c2cf024df5b93bce311079744418121c Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 00:31:18 +0000
+Subject: [PATCH] assurance: metered API keys, Stripe billing, fly.io
+ deployment
+
+WHY
+  The Art. 14 register has no way to take money. Endpoints are open or
+  gated by a shared static key. Nothing distinguishes a prospect from a
+  customer, and nothing stops a prospect using the whole product free.
+
+WHAT
+  - src/assurance/billing/plans.py      entitlements declared in code
+  - src/assurance/billing/accounts.py   accounts, hashed API keys, UTC-day quota
+  - src/assurance/billing/stripe_gateway.py  checkout, portal, webhook HMAC
+  - src/assurance/api/billing_routes.py /v1/plans /v1/checkout /v1/me /v1/billing/*
+  - src/assurance/api/deps.py           principal, entitlement (402), quota (429)
+  - src/assurance/api/routes.py         free tier: /v1/spec/fields, /v1/spec/validate
+  - deploy/assurance/                   Dockerfile, fly.toml, README
+
+CUSTOMER VALUE
+  A buyer can self-serve from the free validator to a paid register in one
+  flow, with no call and no invoice cycle. The free validator catches real
+  submission errors (absent awareness timestamp, non-EU Member State codes,
+  over-length fields) before ENISA rejects them.
+
+RISK
+  Stripe keys absent -> /v1/checkout returns 503 naming the missing variable;
+  no other route is affected. Webhook forgery is refused by HMAC-SHA256 with
+  a 300s replay window. API keys are stored only as sha256; shown once.
+
+ROLLBACK
+  git revert this commit. Patch 001/002 surfaces are untouched apart from
+  deps.py, whose prior static-key behaviour is superseded, not extended.
+
+TESTS
+  245 passed (32 new in tests/test_assurance_billing.py), ruff clean.
+
+SUCCESS CONDITION
+  One paid checkout completed end to end against a live deployment.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/Dockerfile             |  41 +++
+ deploy/assurance/README.md              |  67 ++++
+ deploy/assurance/fly.toml               |  53 +++
+ src/assurance/api/billing_routes.py     | 250 +++++++++++++++
+ src/assurance/api/deps.py               | 190 ++++++++---
+ src/assurance/api/routes.py             |  48 ++-
+ src/assurance/api/service.py            |  11 +-
+ src/assurance/billing/__init__.py       |  16 +
+ src/assurance/billing/accounts.py       | 410 ++++++++++++++++++++++++
+ src/assurance/billing/plans.py          | 159 +++++++++
+ src/assurance/billing/stripe_gateway.py | 169 ++++++++++
+ tests/test_assurance_billing.py         | 384 ++++++++++++++++++++++
+ 12 files changed, 1750 insertions(+), 48 deletions(-)
+ create mode 100644 deploy/assurance/Dockerfile
+ create mode 100644 deploy/assurance/README.md
+ create mode 100644 deploy/assurance/fly.toml
+ create mode 100644 src/assurance/api/billing_routes.py
+ create mode 100644 src/assurance/billing/__init__.py
+ create mode 100644 src/assurance/billing/accounts.py
+ create mode 100644 src/assurance/billing/plans.py
+ create mode 100644 src/assurance/billing/stripe_gateway.py
+ create mode 100644 tests/test_assurance_billing.py
+
+diff --git a/deploy/assurance/Dockerfile b/deploy/assurance/Dockerfile
+new file mode 100644
+index 0000000..c654895
+--- /dev/null
++++ b/deploy/assurance/Dockerfile
+@@ -0,0 +1,41 @@
++# The assurance register, as a deployable service.
++#
++# Deliberately not the NeuralBridge image: this package has no runtime
++# dependencies of its own beyond a web server, and shipping it alone keeps the
++# attack surface of a regulatory register down to what it actually needs.
++
++FROM python:3.12-slim AS build
++
++RUN pip install --no-cache-dir --upgrade pip \
++ && pip install --no-cache-dir --prefix=/install \
++      'fastapi>=0.110.0' 'uvicorn[standard]>=0.27.0' 'pydantic>=2.6.0' 'httpx>=0.27.0'
++
++FROM python:3.12-slim
++
++# Run as a non-root user. A service holding a regulatory record has no business
++# running as root, and the container does not need to write anywhere except the
++# mounted volume.
++RUN useradd --create-home --uid 10001 assurance
++
++COPY --from=build /install /usr/local
++COPY --chown=assurance:assurance src/assurance /app/assurance
++
++WORKDIR /app
++USER assurance
++
++ENV PYTHONPATH=/app \
++    PYTHONUNBUFFERED=1 \
++    PYTHONDONTWRITEBYTECODE=1 \
++    ASSURANCE_HOST=0.0.0.0 \
++    ASSURANCE_PORT=8080 \
++    ASSURANCE_LEDGER=/data/art14-register.db \
++    ASSURANCE_ACCOUNTS=/data/accounts.db
++
++EXPOSE 8080
++
++# One worker, on purpose. The evidence ledger and the account store are SQLite
++# on a single volume; a second process on a second machine would fork the
++# evidence chain, which is the precise failure this package was written to
++# prevent. Scale by making the machine bigger, or move the stores to Postgres
++# first.
++CMD ["uvicorn", "assurance.api.service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+diff --git a/deploy/assurance/README.md b/deploy/assurance/README.md
+new file mode 100644
+index 0000000..4c73791
+--- /dev/null
++++ b/deploy/assurance/README.md
+@@ -0,0 +1,67 @@
++# Deploying the assurance register
++
++The service is one process with two SQLite files on one volume. That is a
++deliberate limit, not an oversight: the evidence ledger is a hash chain, and a
++second writer on a second machine forks it. Scale vertically until the stores
++move to Postgres.
++
++## fly.io
++
++```bash
++fly launch --no-deploy --copy-config --config deploy/assurance/fly.toml
++fly volumes create assurance_data --size 1 --region fra
++
++fly secrets set \
++  ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \
++  STRIPE_SECRET_KEY=sk_test_... \
++  STRIPE_WEBHOOK_SECRET=whsec_... \
++  ASSURANCE_PRICE_REGISTER=price_... \
++  ASSURANCE_PRICE_CELL=price_...
++
++fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile
++```
++
++Set `ASSURANCE_PUBLIC_URL` to the deployed hostname — checkout redirects are
++built from it, and a wrong value sends paying customers to a dead page.
++
++## Stripe
++
++Create the webhook endpoint at `https://<app>.fly.dev/v1/billing/webhook`,
++subscribed to:
++
++- `checkout.session.completed` — grants the plan and mints the API key
++- `customer.subscription.updated` — reactivation, and `past_due` suspension
++- `customer.subscription.deleted` — downgrade to free
++
++The signing secret Stripe shows you is `STRIPE_WEBHOOK_SECRET`. Without it the
++endpoint refuses every event, which is the correct behaviour: an unverified
++webhook is a way for anyone to grant themselves a subscription.
++
++## What to check after deploying
++
++```bash
++curl https://<app>.fly.dev/                       # what the service is
++curl https://<app>.fly.dev/healthz                # auth_mode must not be "open"
++curl https://<app>.fly.dev/v1/plans               # purchasable must be true
++curl -X POST https://<app>.fly.dev/v1/spec/validate \
++     -H 'content-type: application/json' \
++     -d '{"track":"actively_exploited_vulnerability","stage":"early_warning",
++          "payload":{"product_name":"x","member_states_available":["DE","CH"]}}'
++```
++
++The last one is the free tier, and the thing to put in front of a prospect: it
++returns what is missing, what exceeds a character limit, and that Switzerland
++is not an EU Member State — without an account, and recording nothing.
++
++`/healthz` reporting `auth_mode: "open"` on a public host means
++`ASSURANCE_ALLOW_UNAUTHENTICATED=1` is set and anyone can write to the
++register. Unset it.
++
++## Backups
++
++```bash
++fly ssh console -C "sqlite3 /data/art14-register.db .dump" > ledger-$(date +%F).sql
++```
++
++The ledger is append-only and self-verifying, so a restored copy can be checked
++with `GET /v1/ledger/verify` rather than trusted.
+diff --git a/deploy/assurance/fly.toml b/deploy/assurance/fly.toml
+new file mode 100644
+index 0000000..ff9035c
+--- /dev/null
++++ b/deploy/assurance/fly.toml
+@@ -0,0 +1,53 @@
++# fly.io deployment for the assurance register.
++#
++#   fly launch --no-deploy --copy-config --config deploy/assurance/fly.toml
++#   fly volumes create assurance_data --size 1 --region fra
++#   fly secrets set \
++#       ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \
++#       STRIPE_SECRET_KEY=sk_test_... \
++#       STRIPE_WEBHOOK_SECRET=whsec_... \
++#       ASSURANCE_PRICE_REGISTER=price_... \
++#       ASSURANCE_PRICE_CELL=price_...
++#   fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile
++#
++# Then point a Stripe webhook endpoint at https://<app>.fly.dev/v1/billing/webhook
++# for checkout.session.completed, customer.subscription.updated and
++# customer.subscription.deleted.
++
++app = "assurance-register"
++primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regulatory record
++
++[build]
++  dockerfile = "Dockerfile"
++
++[env]
++  ASSURANCE_HOST = "0.0.0.0"
++  ASSURANCE_PORT = "8080"
++  ASSURANCE_LEDGER = "/data/art14-register.db"
++  ASSURANCE_ACCOUNTS = "/data/accounts.db"
++  ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
++
++[[mounts]]
++  source = "assurance_data"
++  destination = "/data"
++
++[http_service]
++  internal_port = 8080
++  force_https = true
++  # SQLite on one volume means one writer. auto_stop would be fine; running two
++  # machines would not, and this is the config line that prevents it.
++  auto_stop_machines = false
++  auto_start_machines = true
++  min_machines_running = 1
++  max_machines_running = 1
++
++  [[http_service.checks]]
++    grace_period = "10s"
++    interval = "30s"
++    method = "GET"
++    path = "/healthz"
++    timeout = "5s"
++
++[[vm]]
++  size = "shared-cpu-1x"
++  memory = "512mb"
+diff --git a/src/assurance/api/billing_routes.py b/src/assurance/api/billing_routes.py
+new file mode 100644
+index 0000000..8e85924
+--- /dev/null
++++ b/src/assurance/api/billing_routes.py
+@@ -0,0 +1,250 @@
++"""Plans, checkout, and the account behind a key.
++
++The loop this closes: a prospect finds the free validator, hits the daily cap,
++sees what the paid plan removes, pays, and gets a working API key in the
++Stripe redirect. No email thread, no manual provisioning, no founder in the
++middle of the transaction.
++
++Two decisions worth stating.
++
++**The key is minted by the webhook, not by the success page.** A browser that
++lands on a success URL proves nothing; a signed ``checkout.session.completed``
++event does. The success page looks the key up by session id, and says "not
++ready yet" if the webhook has not landed, rather than issuing one on the
++strength of a URL anyone could visit.
++
++**The key is shown exactly once.** It is stored only as ``sha256``, so this is
++not a policy but a fact about the store: nobody, including the operator, can
++retrieve it later.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++from fastapi import APIRouter, Depends, HTTPException, Request, status
++from pydantic import BaseModel, ConfigDict, Field
++
++from ..billing import stripe_gateway as stripe
++from ..billing.accounts import AccountStore, Principal
++from ..billing.plans import PLANS, plan_for_price, public_catalogue
++from .deps import current_principal, get_accounts, public_url
++
++__all__ = ["billing_router"]
++
++billing_router = APIRouter(prefix="/v1", tags=["billing"])
++
++
++class CheckoutIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    tier: str = Field(pattern="^(register|cell)$")
++    # A plain pattern rather than EmailStr: correctness here is Stripe's job,
++    # and pulling in email-validator to reject "a@b" would be a dependency
++    # bought for nothing.
++    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=320)
++    company: str = Field(default="", max_length=200)
++
++
++class CheckoutOut(BaseModel):
++    checkout_url: str
++    tier: str
++    price: str
++
++
++@billing_router.get("/plans", response_model=list, summary="What is on sale")
++def get_plans() -> list[dict[str, Any]]:
++    """Every tier and exactly what it permits.
++
++    ``limits`` is generated from the same objects the service enforces, so the
++    pricing page cannot drift from the software.
++    """
++    return public_catalogue()
++
++
++@billing_router.post(
++    "/checkout", response_model=CheckoutOut, summary="Start a subscription"
++)
++def post_checkout(body: CheckoutIn, request: Request) -> CheckoutOut:
++    plan = PLANS[body.tier]
++    if not plan.purchasable:
++        raise HTTPException(
++            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
++            detail={
++                "error": "price_not_configured",
++                "detail": (
++                    f"No Stripe price is configured for the {body.tier} plan "
++                    f"({plan.price_env} is unset). Checkout is disabled rather than "
++                    "taking money for something that cannot be provisioned."
++                ),
++            },
++        )
++    base = public_url()
++    try:
++        session = stripe.create_checkout_session(
++            price_id=plan.price_id,
++            email=body.email,
++            company=body.company,
++            success_url=f"{base}/v1/checkout/complete?session_id={{CHECKOUT_SESSION_ID}}",
++            cancel_url=f"{base}/v1/plans",
++            tier=plan.tier,
++        )
++    except stripe.StripeError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
++            detail={"error": "checkout_unavailable", "detail": str(exc)},
++        ) from exc
++    return CheckoutOut(checkout_url=session.url, tier=plan.tier, price=plan.price_label)
++
++
++@billing_router.get(
++    "/checkout/complete", response_model=dict, summary="Collect the key after paying"
++)
++def get_checkout_complete(
++    session_id: str, accounts: AccountStore = Depends(get_accounts)
++) -> dict[str, Any]:
++    """Hand over the key the webhook minted for this checkout session.
++
++    Returns 202 while the webhook is still in flight. It does not mint a key
++    here: landing on this URL proves only that a browser followed a redirect.
++    """
++    pending = accounts.claim_pending_key(session_id)
++    if pending is None:
++        raise HTTPException(
++            status_code=status.HTTP_202_ACCEPTED,
++            detail={
++                "status": "pending",
++                "detail": (
++                    "Payment is confirmed by Stripe's webhook, which has not arrived yet. "
++                    "Retry in a few seconds. If this persists, the webhook endpoint is not "
++                    "reachable or STRIPE_WEBHOOK_SECRET is wrong."
++                ),
++            },
++        )
++    return {
++        "api_key": pending["api_key"],
++        "tier": pending["tier"],
++        "account_id": pending["account_id"],
++        "keep_this": (
++            "This key is shown once. Only its SHA-256 is stored, so it cannot be "
++            "recovered — not by you and not by us. Store it now."
++        ),
++        "use_it": {"header": "X-API-Key", "start_here": "GET /v1/me"},
++    }
++
++
++@billing_router.post(
++    "/billing/webhook", response_model=dict, summary="Stripe webhook (signature verified)"
++)
++async def post_webhook(
++    request: Request, accounts: AccountStore = Depends(get_accounts)
++) -> dict[str, Any]:
++    """Grant, downgrade and cancel entitlements from signed Stripe events.
++
++    Unverified payloads are refused. Without that, this endpoint is a way for
++    anyone on the internet to grant themselves a paid subscription.
++    """
++    payload = await request.body()
++    signature = request.headers.get("stripe-signature", "")
++    try:
++        event = stripe.verify_webhook(payload, signature)
++    except stripe.SignatureError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_400_BAD_REQUEST,
++            detail={"error": "signature_rejected", "detail": str(exc)},
++        ) from exc
++
++    kind = event.get("type", "")
++    obj = event.get("data", {}).get("object", {})
++
++    if kind == "checkout.session.completed":
++        tier = (obj.get("metadata") or {}).get("tier", "register")
++        email = obj.get("customer_details", {}).get("email") or obj.get("customer_email", "")
++        company = (obj.get("metadata") or {}).get("company", "") or obj.get(
++            "client_reference_id", ""
++        )
++        customer = obj.get("customer", "") or ""
++        subscription = obj.get("subscription", "") or ""
++        account = accounts.upsert_account(
++            email=email,
++            tier=tier,
++            company=company,
++            stripe_customer_id=customer,
++            stripe_subscription_id=subscription,
++            status="active",
++        )
++        key = accounts.issue_key(account.id, label="issued at checkout")
++        accounts.stage_pending_key(obj.get("id", ""), account.id, key, tier)
++        return {"handled": kind, "account_id": account.id, "tier": tier}
++
++    if kind in {"customer.subscription.updated", "customer.subscription.deleted"}:
++        customer = obj.get("customer", "") or ""
++        stripe_status = obj.get("status", "")
++        if kind == "customer.subscription.deleted" or stripe_status in {"canceled", "unpaid"}:
++            accounts.set_status(
++                stripe_customer_id=customer, status="cancelled", tier="free"
++            )
++            return {"handled": kind, "result": "downgraded_to_free"}
++        if stripe_status == "past_due":
++            accounts.set_status(stripe_customer_id=customer, status="past_due")
++            return {"handled": kind, "result": "marked_past_due"}
++        price = ((obj.get("items", {}).get("data") or [{}])[0].get("price") or {}).get("id", "")
++        plan = plan_for_price(price)
++        accounts.set_status(
++            stripe_customer_id=customer,
++            status="active",
++            tier=plan.tier if plan else None,
++        )
++        return {"handled": kind, "result": "reactivated"}
++
++    # Everything else is acknowledged and ignored, so Stripe stops retrying.
++    return {"handled": None, "ignored": kind}
++
++
++@billing_router.get("/me", response_model=dict, summary="Your account, plan and usage")
++def get_me(
++    principal: Principal = Depends(current_principal),
++    accounts: AccountStore = Depends(get_accounts),
++) -> dict[str, Any]:
++    """What this key is entitled to, and what it has spent today."""
++    plan = principal.plan
++    body: dict[str, Any] = {
++        "authenticated": principal.account is not None,
++        "tier": plan.tier,
++        "plan": plan.to_public_dict(),
++        "usage_today": accounts.usage_today(principal.subject),
++    }
++    if principal.account is not None:
++        body["account"] = {
++            "id": principal.account.id,
++            "company": principal.account.company,
++            "email": principal.account.email,
++            "status": principal.account.status,
++        }
++        body["keys"] = accounts.keys_for(principal.account.id)
++    else:
++        body["note"] = (
++            "No key presented. You are on the free validator, limited per address. "
++            "GET /v1/plans to see what a plan removes."
++        )
++    return body
++
++
++@billing_router.post("/billing/portal", response_model=dict, summary="Manage your subscription")
++def post_portal(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
++    """A self-service portal, so cancelling never requires emailing a human."""
++    if principal.account is None or not principal.account.stripe_customer_id:
++        raise HTTPException(
++            status_code=status.HTTP_404_NOT_FOUND,
++            detail="No Stripe customer is associated with this key.",
++        )
++    try:
++        url = stripe.create_billing_portal_session(
++            customer_id=principal.account.stripe_customer_id,
++            return_url=f"{public_url()}/v1/me",
++        )
++    except stripe.StripeError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
++        ) from exc
++    return {"portal_url": url}
+diff --git a/src/assurance/api/deps.py b/src/assurance/api/deps.py
+index 37cfb9d..89297ec 100644
+--- a/src/assurance/api/deps.py
++++ b/src/assurance/api/deps.py
+@@ -1,23 +1,27 @@
+-"""Dependencies: the ledger, and authentication.
++"""Dependencies: the register, the account store, and who is calling.
+ 
+-Authentication is not optional and not mocked. An Article 14 register holds the
+-record that decides whether a manufacturer filed on time; an unauthenticated
+-one is worse than no register, because it produces confident artifacts that
+-anyone could have written.
++Three things are settled here.
+ 
+-Configuration, all by environment variable:
++**Authentication is not optional.** An Article 14 register holds the record
++that decides whether a manufacturer filed on time. An unauthenticated one is
++worse than none, because it produces confident artifacts anyone could have
++written.
++
++**Entitlement is read on every request.** A tier that is stored and never
++consulted is a pricing page that lies. :func:`require_register` is the only
++door into the register, and it asks the plan every time.
+ 
+-``ASSURANCE_LEDGER``
+-    Path to the SQLite ledger. Default ``art14-register.db``.
++**Quota is spent in the same transaction that authorises the call.** Counting
++elsewhere and reconciling later is how a metered product leaks.
+ 
+-``ASSURANCE_API_KEYS``
+-    Comma-separated API keys. Presented as ``X-API-Key``.
++Configuration, all by environment variable:
+ 
+-``ASSURANCE_ALLOW_UNAUTHENTICATED``
+-    Set to ``1`` to run with no keys configured. Intended for a local
+-    evaluation only; the service says so on every response and in ``/healthz``.
+-    Without it, and with no keys configured, every route that touches the
+-    register returns 503 rather than serving unauthenticated writes.
++``ASSURANCE_LEDGER``    evidence ledger path (default ``art14-register.db``)
++``ASSURANCE_ACCOUNTS``  account and key store path (default ``accounts.db``)
++``ASSURANCE_API_KEYS``  comma-separated operator keys; full access, no quota
++``ASSURANCE_ALLOW_UNAUTHENTICATED``  ``1`` to run open for local evaluation
++``ASSURANCE_PUBLIC_URL`` base URL used in checkout redirects
++``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+ """
+ 
+ from __future__ import annotations
+@@ -26,14 +30,26 @@ import hmac
+ import os
+ from functools import lru_cache
+ 
+-from fastapi import Depends, Header, HTTPException, status
++from fastapi import Depends, Header, HTTPException, Request, status
+ 
++from ..billing.accounts import Account, AccountStore, Principal, QuotaExceededError
+ from ..evidence.ledger import EvidenceLedger
+ from ..security.art14.engine import Art14Register
+ 
+-__all__ = ["get_register", "require_api_key", "auth_mode", "ledger_path"]
++__all__ = [
++    "get_register",
++    "get_accounts",
++    "current_principal",
++    "require_register",
++    "spend",
++    "auth_mode",
++    "ledger_path",
++    "accounts_path",
++    "public_url",
++]
+ 
+ _LEDGER_ENV = "ASSURANCE_LEDGER"
++_ACCOUNTS_ENV = "ASSURANCE_ACCOUNTS"
+ _KEYS_ENV = "ASSURANCE_API_KEYS"
+ _OPEN_ENV = "ASSURANCE_ALLOW_UNAUTHENTICATED"
+ 
+@@ -42,14 +58,22 @@ def ledger_path() -> str:
+     return os.environ.get(_LEDGER_ENV, "art14-register.db")
+ 
+ 
+-def _configured_keys() -> tuple[str, ...]:
++def accounts_path() -> str:
++    return os.environ.get(_ACCOUNTS_ENV, "accounts.db")
++
++
++def public_url() -> str:
++    return os.environ.get("ASSURANCE_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
++
++
++def _operator_keys() -> tuple[str, ...]:
+     raw = os.environ.get(_KEYS_ENV, "")
+     return tuple(k.strip() for k in raw.split(",") if k.strip())
+ 
+ 
+ def auth_mode() -> str:
+     """``api_key``, ``open`` or ``unconfigured``."""
+-    if _configured_keys():
++    if _operator_keys():
+         return "api_key"
+     if os.environ.get(_OPEN_ENV) == "1":
+         return "open"
+@@ -61,39 +85,123 @@ def _register_for(path: str) -> Art14Register:
+     return Art14Register(EvidenceLedger(path))
+ 
+ 
++@lru_cache(maxsize=8)
++def _accounts_for(path: str) -> AccountStore:
++    return AccountStore(path)
++
++
+ def get_register() -> Art14Register:
+-    """The register, opened once per ledger path."""
+     return _register_for(ledger_path())
+ 
+ 
+-async def require_api_key(x_api_key: str | None = Header(default=None)) -> str:
+-    """Reject anything that is not presenting a configured key.
++def get_accounts() -> AccountStore:
++    return _accounts_for(accounts_path())
++
++
++_OPERATOR = Account(
++    id="operator",
++    email="",
++    company="operator",
++    tier="cell",
++    status="active",
++)
+ 
+-    Comparison is constant-time. The failure message never says whether the
+-    key was absent, malformed or simply wrong.
++
++async def current_principal(
++    request: Request,
++    x_api_key: str | None = Header(default=None),
++    accounts: AccountStore = Depends(get_accounts),
++) -> Principal:
++    """Resolve the caller. Never raises for an absent key.
++
++    No key means the free, address-limited path — which is the point: the
++    validator has to be usable by a prospect who has not signed up for
++    anything. A key that is presented and wrong is a 401, because that is a
++    mistake the caller needs told about.
++    """
++    presented = (x_api_key or "").strip()
++    if not presented:
++        client = request.client.host if request.client else "unknown"
++        return Principal(account=None, key_prefix="", anonymous_subject=f"ip:{client}")
++
++    for key in _operator_keys():
++        if hmac.compare_digest(presented, key):
++            return Principal(account=_OPERATOR, key_prefix="operator")
++
++    principal = accounts.resolve_key(presented)
++    if principal is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="Invalid or revoked API key.",
++            headers={"WWW-Authenticate": "ApiKey"},
++        )
++    return principal
++
++
++def spend(principal: Principal, scope: str, limit: int | None, accounts: AccountStore) -> None:
++    """Consume one unit of allowance, or refuse with a 429 that says what to do."""
++    try:
++        accounts.consume(principal.subject, scope, limit, principal.tier)
++    except QuotaExceededError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
++            detail={
++                "error": "quota_exceeded",
++                "scope": exc.scope,
++                "limit": exc.limit,
++                "used": exc.used,
++                "tier": exc.tier,
++                "remedy": (
++                    "The free validator allows "
++                    f"{exc.limit} calls per day. A paid plan removes the cap: see "
++                    "GET /v1/plans, then POST /v1/checkout."
++                ),
++            },
++        ) from exc
++
++
++async def require_register(
++    principal: Principal = Depends(current_principal),
++) -> Principal:
++    """The only door into the register.
++
++    Returns 402 rather than 403 when the caller is authenticated but not
++    entitled: the obstacle is payment, and the status code should say so.
+     """
+     mode = auth_mode()
+-    if mode == "unconfigured":
++    if mode == "unconfigured" and principal.account is None:
+         raise HTTPException(
+             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+             detail=(
+-                f"No API keys are configured. Set {_KEYS_ENV} to a comma-separated list, or "
+-                f"set {_OPEN_ENV}=1 to run without authentication for local evaluation. "
+-                "This service refuses to accept unauthenticated writes to a regulatory "
+-                "register by default."
++                f"No operator keys configured and no account presented. Set {_KEYS_ENV}, "
++                f"or sell a plan, or set {_OPEN_ENV}=1 for local evaluation. This service "
++                "refuses unauthenticated writes to a regulatory register by default."
+             ),
+         )
+-    if mode == "open":
+-        return "unauthenticated"
+-    presented = x_api_key or ""
+-    for key in _configured_keys():
+-        if hmac.compare_digest(presented, key):
+-            return key[:8]
+-    raise HTTPException(
+-        status_code=status.HTTP_401_UNAUTHORIZED,
+-        detail="Invalid or missing X-API-Key.",
+-        headers={"WWW-Authenticate": "ApiKey"},
+-    )
++    if mode == "open" and principal.account is None:
++        return Principal(account=_OPERATOR, key_prefix="open-mode")
++
++    if principal.account is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="This endpoint needs an API key. See GET /v1/plans.",
++            headers={"WWW-Authenticate": "ApiKey"},
++        )
++    if not principal.plan.register:
++        raise HTTPException(
++            status_code=status.HTTP_402_PAYMENT_REQUIRED,
++            detail={
++                "error": "plan_does_not_include_register",
++                "tier": principal.tier,
++                "account_status": principal.account.status,
++                "remedy": (
++                    "The register is included from the Register plan upward. "
++                    "GET /v1/plans, then POST /v1/checkout."
++                ),
++            },
++        )
++    return principal
+ 
+ 
+-Authenticated = Depends(require_api_key)
++Registered = Depends(require_register)
++Anyone = Depends(current_principal)
+diff --git a/src/assurance/api/routes.py b/src/assurance/api/routes.py
+index 0ec32e8..21594ed 100644
+--- a/src/assurance/api/routes.py
++++ b/src/assurance/api/routes.py
+@@ -16,6 +16,7 @@ from typing import Any
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+ 
++from ..billing.accounts import AccountStore, Principal
+ from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
+ from ..core.evidence import Actor
+ from ..security.art14.engine import Art14Register, CaseError
+@@ -29,7 +30,15 @@ from ..security.art14.model import (
+ )
+ from ..security.art14.report import readiness_report
+ from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
+-from .deps import auth_mode, get_register, ledger_path, require_api_key
++from .deps import (
++    auth_mode,
++    current_principal,
++    get_accounts,
++    get_register,
++    ledger_path,
++    require_register,
++    spend,
++)
+ from .schemas import (
+     ActorIn,
+     AvailabilityIn,
+@@ -48,7 +57,14 @@ from .schemas import (
+ 
+ __all__ = ["router", "public_router"]
+ 
+-router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_api_key)])
++#: The register. Every route here needs a plan that includes it.
++router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_register)])
++
++#: The free surface: the field specification and the dry-run validator. A
++#: prospect must be able to get value here without signing up for anything,
++#: because that is what makes the paid register worth buying.
++free_router = APIRouter(prefix="/v1", tags=["free"])
++
+ public_router = APIRouter(tags=["service"])
+ 
+ 
+@@ -354,20 +370,39 @@ def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[s
+ # =====================================================================
+ # specification — no register state, safe to expose widely
+ # =====================================================================
+-@router.get("/spec/fields", response_model=list, summary="The platform field specification")
++@free_router.get("/spec/fields", response_model=list, summary="The platform field specification")
+ def get_fields(
+     track: str = Query(..., pattern="^(actively_exploited_vulnerability|severe_incident)$"),
+     stage: str = Query(..., pattern="^(early_warning|notification|final|intermediate)$"),
+ ) -> list[dict[str, Any]]:
++    """Free, and deliberately so. The specification is not the product."""
+     return [f.to_dict() for f in fields_for(Track(track), Stage(stage))]
+ 
+ 
+-@router.post(
++@free_router.post(
+     "/spec/validate",
+     response_model=ValidationOut,
+     summary="Validate a draft submission without recording it",
+ )
+-def post_validate(body: ValidateIn) -> ValidationOut:
++def post_validate(
++    body: ValidateIn,
++    response: Response,
++    principal: Principal = Depends(current_principal),
++    accounts: AccountStore = Depends(get_accounts),
++) -> ValidationOut:
++    """The free tier, and the demo that sells the register behind it.
++
++    Nothing is recorded. A prospect can paste a draft filing and immediately
++    see which of the 39 fields are missing, which exceed a character limit,
++    and which listed territories are not EU Member States.
++    """
++    limit = principal.plan.validations_per_day
++    spend(principal, "validate", limit, accounts)
++    response.headers["X-Assurance-Tier"] = principal.tier
++    if limit is not None:
++        used = accounts.usage_today(principal.subject).get("validate", 0)
++        response.headers["X-Assurance-Quota-Limit"] = str(limit)
++        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
+     validation = validate_payload(body.payload, Track(body.track), Stage(body.stage))
+     return ValidationOut(**validation.to_dict())
+ 
+@@ -406,6 +441,9 @@ def root() -> dict[str, Any]:
+             "interactive_docs": "/docs",
+             "openapi_schema": "/openapi.json",
+             "health": "/healthz",
++            "plans_and_pricing": "/v1/plans",
++            "subscribe": "POST /v1/checkout",
++            "your_account": "/v1/me",
+             "try_without_an_account": {
+                 "method": "POST",
+                 "path": "/v1/spec/validate",
+diff --git a/src/assurance/api/service.py b/src/assurance/api/service.py
+index 70e5fb2..98a933f 100644
+--- a/src/assurance/api/service.py
++++ b/src/assurance/api/service.py
+@@ -19,8 +19,9 @@ from fastapi import FastAPI, Request
+ from fastapi.responses import JSONResponse
+ 
+ from .. import __version__
++from .billing_routes import billing_router
+ from .deps import auth_mode
+-from .routes import public_router, router
++from .routes import free_router, public_router, router
+ 
+ __all__ = ["create_app", "app"]
+ 
+@@ -57,7 +58,11 @@ def create_app(**kwargs: Any) -> FastAPI:
+         version=__version__,
+         description=_DESCRIPTION,
+         openapi_tags=[
+-            {"name": "article 14", "description": "Cases, filings and the field specification."},
++            {"name": "free", "description": "The field specification and the dry-run "
++                                            "validator. No account needed."},
++            {"name": "article 14", "description": "The register. Needs a plan that "
++                                                  "includes it."},
++            {"name": "billing", "description": "Plans, checkout, and your own account."},
+             {"name": "service", "description": "Liveness and configuration."},
+         ],
+         **kwargs,
+@@ -72,6 +77,8 @@ def create_app(**kwargs: Any) -> FastAPI:
+         )
+ 
+     application.include_router(public_router)
++    application.include_router(billing_router)
++    application.include_router(free_router)
+     application.include_router(router)
+     return application
+ 
+diff --git a/src/assurance/billing/__init__.py b/src/assurance/billing/__init__.py
+new file mode 100644
+index 0000000..b6eb484
+--- /dev/null
++++ b/src/assurance/billing/__init__.py
+@@ -0,0 +1,16 @@
++"""Billing: plans, accounts, API keys, quota, and Stripe."""
++
++from .accounts import Account, AccountStore, Principal, QuotaExceededError
++from .plans import PLANS, Plan, plan_for, plan_for_price, public_catalogue
++
++__all__ = [
++    "PLANS",
++    "Account",
++    "AccountStore",
++    "Plan",
++    "Principal",
++    "QuotaExceededError",
++    "plan_for",
++    "plan_for_price",
++    "public_catalogue",
++]
+diff --git a/src/assurance/billing/accounts.py b/src/assurance/billing/accounts.py
+new file mode 100644
+index 0000000..dd6445f
+--- /dev/null
++++ b/src/assurance/billing/accounts.py
+@@ -0,0 +1,410 @@
++"""Accounts, API keys and quota.
++
++The rules this store exists to enforce:
++
++* **A key is never stored.** Only ``sha256(key)`` and a short prefix, so a
++  stolen database yields no working credential. The key is shown once, at
++  issue, and cannot be recovered afterwards.
++* **Quota is counted where it is spent**, per account per UTC day, in the same
++  transaction that authorises the call. Counting somewhere else and hoping the
++  two agree is how a metered product leaks.
++* **Paying changes something.** The entitlement on the account is read on every
++  request; there is no path where a tier is stored and then never consulted.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import secrets
++import sqlite3
++import threading
++from collections.abc import Iterator
++from contextlib import contextmanager
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from ..core.identity import format_utc, utc_now
++from .plans import Plan, plan_for
++
++__all__ = ["ACCOUNTS_SCHEMA_VERSION", "Account", "Principal", "QuotaExceededError", "AccountStore"]
++
++ACCOUNTS_SCHEMA_VERSION = 1
++KEY_PREFIX = "asr_"
++
++_SCHEMA = """
++CREATE TABLE IF NOT EXISTS meta (
++    key   TEXT PRIMARY KEY,
++    value TEXT NOT NULL
++);
++CREATE TABLE IF NOT EXISTS accounts (
++    id                     TEXT PRIMARY KEY,
++    email                  TEXT NOT NULL,
++    company                TEXT NOT NULL DEFAULT '',
++    tier                   TEXT NOT NULL,
++    stripe_customer_id     TEXT NOT NULL DEFAULT '',
++    stripe_subscription_id TEXT NOT NULL DEFAULT '',
++    status                 TEXT NOT NULL DEFAULT 'active'
++                             CHECK (status IN ('active','past_due','cancelled')),
++    created_at             TEXT NOT NULL,
++    updated_at             TEXT NOT NULL
++);
++CREATE INDEX IF NOT EXISTS accounts_by_customer ON accounts (stripe_customer_id);
++CREATE TABLE IF NOT EXISTS api_keys (
++    key_hash   TEXT PRIMARY KEY,
++    prefix     TEXT NOT NULL,
++    account_id TEXT NOT NULL REFERENCES accounts (id),
++    label      TEXT NOT NULL DEFAULT '',
++    created_at TEXT NOT NULL,
++    last_used  TEXT,
++    revoked_at TEXT
++);
++CREATE INDEX IF NOT EXISTS keys_by_account ON api_keys (account_id);
++CREATE TABLE IF NOT EXISTS pending_keys (
++    session_id TEXT PRIMARY KEY,
++    account_id TEXT NOT NULL,
++    api_key    TEXT NOT NULL,
++    tier       TEXT NOT NULL,
++    created_at TEXT NOT NULL
++);
++CREATE TABLE IF NOT EXISTS usage (
++    subject TEXT NOT NULL,
++    scope   TEXT NOT NULL,
++    day     TEXT NOT NULL,
++    count   INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
++    PRIMARY KEY (subject, scope, day)
++);
++"""
++
++
++class QuotaExceededError(RuntimeError):
++    """The caller is out of allowance for this scope today."""
++
++    def __init__(self, scope: str, limit: int, used: int, tier: str) -> None:
++        self.scope, self.limit, self.used, self.tier = scope, limit, used, tier
++        super().__init__(
++            f"{scope}: {used} of {limit} used today on the {tier} plan."
++        )
++
++
++@dataclass(frozen=True)
++class Account:
++    id: str
++    email: str
++    company: str
++    tier: str
++    status: str
++    stripe_customer_id: str = ""
++    stripe_subscription_id: str = ""
++
++    @property
++    def plan(self) -> Plan:
++        # A lapsed subscription drops to free rather than keeping paid access.
++        return plan_for(self.tier if self.status == "active" else "free")
++
++
++@dataclass(frozen=True)
++class Principal:
++    """Who is calling, and what they are entitled to."""
++
++    account: Account | None
++    key_prefix: str
++    #: Set when the caller presented no key (the free, address-limited path).
++    anonymous_subject: str = ""
++
++    @property
++    def plan(self) -> Plan:
++        return self.account.plan if self.account else plan_for("free")
++
++    @property
++    def subject(self) -> str:
++        return self.account.id if self.account else self.anonymous_subject
++
++    @property
++    def tier(self) -> str:
++        return self.plan.tier
++
++
++def _new_id(prefix: str) -> str:
++    return f"{prefix}_{secrets.token_hex(8)}"
++
++
++def hash_key(key: str) -> str:
++    return hashlib.sha256(key.encode("utf-8")).hexdigest()
++
++
++class AccountStore:
++    """Durable account, key and usage store."""
++
++    def __init__(self, path: str | Path) -> None:
++        self.path = Path(path)
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        self._lock = threading.Lock()
++        with self._connect() as db:
++            db.executescript(_SCHEMA)
++            row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
++            if row is None:
++                db.execute(
++                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
++                    (str(ACCOUNTS_SCHEMA_VERSION),),
++                )
++            elif int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
++                raise RuntimeError(
++                    f"{self.path} was written by accounts schema {row[0]}; this build "
++                    f"speaks {ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
++                )
++
++    def _connect(self) -> sqlite3.Connection:
++        db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
++        db.row_factory = sqlite3.Row
++        db.execute("PRAGMA journal_mode=WAL")
++        db.execute("PRAGMA synchronous=FULL")
++        db.execute("PRAGMA foreign_keys=ON")
++        return db
++
++    @contextmanager
++    def _txn(self) -> Iterator[sqlite3.Connection]:
++        with self._lock:
++            db = self._connect()
++            try:
++                db.execute("BEGIN IMMEDIATE")
++                yield db
++                db.execute("COMMIT")
++            except Exception:
++                db.execute("ROLLBACK")
++                raise
++            finally:
++                db.close()
++
++    # -- accounts ---------------------------------------------------------
++    def upsert_account(
++        self,
++        *,
++        email: str,
++        tier: str,
++        company: str = "",
++        stripe_customer_id: str = "",
++        stripe_subscription_id: str = "",
++        status: str = "active",
++    ) -> Account:
++        """Create or update an account, keyed on the Stripe customer where known.
++
++        Stripe can deliver the same event twice; this is written so that it
++        does, harmlessly.
++        """
++        now = format_utc(utc_now())
++        with self._txn() as db:
++            existing = None
++            if stripe_customer_id:
++                existing = db.execute(
++                    "SELECT * FROM accounts WHERE stripe_customer_id = ?",
++                    (stripe_customer_id,),
++                ).fetchone()
++            if existing is None:
++                existing = db.execute(
++                    "SELECT * FROM accounts WHERE email = ?", (email,)
++                ).fetchone()
++
++            if existing is None:
++                account_id = _new_id("acc")
++                db.execute(
++                    "INSERT INTO accounts (id, email, company, tier, stripe_customer_id, "
++                    "stripe_subscription_id, status, created_at, updated_at) "
++                    "VALUES (?,?,?,?,?,?,?,?,?)",
++                    (account_id, email, company, tier, stripe_customer_id,
++                     stripe_subscription_id, status, now, now),
++                )
++            else:
++                account_id = existing["id"]
++                db.execute(
++                    "UPDATE accounts SET email=?, company=?, tier=?, stripe_customer_id=?, "
++                    "stripe_subscription_id=?, status=?, updated_at=? WHERE id=?",
++                    (email, company or existing["company"], tier,
++                     stripe_customer_id or existing["stripe_customer_id"],
++                     stripe_subscription_id or existing["stripe_subscription_id"],
++                     status, now, account_id),
++                )
++            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
++        return self._row_to_account(row)
++
++    def set_status(self, *, stripe_customer_id: str, status: str, tier: str | None = None) -> None:
++        now = format_utc(utc_now())
++        with self._txn() as db:
++            if tier is None:
++                db.execute(
++                    "UPDATE accounts SET status=?, updated_at=? WHERE stripe_customer_id=?",
++                    (status, now, stripe_customer_id),
++                )
++            else:
++                db.execute(
++                    "UPDATE accounts SET status=?, tier=?, updated_at=? "
++                    "WHERE stripe_customer_id=?",
++                    (status, tier, now, stripe_customer_id),
++                )
++
++    @staticmethod
++    def _row_to_account(row: sqlite3.Row) -> Account:
++        return Account(
++            id=row["id"],
++            email=row["email"],
++            company=row["company"],
++            tier=row["tier"],
++            status=row["status"],
++            stripe_customer_id=row["stripe_customer_id"],
++            stripe_subscription_id=row["stripe_subscription_id"],
++        )
++
++    def account(self, account_id: str) -> Account | None:
++        db = self._connect()
++        try:
++            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
++            return self._row_to_account(row) if row else None
++        finally:
++            db.close()
++
++    def account_by_customer(self, stripe_customer_id: str) -> Account | None:
++        db = self._connect()
++        try:
++            row = db.execute(
++                "SELECT * FROM accounts WHERE stripe_customer_id = ?", (stripe_customer_id,)
++            ).fetchone()
++            return self._row_to_account(row) if row else None
++        finally:
++            db.close()
++
++    # -- keys -------------------------------------------------------------
++    def issue_key(self, account_id: str, label: str = "") -> str:
++        """Mint a key and return it once. Only its hash is kept."""
++        key = KEY_PREFIX + secrets.token_urlsafe(32)
++        now = format_utc(utc_now())
++        with self._txn() as db:
++            db.execute(
++                "INSERT INTO api_keys (key_hash, prefix, account_id, label, created_at) "
++                "VALUES (?,?,?,?,?)",
++                (hash_key(key), key[: len(KEY_PREFIX) + 6], account_id, label, now),
++            )
++        return key
++
++    def revoke_key(self, key_hash: str) -> bool:
++        with self._txn() as db:
++            cur = db.execute(
++                "UPDATE api_keys SET revoked_at=? WHERE key_hash=? AND revoked_at IS NULL",
++                (format_utc(utc_now()), key_hash),
++            )
++            return cur.rowcount > 0
++
++    def resolve_key(self, key: str) -> Principal | None:
++        """Look up a presented key. Returns None for unknown or revoked keys."""
++        digest = hash_key(key)
++        with self._txn() as db:
++            row = db.execute(
++                "SELECT k.prefix, k.account_id, a.* FROM api_keys k "
++                "JOIN accounts a ON a.id = k.account_id "
++                "WHERE k.key_hash = ? AND k.revoked_at IS NULL",
++                (digest,),
++            ).fetchone()
++            if row is None:
++                return None
++            db.execute(
++                "UPDATE api_keys SET last_used=? WHERE key_hash=?",
++                (format_utc(utc_now()), digest),
++            )
++        return Principal(account=self._row_to_account(row), key_prefix=row["prefix"])
++
++    def keys_for(self, account_id: str) -> list[dict[str, Any]]:
++        db = self._connect()
++        try:
++            return [
++                {
++                    "prefix": r["prefix"],
++                    "label": r["label"],
++                    "created_at": r["created_at"],
++                    "last_used": r["last_used"],
++                    "revoked": bool(r["revoked_at"]),
++                }
++                for r in db.execute(
++                    "SELECT * FROM api_keys WHERE account_id=? ORDER BY created_at",
++                    (account_id,),
++                )
++            ]
++        finally:
++            db.close()
++
++    # -- checkout handover ------------------------------------------------
++    def stage_pending_key(self, session_id: str, account_id: str, key: str, tier: str) -> None:
++        """Hold a freshly minted key for the browser returning from Stripe.
++
++        This is the one place a key exists in plaintext at rest, and it exists
++        there for seconds. :meth:`claim_pending_key` deletes it on read, so it
++        can be collected exactly once.
++        """
++        if not session_id:
++            return
++        with self._txn() as db:
++            db.execute(
++                "INSERT OR REPLACE INTO pending_keys "
++                "(session_id, account_id, api_key, tier, created_at) VALUES (?,?,?,?,?)",
++                (session_id, account_id, key, tier, format_utc(utc_now())),
++            )
++
++    def claim_pending_key(self, session_id: str) -> dict[str, str] | None:
++        """Return the staged key and delete it. Single use, by construction."""
++        with self._txn() as db:
++            row = db.execute(
++                "SELECT * FROM pending_keys WHERE session_id = ?", (session_id,)
++            ).fetchone()
++            if row is None:
++                return None
++            db.execute("DELETE FROM pending_keys WHERE session_id = ?", (session_id,))
++        return {
++            "api_key": row["api_key"],
++            "account_id": row["account_id"],
++            "tier": row["tier"],
++        }
++
++    # -- quota ------------------------------------------------------------
++    def consume(
++        self, subject: str, scope: str, limit: int | None, tier: str = ""
++    ) -> tuple[int, int | None]:
++        """Spend one unit of allowance. Raises :class:`QuotaExceededError` at the limit.
++
++        The read and the increment happen inside one transaction, so two
++        concurrent requests cannot both see the last remaining unit.
++        """
++        if limit is None:
++            return (0, None)
++        # The UTC day, not the server's local day: a quota that rolls over at
++        # the operator's midnight behaves differently for a customer in another
++        # timezone, and nobody can explain why.
++        today = utc_now().date().isoformat()
++        with self._txn() as db:
++            row = db.execute(
++                "SELECT count FROM usage WHERE subject=? AND scope=? AND day=?",
++                (subject, scope, today),
++            ).fetchone()
++            used = row["count"] if row else 0
++            if used >= limit:
++                raise QuotaExceededError(scope, limit, used, tier or "free")
++            db.execute(
++                "INSERT INTO usage (subject, scope, day, count) VALUES (?,?,?,1) "
++                "ON CONFLICT(subject, scope, day) DO UPDATE SET count = count + 1",
++                (subject, scope, today),
++            )
++        return (used + 1, limit)
++
++    def usage_today(self, subject: str) -> dict[str, int]:
++        # The UTC day, not the server's local day: a quota that rolls over at
++        # the operator's midnight behaves differently for a customer in another
++        # timezone, and nobody can explain why.
++        today = utc_now().date().isoformat()
++        db = self._connect()
++        try:
++            return {
++                r["scope"]: r["count"]
++                for r in db.execute(
++                    "SELECT scope, count FROM usage WHERE subject=? AND day=?",
++                    (subject, today),
++                )
++            }
++        finally:
++            db.close()
+diff --git a/src/assurance/billing/plans.py b/src/assurance/billing/plans.py
+new file mode 100644
+index 0000000..9bbd9fa
+--- /dev/null
++++ b/src/assurance/billing/plans.py
+@@ -0,0 +1,159 @@
++"""What each tier may do.
++
++Entitlements are declared here and enforced in one place. The rule the
++palletizer repository got right and is worth keeping: **if it is not gated in
++code, it is not on the pricing page.** A feature list that the software does
++not enforce is marketing, and it is the kind of marketing that produces refund
++requests.
++
++Prices live in Stripe, not here. This module carries only the price *lookup*
++and the entitlements, so changing a number never means shipping code.
++"""
++
++from __future__ import annotations
++
++import os
++from dataclasses import dataclass, field
++from typing import Any
++
++__all__ = ["Tier", "Plan", "PLANS", "plan_for", "plan_for_price", "public_catalogue"]
++
++Tier = str  # "free" | "register" | "cell"
++
++
++@dataclass(frozen=True)
++class Plan:
++    """One tier, and exactly what it permits."""
++
++    tier: Tier
++    name: str
++    blurb: str
++    #: Environment variable holding the Stripe price id. Empty for free.
++    price_env: str = ""
++    price_label: str = ""
++    #: Calls per UTC day to the free validator. None = unlimited.
++    validations_per_day: int | None = None
++    #: May create and write cases in the register.
++    register: bool = False
++    #: Product families that may appear in availability records.
++    product_families: int | None = None
++    #: Cases per UTC day.
++    cases_per_day: int | None = None
++    #: May export a verifiable evidence bundle.
++    export: bool = False
++    #: May request a signed head attestation.
++    signed_attestation: bool = False
++    included: tuple[str, ...] = field(default_factory=tuple)
++
++    @property
++    def price_id(self) -> str:
++        return os.environ.get(self.price_env, "") if self.price_env else ""
++
++    @property
++    def purchasable(self) -> bool:
++        return bool(self.price_id)
++
++    def to_public_dict(self) -> dict[str, Any]:
++        return {
++            "tier": self.tier,
++            "name": self.name,
++            "blurb": self.blurb,
++            "price": self.price_label or "free",
++            "purchasable": self.purchasable,
++            "includes": list(self.included),
++            "limits": {
++                "validations_per_day": self.validations_per_day,
++                "product_families": self.product_families,
++                "cases_per_day": self.cases_per_day,
++                "register_access": self.register,
++                "verifiable_export": self.export,
++                "signed_attestation": self.signed_attestation,
++            },
++        }
++
++
++PLANS: dict[Tier, Plan] = {
++    "free": Plan(
++        tier="free",
++        name="Validator",
++        blurb=(
++            "Check a draft Article 14 filing against the ENISA platform's 39-field "
++            "specification before you open the platform. No account, nothing recorded."
++        ),
++        validations_per_day=20,
++        included=(
++            "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
++            "which listed territories are not EU Member States",
++            "GET /v1/spec/fields — the full field specification per track and stage",
++            "20 validations per day, per address",
++        ),
++    ),
++    "register": Plan(
++        tier="register",
++        name="Register",
++        blurb=(
++            "The Article 14 register for one manufacturer: awareness records, both "
++            "deadline clocks, triage with the grounds cited, and a hash-chained evidence "
++            "ledger you can export."
++        ),
++        price_env="ASSURANCE_PRICE_REGISTER",
++        price_label="€390 / month",
++        validations_per_day=None,
++        register=True,
++        product_families=25,
++        cases_per_day=50,
++        export=True,
++        included=(
++            "Everything in Validator, without the daily cap",
++            "Unlimited cases; awareness records with the reasoning that defends them",
++            "Both final-report clocks computed correctly, and the platform's counter "
++            "defect surfaced rather than inherited",
++            "Hash-chained evidence ledger; export refuses if the chain does not verify",
++            "Up to 25 product families",
++        ),
++    ),
++    "cell": Plan(
++        tier="cell",
++        name="Cell",
++        blurb=(
++            "For a manufacturer with a large fielded installed base: unlimited product "
++            "families, several Assigned Representatives, and a signed head attestation so "
++            "a silent rewind of the ledger is detectable."
++        ),
++        price_env="ASSURANCE_PRICE_CELL",
++        price_label="€1,290 / month",
++        validations_per_day=None,
++        register=True,
++        product_families=None,
++        cases_per_day=None,
++        export=True,
++        signed_attestation=True,
++        included=(
++            "Everything in Register",
++            "Unlimited product families and cases",
++            "Signed head attestation for the evidence ledger",
++            "Priority response",
++        ),
++    ),
++}
++
++
++def plan_for(tier: Tier) -> Plan:
++    """The plan for a tier, falling back to free rather than raising.
++
++    An unknown tier in a stored account must degrade to the least privilege, not
++    to an error and not to the most.
++    """
++    return PLANS.get(tier, PLANS["free"])
++
++
++def plan_for_price(price_id: str) -> Plan | None:
++    """Which plan a Stripe price belongs to."""
++    for plan in PLANS.values():
++        if plan.price_id and plan.price_id == price_id:
++            return plan
++    return None
++
++
++def public_catalogue() -> list[dict[str, Any]]:
++    return [PLANS[t].to_public_dict() for t in ("free", "register", "cell")]
+diff --git a/src/assurance/billing/stripe_gateway.py b/src/assurance/billing/stripe_gateway.py
+new file mode 100644
+index 0000000..6f899b7
+--- /dev/null
++++ b/src/assurance/billing/stripe_gateway.py
+@@ -0,0 +1,169 @@
++"""Stripe, over plain HTTP.
++
++No SDK. Two operations are needed — create a Checkout session, and verify a
++webhook signature — and both are short enough that a dependency costs more
++than it saves. ``httpx`` is already present for the rest of the service.
++
++The signature check is the part that matters. A webhook endpoint that does not
++verify is an endpoint where anyone on the internet can grant themselves a paid
++subscription by posting JSON at it.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import hmac
++import json
++import os
++import time
++from dataclasses import dataclass
++from typing import Any
++
++import httpx
++
++__all__ = [
++    "StripeError",
++    "SignatureError",
++    "stripe_configured",
++    "create_checkout_session",
++    "create_billing_portal_session",
++    "verify_webhook",
++]
++
++API = "https://api.stripe.com/v1"
++_TOLERANCE_SECONDS = 300
++
++
++class StripeError(RuntimeError):
++    """Stripe refused the call, or is not configured."""
++
++
++class SignatureError(StripeError):
++    """A webhook did not carry a signature this service can verify."""
++
++
++def _secret_key() -> str:
++    key = os.environ.get("STRIPE_SECRET_KEY", "")
++    if not key:
++        raise StripeError(
++            "STRIPE_SECRET_KEY is not set. Checkout is disabled until it is; the service "
++            "will not pretend to take payment."
++        )
++    return key
++
++
++def stripe_configured() -> bool:
++    return bool(os.environ.get("STRIPE_SECRET_KEY"))
++
++
++def webhook_configured() -> bool:
++    return bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
++
++
++def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
++    response = httpx.post(
++        f"{API}{path}",
++        data=form,
++        auth=(_secret_key(), ""),
++        timeout=20.0,
++        headers={"Stripe-Version": "2024-06-20"},
++    )
++    if response.status_code >= 400:
++        detail = response.json().get("error", {}).get("message", response.text)
++        raise StripeError(f"Stripe {response.status_code}: {detail}")
++    return response.json()
++
++
++@dataclass(frozen=True)
++class CheckoutSession:
++    id: str
++    url: str
++
++
++def create_checkout_session(
++    *,
++    price_id: str,
++    email: str,
++    company: str,
++    success_url: str,
++    cancel_url: str,
++    tier: str,
++) -> CheckoutSession:
++    """A subscription checkout for one manufacturer.
++
++    ``tier`` travels in metadata so the webhook can grant the right entitlement
++    without having to map prices back to plans a second time, in a place where
++    a mismatch would silently over- or under-grant.
++    """
++    form: list[tuple[str, str]] = [
++        ("mode", "subscription"),
++        ("line_items[0][price]", price_id),
++        ("line_items[0][quantity]", "1"),
++        ("customer_email", email),
++        ("success_url", success_url),
++        ("cancel_url", cancel_url),
++        ("client_reference_id", company[:200] or email),
++        ("metadata[tier]", tier),
++        ("metadata[company]", company[:200]),
++        ("subscription_data[metadata][tier]", tier),
++        ("automatic_tax[enabled]", "true"),
++        ("tax_id_collection[enabled]", "true"),
++        ("billing_address_collection", "required"),
++        ("allow_promotion_codes", "true"),
++    ]
++    payload = _post("/checkout/sessions", form)
++    return CheckoutSession(id=payload["id"], url=payload["url"])
++
++
++def create_billing_portal_session(*, customer_id: str, return_url: str) -> str:
++    """A self-service portal so cancelling never requires emailing a human."""
++    payload = _post(
++        "/billing_portal/sessions",
++        [("customer", customer_id), ("return_url", return_url)],
++    )
++    return payload["url"]
++
++
++def verify_webhook(payload: bytes, signature_header: str, *, secret: str | None = None) -> dict[str, Any]:
++    """Verify a Stripe signature and return the parsed event.
++
++    Rejects a missing or malformed header, a wrong signature, and a timestamp
++    outside the tolerance window — the last one is what stops a captured
++    request being replayed later.
++    """
++    secret = secret or os.environ.get("STRIPE_WEBHOOK_SECRET", "")
++    if not secret:
++        raise SignatureError(
++            "STRIPE_WEBHOOK_SECRET is not set. This endpoint refuses unverified webhooks "
++            "rather than trusting whatever arrives."
++        )
++    if not signature_header:
++        raise SignatureError("no Stripe-Signature header")
++
++    timestamp = ""
++    candidates: list[str] = []
++    for part in signature_header.split(","):
++        key, _, value = part.strip().partition("=")
++        if key == "t":
++            timestamp = value
++        elif key == "v1":
++            candidates.append(value)
++    if not timestamp or not candidates:
++        raise SignatureError("malformed Stripe-Signature header")
++
++    try:
++        age = abs(time.time() - int(timestamp))
++    except ValueError:
++        raise SignatureError("malformed timestamp in Stripe-Signature") from None
++    if age > _TOLERANCE_SECONDS:
++        raise SignatureError(
++            f"signature timestamp is {age:.0f}s old, outside the "
++            f"{_TOLERANCE_SECONDS}s tolerance; refusing a possible replay"
++        )
++
++    signed = f"{timestamp}.".encode() + payload
++    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
++    if not any(hmac.compare_digest(expected, c) for c in candidates):
++        raise SignatureError("signature does not match")
++
++    return json.loads(payload.decode("utf-8"))
+diff --git a/tests/test_assurance_billing.py b/tests/test_assurance_billing.py
+new file mode 100644
+index 0000000..6b1d205
+--- /dev/null
++++ b/tests/test_assurance_billing.py
+@@ -0,0 +1,384 @@
++"""The paid loop.
++
++This is the money path, so it is tested like one: what a prospect can do
++without paying, what stops when they hit the cap, what paying changes, what
++happens when they stop paying, and whether a key can be recovered from the
++database by anyone who steals it.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import hmac
++import importlib
++import json
++import sqlite3
++import time
++
++import pytest
++from fastapi.testclient import TestClient
++
++from assurance.billing.accounts import AccountStore
++from assurance.billing.plans import PLANS
++
++WEBHOOK_SECRET = "whsec_test_do_not_ship"
++OPERATOR_KEY = "operator-key-test"
++
++
++@pytest.fixture()
++def env(tmp_path, monkeypatch):
++    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
++    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
++    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
++    monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
++    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
++    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
++    monkeypatch.delenv("ASSURANCE_PRICE_REGISTER", raising=False)
++    monkeypatch.delenv("ASSURANCE_PRICE_CELL", raising=False)
++    from assurance.api import deps
++
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++    return tmp_path
++
++
++@pytest.fixture()
++def client(env):
++    service = importlib.import_module("assurance.api.service")
++    with TestClient(service.create_app()) as c:
++        yield c
++
++
++@pytest.fixture()
++def store(env):
++    return AccountStore(str(env / "accounts.db"))
++
++
++def _payload(**over):
++    body = {
++        "notification_type": "Vulnerability",
++        "title": "Unauthenticated command injection",
++        "summary": "Reachable on FW 2.1.0-2.4.6.",
++        "product_name": "SK-4200",
++        "product_version": "FW 2.4.6",
++        "member_states_available": ["DE", "AT"],
++        "awareness_datetime": "2026-09-19T06:30:00Z",
++    }
++    body.update(over)
++    return {
++        "track": "actively_exploited_vulnerability",
++        "stage": "early_warning",
++        "payload": body,
++    }
++
++
++def _signed(body: dict) -> tuple[bytes, dict[str, str]]:
++    raw = json.dumps(body).encode()
++    stamp = str(int(time.time()))
++    sig = hmac.new(WEBHOOK_SECRET.encode(), f"{stamp}.".encode() + raw, hashlib.sha256).hexdigest()
++    return raw, {"stripe-signature": f"t={stamp},v1={sig}", "content-type": "application/json"}
++
++
++def _checkout_event(session_id="cs_test_1", tier="register", customer="cus_1"):
++    return {
++        "type": "checkout.session.completed",
++        "data": {
++            "object": {
++                "id": session_id,
++                "customer": customer,
++                "subscription": "sub_1",
++                "customer_details": {"email": "m.braun@sk-maschinenbau.de"},
++                "metadata": {"tier": tier, "company": "SK Maschinenbau GmbH"},
++            }
++        },
++    }
++
++
++class TestCatalogue:
++    def test_plans_are_public(self, client):
++        plans = client.get("/v1/plans").json()
++        assert [p["tier"] for p in plans] == ["free", "register", "cell"]
++
++    def test_limits_come_from_what_is_enforced(self, client):
++        plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
++        assert plans["free"]["limits"]["register_access"] is False
++        assert plans["register"]["limits"]["register_access"] is True
++        assert plans["free"]["limits"]["validations_per_day"] == PLANS["free"].validations_per_day
++        assert plans["cell"]["limits"]["product_families"] is None
++
++    def test_a_plan_with_no_configured_price_is_not_purchasable(self, client):
++        plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
++        assert plans["register"]["purchasable"] is False
++
++
++class TestFreeTier:
++    def test_the_validator_needs_no_account(self, client):
++        response = client.post("/v1/spec/validate", json=_payload())
++        assert response.status_code == 200
++        assert response.json()["submittable"] is True
++        assert response.headers["X-Assurance-Tier"] == "free"
++
++    def test_the_field_spec_needs_no_account(self, client):
++        response = client.get(
++            "/v1/spec/fields",
++            params={"track": "severe_incident", "stage": "early_warning"},
++        )
++        assert response.status_code == 200
++
++    def test_the_validator_still_catches_the_switzerland_error(self, client):
++        body = client.post(
++            "/v1/spec/validate",
++            json=_payload(member_states_available=["DE", "CH"]),
++        ).json()
++        assert body["submittable"] is False
++        assert any("not EU Member States" in i["message"] for i in body["issues"])
++
++    def test_the_daily_cap_is_enforced_and_says_what_to_do(self, client):
++        limit = PLANS["free"].validations_per_day
++        assert limit is not None
++        for _ in range(limit):
++            assert client.post("/v1/spec/validate", json=_payload()).status_code == 200
++        blocked = client.post("/v1/spec/validate", json=_payload())
++        assert blocked.status_code == 429
++        detail = blocked.json()["detail"]
++        assert detail["error"] == "quota_exceeded"
++        assert detail["limit"] == limit
++        assert "/v1/checkout" in detail["remedy"]
++
++    def test_remaining_quota_is_reported(self, client):
++        response = client.post("/v1/spec/validate", json=_payload())
++        assert int(response.headers["X-Assurance-Quota-Remaining"]) == (
++            PLANS["free"].validations_per_day - 1
++        )
++
++
++class TestRegisterIsGated:
++    def test_no_key_is_a_401(self, client):
++        assert client.get("/v1/cases").status_code in (401, 503)
++
++    def test_a_free_tier_key_is_a_402_not_a_403(self, client, store):
++        # The obstacle is payment, and the status code should say so.
++        account = store.upsert_account(email="a@b.de", tier="free")
++        key = store.issue_key(account.id)
++        response = client.get("/v1/cases", headers={"X-API-Key": key})
++        assert response.status_code == 402
++        assert response.json()["detail"]["error"] == "plan_does_not_include_register"
++        assert "/v1/plans" in response.json()["detail"]["remedy"]
++
++    def test_a_register_key_gets_in(self, client, store):
++        account = store.upsert_account(email="a@b.de", tier="register")
++        key = store.issue_key(account.id)
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
++
++    def test_an_unknown_key_is_a_401(self, client):
++        assert client.get("/v1/cases", headers={"X-API-Key": "asr_nope"}).status_code == 401
++
++    def test_a_revoked_key_stops_working(self, client, store):
++        account = store.upsert_account(email="a@b.de", tier="register")
++        key = store.issue_key(account.id)
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
++        store.revoke_key(hashlib.sha256(key.encode()).hexdigest())
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 401
++
++    def test_an_operator_key_still_works(self, env, monkeypatch):
++        monkeypatch.setenv("ASSURANCE_API_KEYS", OPERATOR_KEY)
++        from assurance.api import deps
++
++        deps._register_for.cache_clear()
++        deps._accounts_for.cache_clear()
++        service = importlib.import_module("assurance.api.service")
++        with TestClient(service.create_app()) as c:
++            assert c.get("/v1/cases", headers={"X-API-Key": OPERATOR_KEY}).status_code == 200
++
++
++class TestCheckout:
++    def test_checkout_refuses_when_no_price_is_configured(self, client):
++        # Better a 503 than taking money for something that cannot be provisioned.
++        response = client.post(
++            "/v1/checkout",
++            json={"tier": "register", "email": "m.braun@example.de", "company": "SK"},
++        )
++        assert response.status_code == 503
++        assert response.json()["detail"]["error"] == "price_not_configured"
++
++    def test_a_malformed_email_is_rejected_before_stripe(self, client):
++        response = client.post(
++            "/v1/checkout", json={"tier": "register", "email": "not-an-email"}
++        )
++        assert response.status_code == 422
++
++    def test_an_unknown_tier_is_rejected(self, client):
++        response = client.post(
++            "/v1/checkout", json={"tier": "enterprise", "email": "a@b.de"}
++        )
++        assert response.status_code == 422
++
++
++class TestWebhook:
++    def test_an_unsigned_webhook_is_refused(self, client):
++        # Without this, anyone on the internet can grant themselves a plan.
++        response = client.post("/v1/billing/webhook", json=_checkout_event())
++        assert response.status_code == 400
++        assert response.json()["detail"]["error"] == "signature_rejected"
++
++    def test_a_wrongly_signed_webhook_is_refused(self, client):
++        raw = json.dumps(_checkout_event()).encode()
++        stamp = str(int(time.time()))
++        response = client.post(
++            "/v1/billing/webhook",
++            content=raw,
++            headers={"stripe-signature": f"t={stamp},v1=deadbeef"},
++        )
++        assert response.status_code == 400
++
++    def test_a_replayed_webhook_is_refused(self, client):
++        raw = json.dumps(_checkout_event()).encode()
++        stale = str(int(time.time()) - 100_000)
++        sig = hmac.new(
++            WEBHOOK_SECRET.encode(), f"{stale}.".encode() + raw, hashlib.sha256
++        ).hexdigest()
++        response = client.post(
++            "/v1/billing/webhook",
++            content=raw,
++            headers={"stripe-signature": f"t={stale},v1={sig}"},
++        )
++        assert response.status_code == 400
++        assert "replay" in response.json()["detail"]["detail"]
++
++    def test_a_signed_checkout_grants_the_plan(self, client):
++        raw, headers = _signed(_checkout_event())
++        response = client.post("/v1/billing/webhook", content=raw, headers=headers)
++        assert response.status_code == 200
++        assert response.json()["tier"] == "register"
++
++    def test_the_key_is_collected_once_and_works(self, client):
++        raw, headers = _signed(_checkout_event())
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++
++        collected = client.get("/v1/checkout/complete", params={"session_id": "cs_test_1"})
++        assert collected.status_code == 200
++        key = collected.json()["api_key"]
++        assert key.startswith("asr_")
++
++        # It works.
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
++
++        # And it cannot be collected a second time.
++        assert (
++            client.get("/v1/checkout/complete", params={"session_id": "cs_test_1"}).status_code
++            == 202
++        )
++
++    def test_collecting_before_the_webhook_lands_is_202_not_a_free_key(self, client):
++        # Landing on a success URL proves only that a browser followed a redirect.
++        response = client.get("/v1/checkout/complete", params={"session_id": "cs_never"})
++        assert response.status_code == 202
++        assert response.json()["detail"]["status"] == "pending"
++
++    def test_a_duplicate_webhook_does_not_create_a_second_account(self, client, store):
++        raw, headers = _signed(_checkout_event())
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++        db = sqlite3.connect(store.path)
++        try:
++            count = db.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
++        finally:
++            db.close()
++        assert count == 1
++
++    def test_cancellation_downgrades_to_free(self, client, store):
++        raw, headers = _signed(_checkout_event())
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++        key = client.get(
++            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
++        ).json()["api_key"]
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
++
++        cancel_raw, cancel_headers = _signed(
++            {
++                "type": "customer.subscription.deleted",
++                "data": {"object": {"customer": "cus_1", "status": "canceled"}},
++            }
++        )
++        client.post("/v1/billing/webhook", content=cancel_raw, headers=cancel_headers)
++
++        # Paying stopped, so access stopped.
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 402
++
++    def test_past_due_also_suspends_access(self, client):
++        raw, headers = _signed(_checkout_event())
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++        key = client.get(
++            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
++        ).json()["api_key"]
++        due_raw, due_headers = _signed(
++            {
++                "type": "customer.subscription.updated",
++                "data": {"object": {"customer": "cus_1", "status": "past_due"}},
++            }
++        )
++        client.post("/v1/billing/webhook", content=due_raw, headers=due_headers)
++        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 402
++
++    def test_an_unrecognised_event_is_acknowledged_not_retried(self, client):
++        raw, headers = _signed({"type": "invoice.created", "data": {"object": {}}})
++        response = client.post("/v1/billing/webhook", content=raw, headers=headers)
++        assert response.status_code == 200
++        assert response.json()["ignored"] == "invoice.created"
++
++
++class TestKeyStorage:
++    def test_the_key_is_never_stored(self, client, store):
++        raw, headers = _signed(_checkout_event())
++        client.post("/v1/billing/webhook", content=raw, headers=headers)
++        key = client.get(
++            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
++        ).json()["api_key"]
++
++        db = sqlite3.connect(store.path)
++        try:
++            blob = " ".join(
++                str(r) for r in db.execute("SELECT * FROM api_keys").fetchall()
++            )
++            pending = db.execute("SELECT COUNT(*) FROM pending_keys").fetchone()[0]
++        finally:
++            db.close()
++        # The key itself appears nowhere; only its digest does.
++        assert key not in blob
++        assert hashlib.sha256(key.encode()).hexdigest() in blob
++        # And the staging row was deleted when it was collected.
++        assert pending == 0
++
++
++class TestMe:
++    def test_an_anonymous_caller_is_told_they_are_on_free(self, client):
++        body = client.get("/v1/me").json()
++        assert body["authenticated"] is False
++        assert body["tier"] == "free"
++        assert "GET /v1/plans" in body["note"]
++
++    def test_usage_is_reported(self, client):
++        client.post("/v1/spec/validate", json=_payload())
++        client.post("/v1/spec/validate", json=_payload())
++        assert client.get("/v1/me").json()["usage_today"]["validate"] == 2
++
++    def test_a_paid_key_sees_its_account_and_keys(self, client, store):
++        account = store.upsert_account(
++            email="m.braun@sk.de", tier="register", company="SK Maschinenbau"
++        )
++        key = store.issue_key(account.id, label="primary")
++        body = client.get("/v1/me", headers={"X-API-Key": key}).json()
++        assert body["authenticated"] is True
++        assert body["account"]["company"] == "SK Maschinenbau"
++        assert body["keys"][0]["label"] == "primary"
++        assert body["keys"][0]["revoked"] is False
++
++    def test_a_paid_key_has_no_validation_cap(self, client, store):
++        account = store.upsert_account(email="a@b.de", tier="register")
++        key = store.issue_key(account.id)
++        for _ in range(PLANS["free"].validations_per_day + 5):
++            response = client.post(
++                "/v1/spec/validate", json=_payload(), headers={"X-API-Key": key}
++            )
++            assert response.status_code == 200
++        assert "X-Assurance-Quota-Limit" not in response.headers
+-- 
+2.43.0
+
