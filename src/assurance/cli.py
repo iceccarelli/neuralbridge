@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 _DOMAINS = {
+    "collect": "assurance.collect.cli",
     "art14": "assurance.security.art14.cli",
     "machine": "assurance.machine.cli",
     "machinery": "assurance.machinery.cli",
