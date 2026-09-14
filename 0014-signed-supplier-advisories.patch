@@ -1,0 +1,1574 @@
+From 46a6e4f18a1b19dd97dc44b6ae866c3c68b008e4 Mon Sep 17 00:00:00 2001
+From: i <v@g>
+Date: Mon, 14 Sep 2026 18:16:44 +0000
+Subject: [PATCH] assurance.supplier: sign the advisory, because the forged one
+ reflashes a robot
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A component advisory reaches an integrator as a PDF attached to an email.
+Nothing about it is verifiable. So this works:
+
+    From:    security@controlco-support.example
+    Subject: URGENT — safety controller firmware 3.9.0 advisory
+    Body:    Action required within 24 hours. Flash the attached image.
+
+An integrator who acts on that has been induced to modify the safety system of
+a machine people stand next to. That is not a data breach with a notification
+attached; it is a physical safety incident delivered by email. The industry's
+present defence is that the recipient recognises the sender's writing style.
+
+This closes it, and the reason nobody has is not that it is hard.
+
+  assurance supplier keygen     an Ed25519 publishing key, and the fingerprint
+                                to hand customers by a route advisories do not
+                                travel on
+  assurance supplier publish    sign an advisory into your feed
+  assurance supplier withdraw   sign a withdrawal. The original is never deleted
+  assurance supplier verify     check a feed before anything acts on it
+
+The feed is a chain, not a list, and three properties follow.
+
+**A supplier cannot silently un-publish.** Each record names the content hash of
+the previous one. The commercial incentive on a supplier who has published an
+embarrassing advisory is to make it go away; removing a record now breaks the
+chain at a named position in every copy every customer already holds.
+
+**A withdrawal is a publication.** A supplier who got one wrong publishes a
+signed withdrawal naming it, with a reason. The original stays: integrators
+already changed machines because of it, and erasing it leaves them holding a
+modification to a safety system that nobody can explain.
+
+**An empty feed does not verify.** A wrong path and a supplier with nothing to
+report look identical in the file, and "your fleet is unaffected" is the worst
+possible wrong answer to give somebody who is exposed. Both are refused rather
+than guessed between.
+
+One feed, one supplier, because an integrator pins one key to one feed and two
+suppliers sharing a file makes that pinning meaningless. An advisory whose
+issued_by is not the publisher is refused, because a feed carrying somebody
+else's advisory under your signature makes you the source of it.
+
+The refusal that matters is in `assurance fleet advisory`. Given --feed it
+verifies before it computes, and a feed that does not hold up is refused with
+exit 2 and nothing calculated — not a warning, a refusal. --unsigned-anyway
+exists, prints the full reason, and records it in the output under provenance,
+because sometimes you have to proceed and everyone downstream should know you
+did. An unsigned advisory file passed the old way still gets the warning: a
+tool that treats signed and unsigned as equivalent has closed nothing.
+
+`publish` says so every time an advisory names versions but no content hashes,
+because that is the difference between telling a customer "possible — somebody
+has to go and look at the machine" and "affected, by hash, beyond argument" —
+and it is the single most useful thing a component supplier can do for the
+people who install their parts.
+
+What a verified feed does not establish is in checks_skipped on every verdict:
+that the key belongs to the supplier, which cryptography cannot bootstrap and
+which is why the fingerprint is printed everywhere; and that the advisories are
+correct, complete or timely, because a supplier who has not noticed a
+vulnerability publishes nothing and no amount of signing detects silence.
+
+Commercially this is the second payer and the reason the first one stays. A
+supplier publishes once; every integrator with that component enrolled learns
+which of their serial numbers it touches and which safety functions it puts in
+question. That fan-out only works for people whose machines are enrolled here.
+
+Tests: 30 new, 701 total, all passing. ruff clean, mypy clean on the new module.
+The load-bearing one alters the remedy text of a published advisory to point at
+an attacker's firmware image and asserts that both `supplier verify` and
+`fleet advisory` refuse it.
+
+Verified end to end before committing: a supplier key generated, a real advisory
+signed into a feed, an integrator's fleet of two machines enrolled offline by
+the kit, the signed feed fanned across it — two machines matched, reported as
+possible rather than affected because ControlCo published no hashes, and the
+report saying exactly that — then the same feed with one word changed, refused.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/SUPPLIER.md       | 133 +++++++
+ pyproject.toml                     |   1 +
+ src/assurance/__init__.py          |   2 +
+ src/assurance/cli.py               |   1 +
+ src/assurance/fleet/cli.py         | 105 +++++-
+ src/assurance/supplier/__init__.py |  32 ++
+ src/assurance/supplier/cli.py      | 244 +++++++++++++
+ src/assurance/supplier/publish.py  | 543 +++++++++++++++++++++++++++++
+ tests/test_assurance_supplier.py   | 318 +++++++++++++++++
+ 9 files changed, 1369 insertions(+), 10 deletions(-)
+ create mode 100644 deploy/assurance/SUPPLIER.md
+ create mode 100644 src/assurance/supplier/__init__.py
+ create mode 100644 src/assurance/supplier/cli.py
+ create mode 100644 src/assurance/supplier/publish.py
+ create mode 100644 tests/test_assurance_supplier.py
+
+diff --git a/deploy/assurance/SUPPLIER.md b/deploy/assurance/SUPPLIER.md
+new file mode 100644
+index 0000000..29e38db
+--- /dev/null
++++ b/deploy/assurance/SUPPLIER.md
+@@ -0,0 +1,133 @@
++# The supplier side — signing the other half of the market
++
++## The attack nobody has closed
++
++A component advisory reaches an integrator today as a PDF attached to an email,
++or a link in a newsletter. Nothing about it is verifiable. Which means this
++works:
++
++```
++From:    security@controlco-support.example
++Subject: URGENT — safety controller firmware 3.9.0 advisory
++Body:    Action required within 24 hours. Flash the attached image on all units.
++```
++
++An integrator who acts on that has been induced to modify the safety system of a
++machine people stand next to. That is not a data breach with a notification
++attached — it is a physical safety incident delivered by email. The industry's
++present defence is that the recipient recognises the sender's writing style.
++
++Signing closes it, and the reason it is not already done everywhere is not that
++it is hard. It is two commands.
++
++## For a component supplier
++
++```bash
++assurance supplier keygen --out psirt-key.pem
++```
++
++```
++publishing key 759448e260ca239c
++  Give your customers this fingerprint:
++
++      759448e260ca239c
++```
++
++**That fingerprint is the entire security model.** Put it where customers find
++it *without following a link from an advisory*: the contract, the quotation, the
++machine's documentation folder, the back of the CE plate. Read it aloud on the
++phone. A forged advisory will happily carry its own key.
++
++Then, for each advisory:
++
++```bash
++assurance supplier publish CTRL-2026-11.json \
++    --feed psirt-feed.jsonl \
++    --key psirt-key.pem \
++    --identity identity.json
++```
++
++Serve `psirt-feed.jsonl` from any web server. It is a text file, one JSON record
++per line, so a customer can also copy it onto a USB stick and carry it into a
++plant with no network — and read it without this software installed.
++
++### Publish the hashes
++
++An advisory that names versions matches by **label**. An advisory that names
++content hashes matches by **artefact**. The difference, on a real fleet:
++
++| | what the integrator is told |
++|---|---|
++| versions only | *possible* — "this is your component, but the version on this machine is not recorded. Somebody has to look." |
++| with hashes | *affected* — by hash, beyond argument. Or `hash_mismatch`, which is the finding nobody else produces: the label says 3.9.0 and the bytes are not 3.9.0's. |
++
++Publishing the hashes is the single most useful thing a component supplier can
++do for the people who install their parts, and `publish` says so every time you
++omit them.
++
++### Getting one wrong
++
++```bash
++assurance supplier withdraw CTRL-2026-11 \
++    --reason "the affected version range was wrong; 3.9.0 is not affected" \
++    --feed psirt-feed.jsonl --key psirt-key.pem --identity identity.json
++```
++
++**The original stays in the feed.** Your customers changed machines because of
++it; deleting it leaves them holding a change nobody can explain, which is worse
++than the wrong advisory was. A withdrawal is a publication.
++
++## For an integrator
++
++```bash
++assurance supplier verify \
++    --feed psirt-feed.jsonl \
++    --public-key controlco.pub \
++    --expect-supplier controlco
++```
++
++Then fan it across every machine you have enrolled:
++
++```bash
++assurance fleet advisory \
++    --feed psirt-feed.jsonl \
++    --supplier-key controlco.pub \
++    --expect-supplier controlco \
++    --ledger evidence.db
++```
++
++`fleet advisory` **refuses** a feed that does not verify. Not a warning — a
++refusal, exit 2, nothing computed. A change to a safety system driven by an
++advisory that does not verify is precisely what signing is for. `--unsigned-anyway`
++exists, prints the reason in full, and records it in the output, because
++sometimes you have to proceed and everyone downstream should know you did.
++
++## Why the feed is a chain
++
++Each record names the content hash of the one before it.
++
++**A supplier cannot silently un-publish.** The commercial incentive on a supplier
++who has published an embarrassing advisory is to make it go away. Remove a
++record and the chain breaks at a named position, in every copy every customer
++already holds.
++
++**An empty feed does not verify.** A wrong path and a supplier with nothing to
++report look identical, and "your fleet is unaffected" is the worst possible
++wrong answer to give somebody who is exposed. The tool refuses both rather than
++guessing which it was.
++
++**One feed, one supplier.** An integrator pins one key to one feed; two
++suppliers sharing a file makes that pinning meaningless.
++
++## What a verified feed does not establish
++
++Carried in `checks_skipped` on every verdict, and printed by the CLI:
++
++1. **That the key belongs to the supplier.** Cryptography cannot bootstrap this.
++   The fingerprint must arrive by a route the advisories do not travel on. This
++   is the one thing the reader has to do themselves, and the tooling prints the
++   fingerprint everywhere precisely so that it is easy.
++2. **That the advisories are correct, complete, or timely.** A verified feed says
++   these came from the holder of that key and were not altered. A supplier who
++   has not noticed a vulnerability publishes nothing, and no amount of signing
++   detects silence.
+diff --git a/pyproject.toml b/pyproject.toml
+index d7e88dc..5a7ec54 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -130,6 +130,7 @@ ignore = [
+ "src/assurance/watch/cli.py" = ["T20"]
+ "src/assurance/attest/cli.py" = ["T20"]
+ "src/assurance/kit/cli.py" = ["T20"]
++"src/assurance/supplier/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/__init__.py b/src/assurance/__init__.py
+index ffedf25..ef93d5e 100644
+--- a/src/assurance/__init__.py
++++ b/src/assurance/__init__.py
+@@ -14,6 +14,8 @@ Layout
+                         rewind cannot reach, because the key left the building
+ ``assurance.kit``       the offline enrolment kit: one command inside a plant,
+                         with a guard over the socket layer proving it stayed there
++``assurance.supplier``  signed component advisories — the other half of the
++                        market, and the forged-advisory attack it closes
+ ``assurance.security``  product-security obligations. ``security.art14`` is the
+                         EU CRA reporting duty that has applied since 2026-09-11.
+ 
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index 9435d5d..b64db6c 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -15,6 +15,7 @@ _DOMAINS = {
+     "watch": "assurance.watch.cli",
+     "attest": "assurance.attest.cli",
+     "kit": "assurance.kit.cli",
++    "supplier": "assurance.supplier.cli",
+ }
+ 
+ 
+diff --git a/src/assurance/fleet/cli.py b/src/assurance/fleet/cli.py
+index 2c600b7..6aeb0cc 100644
+--- a/src/assurance/fleet/cli.py
++++ b/src/assurance/fleet/cli.py
+@@ -46,7 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
+     ls.add_argument("--json", action="store_true")
+ 
+     ad = verbs.add_parser("advisory", help="which machines does this advisory touch")
+-    ad.add_argument("advisory", type=Path)
++    ad.add_argument("advisory", type=Path, nargs="?", default=None,
++                    help="an advisory as JSON. Prefer --feed, which is signed")
++    ad.add_argument("--feed", type=Path, default=None,
++                    help="a signed supplier feed; every standing advisory in it "
++                         "is fanned out")
++    ad.add_argument("--supplier-key", type=Path, default=None,
++                    help="the supplier's public key, obtained by a route that is "
++                         "not this feed")
++    ad.add_argument("--expect-supplier", default="")
++    ad.add_argument("--unsigned-anyway", action="store_true",
++                    help="act on an unverified advisory. Recorded in the output; "
++                         "you are choosing to modify a safety system on the word "
++                         "of an unauthenticated file")
+     ad.add_argument("--ledger", required=True, type=Path)
+     ad.add_argument("--json", action="store_true")
+ 
+@@ -86,19 +98,92 @@ def _cmd_list(args: argparse.Namespace) -> int:
+     return 0 if not fleet.with_gaps() else 1
+ 
+ 
++#: Said once, loudly, wherever an unverified advisory is acted on. The point of
++#: this whole mechanism is that a forged advisory is a physical safety attack:
++#: it induces somebody to modify the safety system of a machine people stand
++#: next to. A tool that treats signed and unsigned as equivalent has not closed
++#: anything.
++_UNSIGNED_WARNING = (
++    "This advisory is not signed, or its signature was not checked. It arrived "
++    "as a file. Acting on it means changing a safety system on the authority of "
++    "something anyone could have written — which is the attack this mechanism "
++    "exists to prevent. Ask the supplier to publish a signed feed; it costs them "
++    "one command."
++)
++
++
++def _advisories_from_feed(args: argparse.Namespace) -> tuple[list, list[str]]:
++    """Every standing advisory in a feed, refusing the feed if it does not hold up."""
++    from assurance.attest.keys import VerifyingKey
++    from assurance.supplier.publish import AdvisoryFeed, verify_feed
++
++    records = AdvisoryFeed(args.feed).read()
++    if not records:
++        raise AssuranceError(f"{args.feed} holds no records.")
++
++    if args.supplier_key is None:
++        if not args.unsigned_anyway:
++            raise AssuranceError(
++                f"{args.feed} was not checked against a key. Pass --supplier-key "
++                "with the public key you obtained from the supplier by some route "
++                "other than this feed, or --unsigned-anyway if you accept that "
++                "you are acting on an unauthenticated file."
++            )
++        return ([r.component() for r in records if not r.is_withdrawal],
++                [_UNSIGNED_WARNING])
++
++    verdict = verify_feed(records, VerifyingKey.from_file(args.supplier_key),
++                          expect_supplier=args.expect_supplier)
++    if not verdict.ok and not args.unsigned_anyway:
++        raise AssuranceError(
++            f"refusing to act on {args.feed}:\n  "
++            + "\n  ".join(verdict.problems)
++            + "\n\nA change to a safety system driven by an advisory that does "
++              "not verify is exactly what signing is for. Use --unsigned-anyway "
++              "only if you have decided, deliberately, to proceed."
++        )
++    notes = list(verdict.checks_skipped)
++    if not verdict.ok:
++        notes.insert(0, "PROCEEDED ON A FEED THAT DOES NOT VERIFY: "
++                        + "; ".join(verdict.problems))
++    return ([r.component() for r in verdict.live], notes)
++
++
+ def _cmd_advisory(args: argparse.Namespace) -> int:
+-    advisory = ComponentAdvisory.from_json(args.advisory)
++    if args.feed and args.advisory:
++        print("error: give an advisory file or --feed, not both.", file=sys.stderr)
++        return 2
++    if not args.feed and not args.advisory:
++        print("error: give an advisory file or --feed.", file=sys.stderr)
++        return 2
++
++    if args.feed:
++        advisories, notes = _advisories_from_feed(args)
++    else:
++        advisories = [ComponentAdvisory.from_json(args.advisory)]
++        notes = [_UNSIGNED_WARNING]
++
+     fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
+-    report = assess_impact(advisory, fleet)
++    reports = [assess_impact(a, fleet) for a in advisories]
++
+     if args.json:
+-        print(json.dumps(report.to_dict(), indent=2))
++        print(json.dumps({
++            "advisories": [r.to_dict() for r in reports],
++            "provenance_notes": notes,
++        }, indent=2))
+     else:
+-        print(report.summary())
+-        if report.checks_skipped:
+-            print("\n  not checked:")
+-            for c in report.checks_skipped:
+-                print(f"    - {c}")
+-    return 0 if report.verdict == "clear" else 1
++        for advisory, report in zip(advisories, reports, strict=True):
++            print(f"{advisory.advisory_id} — {advisory.title}")
++            print(report.summary())
++            if report.checks_skipped:
++                print("\n  not checked:")
++                for c in report.checks_skipped:
++                    print(f"    - {c}")
++            print()
++        print("  provenance:")
++        for note in notes:
++            print(f"    - {note}")
++    return 0 if all(r.verdict == "clear" for r in reports) else 1
+ 
+ 
+ def _cmd_declare(args: argparse.Namespace) -> int:
+diff --git a/src/assurance/supplier/__init__.py b/src/assurance/supplier/__init__.py
+new file mode 100644
+index 0000000..a908e69
+--- /dev/null
++++ b/src/assurance/supplier/__init__.py
+@@ -0,0 +1,32 @@
++"""The supplier side: signed advisories, and a feed that cannot be edited quietly.
++
++    publish   SupplierIdentity, SignedAdvisory, AdvisoryFeed, verify_feed
++
++A component advisory today is an unsigned PDF in an email. Acting on a forged
++one means modifying the safety system of a machine people stand next to. This is
++the half of the market that makes the other half worth having.
++"""
++
++from assurance.supplier.publish import (
++    FEED_FORMAT,
++    AdvisoryFeed,
++    FeedVerdict,
++    PublishError,
++    SignedAdvisory,
++    SupplierIdentity,
++    publish,
++    verify_feed,
++    withdraw,
++)
++
++__all__ = [
++    "FEED_FORMAT",
++    "AdvisoryFeed",
++    "FeedVerdict",
++    "PublishError",
++    "SignedAdvisory",
++    "SupplierIdentity",
++    "publish",
++    "verify_feed",
++    "withdraw",
++]
+diff --git a/src/assurance/supplier/cli.py b/src/assurance/supplier/cli.py
+new file mode 100644
+index 0000000..49062f4
+--- /dev/null
++++ b/src/assurance/supplier/cli.py
+@@ -0,0 +1,244 @@
++"""``assurance supplier`` — publish an advisory your customers can verify.
++
++    keygen     an Ed25519 publishing key, and the fingerprint to give customers
++    publish    sign an advisory and append it to your feed
++    withdraw   sign a withdrawal of an earlier advisory. It is never deleted
++    verify     check a feed before anything acts on it
++    list       what stands in a feed, and what was withdrawn
++
++Exit codes: 0 fine, 1 a finding — a bad signature, a gap, a feed that must not
++be acted on — and 2 the command could not run.
++
++The fingerprint printed by ``keygen`` is the whole security model. Put it where
++your customers will find it without following a link from an advisory: the
++contract, the machine's documentation folder, the back of the quotation. Read
++it aloud on the phone. A key that can only be checked against the thing it
++signs establishes that one party was consistent and nothing more.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++from assurance.attest.keys import SigningKey, VerifyingKey
++from assurance.core.errors import AssuranceError
++from assurance.fleet.advisory import ComponentAdvisory
++from assurance.supplier.publish import (
++    AdvisoryFeed,
++    PublishError,
++    SupplierIdentity,
++    publish,
++    verify_feed,
++    withdraw,
++)
++
++__all__ = ["build_parser", "main"]
++
++
++def _identity(args: argparse.Namespace) -> SupplierIdentity:
++    if getattr(args, "identity", None):
++        return SupplierIdentity.from_dict(
++            json.loads(Path(args.identity).read_text(encoding="utf-8")))
++    return SupplierIdentity(
++        supplier_id=args.supplier_id,
++        legal_name=args.legal_name,
++        key_contact=args.key_contact,
++    )
++
++
++def _add_identity_args(p: argparse.ArgumentParser) -> None:
++    p.add_argument("--identity", type=Path, default=None,
++                   help="JSON file with supplier_id, legal_name, key_contact")
++    p.add_argument("--supplier-id", default="")
++    p.add_argument("--legal-name", default="")
++    p.add_argument("--key-contact", default="",
++                   help="where a customer confirms this key's fingerprint by a "
++                        "route that is not this feed")
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance supplier",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    k = verbs.add_parser("keygen", help="an Ed25519 publishing key")
++    k.add_argument("--out", required=True, type=Path)
++    k.add_argument("--public-out", type=Path, default=None)
++    k.add_argument("--passphrase-env", default=None)
++
++    pb = verbs.add_parser("publish", help="sign an advisory into your feed")
++    pb.add_argument("advisory", type=Path, help="the advisory as JSON")
++    pb.add_argument("--feed", required=True, type=Path)
++    pb.add_argument("--key", required=True, type=Path)
++    pb.add_argument("--rotating", action="store_true")
++    pb.add_argument("--passphrase-env", default=None)
++    _add_identity_args(pb)
++
++    wd = verbs.add_parser("withdraw", help="sign a withdrawal of an advisory")
++    wd.add_argument("advisory_id")
++    wd.add_argument("--reason", required=True)
++    wd.add_argument("--feed", required=True, type=Path)
++    wd.add_argument("--key", required=True, type=Path)
++    wd.add_argument("--rotating", action="store_true")
++    wd.add_argument("--passphrase-env", default=None)
++    _add_identity_args(wd)
++
++    v = verbs.add_parser("verify", help="check a feed before acting on it")
++    v.add_argument("--feed", required=True, type=Path)
++    v.add_argument("--public-key", required=True, type=Path)
++    v.add_argument("--expect-supplier", default="")
++    v.add_argument("--json", action="store_true")
++
++    ls = verbs.add_parser("list", help="what stands in a feed")
++    ls.add_argument("--feed", required=True, type=Path)
++    ls.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _passphrase(args: argparse.Namespace) -> str:
++    import os
++
++    name = getattr(args, "passphrase_env", None)
++    if not name:
++        return ""
++    value = os.environ.get(name)
++    if value is None:
++        raise PublishError(
++            f"${name} is not set. The passphrase is read from the environment "
++            "on purpose: on the command line it lands in shell history and in "
++            "the process table."
++        )
++    return value
++
++
++def _cmd_keygen(args: argparse.Namespace) -> int:
++    key = SigningKey.generate()
++    private = key.save(args.out, passphrase=_passphrase(args))
++    public = Path(args.public_out) if args.public_out else Path(str(private) + ".pub")
++    public.parent.mkdir(parents=True, exist_ok=True)
++    public.write_text(key.verifying.pem(), encoding="utf-8")
++
++    print(f"publishing key {key.fingerprint}")
++    print(f"  private  {private}  (mode 600)")
++    print(f"  public   {public}")
++    print("\n  Give your customers this fingerprint:")
++    print(f"\n      {key.fingerprint}\n")
++    print("  Put it in the contract, in the machine's documentation folder, on "
++          "the quotation —")
++    print("  anywhere they will find it WITHOUT following a link from an "
++          "advisory. That is the")
++    print("  whole security model. An advisory that carries its own key proves "
++          "nothing, and")
++    print("  the forged advisory telling somebody to reflash a safety "
++          "controller will carry one.")
++    return 0
++
++
++def _cmd_publish(args: argparse.Namespace) -> int:
++    advisory = ComponentAdvisory.from_json(args.advisory)
++    record = publish(
++        advisory, _identity(args),
++        SigningKey.load(args.key, passphrase=_passphrase(args)),
++        AdvisoryFeed(args.feed), rotating=args.rotating)
++    print(f"published {record.advisory_id} as record {record.sequence}")
++    print(f"  signed by {record.key_fingerprint} at {record.published_at}")
++    print(f"  feed      {args.feed}")
++    if not advisory.publishes_hashes:
++        print("\n  This advisory names versions but no content hashes. Your "
++              "customers will match")
++        print("  it by label, and every finding they derive will say so. "
++              "Publishing the hashes")
++        print("  turns 'probably affected' into 'affected', and it is the "
++              "single most useful")
++        print("  thing a component supplier can do for the people who install "
++              "their parts.")
++    return 0
++
++
++def _cmd_withdraw(args: argparse.Namespace) -> int:
++    record = withdraw(
++        args.advisory_id, args.reason, _identity(args),
++        SigningKey.load(args.key, passphrase=_passphrase(args)),
++        AdvisoryFeed(args.feed), rotating=args.rotating)
++    print(f"withdrew {args.advisory_id} as record {record.sequence}")
++    print(f"  reason: {args.reason}")
++    print("\n  The original stays in the feed. Your customers changed machines "
++          "because of it;")
++    print("  deleting it would leave them holding a change nobody can explain.")
++    return 0
++
++
++def _cmd_verify(args: argparse.Namespace) -> int:
++    feed = AdvisoryFeed(args.feed)
++    key = VerifyingKey.from_file(args.public_key)
++    verdict = verify_feed(feed.read(), key, expect_supplier=args.expect_supplier)
++
++    if args.json:
++        print(json.dumps({
++            "ok": verdict.ok, "checked": verdict.checked,
++            "supplier_id": verdict.supplier_id,
++            "key_fingerprint": verdict.key_fingerprint,
++            "problems": verdict.problems,
++            "checks_skipped": verdict.checks_skipped,
++            "live": [r.advisory_id for r in verdict.live],
++            "withdrawn": list(verdict.withdrawn),
++        }, indent=2))
++    else:
++        print(verdict.summary())
++        for problem in verdict.problems:
++            print(f"  ! {problem}")
++        print("\n  not checked:")
++        for skipped in verdict.checks_skipped:
++            print(f"    - {skipped}")
++        if not verdict.ok:
++            print("\n  Do not act on this feed. A change to a safety system "
++                  "driven by an advisory")
++            print("  that does not verify is the attack this mechanism exists "
++                  "to prevent.")
++    return 0 if verdict.ok else 1
++
++
++def _cmd_list(args: argparse.Namespace) -> int:
++    records = AdvisoryFeed(args.feed).read()
++    if args.json:
++        print(json.dumps([r.to_dict() for r in records], indent=2, sort_keys=True))
++        return 0
++    if not records:
++        print(f"{args.feed}: empty")
++        return 0
++    for r in records:
++        mark = "WITHDRAWN" if r.is_withdrawal else "published"
++        print(f"{r.sequence:>4}  {r.published_at}  {mark:<10} "
++              f"{r.advisory_id:<20} {r.advisory.get('title', '')[:50]}")
++        if r.is_withdrawal:
++            print(f"        withdraws {r.withdraws}: {r.withdrawal_reason}")
++    print("\n  Nothing here was verified. `assurance supplier verify` does that.")
++    return 0
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {"keygen": _cmd_keygen, "publish": _cmd_publish,
++                "withdraw": _cmd_withdraw, "verify": _cmd_verify, "list": _cmd_list}
++    try:
++        return handlers[args.command](args)
++    except PublishError as exc:
++        print(f"finding: {exc}", file=sys.stderr)
++        return 1
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError, KeyError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/supplier/publish.py b/src/assurance/supplier/publish.py
+new file mode 100644
+index 0000000..5ede3fa
+--- /dev/null
++++ b/src/assurance/supplier/publish.py
+@@ -0,0 +1,543 @@
++"""Signed component advisories, and the feed a supplier cannot quietly edit.
++
++Today a safety-relevant component advisory reaches an integrator as a PDF
++attached to an email, or a link in a newsletter. Nothing about it is verifiable.
++Which means the following attack is available to anybody with a mail server and
++a letterhead:
++
++    From: security@controlco-support.example
++    Subject: URGENT — safety controller firmware 3.9.0 advisory
++    Action required within 24 hours: flash the attached image on all units.
++
++An integrator who acts on that has just been induced to modify the safety
++system of a machine that people stand next to. This is not a data breach with a
++regulatory notification attached; it is a physical safety incident delivered by
++email. The industry's current defence is that the recipient recognises the
++sender's writing style.
++
++Signing closes it. An advisory carries an Ed25519 signature by the supplier's
++publishing key, and an integrator's tooling refuses to act on one that does not
++verify. That is the whole idea, and the reason it is not already done everywhere
++is not that it is hard.
++
++Two further properties come from making the feed a chain rather than a list:
++
++**A supplier cannot silently un-publish.** Each record names the content hash of
++the previous record from that supplier. Remove one and the chain breaks at a
++named position. This matters because the commercial incentive on a supplier who
++has published an embarrassing advisory is to make it go away, and an integrator
++who acted on it needs it to still exist.
++
++**A withdrawal is a publication, not a deletion.** A supplier who got an
++advisory wrong publishes a signed withdrawal that names it. Integrators already
++acted on the original; erasing it leaves them holding a change nobody can
++explain, which is worse than the wrong advisory was.
++
++What this does not do, stated here because the limits travel with the claim:
++it does not establish that the key belongs to the supplier. That is the one
++thing cryptography cannot bootstrap. A fingerprint has to arrive by a route the
++advisories do not travel on — a contract, a purchase order, a printed sheet in
++the machine's documentation folder, a phone call. Sixteen hex characters read
++aloud is a real and sufficient method, and the tooling prints them for exactly
++that reason.
++"""
++
++from __future__ import annotations
++
++import base64
++import json
++from collections.abc import Iterable
++from dataclasses import dataclass, field, replace
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++from ..attest.keys import SigningKey, VerifyingKey
++from ..core.errors import AssuranceError
++from ..core.identity import canonical_json, content_hash_of, format_utc, utc_now
++from ..fleet.advisory import ComponentAdvisory
++
++__all__ = [
++    "FEED_FORMAT",
++    "AdvisoryFeed",
++    "FeedVerdict",
++    "PublishError",
++    "SignedAdvisory",
++    "SupplierIdentity",
++    "publish",
++    "verify_feed",
++    "withdraw",
++]
++
++#: Written into every record so a future reader knows what the signed bytes
++#: were. Changing what is signed without changing this would make old
++#: signatures fail for a reason nobody could diagnose.
++FEED_FORMAT = "assurance.supplier-feed.v1"
++
++
++class PublishError(AssuranceError):
++    """An advisory cannot be published, or a feed does not hold up."""
++
++
++@dataclass(frozen=True)
++class SupplierIdentity:
++    """Who is publishing, and how a stranger confirms the key is theirs."""
++
++    supplier_id: str
++    legal_name: str
++    #: Where a reader goes to confirm the fingerprint by a route that is not
++    #: this feed. Required: a key that can only be checked against the thing it
++    #: signs establishes nothing.
++    key_contact: str
++
++    def __post_init__(self) -> None:
++        if not self.supplier_id.strip() or not self.legal_name.strip():
++            raise PublishError("a supplier needs an id and a legal name.")
++        if any(c.isspace() or c in '/\\"' for c in self.supplier_id):
++            raise PublishError(
++                f"supplier_id {self.supplier_id!r} must be a single plain token: "
++                "it names a file and appears in a URL."
++            )
++        if not self.key_contact.strip():
++            raise PublishError(
++                "key_contact is empty. Publish where a reader can confirm this "
++                "key's fingerprint by some route other than this feed — a "
++                "contract, the machine's documentation folder, a telephone "
++                "number. A key checked only against what it signs proves that "
++                "one party was consistent, and nothing else."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"supplier_id": self.supplier_id, "legal_name": self.legal_name,
++                "key_contact": self.key_contact}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> SupplierIdentity:
++        return cls(
++            supplier_id=str(d.get("supplier_id", "")),
++            legal_name=str(d.get("legal_name", "")),
++            key_contact=str(d.get("key_contact", "")),
++        )
++
++
++@dataclass(frozen=True)
++class SignedAdvisory:
++    """One advisory as published: signed, positioned, and chained."""
++
++    format: str
++    sequence: int
++    supplier: SupplierIdentity
++    key_fingerprint: str
++    published_at: str
++    previous: str
++    advisory: dict[str, Any]
++    #: Set on a record that withdraws an earlier one. The withdrawn advisory is
++    #: never removed; integrators already acted on it.
++    withdraws: str = ""
++    withdrawal_reason: str = ""
++    signature: str = ""
++
++    def _body(self) -> dict[str, Any]:
++        return {
++            "format": self.format,
++            "sequence": self.sequence,
++            "supplier": self.supplier.to_dict(),
++            "key_fingerprint": self.key_fingerprint,
++            "published_at": self.published_at,
++            "previous": self.previous,
++            "advisory": self.advisory,
++            "withdraws": self.withdraws,
++            "withdrawal_reason": self.withdrawal_reason,
++        }
++
++    def signed_payload(self) -> bytes:
++        return canonical_json(self._body()).encode("utf-8")
++
++    def content_hash(self) -> str:
++        return content_hash_of(self._body())
++
++    @property
++    def advisory_id(self) -> str:
++        return str(self.advisory.get("advisory_id", ""))
++
++    @property
++    def is_withdrawal(self) -> bool:
++        return bool(self.withdraws)
++
++    def component(self) -> ComponentAdvisory:
++        """The advisory itself, for the fleet engine to match against."""
++        return ComponentAdvisory.from_dict(self.advisory)
++
++    def verified_by(self, key: VerifyingKey) -> bool:
++        if not self.signature:
++            return False
++        try:
++            raw = base64.b64decode(self.signature.encode("ascii"), validate=True)
++        except Exception as exc:  # noqa: BLE001 - any decode failure is one finding
++            raise PublishError(
++                f"advisory {self.advisory_id or self.sequence} carries a "
++                f"signature that is not base64 ({exc}). Treat the feed as "
++                "damaged, not as unsigned."
++            ) from exc
++        return key.verify(self.signed_payload(), raw)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {**self._body(), "signature": self.signature}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> SignedAdvisory:
++        missing = [k for k in ("format", "sequence", "supplier", "key_fingerprint",
++                               "published_at", "previous", "advisory") if k not in d]
++        if missing:
++            raise PublishError(
++                "feed record is missing " + ", ".join(missing)
++                + " — it was not written by this system, or it was edited."
++            )
++        return cls(
++            format=str(d["format"]),
++            sequence=int(d["sequence"]),
++            supplier=SupplierIdentity.from_dict(d["supplier"]),
++            key_fingerprint=str(d["key_fingerprint"]),
++            published_at=str(d["published_at"]),
++            previous=str(d["previous"]),
++            advisory=dict(d["advisory"]),
++            withdraws=str(d.get("withdraws", "")),
++            withdrawal_reason=str(d.get("withdrawal_reason", "")),
++            signature=str(d.get("signature", "")),
++        )
++
++
++class AdvisoryFeed:
++    """A supplier's append-only feed, one JSON record per line.
++
++    Deliberately a text file. A supplier must be able to serve it from any web
++    server, an integrator must be able to copy it onto a USB stick and carry it
++    into a plant with no network, and both must be able to read it without this
++    software installed.
++    """
++
++    def __init__(self, path: str | Path) -> None:
++        self.path = Path(path)
++
++    def read(self) -> list[SignedAdvisory]:
++        if not self.path.exists():
++            return []
++        out: list[SignedAdvisory] = []
++        for number, line in enumerate(self.path.read_text("utf-8").splitlines(), 1):
++            text = line.strip()
++            if not text:
++                continue
++            try:
++                data = json.loads(text)
++            except json.JSONDecodeError as exc:
++                raise PublishError(
++                    f"{self.path} line {number} is not JSON ({exc})."
++                ) from exc
++            out.append(SignedAdvisory.from_dict(data))
++        return out
++
++    def last(self) -> SignedAdvisory | None:
++        records = self.read()
++        return records[-1] if records else None
++
++    def append(self, record: SignedAdvisory) -> SignedAdvisory:
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        with self.path.open("a", encoding="utf-8") as handle:
++            handle.write(json.dumps(record.to_dict(), sort_keys=True,
++                                    separators=(",", ":")) + "\n")
++        return record
++
++    def __len__(self) -> int:
++        return len(self.read())
++
++
++def _next(
++    feed: AdvisoryFeed,
++    identity: SupplierIdentity,
++    key: SigningKey,
++    rotating: bool,
++) -> tuple[int, str, list[SignedAdvisory]]:
++    history = feed.read()
++    previous = history[-1] if history else None
++    if previous is not None:
++        if previous.supplier.supplier_id != identity.supplier_id:
++            raise PublishError(
++                f"this feed belongs to {previous.supplier.supplier_id!r} and you "
++                f"are publishing as {identity.supplier_id!r}. One feed, one "
++                "supplier: an integrator pins a key to a feed, and two suppliers "
++                "sharing one file makes that pinning meaningless."
++            )
++        if previous.key_fingerprint != key.fingerprint and not rotating:
++            raise PublishError(
++                f"this feed was signed by key {previous.key_fingerprint} and the "
++                f"key offered is {key.fingerprint}. If this is a deliberate "
++                "rotation, say so explicitly and tell your customers the new "
++                "fingerprint by the route in key_contact — otherwise this is "
++                "what it looks like when somebody else starts publishing under "
++                "your name."
++            )
++    return (
++        (previous.sequence + 1) if previous else 1,
++        previous.content_hash() if previous else "",
++        history,
++    )
++
++
++def publish(
++    advisory: ComponentAdvisory,
++    identity: SupplierIdentity,
++    key: SigningKey,
++    feed: AdvisoryFeed,
++    *,
++    rotating: bool = False,
++    now: datetime | None = None,
++) -> SignedAdvisory:
++    """Sign an advisory and append it to the supplier's feed.
++
++    Refuses to publish the same ``advisory_id`` twice. A corrected advisory gets
++    a new id and, if the first was wrong rather than incomplete, a signed
++    withdrawal of it — because an integrator who already acted on the first one
++    needs both records to exist.
++    """
++    sequence, previous, history = _next(feed, identity, key, rotating)
++
++    for earlier in history:
++        if earlier.advisory_id == advisory.advisory_id and not earlier.is_withdrawal:
++            raise PublishError(
++                f"{advisory.advisory_id} was already published at "
++                f"{earlier.published_at} (sequence {earlier.sequence}). Republishing "
++                "an id silently changes what your customers think they read. Give "
++                "the correction a new id, and withdraw this one if it was wrong."
++            )
++
++    if advisory.issued_by != identity.supplier_id and \
++            advisory.issued_by != identity.legal_name:
++        raise PublishError(
++            f"the advisory says issued_by={advisory.issued_by!r} and you are "
++            f"publishing as {identity.supplier_id!r} ({identity.legal_name!r}). "
++            "A feed that carries somebody else's advisory under your signature "
++            "makes you the source of it."
++        )
++
++    record = SignedAdvisory(
++        format=FEED_FORMAT,
++        sequence=sequence,
++        supplier=identity,
++        key_fingerprint=key.fingerprint,
++        published_at=format_utc(now if now is not None else utc_now()),
++        previous=previous,
++        advisory=advisory.to_dict(),
++    )
++    return feed.append(replace(
++        record,
++        signature=base64.b64encode(key.sign(record.signed_payload())).decode("ascii"),
++    ))
++
++
++def withdraw(
++    advisory_id: str,
++    reason: str,
++    identity: SupplierIdentity,
++    key: SigningKey,
++    feed: AdvisoryFeed,
++    *,
++    rotating: bool = False,
++    now: datetime | None = None,
++) -> SignedAdvisory:
++    """Publish a signed withdrawal of an earlier advisory.
++
++    The original stays in the feed. Deleting it would leave every integrator who
++    acted on it holding an unexplained change to a safety system, which is worse
++    than the wrong advisory was.
++    """
++    if not reason.strip():
++        raise PublishError(
++            "a withdrawal needs a reason. Your customers changed a machine "
++            "because of the original; 'withdrawn' without a reason tells them "
++            "nothing about whether to change it back."
++        )
++    sequence, previous, history = _next(feed, identity, key, rotating)
++
++    target = next((r for r in history
++                   if r.advisory_id == advisory_id and not r.is_withdrawal), None)
++    if target is None:
++        raise PublishError(
++            f"{advisory_id} is not in this feed, so there is nothing to withdraw."
++        )
++    if any(r.withdraws == advisory_id for r in history):
++        raise PublishError(f"{advisory_id} has already been withdrawn.")
++
++    record = SignedAdvisory(
++        format=FEED_FORMAT,
++        sequence=sequence,
++        supplier=identity,
++        key_fingerprint=key.fingerprint,
++        published_at=format_utc(now if now is not None else utc_now()),
++        previous=previous,
++        advisory=target.advisory,
++        withdraws=advisory_id,
++        withdrawal_reason=reason,
++    )
++    return feed.append(replace(
++        record,
++        signature=base64.b64encode(key.sign(record.signed_payload())).decode("ascii"),
++    ))
++
++
++@dataclass(frozen=True)
++class FeedVerdict:
++    """What a reader can say about a feed, and what they still cannot."""
++
++    ok: bool
++    checked: int
++    supplier_id: str = ""
++    key_fingerprint: str = ""
++    problems: list[str] = field(default_factory=list)
++    checks_skipped: list[str] = field(default_factory=list)
++    live: tuple[SignedAdvisory, ...] = ()
++    withdrawn: tuple[str, ...] = ()
++
++    def summary(self) -> str:
++        if self.checked == 0:
++            return ("the feed is EMPTY — nothing was verified, and an empty feed "
++                    "is not the same as a supplier with nothing to report")
++        if self.ok:
++            return (
++                f"{self.checked} record(s) from {self.supplier_id} verify against "
++                f"key {self.key_fingerprint}; {len(self.live)} advisory(ies) stand, "
++                f"{len(self.withdrawn)} withdrawn"
++            )
++        return f"{len(self.problems)} problem(s) across {self.checked} record(s)"
++
++
++def verify_feed(
++    records: Iterable[SignedAdvisory],
++    key: VerifyingKey,
++    *,
++    expect_supplier: str = "",
++) -> FeedVerdict:
++    """Check a supplier feed before anything acts on it.
++
++    Every signature valid, the sequence unbroken, each record naming its
++    predecessor, one supplier throughout, no advisory id published twice. A
++    feed that fails any of these must not drive a change to a safety system,
++    which is what ``assurance fleet advisory`` enforces by refusing it.
++    """
++    items = list(records)
++    problems: list[str] = []
++    skipped: list[str] = []
++
++    # An empty feed must not verify. The commonest way to end up holding one is
++    # a wrong path or a failed download, and "ok, nothing affects you" is the
++    # worst possible answer to give somebody who is actually exposed. Silence
++    # from a supplier and silence from a broken pipe look identical here, so
++    # this refuses both rather than guessing which it was.
++    if not items:
++        problems.append(
++            "the feed is empty. That is either a supplier who has published "
++            "nothing or a file that did not arrive, and nothing in the file can "
++            "tell you which. Check the path and the download before concluding "
++            "your fleet is unaffected."
++        )
++
++    expected = 1
++    previous: SignedAdvisory | None = None
++    suppliers: set[str] = set()
++    fingerprints: set[str] = set()
++    live: dict[str, SignedAdvisory] = {}
++    withdrawn: list[str] = []
++
++    for record in items:
++        where = f"record {record.sequence}"
++        if record.format != FEED_FORMAT:
++            problems.append(
++                f"{where}: format is {record.format!r}, this build verifies "
++                f"{FEED_FORMAT!r} — the signed bytes may not be what is "
++                "recomputed here"
++            )
++        if record.sequence != expected:
++            problems.append(
++                f"{where}: out of order, expected {expected} — a record was "
++                "removed from the feed, or the file was reordered"
++            )
++            expected = record.sequence
++        expected_previous = previous.content_hash() if previous else ""
++        if record.previous != expected_previous:
++            problems.append(
++                f"{where}: names predecessor "
++                f"{record.previous[:12] or '(none)'} but follows "
++                f"{expected_previous[:12] or '(none)'} — a record was withdrawn "
++                "from the file rather than withdrawn in it"
++            )
++        if not record.verified_by(key):
++            problems.append(
++                f"{where} ({record.advisory_id}): signature does not verify "
++                f"against key {key.fingerprint}. Do not act on this advisory."
++            )
++        suppliers.add(record.supplier.supplier_id)
++        fingerprints.add(record.key_fingerprint)
++
++        if record.is_withdrawal:
++            if record.withdraws not in live:
++                problems.append(
++                    f"{where}: withdraws {record.withdraws}, which this feed "
++                    "does not contain as a standing advisory"
++                )
++            else:
++                live.pop(record.withdraws, None)
++                withdrawn.append(record.withdraws)
++        else:
++            if record.advisory_id in live:
++                problems.append(
++                    f"{where}: advisory id {record.advisory_id} was already "
++                    "published in this feed"
++                )
++            live[record.advisory_id] = record
++
++        previous = record
++        expected += 1
++
++    if len(suppliers) > 1:
++        problems.append(
++            "the feed carries more than one supplier ("
++            + ", ".join(sorted(suppliers))
++            + "). An integrator pins one key to one feed; this cannot be verified "
++            "as a whole."
++        )
++    if expect_supplier and suppliers and expect_supplier not in suppliers:
++        problems.append(
++            f"expected a feed from {expect_supplier!r} and this one is from "
++            + ", ".join(sorted(suppliers))
++        )
++    if len(fingerprints) > 1:
++        problems.append(
++            "the feed names more than one signing key ("
++            + ", ".join(sorted(fingerprints))
++            + "). A rotation is legitimate but must be verified against each key "
++            "over its own span; this check used one."
++        )
++
++    skipped.append(
++        f"Whether key {key.fingerprint} belongs to this supplier was not "
++        "checked, and cannot be checked from inside the feed. Confirm the "
++        "fingerprint by the route the supplier published for that purpose"
++        + (f" ({items[0].supplier.key_contact})" if items else "")
++        + " — not by a link in the advisory."
++    )
++    skipped.append(
++        "A verified feed says these advisories came from the holder of that key "
++        "and have not been altered. It says nothing about whether they are "
++        "correct, complete, or timely. A supplier who has not noticed a "
++        "vulnerability publishes nothing, and this cannot tell you that."
++    )
++
++    return FeedVerdict(
++        ok=not problems,
++        checked=len(items),
++        supplier_id=next(iter(sorted(suppliers))) if suppliers else "",
++        key_fingerprint=key.fingerprint,
++        problems=problems,
++        checks_skipped=skipped,
++        live=tuple(live.values()),
++        withdrawn=tuple(withdrawn),
++    )
+diff --git a/tests/test_assurance_supplier.py b/tests/test_assurance_supplier.py
+new file mode 100644
+index 0000000..7de264f
+--- /dev/null
++++ b/tests/test_assurance_supplier.py
+@@ -0,0 +1,318 @@
++"""Signing the other half of the market, and the attack it closes.
++
++The test that matters here is not that a signature verifies. It is that a feed
++whose advisory text was altered — the forged "reflash your safety controllers
++within 24 hours" — is refused by the tool that would otherwise fan it across a
++fleet. Everything else in this file exists to make sure that refusal cannot be
++bypassed by accident.
++"""
++
++from __future__ import annotations
++
++import json
++
++import pytest
++
++from assurance.attest.keys import SigningKey, VerifyingKey
++from assurance.core.identity import parse_utc
++from assurance.fleet.advisory import (
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++)
++from assurance.supplier import (
++    FEED_FORMAT,
++    AdvisoryFeed,
++    PublishError,
++    SupplierIdentity,
++    publish,
++    verify_feed,
++    withdraw,
++)
++
++IDENTITY = SupplierIdentity(
++    supplier_id="controlco",
++    legal_name="ControlCo GmbH",
++    key_contact="printed on every quotation, and at controlco.example/psirt/key",
++)
++
++
++def _advisory(advisory_id: str = "CTRL-2026-11", **over) -> ComponentAdvisory:
++    body: dict = {
++        "advisory_id": advisory_id,
++        "issued_by": "controlco",
++        "issued_at": parse_utc("2026-09-10T08:00:00Z"),
++        "title": "Authentication bypass in safety controller firmware",
++        "summary": "A crafted frame permits a safety parameter write.",
++        "severity": AdvisorySeverity.STOP_USE,
++        "reference": "https://controlco.example/psirt/CTRL-2026-11",
++        "remedy": "Update to 3.9.1.",
++        "affected": (AffectedArtefact(supplier="ControlCo",
++                                      name="Safety controller firmware",
++                                      versions=("3.8.2", "3.9.0")),),
++    }
++    body.update(over)
++    return ComponentAdvisory(**body)
++
++
++@pytest.fixture()
++def key(tmp_path) -> SigningKey:
++    return SigningKey.generate()
++
++
++@pytest.fixture()
++def feed(tmp_path) -> AdvisoryFeed:
++    return AdvisoryFeed(tmp_path / "feed.jsonl")
++
++
++# =====================================================================
++class TestIdentity:
++    def test_a_key_nobody_can_confirm_is_refused(self):
++        with pytest.raises(PublishError, match="key_contact"):
++            SupplierIdentity(supplier_id="x", legal_name="X GmbH", key_contact="")
++
++    def test_a_supplier_id_that_is_not_a_plain_token_is_refused(self):
++        with pytest.raises(PublishError, match="plain token"):
++            SupplierIdentity(supplier_id="control co", legal_name="X",
++                             key_contact="the contract")
++
++
++# =====================================================================
++class TestPublishing:
++    def test_a_published_advisory_verifies(self, key, feed):
++        record = publish(_advisory(), IDENTITY, key, feed)
++        assert record.sequence == 1
++        assert record.previous == ""
++        assert record.format == FEED_FORMAT
++        assert record.verified_by(key.verifying)
++        assert record.component().advisory_id == "CTRL-2026-11"
++
++    def test_each_record_names_its_predecessor(self, key, feed):
++        first = publish(_advisory("A-1"), IDENTITY, key, feed)
++        second = publish(_advisory("A-2"), IDENTITY, key, feed)
++        assert second.previous == first.content_hash()
++        assert second.sequence == 2
++
++    def test_an_id_cannot_be_republished(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        with pytest.raises(PublishError, match="already published"):
++            publish(_advisory(), IDENTITY, key, feed)
++
++    def test_a_feed_belongs_to_one_supplier(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        other = SupplierIdentity(supplier_id="scanco", legal_name="ScanCo",
++                                 key_contact="the contract")
++        with pytest.raises(PublishError, match="One feed, one supplier"):
++            publish(_advisory("S-1", issued_by="scanco"), other, key, feed)
++
++    def test_a_feed_will_not_carry_somebody_elses_advisory(self, key, feed):
++        with pytest.raises(PublishError, match="makes you the source"):
++            publish(_advisory(issued_by="someone-else"), IDENTITY, key, feed)
++
++    def test_a_different_key_needs_to_be_declared_a_rotation(self, key, feed):
++        publish(_advisory("A-1"), IDENTITY, key, feed)
++        other = SigningKey.generate()
++        with pytest.raises(PublishError, match="rotation"):
++            publish(_advisory("A-2"), IDENTITY, other, feed)
++        assert publish(_advisory("A-2"), IDENTITY, other, feed,
++                       rotating=True).sequence == 2
++
++
++# =====================================================================
++class TestWithdrawal:
++    def test_a_withdrawal_keeps_the_original(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        withdraw("CTRL-2026-11", "the affected version range was wrong",
++                 IDENTITY, key, feed)
++        records = feed.read()
++        assert len(records) == 2
++        assert records[0].advisory_id == "CTRL-2026-11"
++        assert records[1].is_withdrawal
++
++        verdict = verify_feed(records, key.verifying)
++        assert verdict.ok
++        assert verdict.live == ()
++        assert verdict.withdrawn == ("CTRL-2026-11",)
++
++    def test_a_withdrawal_needs_a_reason(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        with pytest.raises(PublishError, match="needs a reason"):
++            withdraw("CTRL-2026-11", "   ", IDENTITY, key, feed)
++
++    def test_nothing_that_was_never_published_can_be_withdrawn(self, key, feed):
++        publish(_advisory("A-1"), IDENTITY, key, feed)
++        with pytest.raises(PublishError, match="nothing to withdraw"):
++            withdraw("A-9", "oops", IDENTITY, key, feed)
++
++    def test_withdrawing_twice_is_refused(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        withdraw("CTRL-2026-11", "wrong range", IDENTITY, key, feed)
++        with pytest.raises(PublishError, match="already been withdrawn"):
++            withdraw("CTRL-2026-11", "again", IDENTITY, key, feed)
++
++
++# =====================================================================
++class TestVerifying:
++    def test_the_forged_advisory_is_caught(self, key, feed, tmp_path):
++        """The attack: an emailed advisory telling an integrator to reflash a
++        safety controller. Altering the text breaks the signature."""
++        publish(_advisory(), IDENTITY, key, feed)
++        raw = json.loads(feed.path.read_text().splitlines()[0])
++        raw["advisory"]["remedy"] = (
++            "Flash http://controlco-support.example/fw.bin within 24 hours.")
++        forged = tmp_path / "forged.jsonl"
++        forged.write_text(json.dumps(raw) + "\n")
++
++        verdict = verify_feed(AdvisoryFeed(forged).read(), key.verifying)
++        assert not verdict.ok
++        assert any("Do not act on this advisory" in p for p in verdict.problems)
++
++    def test_a_removed_record_breaks_the_chain_at_a_named_position(self, key, feed):
++        for n in range(3):
++            publish(_advisory(f"A-{n}"), IDENTITY, key, feed)
++        records = feed.read()
++        verdict = verify_feed([records[0], records[2]], key.verifying)
++        assert not verdict.ok
++        assert any("out of order" in p for p in verdict.problems)
++        assert any("withdrawn from the file rather than withdrawn in it" in p
++                   for p in verdict.problems)
++
++    def test_an_empty_feed_does_not_verify(self, key):
++        """A wrong path and a supplier with nothing to say look identical, and
++        'you are unaffected' is the worst possible wrong answer."""
++        verdict = verify_feed([], key.verifying)
++        assert not verdict.ok
++        assert any("did not arrive" in p for p in verdict.problems)
++
++    def test_the_wrong_key_fails_every_record(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        verdict = verify_feed(feed.read(), SigningKey.generate().verifying)
++        assert not verdict.ok
++
++    def test_a_feed_from_the_wrong_supplier_is_named(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        verdict = verify_feed(feed.read(), key.verifying, expect_supplier="scanco")
++        assert not verdict.ok
++        assert any("expected a feed from" in p for p in verdict.problems)
++
++    def test_verification_never_claims_the_advisory_is_correct(self, key, feed):
++        publish(_advisory(), IDENTITY, key, feed)
++        verdict = verify_feed(feed.read(), key.verifying)
++        assert verdict.ok
++        joined = " ".join(verdict.checks_skipped)
++        assert "belongs to this supplier was not checked" in joined
++        assert "correct, complete, or timely" in joined
++
++    def test_a_record_missing_a_field_is_a_finding_not_a_crash(self, tmp_path):
++        path = tmp_path / "f.jsonl"
++        path.write_text('{"format": "x"}\n')
++        with pytest.raises(PublishError, match="missing"):
++            AdvisoryFeed(path).read()
++
++    def test_a_public_key_from_pem_verifies_the_same(self, key, feed, tmp_path):
++        publish(_advisory(), IDENTITY, key, feed)
++        (tmp_path / "k.pub").write_text(key.verifying.pem())
++        loaded = VerifyingKey.from_file(tmp_path / "k.pub")
++        assert verify_feed(feed.read(), loaded).ok
++
++
++# =====================================================================
++class TestCli:
++    def _sup(self, *argv) -> int:
++        from assurance.supplier.cli import main
++
++        return main(list(argv))
++
++    def _fleet(self, *argv) -> int:
++        from assurance.fleet.cli import main
++
++        return main(list(argv))
++
++    def _published(self, tmp_path):
++        self._sup("keygen", "--out", str(tmp_path / "k.pem"))
++        (tmp_path / "identity.json").write_text(json.dumps(IDENTITY.to_dict()))
++        (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
++        assert self._sup("publish", str(tmp_path / "adv.json"),
++                         "--feed", str(tmp_path / "feed.jsonl"),
++                         "--key", str(tmp_path / "k.pem"),
++                         "--identity", str(tmp_path / "identity.json")) == 0
++
++    def test_keygen_prints_the_fingerprint_to_hand_out(self, tmp_path, capsys):
++        assert self._sup("keygen", "--out", str(tmp_path / "k.pem")) == 0
++        out = capsys.readouterr().out
++        assert "Give your customers this fingerprint" in out
++        assert (tmp_path / "k.pem.pub").exists()
++
++    def test_publish_then_verify_exits_zero(self, tmp_path, capsys):
++        self._published(tmp_path)
++        capsys.readouterr()
++        assert self._sup("verify", "--feed", str(tmp_path / "feed.jsonl"),
++                         "--public-key", str(tmp_path / "k.pem.pub"),
++                         "--expect-supplier", "controlco") == 0
++
++    def test_publish_says_when_no_hashes_were_given(self, tmp_path, capsys):
++        self._published(tmp_path)
++        assert "no content hashes" in capsys.readouterr().out
++
++    def test_verify_exits_one_on_a_forged_feed(self, tmp_path, capsys):
++        self._published(tmp_path)
++        path = tmp_path / "feed.jsonl"
++        raw = json.loads(path.read_text().splitlines()[0])
++        raw["advisory"]["title"] = "URGENT: reflash all controllers"
++        path.write_text(json.dumps(raw) + "\n")
++        capsys.readouterr()
++        assert self._sup("verify", "--feed", str(path),
++                         "--public-key", str(tmp_path / "k.pem.pub")) == 1
++        assert "Do not act on this feed" in capsys.readouterr().out
++
++    def test_fleet_refuses_a_feed_with_no_key(self, tmp_path, capsys):
++        self._published(tmp_path)
++        ledger = tmp_path / "ledger.db"
++        capsys.readouterr()
++        assert self._fleet("advisory", "--feed", str(tmp_path / "feed.jsonl"),
++                           "--ledger", str(ledger)) == 2
++        assert "not checked against a key" in capsys.readouterr().err
++
++    def test_fleet_refuses_a_forged_feed(self, tmp_path, capsys):
++        self._published(tmp_path)
++        path = tmp_path / "feed.jsonl"
++        raw = json.loads(path.read_text().splitlines()[0])
++        raw["advisory"]["remedy"] = "Flash http://evil.example/fw.bin now."
++        path.write_text(json.dumps(raw) + "\n")
++        capsys.readouterr()
++        assert self._fleet("advisory", "--feed", str(path),
++                           "--supplier-key", str(tmp_path / "k.pem.pub"),
++                           "--ledger", str(tmp_path / "ledger.db")) == 2
++        assert "refusing to act on" in capsys.readouterr().err
++
++    def test_fleet_says_so_loudly_when_told_to_proceed_anyway(
++            self, tmp_path, capsys):
++        self._published(tmp_path)
++        capsys.readouterr()
++        rc = self._fleet("advisory", "--feed", str(tmp_path / "feed.jsonl"),
++                         "--unsigned-anyway",
++                         "--ledger", str(tmp_path / "ledger.db"))
++        assert rc in (0, 1)
++        assert "not signed, or its signature was not checked" in \
++            capsys.readouterr().out
++
++    def test_an_unsigned_advisory_file_still_warns(self, tmp_path, capsys):
++        (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
++        capsys.readouterr()
++        self._fleet("advisory", str(tmp_path / "adv.json"),
++                    "--ledger", str(tmp_path / "ledger.db"))
++        assert "anyone could have written" in capsys.readouterr().out
++
++    def test_giving_both_a_file_and_a_feed_is_refused(self, tmp_path, capsys):
++        self._published(tmp_path)
++        (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
++        capsys.readouterr()
++        assert self._fleet("advisory", str(tmp_path / "adv.json"),
++                           "--feed", str(tmp_path / "feed.jsonl"),
++                           "--ledger", str(tmp_path / "ledger.db")) == 2
++
++    def test_list_says_it_verified_nothing(self, tmp_path, capsys):
++        self._published(tmp_path)
++        capsys.readouterr()
++        assert self._sup("list", "--feed", str(tmp_path / "feed.jsonl")) == 0
++        assert "Nothing here was verified" in capsys.readouterr().out
+-- 
+2.43.0
+
