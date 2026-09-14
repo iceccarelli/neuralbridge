@@ -43,6 +43,12 @@ class Plan:
     export: bool = False
     #: May request a signed head attestation.
     signed_attestation: bool = False
+    #: May verify a machine trace against a declared safety envelope and seal
+    #: the resulting evidence bundle. The separation calculator and the bundle
+    #: re-checker are deliberately outside this gate: see machine_routes.
+    machine_verification: bool = False
+    #: Safety envelope separation calculations per UTC day on the free tier.
+    separations_per_day: int | None = None
     included: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -68,6 +74,8 @@ class Plan:
                 "register_access": self.register,
                 "verifiable_export": self.export,
                 "signed_attestation": self.signed_attestation,
+                "machine_verification": self.machine_verification,
+                "separations_per_day": self.separations_per_day,
             },
         }
 
@@ -81,11 +89,16 @@ PLANS: dict[Tier, Plan] = {
             "specification before you open the platform. No account, nothing recorded."
         ),
         validations_per_day=20,
+        separations_per_day=20,
         included=(
             "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
             "which listed territories are not EU Member States",
             "GET /v1/spec/fields — the full field specification per track and stage",
-            "20 validations per day, per address",
+            "POST /v1/machine/separation — the ISO/TS 15066 protective separation "
+            "distance for your cell, term by term, from your own stop figures",
+            "POST /v1/machine/bundle/check — re-verify anybody's evidence bundle. "
+            "Always free: a bundle only a paying customer can check is worth nothing",
+            "20 validations and 20 separation calculations per day, per address",
         ),
     ),
     "register": Plan(
@@ -116,9 +129,10 @@ PLANS: dict[Tier, Plan] = {
         tier="cell",
         name="Cell",
         blurb=(
-            "For a manufacturer with a large fielded installed base: unlimited product "
-            "families, several Assigned Representatives, and a signed head attestation so "
-            "a silent rewind of the ledger is detectable."
+            "For a manufacturer or integrator shipping machines: everything in "
+            "Register, plus machine safety verification — check a recorded run "
+            "against the safety envelope you declared, and seal an evidence bundle "
+            "your customer's auditor can re-verify without taking your word for it."
         ),
         price_env="ASSURANCE_PRICE_CELL",
         price_label="€1,290 / month",
@@ -128,8 +142,14 @@ PLANS: dict[Tier, Plan] = {
         cases_per_day=None,
         export=True,
         signed_attestation=True,
+        machine_verification=True,
         included=(
             "Everything in Register",
+            "Machine safety verification: POST /v1/machine/verify checks a recorded "
+            "run against a declared safety envelope and seals the result",
+            "Separation, speed, workspace, stop characterisation, power-and-force and "
+            "mode-consistency checks, each with its worst margin",
+            "Evidence bundles anyone can re-verify without an account",
             "Unlimited product families and cases",
             "Signed head attestation for the evidence ledger",
             "Priority response",

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import sys
 
-_DOMAINS = {"art14": "assurance.security.art14.cli"}
+_DOMAINS = {
+    "art14": "assurance.security.art14.cli",
+    "machine": "assurance.machine.cli",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         for name in _DOMAINS:
             print(f"  {name}")
         print("\ntry: python -m assurance art14 --help")
+        print("     python -m assurance machine separation --help")
         return 0
     domain, rest = argv[0], argv[1:]
     if domain not in _DOMAINS:

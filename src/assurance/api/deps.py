@@ -40,6 +40,7 @@ __all__ = [
     "get_register",
     "get_accounts",
     "current_principal",
+    "require_machine",
     "require_register",
     "spend",
     "auth_mode",
@@ -203,5 +204,41 @@ async def require_register(
     return principal
 
 
+async def require_machine(
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The door into machine safety verification.
+
+    Same 402-not-403 rule as the register: an authenticated caller without the
+    entitlement is looking at a price, not a prohibition.
+    """
+    if auth_mode() == "open" and principal.account is None:
+        return Principal(account=_OPERATOR, key_prefix="open-mode")
+    if principal.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    if not principal.plan.machine_verification:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "plan_does_not_include_machine_verification",
+                "tier": principal.tier,
+                "account_status": principal.account.status,
+                "remedy": (
+                    "Machine safety verification is included from the Cell plan "
+                    "upward. The separation calculator "
+                    "(POST /v1/machine/separation) and the bundle re-checker "
+                    "(POST /v1/machine/bundle/check) stay free. "
+                    "GET /v1/plans, then POST /v1/checkout."
+                ),
+            },
+        )
+    return principal
+
+
 Registered = Depends(require_register)
+Machine = Depends(require_machine)
 Anyone = Depends(current_principal)

@@ -1,0 +1,53 @@
+{
+  "envelope_id": "ENV-AR7-2.4.1",
+  "product": "AR-7 Palletising Cell",
+  "product_version": "2.4.1",
+  "workspace": {
+    "minimum": [
+      -1200.0,
+      -1200.0,
+      0.0
+    ],
+    "maximum": [
+      1200.0,
+      1200.0,
+      2100.0
+    ],
+    "frame": "cell"
+  },
+  "max_tcp_speed_mm_s": {
+    "automatic": 2000.0,
+    "ssm": 750.0,
+    "reduced_speed": 250.0,
+    "stopped": 0.0
+  },
+  "stop": {
+    "reaction_time_s": 0.1,
+    "stop_time_s": 0.25,
+    "stop_distance_mm": 120.0,
+    "measured_at_speed_mm_s": 500.0,
+    "basis": {
+      "kind": "measured",
+      "reference": "STOP-TEST-2026-03-11 rev B",
+      "date": "2026-03-11"
+    }
+  },
+  "uncertainty": {
+    "human_position_mm": 100.0,
+    "robot_position_mm": 50.0,
+    "basis": {
+      "kind": "datasheet",
+      "reference": "safety scanner datasheet rev D",
+      "date": "2025-11-02"
+    }
+  },
+  "intrusion_distance_mm": 850.0,
+  "human_approach_speed_mm_s": 1600.0,
+  "pfl_limits_hash": "",
+  "declared_by": {
+    "identifier": "a.integrator",
+    "role": "safety engineer",
+    "kind": "person"
+  },
+  "notes": "Separation figures assume hand/arm detection at the cell perimeter."
+}

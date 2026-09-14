@@ -1,0 +1,15 @@
+{
+  "schema": "assurance.machine.limits/1",
+  "edition": "<name the standard and edition, e.g. ISO/TS 15066:2016 Annex A>",
+  "transcribed_by": "<who typed these in>",
+  "verified_by": "",
+  "verified_on": "",
+  "transient_multiplier": 2.0,
+  "regions": {
+    "example_region": {
+      "label": "REPLACE ME \u2014 this file ships with no real values",
+      "max_pressure_n_cm2": 1.0,
+      "max_force_n": 1.0
+    }
+  }
+}
