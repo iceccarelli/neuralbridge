@@ -1,0 +1,2448 @@
+From c06c6f7f18ac07fa9e64ac71c7be4d244de456c1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 16:16:32 +0000
+Subject: [PATCH] assurance.attest: sign the head, because a chain does not
+ detect deletion
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A hash chain is tamper-evident, not tamper-proof. Whoever holds the database
+can delete the last forty records, rebuild the chain without them, and hand
+over a ledger that verifies perfectly. That is a property of chains, not a
+defect here, and it is true of every product that sells one.
+
+The Cell plan already advertised "Signed head attestation for the evidence
+ledger" and nothing in this codebase signed anything. That is a pricing page
+making a claim the software does not back — the same failure patch 002 removed
+when it deleted fabricated SBOM hashes.
+
+assurance.attest closes both. Ed25519 throughout: small keys, small signatures,
+no parameter for anybody to get wrong.
+
+  keys          SigningKey/VerifyingKey. save() refuses to overwrite an
+                existing key, and refuses to write a private key into the
+                directory holding the ledger it signs — a key stored beside
+                the records it protects is a decoration, because whoever can
+                rewrite the records can re-sign them.
+  attestation   HeadAttestation over (length, head seq, head link hash,
+                basis, time, key fingerprint, predecessor). Signed payload is
+                canonical JSON without the signature; each record names the
+                content hash of the one before it, so the attestation log
+                chains the same way the ledger does.
+
+Three refusals carry the weight, and each is a finding rather than an error:
+
+  * a ledger that does not verify is never attested, because a signature over
+    a broken chain converts a detected break into a signed all-clear;
+  * a ledger shorter than the last attestation is refused — that refusal IS
+    the rewind detector;
+  * a previously attested sequence that now resolves to a different link hash
+    is refused. Same length, different history. verify_chain returns True for
+    this; nothing else in the system catches it.
+
+Attestations live outside the ledger, in an append-only JSONL log. Sealing an
+attestation into the ledger it attests would change the head it had just
+attested. The log is also the only artefact here a rewind cannot reach.
+
+AttestationBasis records how the signer came to know the head: read_from_ledger
+when it read and verified the chain itself, declared_by_holder when it was
+handed three numbers. It is inside the signed bytes, so the weaker statement
+cannot be read later as the stronger one — the same discipline as HashSource
+and FigureBasis.
+
+CLI: assurance attest keygen|sign|verify|log. Exit codes are the interface —
+0 signed, 1 a finding, 2 could not run. A rewind must not share an exit code
+with a missing file. The passphrase is read from an environment variable
+because on the command line it lands in shell history and the process table.
+
+API, and the reason the hosted shape is what it is: a service holding both the
+ledger and the key satisfies nothing. So the ledger never leaves the customer's
+premises. They compute their own head and send three numbers; the service
+counter-signs, keeps a per-account append-only log, and applies the same three
+refusals (409, not 422 — a shorter ledger is the finding, not a bad request).
+The customer's administrator cannot rewind, because the removed records were
+counted in a statement signed by a key nobody there holds; the service cannot
+fabricate their evidence, because it never had any.
+
+  POST /v1/ledger/attest         Cell — gates signed_attestation at last
+  GET  /v1/ledger/attest/log     Cell
+  POST /v1/ledger/attest/verify  free, unmetered
+  GET  /v1/ledger/attest/key     free
+
+Verification is free for the same reason the bundle re-checker is: the audience
+for an attestation is a regulator, an insurer or a customer's customer, none of
+whom will hold an API key here. An attestation only a paying customer can check
+is worth nothing. Where the service checks signatures against its own key, the
+response says that is a party checking its own work.
+
+Every response and every verdict carries checks_skipped verbatim: that the key
+provenance was not established, that records appended since the last signature
+rest on the chain alone, that a counter-signature means the chain was never
+seen.
+
+pyproject gains an assurance-attest extra. cryptography is now the assurance
+package's one runtime dependency, confined to this module, because writing a
+signature scheme here would be the worst decision in the repository.
+
+Tests: 43 new, 639 total, all passing. ruff clean, mypy clean on the new module.
+The load-bearing ones truncate a real ledger, assert verify_chain still returns
+True, and then show the attestation catching it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/ATTEST.md          | 185 ++++++++++
+ deploy/assurance/README.md          |   8 +
+ deploy/assurance/fly.toml           |   3 +
+ pyproject.toml                      |  11 +-
+ src/assurance/__init__.py           |   2 +
+ src/assurance/api/attest_routes.py  | 316 ++++++++++++++++
+ src/assurance/api/deps.py           |  45 +++
+ src/assurance/api/service.py        |   2 +
+ src/assurance/attest/__init__.py    |  38 ++
+ src/assurance/attest/attestation.py | 555 ++++++++++++++++++++++++++++
+ src/assurance/attest/cli.py         | 209 +++++++++++
+ src/assurance/attest/keys.py        | 214 +++++++++++
+ src/assurance/billing/plans.py      |  11 +-
+ src/assurance/cli.py                |   1 +
+ tests/test_assurance_attest.py      | 548 +++++++++++++++++++++++++++
+ 15 files changed, 2144 insertions(+), 4 deletions(-)
+ create mode 100644 deploy/assurance/ATTEST.md
+ create mode 100644 src/assurance/api/attest_routes.py
+ create mode 100644 src/assurance/attest/__init__.py
+ create mode 100644 src/assurance/attest/attestation.py
+ create mode 100644 src/assurance/attest/cli.py
+ create mode 100644 src/assurance/attest/keys.py
+ create mode 100644 tests/test_assurance_attest.py
+
+diff --git a/deploy/assurance/ATTEST.md b/deploy/assurance/ATTEST.md
+new file mode 100644
+index 0000000..e3798ef
+--- /dev/null
++++ b/deploy/assurance/ATTEST.md
+@@ -0,0 +1,185 @@
++# Attestation — closing the hole every hash-chained audit log ships with
++
++## The hole
++
++A hash chain detects **editing**. Change a record and every link after it stops
++matching, and `verify_chain` names the sequence number.
++
++A hash chain does not detect **removal**. An administrator with write access to
++the database can delete the last forty records, rebuild the chain from genesis
++without them, and hand you a ledger that verifies perfectly. Nothing in the
++file says anything was ever there. This is not a defect in this implementation;
++it is a property of chains, and it is true of every product that sells you one.
++
++Here is the attack, in full, against this system:
++
++```sql
++DELETE FROM chain WHERE seq > 12;
++```
++
++That is the entire attack when the chain was built naively. This ledger binds
++each link hash to its own sequence and content, so a rewind followed by fresh
++appends is needed rather than a raw delete — which is three lines of Python
++instead of one. The difficulty is not the point. The point is that afterwards,
++`verify_chain` returns `True`.
++
++## The close
++
++A value that depends on the whole history has to leave the building, and be
++signed by a key the holder of the database does not have. Then a rewind is no
++longer a matter of anybody's word: here is a signature, made at a stated time,
++over a head this ledger can no longer produce.
++
++Two deployments do this, and they are for different buyers.
++
++---
++
++## 1. Local signing — you hold the key, off the machine
++
++For an operator who runs their own ledger and wants a signer under their own
++control: a build server, a security team's host, an HSM, anything that is not
++the box the ledger lives on.
++
++```bash
++# On the signing host — NOT on the ledger host.
++assurance attest keygen \
++    --out /secrets/attest.pem \
++    --passphrase-env ATTEST_PASS
++
++# The tool refuses to write the key into the ledger's directory:
++assurance attest keygen --out /data/attest.pem --ledger /data/register.db
++# error: refusing to write the signing key into /data, which is where
++# register.db lives. [...]
++```
++
++That refusal is not paternalism. A key stored beside the records it signs is a
++decoration, because whoever can rewrite the records can re-sign them.
++
++Then, on a timer:
++
++```bash
++0 3 * * *  assurance attest sign \
++               --ledger /data/register.db \
++               --key /secrets/attest.pem \
++               --log /vault/attest.jsonl \
++               --note nightly || alert "attestation refused"
++```
++
++**The exit code is the interface.**
++
++| code | meaning |
++|-----:|---------|
++| 0 | signed |
++| 1 | a **finding** — a rewind, a fork, an unexpected key |
++| 2 | the command could not run (missing file, bad passphrase) |
++
++A finding must not share an exit code with a missing file. If `sign` ever exits
++1, do not investigate by re-running it: preserve the database and the
++attestation log as they are, and read the message.
++
++Checking, by anybody who has the public key:
++
++```bash
++assurance attest verify \
++    --log /vault/attest.jsonl \
++    --public-key /vault/attest.pem.pub \
++    --ledger /data/register.db
++```
++
++With `--ledger` this asks the question that matters: does the ledger in front of
++us still hold every head that was signed for? Without it, the command says so
++plainly rather than letting you assume otherwise.
++
++---
++
++## 2. Counter-signature — we hold the key, and never see your ledger
++
++For a manufacturer or integrator who does not want to run a second host, and
++whose auditor will not accept self-signed evidence anyway. Cell plan.
++
++**The ledger never leaves the premises.** The customer computes their own head —
++which requires trusting nobody — and sends three numbers:
++
++```bash
++curl -sS https://assurance-register.fly.dev/v1/ledger/attest \
++  -H "X-API-Key: $ASSURANCE_KEY" \
++  -H 'content-type: application/json' \
++  -d '{"ledger_length": 412,
++       "head_seq": 412,
++       "head_link_hash": "9f2c...",
++       "note": "weekly"}'
++```
++
++The service signs that, records it in an append-only log belonging to that
++account, and refuses exactly the cases the local signer refuses. A shorter
++ledger comes back **409**, not 422 — it is a finding, not a malformed request:
++
++```json
++{"error": "attestation_refused",
++ "finding": "refusing to attest: the ledger holds 380 record(s), but attestation 6 signed for 412 at 2026-09-07T03:00:00Z. An append-only ledger does not get shorter. [...]"}
++```
++
++What this buys, precisely:
++
++* The customer's own administrator cannot rewind, because the removed records
++  were counted in a statement signed by a key nobody at the customer holds.
++* The service cannot fabricate the customer's evidence, because the service
++  never had it. All it ever saw was a hash.
++* Neither party can quietly change the story, because each holds a copy of a log
++  that chains to itself.
++
++Every attestation made this way carries `"basis": "declared_by_holder"` **inside
++the signed bytes**. The service did not see the chain verify, and it is not
++going to let that be read as something stronger later. Locally signed
++attestations carry `"basis": "read_from_ledger"`.
++
++### Verification is free and always will be
++
++```bash
++curl -sS https://assurance-register.fly.dev/v1/ledger/attest/verify \
++  -H 'content-type: application/json' \
++  -d '{"attestations": [ ... ]}'
++```
++
++No key, no account, no quota. The audience for an attestation is a regulator, an
++insurer, or a customer's customer — none of whom will ever hold an API key here,
++and all of whom must be able to check the thing without asking us. An
++attestation only a paying customer can verify is worth nothing.
++
++The public key is at `GET /v1/ledger/attest/key`, free. Obtaining it over the
++same connection as the signatures proves only that one party was consistent, and
++the response says so.
++
++---
++
++## Deploying the counter-signer
++
++```bash
++assurance attest keygen --out ./attest-service.pem
++fly secrets set ASSURANCE_ATTEST_KEY_PEM="$(cat ./attest-service.pem)"
++```
++
++| variable | meaning |
++|---|---|
++| `ASSURANCE_ATTEST_KEY_PEM` | the Ed25519 private key itself — what a secrets manager hands a container. Checked first |
++| `ASSURANCE_ATTEST_KEY` | path to that key, for a deployment that mounts a volume or a token |
++| `ASSURANCE_ATTEST_PASSPHRASE` | passphrase for it, if encrypted |
++| `ASSURANCE_ATTEST_LOGS` | directory holding one JSONL log per account (put it on the volume) |
++
++With no key configured, every signing route returns **503** with
++`no_attestation_key_configured`. The service will not generate a key on demand:
++a key that appears when first needed, on the machine that needs it, is not a
++second party.
++
++## What none of this establishes
++
++* **That the public key belongs to whom you think.** A signature is worth
++  exactly the provenance of the key. Confirm the fingerprint by a route other
++  than the one the attestations travelled on — reading sixteen hex characters
++  aloud over a telephone is a real and sufficient method.
++* **That records appended since the last attestation are intact.** They rest on
++  the chain alone until the next signature. Attest on a cadence that matches
++  how much history you are willing to lose the ability to defend.
++* **That the records were true when written.** Attestation is about custody,
++  not about content. Nothing here says a manifest was read from the machine it
++  claims to describe; that is what the assurance tiers are for.
+diff --git a/deploy/assurance/README.md b/deploy/assurance/README.md
+index 4c73791..a88cf29 100644
+--- a/deploy/assurance/README.md
++++ b/deploy/assurance/README.md
+@@ -43,6 +43,7 @@ webhook is a way for anyone to grant themselves a subscription.
+ curl https://<app>.fly.dev/                       # what the service is
+ curl https://<app>.fly.dev/healthz                # auth_mode must not be "open"
+ curl https://<app>.fly.dev/v1/plans               # purchasable must be true
++curl https://<app>.fly.dev/v1/ledger/attest/key   # 503 means no signing key set
+ curl -X POST https://<app>.fly.dev/v1/spec/validate \
+      -H 'content-type: application/json' \
+      -d '{"track":"actively_exploited_vulnerability","stage":"early_warning",
+@@ -65,3 +66,10 @@ fly ssh console -C "sqlite3 /data/art14-register.db .dump" > ledger-$(date +%F).
+ 
+ The ledger is append-only and self-verifying, so a restored copy can be checked
+ with `GET /v1/ledger/verify` rather than trusted.
++
++That check answers "was anything **edited**?" and not "was anything
++**removed**?" — a chain rebuilt without the inconvenient records verifies
++perfectly. Closing that is what `ATTEST.md` is for, and it is the difference
++between a backup and an alibi. Set `ASSURANCE_ATTEST_KEY_PEM` and put
++`POST /v1/ledger/attest` on a timer before you tell a customer their evidence
++is tamper-proof.
+diff --git a/deploy/assurance/fly.toml b/deploy/assurance/fly.toml
+index ff9035c..7b2f1bf 100644
+--- a/deploy/assurance/fly.toml
++++ b/deploy/assurance/fly.toml
+@@ -25,6 +25,9 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
+   ASSURANCE_PORT = "8080"
+   ASSURANCE_LEDGER = "/data/art14-register.db"
+   ASSURANCE_ACCOUNTS = "/data/accounts.db"
++  # One attestation log per account. On the volume: it is the one
++  # artefact in this system that a ledger rewind cannot reach.
++  ASSURANCE_ATTEST_LOGS = "/data/attestations"
+   ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
+ 
+ [[mounts]]
+diff --git a/pyproject.toml b/pyproject.toml
+index 50b2ba7..c26f4b5 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -54,11 +54,17 @@ dependencies = [
+ ]
+ 
+ [project.optional-dependencies]
+-# The assurance package itself has no runtime dependencies. The HTTP register
+-# needs a web server; everything else works from the CLI and the library.
++# The assurance package has one runtime dependency and it is confined to
++# assurance.attest: signing needs a vetted Ed25519 implementation, and writing
++# one here would be the single worst decision in this repository. Everything
++# else works from the CLI and the library with nothing installed.
++assurance-attest = [
++    "cryptography>=42.0.0",
++]
+ assurance-api = [
+     "fastapi>=0.110.0",
+     "uvicorn[standard]>=0.27.0",
++    "cryptography>=42.0.0",
+ ]
+ dev = [
+     "pytest>=8.0.0",
+@@ -122,6 +128,7 @@ ignore = [
+ "src/assurance/report/cli.py" = ["T20"]
+ "src/assurance/bridge/cli.py" = ["T20"]
+ "src/assurance/watch/cli.py" = ["T20"]
++"src/assurance/attest/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/__init__.py b/src/assurance/__init__.py
+index 817968b..9d129e3 100644
+--- a/src/assurance/__init__.py
++++ b/src/assurance/__init__.py
+@@ -10,6 +10,8 @@ Layout
+ ------
+ ``assurance.core``      identity, evidence objects, assurance tiers
+ ``assurance.evidence``  the tamper-evident ledger every record lands in
++``assurance.attest``    signed head attestations — the part of the ledger a
++                        rewind cannot reach, because the key left the building
+ ``assurance.security``  product-security obligations. ``security.art14`` is the
+                         EU CRA reporting duty that has applied since 2026-09-11.
+ 
+diff --git a/src/assurance/api/attest_routes.py b/src/assurance/api/attest_routes.py
+new file mode 100644
+index 0000000..7bc5323
+--- /dev/null
++++ b/src/assurance/api/attest_routes.py
+@@ -0,0 +1,316 @@
++"""Counter-signature: a second party who cannot rewrite your ledger.
++
++The module :mod:`assurance.attest` says the signing key must live where the
++ledger's operator is not. A hosted service that held both the ledger and the
++key would satisfy nothing — whoever can rewrite the records could re-sign them,
++which is precisely the decoration that module refuses to be.
++
++So the hosted product does the opposite of what is convenient. **The ledger
++never leaves the customer's premises.** They compute their own head, which
++requires no trust in anybody, and send three numbers: how many records, which
++sequence, which link hash. The service signs *that*, records it in an
++append-only log belonging to that account, and refuses the same three cases the
++local signer refuses — a shorter ledger, a head that has moved backwards, a
++previously signed position that now resolves differently.
++
++What this buys, precisely:
++
++* The customer's own administrator cannot rewind, because the removed records
++  were counted in a statement signed by a key nobody at the customer holds.
++* The service cannot fabricate the customer's evidence, because the service
++  never had it. All it ever saw was a hash.
++* Neither party can quietly change the story, because each holds a copy of a
++  log that chains to itself.
++
++The basis of every attestation made here is ``declared_by_holder`` and that
++value is inside the signed bytes. The service did not see the chain verify. It
++is not going to imply otherwise later.
++
++Verification is free and unmetered, for the same reason the bundle re-checker
++is: an attestation only a paying customer can check is worth nothing to the
++regulator, the insurer or the buyer who is the actual audience for it.
++"""
++
++from __future__ import annotations
++
++import os
++from pathlib import Path
++from typing import Annotated, Any
++
++from fastapi import APIRouter, Depends, HTTPException, status
++from pydantic import BaseModel, ConfigDict, Field
++
++from assurance.api.deps import Anyone, Attesting, get_accounts
++from assurance.attest.attestation import (
++    AttestationBasis,
++    AttestationError,
++    AttestationLog,
++    HeadAttestation,
++    LedgerHead,
++    attest,
++    verify_log,
++)
++from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
++from assurance.billing.accounts import AccountStore, Principal
++
++__all__ = ["attest_router"]
++
++attest_router = APIRouter(prefix="/v1/ledger/attest", tags=["attestation"])
++
++_KEY_PEM_ENV = "ASSURANCE_ATTEST_KEY_PEM"
++_KEY_ENV = "ASSURANCE_ATTEST_KEY"
++_LOGS_ENV = "ASSURANCE_ATTEST_LOGS"
++_PASSPHRASE_ENV = "ASSURANCE_ATTEST_PASSPHRASE"
++
++#: A caller submitting more than this many attestations to verify in one call
++#: has a file, not a request. Refusing early beats timing out.
++MAX_VERIFY_RECORDS = 5_000
++
++
++def _service_key() -> SigningKey:
++    # PEM-in-environment first, because that is what a secrets manager hands a
++    # container. A path is for the deployment that mounts a volume or a token.
++    pem = os.environ.get(_KEY_PEM_ENV, "").strip()
++    if pem:
++        try:
++            return SigningKey.from_pem(
++                pem, passphrase=os.environ.get(_PASSPHRASE_ENV, ""))
++        except SigningKeyError as exc:
++            raise HTTPException(
++                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
++                detail={"error": "attestation_key_unusable", "detail": str(exc)},
++            ) from exc
++
++    path = os.environ.get(_KEY_ENV, "")
++    if not path:
++        raise HTTPException(
++            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
++            detail={
++                "error": "no_attestation_key_configured",
++                "remedy": (
++                    f"Set {_KEY_PEM_ENV} to the key itself, or {_KEY_ENV} to a "
++                    "path. Generate one with `assurance attest keygen`. "
++                    "This service will not invent a key "
++                    "on demand: a key that appears when first needed and lives "
++                    "beside the process that uses it is not a second party."
++                ),
++            },
++        )
++    try:
++        return SigningKey.load(path, passphrase=os.environ.get(_PASSPHRASE_ENV, ""))
++    except SigningKeyError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
++            detail={"error": "attestation_key_unusable", "detail": str(exc)},
++        ) from exc
++
++
++def _log_for(principal: Principal) -> AttestationLog:
++    root = Path(os.environ.get(_LOGS_ENV, "attestations"))
++    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in principal.subject)
++    return AttestationLog(root / f"{safe}.jsonl")
++
++
++class AttestIn(BaseModel):
++    """Three numbers the customer reads out of their own ledger.
++
++    Nothing else is accepted, and nothing else is wanted. The point of this
++    endpoint is that the records stay where they are.
++    """
++
++    model_config = ConfigDict(extra="forbid")
++
++    ledger_length: int = Field(ge=0, description="how many records the chain holds")
++    head_seq: int = Field(ge=0, description="sequence number of the last record")
++    head_link_hash: str = Field(
++        min_length=64, max_length=64,
++        description="link hash of the last record, hex SHA-256")
++    note: str = Field(default="", max_length=500)
++    rotating: bool = Field(
++        default=False,
++        description="acknowledge that this service is signing with a different key "
++                    "than it did last time. Only set this if you were told to.")
++
++
++class AttestationIn(BaseModel):
++    model_config = ConfigDict(extra="allow")
++
++
++class VerifyIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    attestations: list[dict[str, Any]] = Field(min_length=1)
++    public_key_pem: str = Field(
++        default="",
++        description="the key to check against. Omit to use this service's key — "
++                    "but obtaining it from GET /v1/ledger/attest/key over the same "
++                    "connection proves less than obtaining it elsewhere.")
++
++
++@attest_router.get(
++    "/key",
++    summary="The public key this service counter-signs with. Free, forever.",
++)
++async def service_key() -> dict[str, Any]:
++    """Fetch the verifying key and its fingerprint.
++
++    Read the fingerprint against one published somewhere this service does not
++    control. A signature checked against a key that arrived over the same
++    connection as the signature proves only that one party was consistent.
++    """
++    key = _service_key().verifying
++    return {
++        "fingerprint": key.fingerprint,
++        "public_key_pem": key.pem(),
++        "algorithm": "Ed25519",
++        "checks_skipped": [
++            "This response does not establish that the key belongs to this "
++            "service rather than to whatever is answering this address. Confirm "
++            f"fingerprint {key.fingerprint} by a second route."
++        ],
++    }
++
++
++@attest_router.post(
++    "",
++    summary="Counter-sign the head of your ledger, without sending us the ledger",
++)
++async def counter_sign(
++    body: AttestIn,
++    principal: Annotated[Principal, Attesting],
++    accounts: Annotated[AccountStore, Depends(get_accounts)],
++) -> dict[str, Any]:
++    """Sign three numbers, refuse the three cases that would be a lie.
++
++    The refusals return 409, not 422: a shorter ledger is not a malformed
++    request, it is the finding. The body of the refusal is the sentence to put
++    in front of whoever runs the database.
++    """
++    try:
++        head = LedgerHead(
++            length=body.ledger_length,
++            head_seq=body.head_seq,
++            head_link_hash=body.head_link_hash.lower().strip(),
++            basis=AttestationBasis.DECLARED_BY_HOLDER,
++        )
++    except AttestationError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
++            detail={"error": "not_a_ledger_head", "detail": str(exc)},
++        ) from exc
++
++    log = _log_for(principal)
++    try:
++        record = attest(
++            head, _service_key(), log, note=body.note, rotating=body.rotating)
++    except AttestationError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_409_CONFLICT,
++            detail={"error": "attestation_refused", "finding": str(exc)},
++        ) from exc
++
++    return {
++        "attestation": record.to_dict(),
++        "count": len(log),
++        "checks_skipped": [
++            "This service did not see your ledger and did not verify your chain. "
++            "It signed the values you supplied, at the time you supplied them. "
++            "Run `assurance attest verify --ledger` locally to join the two.",
++            "Records you appended after this call are covered by no signature.",
++        ],
++        "keep": (
++            "Store this attestation somewhere your ledger's administrator cannot "
++            "reach. It is the only artefact in this system that a rewind cannot "
++            "touch."
++        ),
++    }
++
++
++@attest_router.get(
++    "/log",
++    summary="Every attestation this service has made for your account",
++)
++async def account_log(
++    principal: Annotated[Principal, Attesting],
++) -> dict[str, Any]:
++    log = _log_for(principal)
++    try:
++        records = log.read()
++    except AttestationError as exc:
++        raise HTTPException(
++            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
++            detail={"error": "attestation_log_damaged", "finding": str(exc)},
++        ) from exc
++    return {
++        "count": len(records),
++        "attestations": [r.to_dict() for r in records],
++        "verify_with": "POST /v1/ledger/attest/verify — free, no key needed",
++    }
++
++
++@attest_router.post(
++    "/verify",
++    summary="Check an attestation log. Free and unmetered, for anyone.",
++)
++async def verify(
++    body: VerifyIn,
++    principal: Annotated[Principal, Anyone],
++) -> dict[str, Any]:
++    """Verify signatures and internal consistency. No account, no quota.
++
++    Deliberately free: the audience for an attestation is a regulator, an
++    insurer, or a customer's customer — none of whom will ever hold an API key
++    here, and all of whom must be able to check the thing without asking us.
++
++    This endpoint cannot see the caller's ledger, so it cannot answer the
++    question that matters most — whether the ledger still holds what was signed
++    for. That join happens locally, with ``assurance attest verify --ledger``,
++    and its absence here is named rather than glossed.
++    """
++    if len(body.attestations) > MAX_VERIFY_RECORDS:
++        raise HTTPException(
++            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
++            detail={
++                "error": "too_many_attestations",
++                "limit": MAX_VERIFY_RECORDS,
++                "remedy": "Verify locally: `assurance attest verify --log ...`.",
++            },
++        )
++    try:
++        records = [HeadAttestation.from_dict(r) for r in body.attestations]
++    except (AttestationError, ValueError) as exc:
++        raise HTTPException(
++            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
++            detail={"error": "unreadable_attestation", "detail": str(exc)},
++        ) from exc
++
++    if body.public_key_pem.strip():
++        try:
++            key = VerifyingKey.from_pem(body.public_key_pem)
++        except SigningKeyError as exc:
++            raise HTTPException(
++                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
++                detail={"error": "unreadable_public_key", "detail": str(exc)},
++            ) from exc
++        supplied = True
++    else:
++        key = _service_key().verifying
++        supplied = False
++
++    verdict = verify_log(records, key)
++    skipped = list(verdict.checks_skipped)
++    if not supplied:
++        skipped.append(
++            "No key was supplied, so this service checked the signatures against "
++            "its own key. That is a party checking its own work. Fetch the key "
++            "and re-run this locally to make the check mean something."
++        )
++    return {
++        "ok": verdict.ok,
++        "checked": verdict.checked,
++        "summary": verdict.summary(),
++        "key_fingerprint": verdict.key_fingerprint,
++        "problems": verdict.problems,
++        "checks_skipped": skipped,
++        "latest": verdict.latest.to_dict() if verdict.latest else None,
++    }
+diff --git a/src/assurance/api/deps.py b/src/assurance/api/deps.py
+index d1eb882..fe11277 100644
+--- a/src/assurance/api/deps.py
++++ b/src/assurance/api/deps.py
+@@ -21,6 +21,10 @@ Configuration, all by environment variable:
+ ``ASSURANCE_API_KEYS``  comma-separated operator keys; full access, no quota
+ ``ASSURANCE_ALLOW_UNAUTHENTICATED``  ``1`` to run open for local evaluation
+ ``ASSURANCE_PUBLIC_URL`` base URL used in checkout redirects
++``ASSURANCE_ATTEST_KEY_PEM``  the Ed25519 key the service counter-signs with
++``ASSURANCE_ATTEST_KEY``   a path to that key instead
++``ASSURANCE_ATTEST_PASSPHRASE``  passphrase for it, if encrypted
++``ASSURANCE_ATTEST_LOGS``  directory holding one attestation log per account
+ ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+ """
+ 
+@@ -40,6 +44,7 @@ __all__ = [
+     "get_register",
+     "get_accounts",
+     "current_principal",
++    "require_attestation",
+     "require_machine",
+     "require_register",
+     "spend",
+@@ -239,6 +244,46 @@ async def require_machine(
+     return principal
+ 
+ 
++async def require_attestation(
++    principal: Principal = Depends(current_principal),
++) -> Principal:
++    """The door to the counter-signature.
++
++    This gate exists because the Cell plan already said "signed head
++    attestation for the evidence ledger" while nothing in the codebase signed
++    anything. An entitlement that is advertised and not enforced is the same
++    defect as a compliance field that is fabricated: the pricing page makes a
++    claim the software does not back.
++    """
++    if auth_mode() == "open" and principal.account is None:
++        return Principal(account=_OPERATOR, key_prefix="open-mode")
++    if principal.account is None:
++        raise HTTPException(
++            status_code=status.HTTP_401_UNAUTHORIZED,
++            detail="This endpoint needs an API key. See GET /v1/plans.",
++            headers={"WWW-Authenticate": "ApiKey"},
++        )
++    if not principal.plan.signed_attestation:
++        raise HTTPException(
++            status_code=status.HTTP_402_PAYMENT_REQUIRED,
++            detail={
++                "error": "plan_does_not_include_signed_attestation",
++                "tier": principal.tier,
++                "account_status": principal.account.status,
++                "remedy": (
++                    "Counter-signed head attestation is included from the Cell "
++                    "plan upward. Verifying an attestation "
++                    "(POST /v1/ledger/attest/verify) and fetching the public key "
++                    "(GET /v1/ledger/attest/key) are free and always will be: an "
++                    "attestation only a paying customer can check is worth "
++                    "nothing. GET /v1/plans, then POST /v1/checkout."
++                ),
++            },
++        )
++    return principal
++
++
+ Registered = Depends(require_register)
+ Machine = Depends(require_machine)
++Attesting = Depends(require_attestation)
+ Anyone = Depends(current_principal)
+diff --git a/src/assurance/api/service.py b/src/assurance/api/service.py
+index eb27c2f..0851149 100644
+--- a/src/assurance/api/service.py
++++ b/src/assurance/api/service.py
+@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request
+ from fastapi.responses import JSONResponse
+ 
+ from .. import __version__
++from .attest_routes import attest_router
+ from .billing_routes import billing_router
+ from .deps import auth_mode
+ from .fleet_routes import fleet_router
+@@ -99,6 +100,7 @@ def create_app(**kwargs: Any) -> FastAPI:
+     application.include_router(machine_router)
+     application.include_router(machinery_router)
+     application.include_router(fleet_router)
++    application.include_router(attest_router)
+     application.include_router(router)
+     return application
+ 
+diff --git a/src/assurance/attest/__init__.py b/src/assurance/attest/__init__.py
+new file mode 100644
+index 0000000..afc5c90
+--- /dev/null
++++ b/src/assurance/attest/__init__.py
+@@ -0,0 +1,38 @@
++"""Signed head attestations: the part a rewind cannot reach.
++
++    keys         Ed25519, and the refusal to store the key beside the ledger
++    attestation  sign the head, refuse the cases that would lie, verify the log
++
++A hash chain proves nothing was *edited*. Only a signature made by a key the
++database's holder does not have proves nothing was *removed*.
++"""
++
++from assurance.attest.attestation import (
++    ATTESTATION_FORMAT,
++    AttestationBasis,
++    AttestationError,
++    AttestationLog,
++    HeadAttestation,
++    LedgerHead,
++    LogVerdict,
++    attest,
++    head_of,
++    verify_log,
++)
++from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
++
++__all__ = [
++    "ATTESTATION_FORMAT",
++    "AttestationBasis",
++    "AttestationError",
++    "AttestationLog",
++    "HeadAttestation",
++    "SigningKeyError",
++    "LedgerHead",
++    "LogVerdict",
++    "SigningKey",
++    "VerifyingKey",
++    "attest",
++    "head_of",
++    "verify_log",
++]
+diff --git a/src/assurance/attest/attestation.py b/src/assurance/attest/attestation.py
+new file mode 100644
+index 0000000..285a479
+--- /dev/null
++++ b/src/assurance/attest/attestation.py
+@@ -0,0 +1,555 @@
++"""Signed head attestations: making a rewind undeniable.
++
++The ledger's own integrity check answers "has this chain been edited?". It
++cannot answer "has this chain been *shortened*?", because a chain rebuilt from
++genesis with the inconvenient records left out verifies perfectly. Every
++hash-chained audit log has this hole, and most products that sell one do not
++say so.
++
++The hole closes when a value that depends on the whole history leaves the
++building periodically and is signed by a key the holder of the database does
++not have. Then a rewind is not a matter of opinion: here is a signature, made
++at a stated time, over a head that the present ledger cannot produce.
++
++Three refusals carry the weight, and each one is a finding rather than an
++error:
++
++* **A ledger that does not verify is never attested.** A signature over a
++  broken chain converts a detected problem into a signed assertion that
++  everything is fine.
++* **A ledger shorter than the last attestation is refused.** That refusal *is*
++  the rewind detector. It is the reason to run this at all.
++* **A ledger that has changed an already-attested link is refused.** Same
++  length, different history — a fork. Detected by re-reading the exact
++  sequence numbers previously signed for.
++
++Attestations live *outside* the ledger, in an append-only JSONL log. Sealing an
++attestation into the ledger it attests would change the head it had just
++attested, which is either a lie or an infinite regress. The log is also the
++thing worth copying off the machine — it is small, it is text, and it is the
++only part of this system that a rewind cannot reach.
++"""
++
++from __future__ import annotations
++
++import base64
++import json
++from collections.abc import Iterable
++from dataclasses import dataclass, field, replace
++from datetime import datetime
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from ..core.errors import AssuranceError
++from ..core.identity import content_hash_of, format_utc, utc_now
++from ..evidence.ledger import GENESIS, EvidenceLedger
++from .keys import SigningKey, VerifyingKey
++
++__all__ = [
++    "ATTESTATION_FORMAT",
++    "AttestationBasis",
++    "AttestationError",
++    "AttestationLog",
++    "HeadAttestation",
++    "LedgerHead",
++    "LogVerdict",
++    "attest",
++    "head_of",
++    "verify_log",
++]
++
++#: Written into every attestation so a future reader knows what the bytes under
++#: the signature were. Changing what is signed without changing this would make
++#: old signatures unverifiable for a reason nobody could diagnose.
++ATTESTATION_FORMAT = "assurance.head-attestation.v1"
++
++
++class AttestationError(AssuranceError):
++    """An attestation cannot be made, or a log does not hold up."""
++
++
++class AttestationBasis(StrEnum):
++    """How the signer came to know the head it signed.
++
++    The distinction is the whole difference between two products. When the
++    signer read the ledger itself, the signature says the chain verified and
++    every previously attested position still resolved the same way. When the
++    holder *told* the signer what the head was, the signature says only that
++    this value was presented at this time — which is still enough to make a
++    later rewind contradict a signed statement, and is emphatically not enough
++    to say the records behind it were ever coherent.
++
++    Recording which one happened, inside the signed bytes, is what stops the
++    weaker statement from being read later as the stronger one.
++    """
++
++    READ_FROM_LEDGER = "read_from_ledger"
++    DECLARED_BY_HOLDER = "declared_by_holder"
++
++
++@dataclass(frozen=True)
++class LedgerHead:
++    """The three numbers that identify a ledger's state, and where they came from."""
++
++    length: int
++    head_seq: int
++    head_link_hash: str
++    basis: AttestationBasis = AttestationBasis.DECLARED_BY_HOLDER
++
++    def __post_init__(self) -> None:
++        if self.length < 0 or self.head_seq < 0:
++            raise AttestationError("a ledger cannot have a negative length or head.")
++        if self.length == 0:
++            if self.head_seq != 0 or self.head_link_hash != GENESIS:
++                raise AttestationError(
++                    "an empty ledger has head seq 0 and the genesis link hash; "
++                    f"this one claims seq {self.head_seq}."
++                )
++        elif self.head_seq < 1:
++            raise AttestationError(
++                f"a ledger of {self.length} record(s) cannot have head seq "
++                f"{self.head_seq}."
++            )
++        if len(self.head_link_hash) != 64 or not all(
++            c in "0123456789abcdef" for c in self.head_link_hash
++        ):
++            raise AttestationError(
++                f"{self.head_link_hash!r} is not a SHA-256 link hash. Refusing to "
++                "sign a value that cannot have come from a ledger."
++            )
++
++
++def head_of(ledger: EvidenceLedger) -> LedgerHead:
++    """Read the head of *ledger*, refusing if the chain does not verify.
++
++    A signature over a broken chain converts a detected break into a signed
++    statement that all is well, so the verification is not optional here.
++    """
++    ok, problems = ledger.verify_chain()
++    if not ok:
++        raise AttestationError(
++            "refusing to attest a ledger that does not verify. A signature here "
++            "would turn a detected break into a signed statement that all is "
++            "well:\n  " + "\n  ".join(problems)
++        )
++    entries = ledger.entries()
++    head = entries[-1] if entries else None
++    return LedgerHead(
++        length=len(entries),
++        head_seq=head.seq if head else 0,
++        head_link_hash=head.link_hash if head else GENESIS,
++        basis=AttestationBasis.READ_FROM_LEDGER,
++    )
++
++
++@dataclass(frozen=True)
++class HeadAttestation:
++    """One signed statement about the state of a ledger at a moment.
++
++    The signature covers :meth:`signed_payload` — everything here except the
++    signature itself. That includes ``previous``, which chains the attestation
++    log the same way the ledger chains its records, so an attestation cannot be
++    quietly dropped from the middle of the log either.
++    """
++
++    format: str
++    sequence: int
++    ledger_length: int
++    head_seq: int
++    head_link_hash: str
++    basis: AttestationBasis
++    attested_at: str
++    key_fingerprint: str
++    previous: str
++    note: str = ""
++    signature: str = ""
++
++    # -- bytes under the signature ---------------------------------------
++    def _body(self) -> dict[str, Any]:
++        return {
++            "format": self.format,
++            "sequence": self.sequence,
++            "ledger_length": self.ledger_length,
++            "head_seq": self.head_seq,
++            "head_link_hash": self.head_link_hash,
++            "basis": self.basis.value,
++            "attested_at": self.attested_at,
++            "key_fingerprint": self.key_fingerprint,
++            "previous": self.previous,
++            "note": self.note,
++        }
++
++    def signed_payload(self) -> bytes:
++        """Exactly the bytes the signature is over. Canonical, so portable."""
++        from ..core.identity import canonical_json
++
++        return canonical_json(self._body()).encode("utf-8")
++
++    def content_hash(self) -> str:
++        """Names this attestation. What the *next* attestation points back to."""
++        return content_hash_of(self._body())
++
++    # -- serialisation ----------------------------------------------------
++    def to_dict(self) -> dict[str, Any]:
++        return {**self._body(), "signature": self.signature}
++
++    @classmethod
++    def from_dict(cls, data: dict[str, Any]) -> HeadAttestation:
++        missing = [
++            k
++            for k in (
++                "format",
++                "sequence",
++                "ledger_length",
++                "head_seq",
++                "head_link_hash",
++                "basis",
++                "attested_at",
++                "key_fingerprint",
++                "previous",
++            )
++            if k not in data
++        ]
++        if missing:
++            raise AttestationError(
++                "attestation record is missing " + ", ".join(missing)
++                + " — it was not written by this system, or it was edited."
++            )
++        return cls(
++            format=str(data["format"]),
++            sequence=int(data["sequence"]),
++            ledger_length=int(data["ledger_length"]),
++            head_seq=int(data["head_seq"]),
++            head_link_hash=str(data["head_link_hash"]),
++            basis=AttestationBasis(str(data["basis"])),
++            attested_at=str(data["attested_at"]),
++            key_fingerprint=str(data["key_fingerprint"]),
++            previous=str(data["previous"]),
++            note=str(data.get("note", "")),
++            signature=str(data.get("signature", "")),
++        )
++
++    def signature_bytes(self) -> bytes:
++        try:
++            return base64.b64decode(self.signature.encode("ascii"), validate=True)
++        except Exception as exc:  # noqa: BLE001 - any decode failure is the same finding
++            raise AttestationError(
++                f"attestation {self.sequence} carries a signature that is not base64 "
++                f"({exc}). Treat the log as damaged, not as unsigned."
++            ) from exc
++
++    def verified_by(self, key: VerifyingKey) -> bool:
++        if not self.signature:
++            return False
++        return key.verify(self.signed_payload(), self.signature_bytes())
++
++
++class AttestationLog:
++    """An append-only JSONL file of attestations, one per line.
++
++    Deliberately not a database. It must be copyable by somebody who does not
++    have this software installed, readable by somebody who does not trust it,
++    and small enough to paste into an email to an auditor.
++    """
++
++    def __init__(self, path: str | Path) -> None:
++        self.path = Path(path)
++
++    def read(self) -> list[HeadAttestation]:
++        if not self.path.exists():
++            return []
++        out: list[HeadAttestation] = []
++        for number, line in enumerate(self.path.read_text("utf-8").splitlines(), start=1):
++            text = line.strip()
++            if not text:
++                continue
++            try:
++                data = json.loads(text)
++            except json.JSONDecodeError as exc:
++                raise AttestationError(
++                    f"{self.path} line {number} is not JSON ({exc}). A damaged "
++                    "attestation log is a finding: it is the one file a rewind "
++                    "cannot reach, so damage to it is worth explaining."
++                ) from exc
++            out.append(HeadAttestation.from_dict(data))
++        return out
++
++    def last(self) -> HeadAttestation | None:
++        records = self.read()
++        return records[-1] if records else None
++
++    def append(self, attestation: HeadAttestation) -> HeadAttestation:
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        line = json.dumps(attestation.to_dict(), sort_keys=True, separators=(",", ":"))
++        with self.path.open("a", encoding="utf-8") as handle:
++            handle.write(line + "\n")
++            handle.flush()
++        return attestation
++
++    def __len__(self) -> int:
++        return len(self.read())
++
++
++def attest(
++    source: EvidenceLedger | LedgerHead,
++    key: SigningKey,
++    log: AttestationLog,
++    *,
++    note: str = "",
++    rotating: bool = False,
++    now: datetime | None = None,
++) -> HeadAttestation:
++    """Sign a ledger head, refusing every case that would lie.
++
++    *source* is either a ledger, which is read and verified here, or a
++    :class:`LedgerHead` somebody else has declared — the counter-signature
++    case, where the signer never sees the records and says so in the signed
++    bytes. Returns the attestation, already appended to *log*.
++
++    Raises :class:`AttestationError` — and the message is the finding — when
++    the chain does not verify, when the ledger is shorter than it was at the
++    last attestation, when an already-attested link has changed, or when a
++    different key is being used without ``rotating=True``.
++    """
++    head: LedgerHead
++    by_seq: dict[int, str] | None
++    if isinstance(source, EvidenceLedger):
++        head = head_of(source)
++        by_seq = {e.seq: e.link_hash for e in source.entries()}
++    else:
++        head = source
++        by_seq = None
++
++    history = log.read()
++    previous = history[-1] if history else None
++
++    if previous is not None:
++        if head.length < previous.ledger_length:
++            raise AttestationError(
++                f"refusing to attest: the ledger holds {head.length} record(s), but "
++                f"attestation {previous.sequence} signed for {previous.ledger_length} "
++                f"at {previous.attested_at}. An append-only ledger does not get "
++                "shorter. Records were removed after they were attested — this is "
++                "the event this whole mechanism exists to catch. Preserve the "
++                "database and the attestation log as they are."
++            )
++        if head.head_seq < previous.head_seq:
++            raise AttestationError(
++                f"refusing to attest: head seq {head.head_seq} is behind the "
++                f"{previous.head_seq} signed at {previous.attested_at}."
++            )
++        for earlier in history:
++            if earlier.head_seq == 0:
++                continue
++            if by_seq is not None:
++                current = by_seq.get(earlier.head_seq)
++                if current is None:
++                    raise AttestationError(
++                        f"refusing to attest: seq {earlier.head_seq} was attested at "
++                        f"{earlier.attested_at} and is no longer in the ledger."
++                    )
++            elif earlier.head_seq == head.head_seq:
++                current = head.head_link_hash
++            else:
++                continue
++            if current != earlier.head_link_hash:
++                raise AttestationError(
++                    f"refusing to attest: seq {earlier.head_seq} now links as "
++                    f"{current[:12]} but was attested as "
++                    f"{earlier.head_link_hash[:12]} at {earlier.attested_at}. The "
++                    "chain was rebuilt — same position, different history. This is "
++                    "a fork, not a gap, and it will not show up in verify_chain."
++                )
++        if previous.key_fingerprint != key.fingerprint and not rotating:
++            raise AttestationError(
++                f"refusing to attest: this log was signed by key "
++                f"{previous.key_fingerprint} and the key offered is "
++                f"{key.fingerprint}. If this is a deliberate rotation, say so "
++                "explicitly; otherwise somebody is continuing your attestation log "
++                "with a key of their own, which is exactly what a rewind looks "
++                "like when nobody checks the fingerprint."
++            )
++
++    attestation = HeadAttestation(
++        format=ATTESTATION_FORMAT,
++        sequence=(previous.sequence + 1) if previous else 1,
++        ledger_length=head.length,
++        head_seq=head.head_seq,
++        head_link_hash=head.head_link_hash,
++        basis=head.basis,
++        attested_at=format_utc(now if now is not None else utc_now()),
++        key_fingerprint=key.fingerprint,
++        previous=previous.content_hash() if previous else "",
++        note=note,
++    )
++    signed = replace(
++        attestation,
++        signature=base64.b64encode(key.sign(attestation.signed_payload())).decode("ascii"),
++    )
++    return log.append(signed)
++
++
++@dataclass(frozen=True)
++class LogVerdict:
++    """What a verifier can say about an attestation log, and what it cannot."""
++
++    ok: bool
++    checked: int
++    problems: list[str] = field(default_factory=list)
++    checks_skipped: list[str] = field(default_factory=list)
++    key_fingerprint: str = ""
++    latest: HeadAttestation | None = None
++
++    def summary(self) -> str:
++        if self.checked == 0:
++            return "no attestations to check"
++        if self.ok:
++            return (
++                f"{self.checked} attestation(s) verify against key "
++                f"{self.key_fingerprint}"
++            )
++        return f"{len(self.problems)} problem(s) across {self.checked} attestation(s)"
++
++
++def verify_log(
++    attestations: Iterable[HeadAttestation],
++    key: VerifyingKey,
++    *,
++    ledger: EvidenceLedger | None = None,
++) -> LogVerdict:
++    """Check an attestation log, and optionally check a ledger against it.
++
++    Without a ledger this establishes only that the log is internally sound and
++    was signed by the holder of *key*: signatures valid, sequence unbroken,
++    each record naming its predecessor, lengths never decreasing. That is worth
++    something on its own, and it is not the same as the ledger being intact, so
++    the omission is named in ``checks_skipped`` rather than left for the reader
++    to infer.
++
++    With a ledger, the question that matters gets asked: does the ledger in
++    front of us still contain every head that was signed for?
++    """
++    records = list(attestations)
++    problems: list[str] = []
++    skipped: list[str] = []
++
++    expected_sequence = 1
++    previous: HeadAttestation | None = None
++    fingerprints: set[str] = set()
++
++    for record in records:
++        where = f"attestation {record.sequence}"
++        if record.format != ATTESTATION_FORMAT:
++            problems.append(
++                f"{where}: format is {record.format!r}, this build verifies "
++                f"{ATTESTATION_FORMAT!r} — the signed bytes may not be what is "
++                "recomputed here, so a failure below would be uninformative"
++            )
++        if record.sequence != expected_sequence:
++            problems.append(
++                f"{where}: out of order, expected {expected_sequence} — an "
++                "attestation was removed from the log or the file was reordered"
++            )
++            expected_sequence = record.sequence
++        expected_previous = previous.content_hash() if previous else ""
++        if record.previous != expected_previous:
++            problems.append(
++                f"{where}: names predecessor {record.previous[:12] or '(none)'} but "
++                f"follows {expected_previous[:12] or '(none)'} — the log was spliced"
++            )
++        if previous is not None and record.ledger_length < previous.ledger_length:
++            problems.append(
++                f"{where}: signs for {record.ledger_length} records where "
++                f"attestation {previous.sequence} signed for "
++                f"{previous.ledger_length}. The ledger was shortened between the "
++                "two, and both statements are signed."
++            )
++        if not record.verified_by(key):
++            problems.append(
++                f"{where}: signature does not verify against key {key.fingerprint} "
++                "— either it was signed by a different key, or the record was "
++                "edited after signing"
++            )
++        fingerprints.add(record.key_fingerprint)
++        previous = record
++        expected_sequence += 1
++
++    declared = [r.sequence for r in records
++                if r.basis is AttestationBasis.DECLARED_BY_HOLDER]
++    if declared:
++        skipped.append(
++            "Attestation(s) "
++            + ", ".join(str(n) for n in declared)
++            + " were counter-signatures: the signer was handed a head value and "
++            "never saw the ledger. They fix what was claimed and when, so a later "
++            "rewind contradicts a signed statement. They do not say the chain "
++            "verified at the time of signing."
++        )
++
++    if len(fingerprints) > 1:
++        problems.append(
++            "the log names more than one signing key ("
++            + ", ".join(sorted(fingerprints))
++            + "). A rotation is legitimate but must be verified against each key "
++            "over its own span; this check used one."
++        )
++
++    if ledger is None:
++        skipped.append(
++            "The ledger itself was not examined. This says the attestations are "
++            "genuine and consistent with each other; it does not say the ledger "
++            "still holds the records they were made over."
++        )
++    else:
++        chain_ok, chain_problems = ledger.verify_chain()
++        if not chain_ok:
++            problems.extend(f"ledger: {p}" for p in chain_problems)
++        entries = ledger.entries()
++        by_seq = {e.seq: e.link_hash for e in entries}
++        length = len(entries)
++        for record in records:
++            where = f"attestation {record.sequence}"
++            if length < record.ledger_length:
++                problems.append(
++                    f"{where}: signed for {record.ledger_length} records at "
++                    f"{record.attested_at}; the ledger now holds {length}. "
++                    f"{record.ledger_length - length} record(s) were removed after "
++                    "being attested."
++                )
++            if record.head_seq == 0:
++                continue
++            current = by_seq.get(record.head_seq)
++            if current is None:
++                problems.append(
++                    f"{where}: seq {record.head_seq} was attested at "
++                    f"{record.attested_at} and is absent from the ledger"
++                )
++            elif current != record.head_link_hash:
++                problems.append(
++                    f"{where}: seq {record.head_seq} links as {current[:12]} but was "
++                    f"attested as {record.head_link_hash[:12]} — the history at that "
++                    "position was rewritten"
++                )
++        skipped.append(
++            "Records appended after the latest attestation are covered by no "
++            "signature. Everything from seq "
++            f"{(records[-1].head_seq + 1) if records else 1} onward rests on the "
++            "chain alone."
++        )
++
++    skipped.append(
++        "Whether this public key belongs to whom you think it does was not "
++        "checked. A signature is only worth the provenance of the key: obtain "
++        f"fingerprint {key.fingerprint} by some route other than the one these "
++        "attestations arrived on."
++    )
++
++    return LogVerdict(
++        ok=not problems,
++        checked=len(records),
++        problems=problems,
++        checks_skipped=skipped,
++        key_fingerprint=key.fingerprint,
++        latest=records[-1] if records else None,
++    )
+diff --git a/src/assurance/attest/cli.py b/src/assurance/attest/cli.py
+new file mode 100644
+index 0000000..b038198
+--- /dev/null
++++ b/src/assurance/attest/cli.py
+@@ -0,0 +1,209 @@
++"""``assurance attest`` — sign the head of a ledger, and check the signatures.
++
++    keygen   make an Ed25519 key pair, refusing to put the private half next
++             to the ledger it will sign
++    sign     attest the current head, refusing every case that would lie
++    verify   check an attestation log, and a ledger against it
++    log      print the attestations without checking anything
++
++``sign`` and ``verify`` exit 0 when everything holds, 1 when there is a
++finding — a rewind, a fork, a bad signature — and 2 when the command could not
++run at all. A finding is not an error: it is the output this exists to produce,
++and it must not share an exit code with a missing file.
++
++The intended shape of a deployment is that ``sign`` runs somewhere the ledger's
++operator does not control, on a timer, with the private key held there:
++
++    0 3 * * *  assurance attest sign --ledger /data/register.db \\
++                   --key /secrets/attest.pem --log /vault/attest.jsonl || alert
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++from pathlib import Path
++
++from assurance.attest.attestation import (
++    AttestationError,
++    AttestationLog,
++    attest,
++    verify_log,
++)
++from assurance.attest.keys import SigningKey, VerifyingKey
++from assurance.core.errors import AssuranceError
++from assurance.evidence.ledger import EvidenceLedger
++
++__all__ = ["build_parser", "main"]
++
++
++def _passphrase(args: argparse.Namespace) -> str:
++    name = getattr(args, "passphrase_env", None)
++    if not name:
++        return ""
++    value = os.environ.get(name)
++    if value is None:
++        raise AttestationError(
++            f"${name} is not set. The passphrase is read from the environment on "
++            "purpose: on the command line it lands in shell history and in the "
++            "process table, where every other user on the machine can read it."
++        )
++    return value
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance attest",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    k = verbs.add_parser("keygen", help="make an Ed25519 key pair")
++    k.add_argument("--out", required=True, type=Path, help="where the private key goes")
++    k.add_argument("--public-out", type=Path, default=None,
++                   help="where the public key goes (default: <out>.pub)")
++    k.add_argument("--ledger", type=Path, default=None,
++                   help="the ledger this key will sign; naming it makes the tool "
++                        "refuse to store the key beside it")
++    k.add_argument("--passphrase-env", default=None,
++                   help="environment variable holding the passphrase")
++
++    s = verbs.add_parser("sign", help="attest the current head of a ledger")
++    s.add_argument("--ledger", required=True, type=Path)
++    s.add_argument("--key", required=True, type=Path)
++    s.add_argument("--log", required=True, type=Path)
++    s.add_argument("--note", default="")
++    s.add_argument("--rotating", action="store_true",
++                   help="acknowledge that this is a different key from the last one")
++    s.add_argument("--passphrase-env", default=None)
++    s.add_argument("--json", action="store_true")
++
++    v = verbs.add_parser("verify", help="check an attestation log")
++    v.add_argument("--log", required=True, type=Path)
++    v.add_argument("--public-key", required=True, type=Path)
++    v.add_argument("--ledger", type=Path, default=None,
++                   help="check the ledger against the attestations too; without it "
++                        "only the log itself is checked")
++    v.add_argument("--json", action="store_true")
++
++    ll = verbs.add_parser("log", help="print the attestations, checking nothing")
++    ll.add_argument("--log", required=True, type=Path)
++    ll.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _cmd_keygen(args: argparse.Namespace) -> int:
++    key = SigningKey.generate()
++    private = key.save(args.out, passphrase=_passphrase(args), ledger=args.ledger)
++    public = Path(args.public_out) if args.public_out else Path(str(private) + ".pub")
++    public.parent.mkdir(parents=True, exist_ok=True)
++    public.write_text(key.verifying.pem(), encoding="utf-8")
++
++    print(f"key {key.fingerprint}")
++    print(f"  private  {private}  (mode 600)")
++    print(f"  public   {public}")
++    if not args.passphrase_env:
++        print("\n  The private key is not encrypted. That is a defensible choice for "
++              "an unattended signer inside a secrets store, and a bad one for a "
++              "laptop.")
++    print("\n  Give the public key to whoever will check the attestations, by some "
++          "route other than the one the attestations travel on. Read the "
++          f"fingerprint {key.fingerprint} aloud to them if you can: a signature "
++          "checked against a key that arrived with it proves nothing.")
++    return 0
++
++
++def _cmd_sign(args: argparse.Namespace) -> int:
++    ledger = EvidenceLedger(args.ledger)
++    key = SigningKey.load(args.key, passphrase=_passphrase(args))
++    log = AttestationLog(args.log)
++    record = attest(ledger, key, log, note=args.note, rotating=args.rotating)
++
++    if args.json:
++        print(json.dumps(record.to_dict(), indent=2, sort_keys=True))
++    else:
++        print(f"attestation {record.sequence} — {record.ledger_length} record(s), "
++              f"head seq {record.head_seq} {record.head_link_hash[:12]}")
++        print(f"  signed by {record.key_fingerprint} at {record.attested_at}")
++        print(f"  appended to {log.path}")
++        if record.ledger_length == 0:
++            print("\n  The ledger is empty. This is still worth signing: it fixes "
++                  "the starting point, so a record back-dated before today cannot "
++                  "be passed off as having always been there.")
++    return 0
++
++
++def _cmd_verify(args: argparse.Namespace) -> int:
++    log = AttestationLog(args.log)
++    key = VerifyingKey.from_file(args.public_key)
++    ledger = EvidenceLedger(args.ledger) if args.ledger else None
++    verdict = verify_log(log.read(), key, ledger=ledger)
++
++    if args.json:
++        print(json.dumps(
++            {
++                "ok": verdict.ok,
++                "checked": verdict.checked,
++                "key_fingerprint": verdict.key_fingerprint,
++                "problems": verdict.problems,
++                "checks_skipped": verdict.checks_skipped,
++                "latest": verdict.latest.to_dict() if verdict.latest else None,
++            },
++            indent=2, sort_keys=True))
++    else:
++        print(verdict.summary())
++        if verdict.latest is not None:
++            print(f"  latest: attestation {verdict.latest.sequence}, "
++                  f"{verdict.latest.ledger_length} record(s), "
++                  f"{verdict.latest.attested_at}")
++        for problem in verdict.problems:
++            print(f"  ! {problem}")
++        print("\n  not checked:")
++        for skipped in verdict.checks_skipped:
++            print(f"    - {skipped}")
++    return 0 if verdict.ok else 1
++
++
++def _cmd_log(args: argparse.Namespace) -> int:
++    records = AttestationLog(args.log).read()
++    if args.json:
++        print(json.dumps([r.to_dict() for r in records], indent=2, sort_keys=True))
++        return 0
++    if not records:
++        print(f"{args.log}: no attestations")
++        return 0
++    for r in records:
++        print(f"{r.sequence:>4}  {r.attested_at}  len={r.ledger_length:<6} "
++              f"head={r.head_seq:<6} {r.head_link_hash[:12]}  key={r.key_fingerprint}"
++              f"  {r.basis.value}" + (f"  {r.note}" if r.note else ""))
++    print("\n  Nothing here was verified. `assurance attest verify` does that.")
++    return 0
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {
++        "keygen": _cmd_keygen,
++        "sign": _cmd_sign,
++        "verify": _cmd_verify,
++        "log": _cmd_log,
++    }
++    try:
++        return handlers[args.command](args)
++    except AttestationError as exc:
++        print(f"finding: {exc}", file=sys.stderr)
++        return 1
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/attest/keys.py b/src/assurance/attest/keys.py
+new file mode 100644
+index 0000000..d75d9e7
+--- /dev/null
++++ b/src/assurance/attest/keys.py
+@@ -0,0 +1,214 @@
++"""The key that turns tamper-evidence into tamper-proof, and where it must not live.
++
++A hash chain is tamper-*evident*: change a record and the links stop matching.
++It is not tamper-*proof*, because whoever holds the database can rewrite every
++link and produce a shorter, internally consistent history. The chain then
++verifies perfectly and says nothing about what was removed.
++
++The only defence is a value that left the building. Sign the head with a key the
++operator of the ledger does not hold, keep the signatures, and a rewind stops
++being deniable.
++
++Which makes where the key lives the entire security property, and why
++:meth:`SigningKey.save` refuses to write a private key into the directory
++holding the ledger it signs. A key stored beside the thing it protects protects
++nothing: whoever can rewrite the records can re-sign them. The refusal is not
++paternalism — it is the difference between this being a security control and
++being a decoration.
++
++Ed25519 throughout: small keys, small signatures, no parameter choices to get
++wrong, and no room for a curve or a padding mode to be selected badly.
++"""
++
++from __future__ import annotations
++
++import hashlib
++from dataclasses import dataclass
++from pathlib import Path
++
++try:
++    from cryptography.exceptions import InvalidSignature
++    from cryptography.hazmat.primitives import serialization
++    from cryptography.hazmat.primitives.asymmetric import ed25519
++except ImportError as _exc:  # pragma: no cover - environment, not logic
++    raise ImportError(
++        "assurance.attest needs the `cryptography` package for Ed25519. Install "
++        "it with `pip install 'neuralbridge[assurance-attest]'` or "
++        "`pip install cryptography`. This is the one runtime dependency in the "
++        "assurance package, and it is here because writing a signature scheme by "
++        "hand would be the worst decision in this repository."
++    ) from _exc
++
++from assurance.core.errors import AssuranceError
++
++__all__ = ["SigningKeyError", "SigningKey", "VerifyingKey"]
++
++
++class SigningKeyError(AssuranceError):
++    """A key is missing, malformed, or being stored somewhere it must not be."""
++
++
++def _fingerprint(public_bytes: bytes) -> str:
++    """A short, stable name for a key, to print next to a signature.
++
++    Sixteen hex characters of SHA-256 over the raw public key. Long enough that
++    two keys in one organisation will not collide, short enough to read aloud
++    over a telephone — which is how a public key actually gets confirmed
++    between two companies that do not already trust each other's email.
++    """
++    return hashlib.sha256(public_bytes).hexdigest()[:16]
++
++
++@dataclass(frozen=True)
++class VerifyingKey:
++    """The half anybody may hold. Verification needs nothing else."""
++
++    public: ed25519.Ed25519PublicKey
++
++    @classmethod
++    def from_pem(cls, text: str | bytes) -> VerifyingKey:
++        data = text.encode("utf-8") if isinstance(text, str) else text
++        try:
++            key = serialization.load_pem_public_key(data)
++        except (ValueError, TypeError) as exc:
++            raise SigningKeyError(f"not a readable PEM public key: {exc}") from exc
++        if not isinstance(key, ed25519.Ed25519PublicKey):
++            raise SigningKeyError(
++                "this is not an Ed25519 public key. Attestations are Ed25519 only, "
++                "so that there is no algorithm or parameter for anybody to get wrong."
++            )
++        return cls(public=key)
++
++    @classmethod
++    def from_file(cls, path: str | Path) -> VerifyingKey:
++        p = Path(path)
++        if not p.exists():
++            raise SigningKeyError(
++                f"{p} does not exist. A verifier needs the public key from a channel "
++                "that is not the same one the attestations arrived on; a signature "
++                "checked against a key that came with it proves nothing."
++            )
++        return cls.from_pem(p.read_bytes())
++
++    def raw_bytes(self) -> bytes:
++        raw: bytes = self.public.public_bytes(
++            encoding=serialization.Encoding.Raw,
++            format=serialization.PublicFormat.Raw,
++        )
++        return raw
++
++    def pem(self) -> str:
++        encoded: bytes = self.public.public_bytes(
++            encoding=serialization.Encoding.PEM,
++            format=serialization.PublicFormat.SubjectPublicKeyInfo,
++        )
++        return encoded.decode("ascii")
++
++    @property
++    def fingerprint(self) -> str:
++        return _fingerprint(self.raw_bytes())
++
++    def verify(self, message: bytes, signature: bytes) -> bool:
++        """True only for a signature this key made over exactly these bytes."""
++        try:
++            self.public.verify(signature, message)
++        except InvalidSignature:
++            return False
++        return True
++
++
++@dataclass(frozen=True)
++class SigningKey:
++    """The half that must live somewhere the ledger's operator cannot reach."""
++
++    private: ed25519.Ed25519PrivateKey
++
++    @classmethod
++    def generate(cls) -> SigningKey:
++        return cls(private=ed25519.Ed25519PrivateKey.generate())
++
++    @classmethod
++    def from_pem(cls, text: str | bytes, *, passphrase: str = "",
++                 where: str = "the supplied key") -> SigningKey:
++        """Load from PEM bytes. This is how a secrets manager hands over a key."""
++        data = text.encode("utf-8") if isinstance(text, str) else text
++        try:
++            key = serialization.load_pem_private_key(
++                data, password=passphrase.encode("utf-8") if passphrase else None
++            )
++        except TypeError as exc:
++            raise SigningKeyError(
++                f"{where} is encrypted and no passphrase was given."
++            ) from exc
++        except ValueError as exc:
++            raise SigningKeyError(
++                f"{where} could not be read: {exc}. If it is encrypted, the "
++                "passphrase is wrong."
++            ) from exc
++        if not isinstance(key, ed25519.Ed25519PrivateKey):
++            raise SigningKeyError(f"{where} is not an Ed25519 private key.")
++        return cls(private=key)
++
++    @classmethod
++    def load(cls, path: str | Path, *, passphrase: str = "") -> SigningKey:
++        p = Path(path)
++        if not p.exists():
++            raise SigningKeyError(f"{p} does not exist.")
++        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=str(p))
++
++    def save(
++        self, path: str | Path, *, passphrase: str = "", ledger: str | Path | None = None,
++    ) -> Path:
++        """Write the private key, refusing the one place it must never go.
++
++        ``ledger`` is the ledger this key will sign. When it is given and the
++        key would land in the same directory, the write is refused: a signing
++        key stored beside the records it signs is not a control, because
++        whoever can rewrite the records can re-sign them.
++        """
++        p = Path(path).resolve()
++        if p.exists():
++            raise SigningKeyError(
++                f"{p} already exists. Refusing to overwrite a signing key: every "
++                "attestation ever made with the old one becomes unverifiable, and "
++                "that is indistinguishable from the old one being repudiated."
++            )
++        if ledger is not None:
++            led = Path(ledger).resolve()
++            if p.parent == led.parent:
++                raise SigningKeyError(
++                    f"refusing to write the signing key into {p.parent}, which is "
++                    f"where {led.name} lives. The whole value of an attestation is "
++                    "that the key is somewhere the ledger's operator is not. Put it "
++                    "on a token, in a secrets manager, or on another machine."
++                )
++        if not passphrase:
++            # Not refused: an unattended signer in a locked-down secrets store is
++            # a legitimate deployment, and forcing a passphrase there produces a
++            # passphrase in an environment variable, which is worse.
++            encryption: serialization.KeySerializationEncryption = (
++                serialization.NoEncryption())
++        else:
++            encryption = serialization.BestAvailableEncryption(
++                passphrase.encode("utf-8"))
++
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_bytes(self.private.private_bytes(
++            encoding=serialization.Encoding.PEM,
++            format=serialization.PrivateFormat.PKCS8,
++            encryption_algorithm=encryption,
++        ))
++        p.chmod(0o600)
++        return p
++
++    @property
++    def verifying(self) -> VerifyingKey:
++        return VerifyingKey(public=self.private.public_key())
++
++    @property
++    def fingerprint(self) -> str:
++        return self.verifying.fingerprint
++
++    def sign(self, message: bytes) -> bytes:
++        signature: bytes = self.private.sign(message)
++        return signature
+diff --git a/src/assurance/billing/plans.py b/src/assurance/billing/plans.py
+index aefed5e..102d746 100644
+--- a/src/assurance/billing/plans.py
++++ b/src/assurance/billing/plans.py
+@@ -41,7 +41,8 @@ class Plan:
+     cases_per_day: int | None = None
+     #: May export a verifiable evidence bundle.
+     export: bool = False
+-    #: May request a signed head attestation.
++    #: May have the service counter-sign the head of their own ledger. The
++    #: verification side is deliberately outside this gate: see attest_routes.
+     signed_attestation: bool = False
+     #: May verify a machine trace against a declared safety envelope and seal
+     #: the resulting evidence bundle. The separation calculator and the bundle
+@@ -109,6 +110,9 @@ PLANS: dict[Tier, Plan] = {
+             "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
+             "still describes the machine you were sold. Always free: the person who "
+             "most needs this is the buyer, not the seller",
++            "POST /v1/ledger/attest/verify and GET /v1/ledger/attest/key — check "
++            "anybody's signed head attestations. Always free: the audience for an "
++            "attestation is a regulator or an insurer, not an account holder",
+             "20 validations and 20 separation calculations per day, per address",
+         ),
+     ),
+@@ -172,7 +176,10 @@ PLANS: dict[Tier, Plan] = {
+             "Declarations of Conformity bound to a configuration hash, so a "
+             "declaration can be shown to have stopped describing the machine",
+             "Unlimited product families and cases",
+-            "Signed head attestation for the evidence ledger",
++            "Counter-signed head attestation: POST /v1/ledger/attest signs the "
++            "head of your ledger with a key you do not hold, so a rewind "
++            "contradicts a signed statement. Your ledger is never uploaded — "
++            "we sign three numbers and never see a record",
+             "Priority response",
+         ),
+     ),
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index dd41653..7cf944a 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -13,6 +13,7 @@ _DOMAINS = {
+     "fleet": "assurance.fleet.cli",
+     "bridge": "assurance.bridge.cli",
+     "watch": "assurance.watch.cli",
++    "attest": "assurance.attest.cli",
+ }
+ 
+ 
+diff --git a/tests/test_assurance_attest.py b/tests/test_assurance_attest.py
+new file mode 100644
+index 0000000..886245e
+--- /dev/null
++++ b/tests/test_assurance_attest.py
+@@ -0,0 +1,548 @@
++"""What a signature over a ledger head must refuse to say.
++
++The interesting tests here are not the ones where a signature verifies. They
++are the ones where a perfectly valid chain has been rewound and the chain check
++is happy about it — because that is the case the whole module exists for, and
++it is the case every hash-chain audit log ships without.
++"""
++
++from __future__ import annotations
++
++import importlib
++import sqlite3
++
++import pytest
++from cryptography.hazmat.primitives import serialization
++from fastapi.testclient import TestClient
++
++from assurance.attest import (
++    ATTESTATION_FORMAT,
++    AttestationBasis,
++    AttestationError,
++    AttestationLog,
++    HeadAttestation,
++    LedgerHead,
++    SigningKey,
++    SigningKeyError,
++    VerifyingKey,
++    attest,
++    head_of,
++    verify_log,
++)
++from assurance.core.evidence import Actor, Evidence, Origin
++from assurance.evidence.ledger import GENESIS, EvidenceLedger
++
++OPERATOR_KEY = "operator-key-test"
++PASSPHRASE = "correct horse battery staple"  # noqa: S105
++
++
++def _ledger(path, count: int = 4) -> EvidenceLedger:
++    led = EvidenceLedger(path)
++    for n in range(count):
++        led.append(
++            Evidence(
++                kind="test.record",
++                body={"n": n},
++                actor=Actor(identifier="tester"),
++                origin=Origin(system="pytest"),
++            ).seal(),
++            subject=f"machine-{n}",
++        )
++    return led
++
++
++def _truncate(path, keep: int) -> None:
++    """Rewind a ledger the way an administrator with write access would."""
++    db = sqlite3.connect(path)
++    db.execute("DELETE FROM chain WHERE seq > ?", (keep,))
++    db.commit()
++    db.close()
++
++
++# --------------------------------------------------------------------------
++class TestKeys:
++    def test_a_key_will_not_be_written_beside_the_ledger_it_signs(self, tmp_path):
++        ledger = tmp_path / "data" / "register.db"
++        ledger.parent.mkdir()
++        with pytest.raises(SigningKeyError) as exc:
++            SigningKey.generate().save(
++                tmp_path / "data" / "key.pem", ledger=ledger)
++        assert "refusing to write the signing key" in str(exc.value)
++
++    def test_a_key_is_not_silently_overwritten(self, tmp_path):
++        first = SigningKey.generate()
++        first.save(tmp_path / "k.pem")
++        with pytest.raises(SigningKeyError) as exc:
++            SigningKey.generate().save(tmp_path / "k.pem")
++        assert "already exists" in str(exc.value)
++        # And the original still loads, which is the point of the refusal.
++        assert SigningKey.load(tmp_path / "k.pem").fingerprint == first.fingerprint
++
++    def test_a_passphrase_is_honoured_in_both_directions(self, tmp_path):
++        key = SigningKey.generate()
++        key.save(tmp_path / "k.pem", passphrase=PASSPHRASE)
++        with pytest.raises(SigningKeyError):
++            SigningKey.load(tmp_path / "k.pem")
++        assert SigningKey.load(
++            tmp_path / "k.pem", passphrase=PASSPHRASE).fingerprint == key.fingerprint
++
++    def test_the_private_key_file_is_not_world_readable(self, tmp_path):
++        path = SigningKey.generate().save(tmp_path / "k.pem")
++        assert oct(path.stat().st_mode)[-3:] == "600"
++
++    def test_a_public_key_round_trips_through_pem(self, tmp_path):
++        key = SigningKey.generate()
++        (tmp_path / "k.pub").write_text(key.verifying.pem())
++        loaded = VerifyingKey.from_file(tmp_path / "k.pub")
++        assert loaded.fingerprint == key.fingerprint
++        assert loaded.verify(b"hello", key.sign(b"hello"))
++
++    def test_a_signature_over_other_bytes_does_not_verify(self):
++        key = SigningKey.generate()
++        assert not key.verifying.verify(b"goodbye", key.sign(b"hello"))
++
++    def test_an_rsa_key_is_refused_by_name(self, tmp_path):
++        from cryptography.hazmat.primitives.asymmetric import rsa
++
++        rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
++        pem = rsa_key.public_key().public_bytes(
++            encoding=serialization.Encoding.PEM,
++            format=serialization.PublicFormat.SubjectPublicKeyInfo,
++        )
++        with pytest.raises(SigningKeyError) as exc:
++            VerifyingKey.from_pem(pem)
++        assert "Ed25519" in str(exc.value)
++
++
++# --------------------------------------------------------------------------
++class TestAttesting:
++    def test_the_head_of_an_empty_ledger_is_still_worth_signing(self, tmp_path):
++        led = EvidenceLedger(tmp_path / "l.db")
++        head = head_of(led)
++        assert head.length == 0
++        assert head.head_seq == 0
++        assert head.head_link_hash == GENESIS
++
++    def test_a_signed_head_verifies_against_the_public_key(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "att.jsonl")
++        record = attest(led, key, log, note="weekly")
++
++        assert record.sequence == 1
++        assert record.ledger_length == 4
++        assert record.head_seq == 4
++        assert record.basis is AttestationBasis.READ_FROM_LEDGER
++        assert record.format == ATTESTATION_FORMAT
++        assert record.verified_by(key.verifying)
++
++    def test_the_basis_says_whether_the_signer_saw_the_ledger(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        declared = LedgerHead(
++            length=4, head_seq=4, head_link_hash=led.entries()[-1].link_hash)
++        record = attest(declared, key, AttestationLog(tmp_path / "a.jsonl"))
++        assert record.basis is AttestationBasis.DECLARED_BY_HOLDER
++        # And it is inside the signed bytes, so it cannot be upgraded later.
++        assert b"declared_by_holder" in record.signed_payload()
++
++    def test_a_ledger_that_does_not_verify_is_never_attested(self, tmp_path):
++        path = tmp_path / "l.db"
++        _ledger(path)
++        db = sqlite3.connect(path)
++        db.execute("UPDATE chain SET payload = ? WHERE seq = 2", ('{"kind":"x"}',))
++        db.commit()
++        db.close()
++        with pytest.raises(AttestationError) as exc:
++            attest(EvidenceLedger(path), SigningKey.generate(),
++                   AttestationLog(tmp_path / "a.jsonl"))
++        assert "refusing to attest a ledger that does not verify" in str(exc.value)
++
++    def test_a_rewound_ledger_is_refused_and_the_message_is_the_finding(self, tmp_path):
++        path = tmp_path / "l.db"
++        led = _ledger(path)
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(led, key, log)
++
++        _truncate(path, keep=2)
++        rewound = EvidenceLedger(path)
++        # The chain is perfectly happy. This is the whole problem.
++        assert rewound.verify_chain()[0] is True
++
++        with pytest.raises(AttestationError) as exc:
++            attest(rewound, key, log)
++        message = str(exc.value)
++        assert "holds 2 record(s)" in message
++        assert "signed for 4" in message
++        assert "does not get shorter" in message
++
++    def test_a_fork_at_an_attested_position_is_refused(self, tmp_path):
++        path = tmp_path / "l.db"
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(_ledger(path), key, log)
++
++        # Same length, different history: rebuild seq 4 with other content.
++        db = sqlite3.connect(path)
++        db.execute("UPDATE chain SET link_hash = ? WHERE seq = 4", ("f" * 64,))
++        db.commit()
++        db.close()
++        # Rebuild the ledger so it self-verifies at the new content by rewinding
++        # and re-appending — the realistic attack, not a hand-edited hash.
++        _truncate(path, keep=3)
++        rebuilt = EvidenceLedger(path)
++        rebuilt.append(
++            Evidence(kind="test.record", body={"n": "different"},
++                     actor=Actor(identifier="tester"),
++                     origin=Origin(system="pytest")).seal(),
++            subject="machine-3")
++        assert rebuilt.verify_chain()[0] is True
++        assert len(rebuilt) == 4
++
++        with pytest.raises(AttestationError) as exc:
++            attest(rebuilt, key, log)
++        assert "fork, not a gap" in str(exc.value)
++
++    def test_a_different_key_needs_to_be_declared_a_rotation(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(led, SigningKey.generate(), log)
++        second = SigningKey.generate()
++        with pytest.raises(AttestationError) as exc:
++            attest(led, second, log)
++        assert "rotation" in str(exc.value)
++        assert attest(led, second, log, rotating=True).sequence == 2
++
++    def test_each_attestation_names_its_predecessor(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        first = attest(led, key, log)
++        led.append(
++            Evidence(kind="test.record", body={"n": 99},
++                     actor=Actor(identifier="tester"),
++                     origin=Origin(system="pytest")).seal())
++        second = attest(led, key, log)
++        assert first.previous == ""
++        assert second.previous == first.content_hash()
++        assert second.ledger_length == 5
++
++    def test_a_head_hash_that_cannot_have_come_from_a_ledger_is_refused(self):
++        with pytest.raises(AttestationError) as exc:
++            LedgerHead(length=1, head_seq=1, head_link_hash="not-a-hash")
++        assert "SHA-256" in str(exc.value)
++
++    def test_an_empty_ledger_cannot_claim_a_head(self):
++        with pytest.raises(AttestationError):
++            LedgerHead(length=0, head_seq=3, head_link_hash="a" * 64)
++
++
++# --------------------------------------------------------------------------
++class TestVerifying:
++    def test_a_clean_log_verifies_and_still_names_what_it_did_not_check(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(led, key, log)
++
++        verdict = verify_log(log.read(), key.verifying, ledger=led)
++        assert verdict.ok
++        assert verdict.problems == []
++        assert any("belongs to whom you think" in c for c in verdict.checks_skipped)
++
++    def test_without_a_ledger_the_omission_is_stated_not_implied(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(led, key, log)
++
++        verdict = verify_log(log.read(), key.verifying)
++        assert verdict.ok
++        assert any("ledger itself was not examined" in c for c in verdict.checks_skipped)
++
++    def test_a_rewind_is_found_by_verification_as_well_as_by_signing(self, tmp_path):
++        path = tmp_path / "l.db"
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(_ledger(path), key, log)
++        _truncate(path, keep=2)
++
++        verdict = verify_log(log.read(), VerifyingKey.from_pem(key.verifying.pem()),
++                             ledger=EvidenceLedger(path))
++        assert not verdict.ok
++        assert any("2 record(s) were removed after being attested" in p
++                   for p in verdict.problems)
++
++    def test_the_wrong_public_key_fails_every_signature(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(led, SigningKey.generate(), log)
++        verdict = verify_log(log.read(), SigningKey.generate().verifying, ledger=led)
++        assert not verdict.ok
++        assert any("signature does not verify" in p for p in verdict.problems)
++
++    def test_an_edited_attestation_stops_verifying(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        record = attest(led, key, log)
++
++        forged = HeadAttestation(
++            **{**record.to_dict(),
++               "basis": record.basis,
++               "ledger_length": 99})
++        assert not forged.verified_by(key.verifying)
++
++    def test_an_attestation_removed_from_the_middle_is_detected(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        for n in range(3):
++            attest(led, key, log)
++            led.append(
++                Evidence(kind="test.record", body={"n": 100 + n},
++                         actor=Actor(identifier="tester"),
++                         origin=Origin(system="pytest")).seal())
++        records = log.read()
++        assert len(records) == 3
++
++        verdict = verify_log([records[0], records[2]], key.verifying)
++        assert not verdict.ok
++        assert any("out of order" in p for p in verdict.problems)
++        assert any("spliced" in p for p in verdict.problems)
++
++    def test_a_counter_signature_is_labelled_as_one_in_what_was_not_checked(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        attest(LedgerHead(length=4, head_seq=4,
++                          head_link_hash=led.entries()[-1].link_hash),
++               key, log)
++        verdict = verify_log(log.read(), key.verifying)
++        assert verdict.ok
++        assert any("never saw the ledger" in c for c in verdict.checks_skipped)
++
++    def test_a_damaged_log_is_a_finding_not_a_crash(self, tmp_path):
++        path = tmp_path / "a.jsonl"
++        path.write_text('{"not": "an attestation"}\n')
++        with pytest.raises(AttestationError) as exc:
++            AttestationLog(path).read()
++        assert "missing" in str(exc.value)
++
++    def test_a_signature_that_is_not_base64_is_a_finding(self, tmp_path):
++        led = _ledger(tmp_path / "l.db")
++        key = SigningKey.generate()
++        log = AttestationLog(tmp_path / "a.jsonl")
++        record = attest(led, key, log)
++        broken = HeadAttestation(
++            **{**record.to_dict(), "basis": record.basis, "signature": "!!!!"})
++        with pytest.raises(AttestationError):
++            broken.signature_bytes()
++
++
++# --------------------------------------------------------------------------
++class TestCli:
++    def _run(self, *argv) -> int:
++        from assurance.attest.cli import main
++
++        return main(list(argv))
++
++    def test_keygen_writes_both_halves(self, tmp_path, capsys):
++        assert self._run("keygen", "--out", str(tmp_path / "k.pem")) == 0
++        assert (tmp_path / "k.pem").exists()
++        assert (tmp_path / "k.pem.pub").exists()
++        assert "not encrypted" in capsys.readouterr().out
++
++    def test_sign_then_verify_exits_zero(self, tmp_path, capsys):
++        _ledger(tmp_path / "l.db")
++        self._run("keygen", "--out", str(tmp_path / "k.pem"))
++        capsys.readouterr()
++        assert self._run(
++            "sign", "--ledger", str(tmp_path / "l.db"),
++            "--key", str(tmp_path / "k.pem"),
++            "--log", str(tmp_path / "a.jsonl")) == 0
++        assert self._run(
++            "verify", "--log", str(tmp_path / "a.jsonl"),
++            "--public-key", str(tmp_path / "k.pem.pub"),
++            "--ledger", str(tmp_path / "l.db")) == 0
++
++    def test_a_finding_exits_one_and_a_missing_file_exits_two(self, tmp_path):
++        path = tmp_path / "l.db"
++        _ledger(path)
++        self._run("keygen", "--out", str(tmp_path / "k.pem"))
++        self._run("sign", "--ledger", str(path), "--key", str(tmp_path / "k.pem"),
++                  "--log", str(tmp_path / "a.jsonl"))
++        _truncate(path, keep=1)
++
++        assert self._run(
++            "verify", "--log", str(tmp_path / "a.jsonl"),
++            "--public-key", str(tmp_path / "k.pem.pub"),
++            "--ledger", str(path)) == 1
++        assert self._run(
++            "sign", "--ledger", str(path), "--key", str(tmp_path / "k.pem"),
++            "--log", str(tmp_path / "a.jsonl")) == 1
++        assert self._run(
++            "verify", "--log", str(tmp_path / "a.jsonl"),
++            "--public-key", str(tmp_path / "nope.pub")) == 2
++
++    def test_the_log_verb_says_it_verified_nothing(self, tmp_path, capsys):
++        _ledger(tmp_path / "l.db")
++        self._run("keygen", "--out", str(tmp_path / "k.pem"))
++        self._run("sign", "--ledger", str(tmp_path / "l.db"),
++                  "--key", str(tmp_path / "k.pem"), "--log", str(tmp_path / "a.jsonl"))
++        capsys.readouterr()
++        assert self._run("log", "--log", str(tmp_path / "a.jsonl")) == 0
++        assert "Nothing here was verified" in capsys.readouterr().out
++
++    def test_the_passphrase_comes_from_the_environment_not_the_argv(
++            self, tmp_path, monkeypatch):
++        monkeypatch.setenv("TEST_ATTEST_PASS", PASSPHRASE)
++        assert self._run("keygen", "--out", str(tmp_path / "k.pem"),
++                         "--passphrase-env", "TEST_ATTEST_PASS") == 0
++        with pytest.raises(SigningKeyError):
++            SigningKey.load(tmp_path / "k.pem")
++        assert SigningKey.load(tmp_path / "k.pem", passphrase=PASSPHRASE)
++
++    def test_a_missing_passphrase_variable_is_named(self, tmp_path, monkeypatch, capsys):
++        monkeypatch.delenv("TEST_ATTEST_PASS", raising=False)
++        assert self._run("keygen", "--out", str(tmp_path / "k.pem"),
++                         "--passphrase-env", "TEST_ATTEST_PASS") == 1
++        assert "$TEST_ATTEST_PASS is not set" in capsys.readouterr().err
++
++
++# --------------------------------------------------------------------------
++@pytest.fixture()
++def attest_env(tmp_path, monkeypatch):
++    key_path = tmp_path / "secrets" / "service.pem"
++    SigningKey.generate().save(key_path)
++    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
++    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
++    monkeypatch.setenv("ASSURANCE_ATTEST_KEY", str(key_path))
++    monkeypatch.setenv("ASSURANCE_ATTEST_LOGS", str(tmp_path / "attestations"))
++    monkeypatch.setenv("ASSURANCE_API_KEYS", OPERATOR_KEY)
++    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
++    from assurance.api import deps
++
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++    return tmp_path
++
++
++@pytest.fixture()
++def client(attest_env):
++    service = importlib.import_module("assurance.api.service")
++    with TestClient(service.create_app()) as c:
++        yield c
++
++
++class TestApi:
++    def _head(self, tmp_path, count=4):
++        led = _ledger(tmp_path / "customer.db", count)
++        entries = led.entries()
++        return {
++            "ledger_length": len(entries),
++            "head_seq": entries[-1].seq,
++            "head_link_hash": entries[-1].link_hash,
++        }
++
++    def test_the_public_key_is_free_and_says_what_it_does_not_prove(self, client):
++        response = client.get("/v1/ledger/attest/key")
++        assert response.status_code == 200
++        body = response.json()
++        assert body["algorithm"] == "Ed25519"
++        assert "BEGIN PUBLIC KEY" in body["public_key_pem"]
++        assert any("second route" in c for c in body["checks_skipped"])
++
++    def test_counter_signing_needs_the_cell_plan(self, client, attest_env, tmp_path):
++        from assurance.billing.accounts import AccountStore
++
++        store = AccountStore(str(attest_env / "accounts.db"))
++        account = store.upsert_account(email="a@b.de", tier="register")
++        key = store.issue_key(account.id)
++        response = client.post("/v1/ledger/attest",
++                               json=self._head(attest_env),
++                               headers={"X-API-Key": key})
++        assert response.status_code == 402
++        assert response.json()["detail"]["error"] == (
++            "plan_does_not_include_signed_attestation")
++
++    def test_a_counter_signature_never_receives_the_ledger(self, client, attest_env):
++        head = self._head(attest_env)
++        response = client.post("/v1/ledger/attest", json=head,
++                               headers={"X-API-Key": OPERATOR_KEY})
++        assert response.status_code == 200
++        body = response.json()
++        record = body["attestation"]
++        assert record["basis"] == "declared_by_holder"
++        assert record["head_link_hash"] == head["head_link_hash"]
++        assert any("did not verify your chain" in c for c in body["checks_skipped"])
++
++    def test_the_service_refuses_to_sign_a_shorter_ledger(self, client, attest_env):
++        head = self._head(attest_env)
++        assert client.post("/v1/ledger/attest", json=head,
++                           headers={"X-API-Key": OPERATOR_KEY}).status_code == 200
++        shorter = dict(head, ledger_length=2, head_seq=2)
++        response = client.post("/v1/ledger/attest", json=shorter,
++                               headers={"X-API-Key": OPERATOR_KEY})
++        assert response.status_code == 409
++        assert "does not get shorter" in response.json()["detail"]["finding"]
++
++    def test_verification_is_free_and_needs_no_key(self, client, attest_env):
++        signed = client.post("/v1/ledger/attest", json=self._head(attest_env),
++                             headers={"X-API-Key": OPERATOR_KEY}).json()["attestation"]
++        response = client.post("/v1/ledger/attest/verify",
++                               json={"attestations": [signed]})
++        assert response.status_code == 200
++        body = response.json()
++        assert body["ok"] is True
++        assert any("checking its own work" in c for c in body["checks_skipped"])
++
++    def test_a_tampered_attestation_fails_free_verification(self, client, attest_env):
++        signed = client.post("/v1/ledger/attest", json=self._head(attest_env),
++                             headers={"X-API-Key": OPERATOR_KEY}).json()["attestation"]
++        signed["ledger_length"] = 40
++        response = client.post("/v1/ledger/attest/verify",
++                               json={"attestations": [signed]})
++        assert response.json()["ok"] is False
++
++    def test_a_head_hash_that_is_not_a_hash_is_refused(self, client, attest_env):
++        response = client.post(
++            "/v1/ledger/attest",
++            json={"ledger_length": 1, "head_seq": 1, "head_link_hash": "z" * 64},
++            headers={"X-API-Key": OPERATOR_KEY})
++        assert response.status_code == 422
++
++    def test_without_a_key_the_service_says_so_rather_than_inventing_one(
++            self, client, monkeypatch):
++        monkeypatch.delenv("ASSURANCE_ATTEST_KEY")
++        response = client.get("/v1/ledger/attest/key")
++        assert response.status_code == 503
++        assert response.json()["detail"]["error"] == "no_attestation_key_configured"
++
++    def test_the_key_can_come_from_the_environment_as_a_secret_manager_gives_it(
++            self, client, monkeypatch):
++        """fly secrets, and every other secrets manager, hand over a value, not a path."""
++        monkeypatch.delenv("ASSURANCE_ATTEST_KEY")
++        key = SigningKey.generate()
++        pem = key.private.private_bytes(
++            encoding=serialization.Encoding.PEM,
++            format=serialization.PrivateFormat.PKCS8,
++            encryption_algorithm=serialization.NoEncryption(),
++        ).decode("ascii")
++        monkeypatch.setenv("ASSURANCE_ATTEST_KEY_PEM", pem)
++        body = client.get("/v1/ledger/attest/key").json()
++        assert body["fingerprint"] == key.fingerprint
++
++    def test_an_unreadable_key_in_the_environment_is_503_not_500(
++            self, client, monkeypatch):
++        monkeypatch.setenv("ASSURANCE_ATTEST_KEY_PEM", "-----BEGIN PRIVATE KEY-----\nnope")
++        response = client.get("/v1/ledger/attest/key")
++        assert response.status_code == 503
++        assert response.json()["detail"]["error"] == "attestation_key_unusable"
++
++    def test_the_cell_plan_page_matches_what_the_code_gates(self, client):
++        plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
++        assert plans["cell"]["limits"]["signed_attestation"] is True
++        assert plans["register"]["limits"]["signed_attestation"] is False
++        assert any("attest" in line for line in plans["cell"]["includes"])
+-- 
+2.43.0
+
