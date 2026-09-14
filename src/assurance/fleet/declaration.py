@@ -297,8 +297,8 @@ def check_declaration(
             statement=(
                 f"the configuration is the one declaration {declaration.doc_id} was "
                 f"signed against ({current[:12]}), and the evidence for "
-                + ", ".join(lapsed) + " no longer stands. The declaration names a "
-                "machine that is unchanged and a demonstration that has lapsed."
+                + ", ".join(lapsed) + " does not stand. The declaration names a "
+                "machine that is unchanged and a demonstration that does not."
             ),
             checks_skipped=tuple(caveats),
         )
