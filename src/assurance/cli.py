@@ -15,6 +15,7 @@ _DOMAINS = {
     "watch": "assurance.watch.cli",
     "attest": "assurance.attest.cli",
     "kit": "assurance.kit.cli",
+    "supplier": "assurance.supplier.cli",
 }
 
 
