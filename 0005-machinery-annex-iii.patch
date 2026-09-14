@@ -1,0 +1,3944 @@
+From aa6c7efa179dbc77054e1dfbad00e0e98f2f4069 Mon Sep 17 00:00:00 2001
+From: Claude Opus 5 <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 07:31:43 +0000
+Subject: [PATCH] assurance.machinery: safety software identity, intervention,
+ and the staleness join
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WHY
+  Machinery Regulation (EU) 2023/1230 applies 20 January 2027. Annex III 1.1.9
+  requires a machine to identify its safety-relevant software and record
+  evidence of intervention in it. Nobody can do either today. And the piece
+  that is worth more than either: a change to safety software silently
+  invalidates the validation that preceded it, and no product on the market
+  can tell you which validation, or when.
+
+WHAT
+  src/assurance/machinery/manifest.py     what is on the machine, hash by hash,
+                                           with the provenance of every hash
+  src/assurance/machinery/divergence.py   whether it still matches the
+                                           configuration it was CE-marked with
+  src/assurance/machinery/intervention.py who changed what, who authorised it,
+                                           what was re-run
+  src/assurance/machinery/staleness.py    THE JOIN: which safety functions still
+                                           have evidence that describes the
+                                           machine as it is today
+  src/assurance/machinery/record.py       sealing into the ledger; the passport
+  src/assurance/machinery/cli.py          record-manifest / record-change / diff
+                                           / coverage / passport / check
+  src/assurance/api/machinery_routes.py   six endpoints, two of them free
+  examples/machinery/                     a cell whose firmware was swapped
+                                           without the version string moving
+  deploy/assurance/MACHINERY.md           what it does and what it will not say
+
+  src/assurance/machine/bundle.py         a verification now carries the time of
+                                           the run it describes, and may be
+                                           sealed under a machine key
+
+CUSTOMER VALUE
+  "SF-01 protective stop — STALE. Last verified 9 February; invalidated by
+  INT-0007 on 14 March, which changed the safety controller firmware and re-ran
+  nothing. The cell has run 183 days on a validation that stopped describing
+  it." No integrator, insurer or plant manager has ever been handed that
+  sentence, and every one of them needs it before January 2027.
+
+RISK
+  The inference must never over-claim, so every link is declared by the customer
+  and visible in the output. A function with no declared checks reports
+  not_demonstrable, never covered. An item with no hash reports uncomparable,
+  never unchanged. A verification is dated by the run, not by the filing. And
+  every assessment states that it cannot confirm the manifest is complete: an
+  item nobody listed is covered by nothing here and reported by nothing here.
+
+ROLLBACK
+  git revert this commit. Outside assurance/machinery it touches bundle.py
+  (two additive fields), plans.py (one free quota and copy), deps usage,
+  one router, one CLI domain, one ruff ignore.
+
+TESTS
+  400 passed (80 new), ruff clean over src/assurance and the new tests.
+  The end-to-end case — a March firmware change stranding a February sign-off —
+  is tested through the real ledger, not a stub.
+
+SUCCESS CONDITION
+  One integrator runs `machinery coverage` on a cell they believed was signed
+  off, finds a stale safety function, and cannot unsee it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/MACHINERY.md             | 152 +++++
+ examples/machinery/intervention-0007.json |  22 +
+ examples/machinery/manifest-as-found.json |  99 +++
+ examples/machinery/manifest-baseline.json |  99 +++
+ pyproject.toml                            |   1 +
+ src/assurance/api/machinery_routes.py     | 286 +++++++++
+ src/assurance/api/service.py              |   7 +
+ src/assurance/billing/plans.py            |  17 +-
+ src/assurance/cli.py                      |   1 +
+ src/assurance/machine/bundle.py           |  22 +-
+ src/assurance/machinery/__init__.py       |  96 +++
+ src/assurance/machinery/cli.py            | 221 +++++++
+ src/assurance/machinery/divergence.py     | 310 ++++++++++
+ src/assurance/machinery/intervention.py   | 298 +++++++++
+ src/assurance/machinery/manifest.py       | 440 ++++++++++++++
+ src/assurance/machinery/record.py         | 406 +++++++++++++
+ src/assurance/machinery/staleness.py      | 411 +++++++++++++
+ tests/test_assurance_machinery.py         | 705 ++++++++++++++++++++++
+ tests/test_sandbox.py                     |   3 +-
+ 19 files changed, 3587 insertions(+), 9 deletions(-)
+ create mode 100644 deploy/assurance/MACHINERY.md
+ create mode 100644 examples/machinery/intervention-0007.json
+ create mode 100644 examples/machinery/manifest-as-found.json
+ create mode 100644 examples/machinery/manifest-baseline.json
+ create mode 100644 src/assurance/api/machinery_routes.py
+ create mode 100644 src/assurance/machinery/__init__.py
+ create mode 100644 src/assurance/machinery/cli.py
+ create mode 100644 src/assurance/machinery/divergence.py
+ create mode 100644 src/assurance/machinery/intervention.py
+ create mode 100644 src/assurance/machinery/manifest.py
+ create mode 100644 src/assurance/machinery/record.py
+ create mode 100644 src/assurance/machinery/staleness.py
+ create mode 100644 tests/test_assurance_machinery.py
+
+diff --git a/deploy/assurance/MACHINERY.md b/deploy/assurance/MACHINERY.md
+new file mode 100644
+index 0000000..324af28
+--- /dev/null
++++ b/deploy/assurance/MACHINERY.md
+@@ -0,0 +1,152 @@
++# Machinery Regulation Annex III 1.1.9
++
++Machinery Regulation (EU) 2023/1230 applies from **20 January 2027**. Annex III
++1.1.9 requires a machine to identify its safety-relevant software and to record
++evidence of intervention in it.
++
++Almost nobody can do either today. The safety PLC program is on a laptop, the
++scanner zones are in a vendor tool, the robot's safety parameters are in the
++controller, and the only record that a technician changed any of them is that
++technician's memory.
++
++## The three verbs
++
++```bash
++assurance machinery record-manifest manifest.json --ledger register.db
++assurance machinery record-change   intervention.json --ledger register.db
++assurance machinery coverage        manifest.json --ledger register.db
++```
++
++`coverage` exits non-zero when any declared safety function is not currently
++covered, so it is a gate, not a report.
++
++## What a manifest is
++
++One machine, one moment, one list of safety-relevant software. The field the
++whole product turns on is `hash_source` per item:
++
++| `hash_source` | what it means | tier ceiling |
++|---|---|---|
++| `read_from_machine` | hashed off the controller | `validated` |
++| `supplied_by_vendor` | hashed from a file the supplier sent | `community` |
++| `declared` | somebody typed a version number | `profile` |
++
++One declared item among fifty read from the machine drags the whole manifest to
++`profile`, and that is correct: the manifest is a statement about the machine's
++configuration as a whole.
++
++An item with no hash is reported as **uncomparable**, never as unchanged.
++
++## Drift
++
++```bash
++assurance machinery diff \
++  --baseline examples/machinery/manifest-baseline.json \
++  --observed examples/machinery/manifest-as-found.json
++```
++
++```
++Grimaldi/AR-7#0412: SAFETY-RELEVANT DRIFT — a safety-bearing item has changed
++  !! ITM-FW: the artefact changed: aaaaaaaaaaaa → dddddddddddd,
++             with the version still reported as '3.8.2'
++       affects SF-01, SF-02
++```
++
++The grading is deliberately narrow. A version string moving while the artefact
++stays byte-identical is `administrative` — reporting that as a safety finding
++trains people to ignore the report. A hash moving on an item that implements a
++safety function is the finding. A firmware swap that did **not** bump the
++version string, as above, is the one nobody catches by hand.
++
++Free and unmetered-by-account at `POST /v1/machinery/diff`, 10 per day.
++
++## The join — the part nobody else has
++
++`assurance.machine` says: *on this run the cell met its declared separation,
++speed and workspace limits.* `assurance.machinery` says: *on 14 March a
++technician replaced the safety controller firmware.* Separately, each is a file.
++
++```
++Grimaldi/AR-7#0412 — GAPS
++  [STALE ] SF-01 [PL d]  Protective stop on zone intrusion
++           last verified by c0f9dcda3cd6 on 2026-02-09; invalidated by INT-0007
++           on 2026-03-14, which changed ITM-FW and re-ran nothing with sealed evidence.
++           running 183 day(s) without valid evidence for this function.
++  [n/a   ] SF-03 [PL d]  Emergency stop
++           this function declares no verification check, so no verification can cover it.
++```
++
++The inference is mechanical, not clever, and every link is declared by the
++customer so a reviewer can point at the one they disagree with:
++
++1. an intervention names the **item** it touched
++2. the manifest says which **safety functions** that item implements
++3. each function declares the **verification checks** that exercise it
++4. a verification recorded before that intervention, whose verified checks
++   intersect that set, no longer describes the machine
++
++A verification is dated by **when the run happened**, not when the bundle was
++filed. A run captured in February and filed in June is evidence about February.
++
++## Coverage states
++
++| state | meaning |
++|---|---|
++| `current` | a passing verification exists and nothing since has disturbed it |
++| `stale` | it was verified, and a later intervention invalidated that verification |
++| `failing` | the checks for this function ran and did not pass |
++| `never_verified` | no verification has ever exercised this function |
++| `not_demonstrable` | the function declares no checks, so nothing could cover it |
++
++Only `current` counts as covered. `not_demonstrable` is not a pass — it is the
++system telling you it has nothing to say.
++
++## Intervention records
++
++A record that names only *what* changed is a log. A record that also names *who
++authorised it* and *what was re-run* is evidence. An intervention is recorded
++either way — refusing an undocumented change would push it back to where it
++lives now, which is nowhere — and its own findings travel with the sealed
++record:
++
++```
++    authorised: NO
++    revalidated: NO
++    !! a safety-bearing item was changed and nothing was re-run. Every
++       verification of SF-01, SF-02 that predates this change no longer
++       describes the machine.
++    !! a safety-bearing item was changed with no recorded authorisation.
++```
++
++`kind: reconstructed` marks a record written after the fact, and says in its
++findings that the times and attribution are somebody's recollection.
++
++## The passport
++
++```bash
++assurance machinery passport manifest.json --ledger register.db \
++  --actor a.person --out passport.json
++```
++
++Identity, configuration, change history, and the coverage position for every
++declared safety function — sealed as one object. To re-check somebody else's:
++
++```bash
++assurance machinery check passport.json --ledger register.db
++```
++
++`POST /v1/machinery/passport/check` does the seal and internal-consistency half
++over HTTP, free and unmetered for anyone, for the same reason the verification
++bundle checker is free: a passport only its vendor can verify is a certificate,
++not evidence.
++
++Checking a passport with no ledger returns `ok` **with** a stated limitation, not
++a clean pass. The seal proves the file was not edited. It does not prove the
++machine is safe.
++
++## What it will not tell you
++
++It does not confirm the manifest is complete. A safety-relevant item nobody
++listed is covered by nothing here and reported by nothing here. That sentence is
++in the `checks_skipped` of every coverage assessment, because it is the limit
++that matters and it is the one a customer will otherwise assume away.
+diff --git a/examples/machinery/intervention-0007.json b/examples/machinery/intervention-0007.json
+new file mode 100644
+index 0000000..37937a6
+--- /dev/null
++++ b/examples/machinery/intervention-0007.json
+@@ -0,0 +1,22 @@
++{
++  "intervention_id": "INT-0007",
++  "machine_key": "Grimaldi/AR-7#0412",
++  "item_id": "ITM-FW",
++  "kind": "update",
++  "occurred_at": "2026-03-14T09:30:00Z",
++  "performed_by": {
++    "identifier": "m.tech",
++    "role": "service technician",
++    "kind": "person"
++  },
++  "reason": "Vendor advisory CTRL-2026-11: watchdog timeout under bus load.",
++  "from_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++  "to_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
++  "affects_functions": [
++    "SF-01",
++    "SF-02"
++  ],
++  "authorization": null,
++  "revalidation": null,
++  "notes": "Recorded from the service report. Nothing was re-run afterwards."
++}
+diff --git a/examples/machinery/manifest-as-found.json b/examples/machinery/manifest-as-found.json
+new file mode 100644
+index 0000000..136acda
+--- /dev/null
++++ b/examples/machinery/manifest-as-found.json
+@@ -0,0 +1,99 @@
++{
++  "manifest_id": "MAN-2026-09",
++  "machine": {
++    "manufacturer": "Grimaldi",
++    "model": "AR-7",
++    "serial": "0412",
++    "year": "2026",
++    "site": "Plant 2, Line 4"
++  },
++  "source": "as_found",
++  "taken_at": "2026-09-13T07:20:00Z",
++  "taken_by": {
++    "identifier": "a.integrator",
++    "role": "safety engineer",
++    "kind": "person"
++  },
++  "method": "read via controller service port, work order WO-91204",
++  "notes": "Annual verification visit.",
++  "items": [
++    {
++      "item_id": "ITM-FW",
++      "kind": "firmware",
++      "name": "Safety controller firmware",
++      "version": "3.8.2",
++      "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
++      "hash_source": "read_from_machine",
++      "supplier": "ControlCo",
++      "implements": [
++        "SF-01",
++        "SF-02"
++      ],
++      "modifiable_in_field": false,
++      "notes": "Read from the controller service port with the vendor tool."
++    },
++    {
++      "item_id": "ITM-ZONES",
++      "kind": "safety_configuration",
++      "name": "Safety scanner zone set",
++      "version": "r4",
++      "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
++      "hash_source": "read_from_machine",
++      "supplier": "ScanCo",
++      "implements": [
++        "SF-01"
++      ],
++      "modifiable_in_field": true,
++      "notes": "A technician with the scanner tool can change this on site."
++    },
++    {
++      "item_id": "ITM-ESTOP",
++      "kind": "safety_program",
++      "name": "E-stop logic block",
++      "version": "1.0",
++      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
++      "hash_source": "read_from_machine",
++      "implements": [
++        "SF-03"
++      ],
++      "modifiable_in_field": false
++    },
++    {
++      "item_id": "ITM-HMI",
++      "kind": "library",
++      "name": "HMI runtime",
++      "version": "9.1",
++      "content_hash": "",
++      "hash_source": "declared",
++      "supplier": "PanelCo",
++      "implements": [],
++      "modifiable_in_field": false,
++      "notes": "Not hashed: the vendor ships no artefact we can read. A change to this would be invisible to every comparison."
++    }
++  ],
++  "functions": [
++    {
++      "function_id": "SF-01",
++      "description": "Protective stop on zone intrusion",
++      "required_performance": "PL d",
++      "verified_by": [
++        "ssm_separation",
++        "stop_characterisation"
++      ]
++    },
++    {
++      "function_id": "SF-02",
++      "description": "Speed limit in collaborative operation",
++      "required_performance": "PL d",
++      "verified_by": [
++        "speed_limit"
++      ]
++    },
++    {
++      "function_id": "SF-03",
++      "description": "Emergency stop, category 1",
++      "required_performance": "PL d",
++      "verified_by": []
++    }
++  ]
++}
+diff --git a/examples/machinery/manifest-baseline.json b/examples/machinery/manifest-baseline.json
+new file mode 100644
+index 0000000..628e0f3
+--- /dev/null
++++ b/examples/machinery/manifest-baseline.json
+@@ -0,0 +1,99 @@
++{
++  "manifest_id": "MAN-CE-2026",
++  "machine": {
++    "manufacturer": "Grimaldi",
++    "model": "AR-7",
++    "serial": "0412",
++    "year": "2026",
++    "site": "Plant 2, Line 4"
++  },
++  "source": "as_declared",
++  "taken_at": "2026-01-20T09:00:00Z",
++  "taken_by": {
++    "identifier": "a.integrator",
++    "role": "safety engineer",
++    "kind": "person"
++  },
++  "method": "configuration recorded at CE marking",
++  "notes": "The configuration this machine was placed on the market with.",
++  "items": [
++    {
++      "item_id": "ITM-FW",
++      "kind": "firmware",
++      "name": "Safety controller firmware",
++      "version": "3.8.2",
++      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++      "hash_source": "read_from_machine",
++      "supplier": "ControlCo",
++      "implements": [
++        "SF-01",
++        "SF-02"
++      ],
++      "modifiable_in_field": false,
++      "notes": "Read from the controller service port with the vendor tool."
++    },
++    {
++      "item_id": "ITM-ZONES",
++      "kind": "safety_configuration",
++      "name": "Safety scanner zone set",
++      "version": "r4",
++      "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
++      "hash_source": "read_from_machine",
++      "supplier": "ScanCo",
++      "implements": [
++        "SF-01"
++      ],
++      "modifiable_in_field": true,
++      "notes": "A technician with the scanner tool can change this on site."
++    },
++    {
++      "item_id": "ITM-ESTOP",
++      "kind": "safety_program",
++      "name": "E-stop logic block",
++      "version": "1.0",
++      "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
++      "hash_source": "read_from_machine",
++      "implements": [
++        "SF-03"
++      ],
++      "modifiable_in_field": false
++    },
++    {
++      "item_id": "ITM-HMI",
++      "kind": "library",
++      "name": "HMI runtime",
++      "version": "9.1",
++      "content_hash": "",
++      "hash_source": "declared",
++      "supplier": "PanelCo",
++      "implements": [],
++      "modifiable_in_field": false,
++      "notes": "Not hashed: the vendor ships no artefact we can read. A change to this would be invisible to every comparison."
++    }
++  ],
++  "functions": [
++    {
++      "function_id": "SF-01",
++      "description": "Protective stop on zone intrusion",
++      "required_performance": "PL d",
++      "verified_by": [
++        "ssm_separation",
++        "stop_characterisation"
++      ]
++    },
++    {
++      "function_id": "SF-02",
++      "description": "Speed limit in collaborative operation",
++      "required_performance": "PL d",
++      "verified_by": [
++        "speed_limit"
++      ]
++    },
++    {
++      "function_id": "SF-03",
++      "description": "Emergency stop, category 1",
++      "required_performance": "PL d",
++      "verified_by": []
++    }
++  ]
++}
+diff --git a/pyproject.toml b/pyproject.toml
+index 415945d..830bf94 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -116,6 +116,7 @@ ignore = [
+ "src/assurance/cli.py" = ["T20"]
+ "src/assurance/security/art14/cli.py" = ["T20"]
+ "src/assurance/machine/cli.py" = ["T20"]
++"src/assurance/machinery/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/api/machinery_routes.py b/src/assurance/api/machinery_routes.py
+new file mode 100644
+index 0000000..5c70670
+--- /dev/null
++++ b/src/assurance/api/machinery_routes.py
+@@ -0,0 +1,286 @@
++"""Machinery Regulation Annex III 1.1.9 over HTTP.
++
++The same commercial shape as the machine routes, for the same reason.
++
++Free, no account: ``POST /v1/machinery/diff`` compares a baseline manifest
++against what was found on the machine. It is the demonstration — an integrator
++who has a CE-marking configuration and a current one finds out in one call
++whether the cell is still the cell they signed off, and usually it is not.
++
++Free, permanently, unmetered: ``POST /v1/machinery/passport/check``. A customer,
++their insurer and their notified body must be able to re-verify a machine
++passport without an account, or it is a vendor certificate rather than evidence.
++
++Paid: sealing manifests and interventions into the ledger, and the coverage
++assessment that joins them to verification bundles. That join is the product.
++"""
++
++from __future__ import annotations
++
++import json
++import tempfile
++from pathlib import Path
++from typing import Annotated, Any
++
++from fastapi import APIRouter, Depends, HTTPException, Response
++from pydantic import BaseModel, ConfigDict, Field
++
++from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
++from assurance.billing.accounts import AccountStore, Principal
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.machinery.divergence import compare
++from assurance.machinery.intervention import Intervention
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.record import (
++    build_passport,
++    interventions_from_ledger,
++    record_intervention,
++    record_manifest,
++    verify_passport,
++)
++from assurance.machinery.staleness import VerificationRecord, assess_coverage
++
++__all__ = ["machinery_router"]
++
++machinery_router = APIRouter(prefix="/v1/machinery", tags=["machinery"])
++
++#: A manifest larger than this is a fleet export, not one machine.
++MAX_ITEMS = 5_000
++
++
++class DiffIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    baseline: dict[str, Any]
++    observed: dict[str, Any]
++
++
++class ManifestIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    manifest: dict[str, Any]
++    actor: str = Field(default="", max_length=200)
++    role: str = Field(default="", max_length=200)
++
++
++class InterventionIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    intervention: dict[str, Any]
++    actor: str = Field(default="", max_length=200)
++    role: str = Field(default="", max_length=200)
++
++
++class CoverageIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    manifest: dict[str, Any]
++
++
++class PassportIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    manifest: dict[str, Any]
++    actor: str = Field(min_length=1, max_length=200)
++    role: str = Field(default="verification engineer", max_length=200)
++    seal: bool = True
++
++
++class PassportCheckIn(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    passport: dict[str, Any]
++
++
++def _bad(exc: Exception, what: str) -> HTTPException:
++    return HTTPException(
++        # 422: unprocessable content.
++        status_code=422,
++        detail={"error": f"invalid_{what}", "detail": str(exc)},
++    )
++
++
++def _manifest(raw: dict[str, Any], what: str = "manifest") -> SafetyManifest:
++    items = raw.get("items")
++    if isinstance(items, list) and len(items) > MAX_ITEMS:
++        raise HTTPException(
++            # 413: content too large.
++            status_code=413,
++            detail={"error": "manifest_too_large",
++                    "detail": f"{len(items)} items exceeds the {MAX_ITEMS} this "
++                              "endpoint accepts. One manifest describes one machine."},
++        )
++    try:
++        return SafetyManifest.from_dict(raw)
++    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
++        raise _bad(exc, what) from exc
++
++
++@machinery_router.post(
++    "/diff",
++    summary="Is the machine still the configuration you signed off?",
++)
++async def diff(
++    body: DiffIn,
++    response: Response,
++    principal: Annotated[Principal, Anyone],
++    accounts: Annotated[AccountStore, Depends(get_accounts)],
++) -> dict[str, Any]:
++    """Compare an as-declared baseline against what was found on the machine.
++
++    A version string changing while the artefact stays byte-identical is graded
++    administrative; a hash changing on an item that implements a safety function
++    is the finding. An item carrying no hash is reported as uncomparable — never
++    as unchanged.
++    """
++    limit = principal.plan.diffs_per_day
++    spend(principal, "machinery_diff", limit, accounts)
++    response.headers["X-Assurance-Tier"] = principal.tier
++    if limit is not None:
++        used = accounts.usage_today(principal.subject).get("machinery_diff", 0)
++        response.headers["X-Assurance-Quota-Limit"] = str(limit)
++        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
++
++    baseline = _manifest(body.baseline, "baseline")
++    observed = _manifest(body.observed, "observed")
++    try:
++        divergence = compare(baseline, observed)
++    except ValueError as exc:
++        raise _bad(exc, "comparison") from exc
++    return divergence.to_dict()
++
++
++@machinery_router.post("/manifest", summary="Seal a safety software manifest")
++async def post_manifest(
++    body: ManifestIn,
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    manifest = _manifest(body.manifest)
++    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
++             if body.actor else None)
++    evidence = record_manifest(register.ledger, manifest, actor=actor)
++    return {
++        "content_hash": evidence.content_hash,
++        "machine": manifest.machine.key,
++        "manifest_id": manifest.manifest_id,
++        "configuration_hash": manifest.configuration_hash(),
++        "tier_ceiling": manifest.tier_ceiling.value,
++        "items": len(manifest.items),
++        "uncomparable_items": [i.item_id for i in manifest.uncomparable_items],
++        "undemonstrable_functions": [f.function_id
++                                     for f in manifest.undemonstrable_functions],
++        "checks_skipped": list(evidence.checks_skipped),
++    }
++
++
++@machinery_router.post("/intervention", summary="Seal an intervention record")
++async def post_intervention(
++    body: InterventionIn,
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    """Record a change to safety-relevant software.
++
++    A change with no authorisation and no re-validation is recorded, not
++    refused — and its findings travel with it. Refusing would push the change
++    back to where it lives now, which is nowhere.
++    """
++    try:
++        intervention = Intervention.from_dict(body.intervention)
++    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
++        raise _bad(exc, "intervention") from exc
++    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
++             if body.actor else None)
++    evidence = record_intervention(register.ledger, intervention, actor=actor)
++    return {
++        "content_hash": evidence.content_hash,
++        "machine": intervention.machine_key,
++        "intervention_id": intervention.intervention_id,
++        "authorised": intervention.is_authorised,
++        "revalidated": intervention.is_revalidated,
++        "affects_functions": list(intervention.affects_functions),
++        "findings": list(intervention.findings),
++    }
++
++
++@machinery_router.post(
++    "/coverage",
++    summary="Which safety functions still have valid evidence",
++)
++async def coverage(
++    body: CoverageIn,
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    """The join: verification bundles against intervention records.
++
++    A verification recorded before an intervention that touched an item
++    implementing the same safety function no longer describes the machine, and
++    this says so by name and by date.
++    """
++    manifest = _manifest(body.manifest)
++    key = manifest.machine.key
++    report = assess_coverage(
++        manifest,
++        VerificationRecord.from_ledger(register.ledger, subject=key),
++        interventions_from_ledger(register.ledger, key),
++    )
++    return report.to_dict()
++
++
++@machinery_router.post("/passport", summary="Seal the machine's evidence position")
++async def passport(
++    body: PassportIn,
++    principal: Annotated[Principal, Machine],
++    register: Annotated[Any, Depends(get_register)] = None,
++) -> dict[str, Any]:
++    manifest = _manifest(body.manifest)
++    built = build_passport(
++        register.ledger, manifest,
++        actor=Actor(identifier=body.actor, role=body.role, kind="person"),
++        seal=body.seal,
++    )
++    payload = built.to_dict()
++    payload["sealed"] = bool(body.seal)
++    payload["verdict"] = built.verdict
++    return payload
++
++
++@machinery_router.post(
++    "/passport/check",
++    summary="Re-verify a machine passport. Free, permanently, for anyone.",
++)
++async def check_passport(
++    body: PassportCheckIn,
++    principal: Annotated[Principal, Anyone],
++) -> dict[str, Any]:
++    """Check somebody else's passport without trusting them or us.
++
++    No ledger is supplied over HTTP, so this confirms the seal and the passport's
++    internal consistency and says plainly that it confirmed nothing else. Use
++    ``assurance machinery check --ledger`` to check the records it names.
++    """
++    del principal  # free and unmetered, on purpose
++
++    with tempfile.TemporaryDirectory() as d:
++        p = Path(d) / "passport.json"
++        p.write_text(json.dumps(body.passport), encoding="utf-8")
++        ok, problems = verify_passport(p)
++
++    recorded = (body.passport.get("evidence") or {}).get("body") or {}
++    functions = recorded.get("functions") or []
++    return {
++        "ok": ok,
++        "problems": problems,
++        "checked": {"seal": True, "internal_consistency": True,
++                    "against_ledger": False},
++        "machine": recorded.get("machine"),
++        "recorded_verdict": recorded.get("verdict"),
++        "configuration_hash": recorded.get("configuration_hash"),
++        "functions_not_current": [
++            {"function_id": f.get("function_id"), "coverage": f.get("coverage")}
++            for f in functions if f.get("coverage") != "current"
++        ],
++    }
+diff --git a/src/assurance/api/service.py b/src/assurance/api/service.py
+index e966274..8857c45 100644
+--- a/src/assurance/api/service.py
++++ b/src/assurance/api/service.py
+@@ -22,6 +22,7 @@ from .. import __version__
+ from .billing_routes import billing_router
+ from .deps import auth_mode
+ from .machine_routes import machine_router
++from .machinery_routes import machinery_router
+ from .routes import free_router, public_router, router
+ 
+ __all__ = ["create_app", "app"]
+@@ -68,6 +69,11 @@ def create_app(**kwargs: Any) -> FastAPI:
+                                                      "envelope. The separation "
+                                                      "calculator and the bundle "
+                                                      "re-checker need no account."},
++            {"name": "machinery", "description": "Machinery Regulation Annex III "
++                                                 "1.1.9: safety software identity, "
++                                                 "evidence of intervention, and which "
++                                                 "safety functions still have valid "
++                                                 "evidence."},
+             {"name": "billing", "description": "Plans, checkout, and your own account."},
+             {"name": "service", "description": "Liveness and configuration."},
+         ],
+@@ -86,6 +92,7 @@ def create_app(**kwargs: Any) -> FastAPI:
+     application.include_router(billing_router)
+     application.include_router(free_router)
+     application.include_router(machine_router)
++    application.include_router(machinery_router)
+     application.include_router(router)
+     return application
+ 
+diff --git a/src/assurance/billing/plans.py b/src/assurance/billing/plans.py
+index 607c464..73c90ba 100644
+--- a/src/assurance/billing/plans.py
++++ b/src/assurance/billing/plans.py
+@@ -49,6 +49,8 @@ class Plan:
+     machine_verification: bool = False
+     #: Safety envelope separation calculations per UTC day on the free tier.
+     separations_per_day: int | None = None
++    #: Manifest comparisons per UTC day on the free tier.
++    diffs_per_day: int | None = None
+     included: tuple[str, ...] = field(default_factory=tuple)
+ 
+     @property
+@@ -76,6 +78,7 @@ class Plan:
+                 "signed_attestation": self.signed_attestation,
+                 "machine_verification": self.machine_verification,
+                 "separations_per_day": self.separations_per_day,
++                "diffs_per_day": self.diffs_per_day,
+             },
+         }
+ 
+@@ -90,6 +93,7 @@ PLANS: dict[Tier, Plan] = {
+         ),
+         validations_per_day=20,
+         separations_per_day=20,
++        diffs_per_day=10,
+         included=(
+             "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
+             "which listed territories are not EU Member States",
+@@ -98,6 +102,8 @@ PLANS: dict[Tier, Plan] = {
+             "distance for your cell, term by term, from your own stop figures",
+             "POST /v1/machine/bundle/check — re-verify anybody's evidence bundle. "
+             "Always free: a bundle only a paying customer can check is worth nothing",
++            "POST /v1/machinery/diff — whether a machine still matches the "
++            "configuration it was CE-marked with",
+             "20 validations and 20 separation calculations per day, per address",
+         ),
+     ),
+@@ -130,9 +136,10 @@ PLANS: dict[Tier, Plan] = {
+         name="Cell",
+         blurb=(
+             "For a manufacturer or integrator shipping machines: everything in "
+-            "Register, plus machine safety verification — check a recorded run "
+-            "against the safety envelope you declared, and seal an evidence bundle "
+-            "your customer's auditor can re-verify without taking your word for it."
++            "Register, plus machine safety assurance: check a recorded run against "
++            "the safety envelope you declared, track what safety software is on each "
++            "machine and who changed it, and know which safety functions still have "
++            "evidence that describes the machine as it is today."
+         ),
+         price_env="ASSURANCE_PRICE_CELL",
+         price_label="€1,290 / month",
+@@ -150,6 +157,10 @@ PLANS: dict[Tier, Plan] = {
+             "Separation, speed, workspace, stop characterisation, power-and-force and "
+             "mode-consistency checks, each with its worst margin",
+             "Evidence bundles anyone can re-verify without an account",
++            "Machinery Regulation Annex III 1.1.9: the safety software manifest, the "
++            "intervention record, and the machine passport",
++            "Coverage: which declared safety functions still have valid evidence, and "
++            "which intervention invalidated the rest",
+             "Unlimited product families and cases",
+             "Signed head attestation for the evidence ledger",
+             "Priority response",
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index 236ebbb..c7f271c 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -7,6 +7,7 @@ import sys
+ _DOMAINS = {
+     "art14": "assurance.security.art14.cli",
+     "machine": "assurance.machine.cli",
++    "machinery": "assurance.machinery.cli",
+ }
+ 
+ 
+diff --git a/src/assurance/machine/bundle.py b/src/assurance/machine/bundle.py
+index 5b460eb..df7b0ef 100644
+--- a/src/assurance/machine/bundle.py
++++ b/src/assurance/machine/bundle.py
+@@ -32,7 +32,7 @@ from assurance.core.evidence import (
+     Origin,
+     ValidationState,
+ )
+-from assurance.core.identity import content_hash_of
++from assurance.core.identity import content_hash_of, format_utc
+ from assurance.core.tiers import AssuranceTier
+ from assurance.evidence.ledger import EvidenceLedger
+ from assurance.machine.envelope import SafetyEnvelope
+@@ -99,7 +99,7 @@ class EvidenceBundle:
+ 
+ 
+ def _body(result: VerificationResult, envelope: SafetyEnvelope,
+-          limits: LimitsTable | None) -> dict[str, Any]:
++          limits: LimitsTable | None, trace: Trace) -> dict[str, Any]:
+     return {
+         "schema": BUNDLE_SCHEMA,
+         "product": envelope.product,
+@@ -107,6 +107,10 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
+         "envelope_hash": result.envelope_hash,
+         "trace_hash": result.trace_hash,
+         "trace_id": result.trace_id,
++        # When the machine was in the state this verification describes. A run
++        # captured in February and filed in June is evidence about February, and
++        # staleness is computed against this, never against the filing time.
++        "trace_started_at": format_utc(trace.started_at),
+         "provenance": result.provenance,
+         "engine_version": result.engine_version,
+         "limits_hash": limits.content_hash() if limits else "",
+@@ -124,12 +128,19 @@ def build_bundle(
+     limits: LimitsTable | None = None,
+     ledger: EvidenceLedger | None = None,
+     result: VerificationResult | None = None,
++    subject: str = "",
+ ) -> EvidenceBundle:
+     """Verify, seal, and optionally append to the ledger.
+ 
+     ``actor`` is required and unattributed bundles are refused by
+     :meth:`Evidence.seal`. A safety verification that nobody signed is a file,
+     not evidence.
++
++    ``subject`` sets the ledger subject. It defaults to ``product@version``,
++    which is right for a manufacturer verifying a product line. Pass a machine
++    key (``MachineIdentity.key``) when the verification is about one specific
++    unit, so that :mod:`assurance.machinery.staleness` can find it alongside
++    that unit's intervention records.
+     """
+     res = result if result is not None else verify(envelope, trace, limits=limits)
+ 
+@@ -145,7 +156,7 @@ def build_bundle(
+ 
+     evidence = Evidence(
+         kind=BUNDLE_KIND,
+-        body=_body(res, envelope, limits),
++        body=_body(res, envelope, limits, trace),
+         actor=actor,
+         origin=Origin(
+             system="assurance.machine",
+@@ -165,7 +176,10 @@ def build_bundle(
+     ).seal()
+ 
+     if ledger is not None:
+-        ledger.append(evidence, subject=f"{envelope.product}@{envelope.product_version}")
++        ledger.append(
++            evidence,
++            subject=subject or f"{envelope.product}@{envelope.product_version}",
++        )
+ 
+     return EvidenceBundle(evidence=evidence, result=res, envelope=envelope)
+ 
+diff --git a/src/assurance/machinery/__init__.py b/src/assurance/machinery/__init__.py
+new file mode 100644
+index 0000000..c2c3626
+--- /dev/null
++++ b/src/assurance/machinery/__init__.py
+@@ -0,0 +1,96 @@
++"""Machinery Regulation Annex III 1.1.9: what software is on the machine, who changed it.
++
++Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
++1.1.9 requires a machine to identify its safety-relevant software and to record
++evidence of intervention in it.
++
++    manifest      what is on the machine, with the provenance of every hash
++    divergence    whether it still matches the configuration it was signed off with
++    intervention  who changed what, who authorised it, what was re-run
++    staleness     which safety functions are still covered by valid evidence
++    record        sealing all of it into the ledger, and the machine passport
++
++The join in :mod:`~assurance.machinery.staleness` is the part nobody else has:
++a firmware change recorded here invalidates, by name and by date, the
++:mod:`assurance.machine` verification that preceded it.
++"""
++
++from assurance.machinery.divergence import (
++    Change,
++    ChangeKind,
++    Divergence,
++    Severity,
++    compare,
++)
++from assurance.machinery.intervention import (
++    Authorization,
++    Intervention,
++    InterventionKind,
++    Revalidation,
++)
++from assurance.machinery.manifest import (
++    HashSource,
++    ItemKind,
++    MachineIdentity,
++    ManifestSource,
++    SafetyFunction,
++    SafetyItem,
++    SafetyManifest,
++)
++from assurance.machinery.record import (
++    DIVERGENCE_KIND,
++    INTERVENTION_KIND,
++    MANIFEST_KIND,
++    PASSPORT_KIND,
++    MachinePassport,
++    build_passport,
++    interventions_from_ledger,
++    manifests_from_ledger,
++    record_divergence,
++    record_intervention,
++    record_manifest,
++    verify_passport,
++)
++from assurance.machinery.staleness import (
++    Coverage,
++    CoverageReport,
++    FunctionCoverage,
++    VerificationRecord,
++    assess_coverage,
++)
++
++__all__ = [
++    "DIVERGENCE_KIND",
++    "INTERVENTION_KIND",
++    "MANIFEST_KIND",
++    "PASSPORT_KIND",
++    "Authorization",
++    "Change",
++    "ChangeKind",
++    "Coverage",
++    "CoverageReport",
++    "Divergence",
++    "FunctionCoverage",
++    "HashSource",
++    "Intervention",
++    "InterventionKind",
++    "ItemKind",
++    "MachineIdentity",
++    "MachinePassport",
++    "ManifestSource",
++    "Revalidation",
++    "SafetyFunction",
++    "SafetyItem",
++    "SafetyManifest",
++    "Severity",
++    "VerificationRecord",
++    "assess_coverage",
++    "build_passport",
++    "compare",
++    "interventions_from_ledger",
++    "manifests_from_ledger",
++    "record_divergence",
++    "record_intervention",
++    "record_manifest",
++    "verify_passport",
++]
+diff --git a/src/assurance/machinery/cli.py b/src/assurance/machinery/cli.py
+new file mode 100644
+index 0000000..fdaff70
+--- /dev/null
++++ b/src/assurance/machinery/cli.py
+@@ -0,0 +1,221 @@
++"""``assurance machinery`` — the machine's software identity and its change history.
++
++    record-manifest   seal what is on the machine today
++    record-change     seal an intervention in safety-relevant software
++    diff              compare a baseline manifest against what was found
++    coverage          which safety functions still have valid evidence
++    passport          seal and export the machine's whole evidence position
++    check             re-verify a passport somebody else produced
++
++``coverage`` exits non-zero when any declared safety function is not currently
++covered, which makes it a gate rather than a report.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.divergence import compare
++from assurance.machinery.intervention import Intervention
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.record import (
++    build_passport,
++    interventions_from_ledger,
++    record_divergence,
++    record_intervention,
++    record_manifest,
++    verify_passport,
++)
++from assurance.machinery.staleness import VerificationRecord, assess_coverage
++
++__all__ = ["build_parser", "main"]
++
++
++def _actor(args: argparse.Namespace) -> Actor:
++    return Actor(identifier=args.actor, role=getattr(args, "role", ""), kind="person")
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance machinery",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    rm = verbs.add_parser("record-manifest", help="seal a safety software manifest")
++    rm.add_argument("manifest", type=Path)
++    rm.add_argument("--ledger", required=True, type=Path)
++    rm.add_argument("--actor", default="")
++    rm.add_argument("--role", default="")
++
++    rc = verbs.add_parser("record-change", help="seal an intervention record")
++    rc.add_argument("intervention", type=Path)
++    rc.add_argument("--ledger", required=True, type=Path)
++    rc.add_argument("--actor", default="")
++    rc.add_argument("--role", default="")
++
++    df = verbs.add_parser("diff", help="compare a baseline manifest against an observed one")
++    df.add_argument("--baseline", required=True, type=Path)
++    df.add_argument("--observed", required=True, type=Path)
++    df.add_argument("--ledger", type=Path, default=None,
++                    help="seal the divergence report into this ledger")
++    df.add_argument("--actor", default="")
++    df.add_argument("--role", default="")
++    df.add_argument("--json", action="store_true")
++
++    cv = verbs.add_parser("coverage", help="which safety functions still have evidence")
++    cv.add_argument("manifest", type=Path)
++    cv.add_argument("--ledger", required=True, type=Path)
++    cv.add_argument("--json", action="store_true")
++
++    pp = verbs.add_parser("passport", help="seal and export the machine's position")
++    pp.add_argument("manifest", type=Path)
++    pp.add_argument("--ledger", required=True, type=Path)
++    pp.add_argument("--actor", required=True)
++    pp.add_argument("--role", default="verification engineer")
++    pp.add_argument("--out", type=Path, default=None)
++    pp.add_argument("--no-seal", action="store_true",
++                    help="assemble without appending to the ledger")
++    pp.add_argument("--json", action="store_true")
++
++    ck = verbs.add_parser("check", help="re-verify a passport you did not produce")
++    ck.add_argument("passport", type=Path)
++    ck.add_argument("--ledger", type=Path, default=None)
++    ck.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _cmd_record_manifest(args: argparse.Namespace) -> int:
++    manifest = SafetyManifest.from_json(args.manifest)
++    ledger = EvidenceLedger(args.ledger)
++    actor = _actor(args) if args.actor else None
++    evidence = record_manifest(ledger, manifest, actor=actor)
++    print(f"sealed {evidence.content_hash[:16]} as entry {len(ledger)}")
++    print(f"  machine       {manifest.machine.key}")
++    print(f"  source        {manifest.source.value}")
++    print(f"  items         {len(manifest.items)} "
++          f"({len(manifest.uncomparable_items)} carry no hash)")
++    print(f"  configuration {manifest.configuration_hash()[:16]}")
++    print(f"  tier ceiling  {manifest.tier_ceiling.value}")
++    for f in manifest.undemonstrable_functions:
++        print(f"  !! {f.function_id} declares no verification check")
++    return 0
++
++
++def _cmd_record_change(args: argparse.Namespace) -> int:
++    intervention = Intervention.from_json(args.intervention)
++    ledger = EvidenceLedger(args.ledger)
++    actor = _actor(args) if args.actor else None
++    evidence = record_intervention(ledger, intervention, actor=actor)
++    print(intervention.summary())
++    print(f"    sealed {evidence.content_hash[:16]} as entry {len(ledger)}")
++    return 0
++
++
++def _cmd_diff(args: argparse.Namespace) -> int:
++    baseline = SafetyManifest.from_json(args.baseline)
++    observed = SafetyManifest.from_json(args.observed)
++    divergence = compare(baseline, observed)
++
++    if args.ledger:
++        if not args.actor:
++            print("error: --actor is required to seal a divergence report",
++                  file=sys.stderr)
++            return 2
++        record_divergence(EvidenceLedger(args.ledger), divergence, actor=_actor(args))
++
++    if args.json:
++        print(json.dumps(divergence.to_dict(), indent=2))
++    else:
++        print(divergence.summary())
++        if divergence.checks_skipped:
++            print("\n  not checked:")
++            for c in divergence.checks_skipped:
++                print(f"    - {c}")
++    return 0 if divergence.verdict == "matches" else 1
++
++
++def _cmd_coverage(args: argparse.Namespace) -> int:
++    manifest = SafetyManifest.from_json(args.manifest)
++    ledger = EvidenceLedger(args.ledger)
++    key = manifest.machine.key
++    report = assess_coverage(
++        manifest,
++        VerificationRecord.from_ledger(ledger, subject=key),
++        interventions_from_ledger(ledger, key),
++    )
++    if args.json:
++        print(json.dumps(report.to_dict(), indent=2))
++    else:
++        print(report.summary())
++        if report.checks_skipped:
++            print("\n  not checked:")
++            for c in report.checks_skipped:
++                print(f"    - {c}")
++    return 0 if report.verdict == "covered" else 1
++
++
++def _cmd_passport(args: argparse.Namespace) -> int:
++    manifest = SafetyManifest.from_json(args.manifest)
++    ledger = EvidenceLedger(args.ledger)
++    passport = build_passport(ledger, manifest, actor=_actor(args),
++                              seal=not args.no_seal)
++    if args.out:
++        passport.write(args.out)
++    if args.json:
++        print(json.dumps(passport.to_dict(), indent=2, sort_keys=True))
++    else:
++        print(passport.summary())
++        if passport.coverage.checks_skipped:
++            print("\n  not checked:")
++            for c in passport.coverage.checks_skipped:
++                print(f"    - {c}")
++        if args.out:
++            print(f"\n  passport written to {args.out}")
++    return 0 if passport.verdict == "covered" else 1
++
++
++def _cmd_check(args: argparse.Namespace) -> int:
++    ledger = EvidenceLedger(args.ledger) if args.ledger else None
++    ok, problems = verify_passport(args.passport, ledger=ledger)
++    if args.json:
++        print(json.dumps({"ok": ok, "problems": problems}, indent=2))
++    else:
++        print(f"{args.passport}: {'OK' if ok else 'REJECTED'}")
++        for p in problems:
++            print(f"  - {p}")
++        if ok and ledger is None:
++            print("  Supply --ledger to check the records it names, not just the seal.")
++    return 0 if ok else 1
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {
++        "record-manifest": _cmd_record_manifest,
++        "record-change": _cmd_record_change,
++        "diff": _cmd_diff,
++        "coverage": _cmd_coverage,
++        "passport": _cmd_passport,
++        "check": _cmd_check,
++    }
++    try:
++        return handlers[args.command](args)
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/machinery/divergence.py b/src/assurance/machinery/divergence.py
+new file mode 100644
+index 0000000..0884175
+--- /dev/null
++++ b/src/assurance/machinery/divergence.py
+@@ -0,0 +1,310 @@
++"""Has this machine drifted from the configuration it was signed off with?
++
++Two manifests go in. What comes out is the sentence an inspector, an insurer or
++a plant manager actually wants: *this cell no longer matches the configuration
++it was CE-marked with, here is which item changed, and here is which safety
++function that item implements.*
++
++The grading is deliberate and narrow. A version string changing while the hash
++stays identical is not a change to the machine — it is a change to a label, and
++reporting it as a safety divergence trains people to ignore the report. A hash
++changing on an item that implements a safety function is the finding. Everything
++else sits between, named.
++
++What this cannot do is also stated, every time: an item carrying no hash is
++invisible to comparison. A clean divergence report over a manifest full of
++declared items means nothing was seen, not that nothing changed.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from enum import StrEnum
++from typing import Any
++
++from assurance.core.tiers import AssuranceTier
++from assurance.machinery.manifest import SafetyItem, SafetyManifest
++
++__all__ = ["Change", "ChangeKind", "Divergence", "Severity", "compare"]
++
++
++class ChangeKind(StrEnum):
++    ADDED = "added"
++    REMOVED = "removed"
++    #: The artefact itself differs. The only kind that means the machine changed.
++    CONTENT_CHANGED = "content_changed"
++    #: Hash identical, version string differs. A relabelling.
++    VERSION_RELABELLED = "version_relabelled"
++    #: The safety functions this item is credited with were re-declared.
++    ATTRIBUTION_CHANGED = "attribution_changed"
++
++
++class Severity(StrEnum):
++    #: A safety-bearing item's artefact changed. Prior verification is in doubt.
++    SAFETY_RELEVANT = "safety_relevant"
++    #: Something changed, but not on an item credited to a safety function.
++    NOTABLE = "notable"
++    #: Bookkeeping. Worth recording, not worth stopping a line for.
++    ADMINISTRATIVE = "administrative"
++
++    @property
++    def rank(self) -> int:
++        return {"administrative": 0, "notable": 1, "safety_relevant": 2}[self.value]
++
++
++@dataclass(frozen=True)
++class Change:
++    """One item that differs between the two manifests."""
++
++    item_id: str
++    kind: ChangeKind
++    severity: Severity
++    name: str
++    detail: str
++    before: dict[str, Any] | None = None
++    after: dict[str, Any] | None = None
++    #: Safety function ids this item is credited with, in either manifest.
++    functions: tuple[str, ...] = ()
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "item_id": self.item_id,
++            "kind": self.kind.value,
++            "severity": self.severity.value,
++            "name": self.name,
++            "detail": self.detail,
++            "functions": list(self.functions),
++            "before": self.before,
++            "after": self.after,
++        }
++
++
++def _summary(item: SafetyItem) -> dict[str, Any]:
++    return {
++        "kind": item.kind.value, "name": item.name, "version": item.version,
++        "content_hash": item.content_hash, "hash_source": item.hash_source.value,
++        "implements": list(item.implements),
++    }
++
++
++@dataclass(frozen=True)
++class Divergence:
++    """The comparison, its verdict, and everything it could not see."""
++
++    machine_key: str
++    baseline_id: str
++    baseline_hash: str
++    observed_id: str
++    observed_hash: str
++    baseline_configuration: str
++    observed_configuration: str
++    changes: tuple[Change, ...]
++    checks_skipped: tuple[str, ...]
++    tier: AssuranceTier
++
++    @property
++    def identical(self) -> bool:
++        """True only when the configuration hashes match exactly."""
++        return self.baseline_configuration == self.observed_configuration
++
++    @property
++    def safety_relevant(self) -> tuple[Change, ...]:
++        return tuple(c for c in self.changes if c.severity is Severity.SAFETY_RELEVANT)
++
++    @property
++    def worst(self) -> Severity | None:
++        return max((c.severity for c in self.changes),
++                   key=lambda s: s.rank, default=None)
++
++    @property
++    def affected_functions(self) -> tuple[str, ...]:
++        out: list[str] = []
++        for c in self.safety_relevant:
++            for f in c.functions:
++                if f not in out:
++                    out.append(f)
++        return tuple(sorted(out))
++
++    @property
++    def verdict(self) -> str:
++        """``matches`` | ``drifted`` | ``safety_relevant_drift``."""
++        if self.identical and not self.changes:
++            return "matches"
++        if self.safety_relevant:
++            return "safety_relevant_drift"
++        return "drifted"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "machine": self.machine_key,
++            "verdict": self.verdict,
++            "identical": self.identical,
++            "baseline": {"manifest_id": self.baseline_id, "hash": self.baseline_hash,
++                         "configuration": self.baseline_configuration},
++            "observed": {"manifest_id": self.observed_id, "hash": self.observed_hash,
++                         "configuration": self.observed_configuration},
++            "changes": [c.to_dict() for c in self.changes],
++            "affected_functions": list(self.affected_functions),
++            "tier": self.tier.value,
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        head = {
++            "matches": "MATCHES — the configuration is the one that was signed off",
++            "drifted": "DRIFTED — changes found, none on a safety-bearing item",
++            "safety_relevant_drift":
++                "SAFETY-RELEVANT DRIFT — a safety-bearing item has changed",
++        }[self.verdict]
++        lines = [f"{self.machine_key}: {head}",
++                 f"  baseline {self.baseline_configuration[:12]} "
++                 f"→ observed {self.observed_configuration[:12]}  (tier {self.tier.value})"]
++        for c in sorted(self.changes, key=lambda c: (-c.severity.rank, c.item_id)):
++            mark = {"safety_relevant": "!!", "notable": " *", "administrative": "  "}
++            lines.append(f"  {mark[c.severity.value]} {c.item_id}: {c.detail}")
++            if c.functions:
++                lines.append(f"       affects {', '.join(c.functions)}")
++        if self.affected_functions:
++            lines.append("  Verification evidence for the affected functions is in "
++                         "doubt until it is re-run.")
++        return "\n".join(lines)
++
++
++def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
++    """Compare an as-declared baseline against what was found on the machine.
++
++    Refuses to compare two different machines: a divergence report that silently
++    compared serial 0412 against serial 0413 would be worse than none.
++    """
++    if baseline.machine.key != observed.machine.key:
++        raise ValueError(
++            f"these manifests are about different machines: "
++            f"{baseline.machine.key} and {observed.machine.key}."
++        )
++
++    changes: list[Change] = []
++    caveats: list[str] = []
++
++    b_ids = {i.item_id for i in baseline.items}
++    o_ids = {i.item_id for i in observed.items}
++
++    for item_id in sorted(o_ids - b_ids):
++        item = observed.item(item_id)
++        assert item is not None
++        changes.append(Change(
++            item_id=item_id, kind=ChangeKind.ADDED,
++            severity=Severity.SAFETY_RELEVANT if item.is_safety_bearing
++            else Severity.NOTABLE,
++            name=item.name,
++            detail=f"present on the machine and absent from the baseline "
++                   f"({item.kind.value} {item.name} {item.version}).",
++            after=_summary(item), functions=item.implements,
++        ))
++
++    for item_id in sorted(b_ids - o_ids):
++        item = baseline.item(item_id)
++        assert item is not None
++        changes.append(Change(
++            item_id=item_id, kind=ChangeKind.REMOVED,
++            severity=Severity.SAFETY_RELEVANT if item.is_safety_bearing
++            else Severity.NOTABLE,
++            name=item.name,
++            detail=f"in the baseline and not found on the machine "
++                   f"({item.kind.value} {item.name} {item.version}).",
++            before=_summary(item), functions=item.implements,
++        ))
++
++    for item_id in sorted(b_ids & o_ids):
++        b = baseline.item(item_id)
++        o = observed.item(item_id)
++        assert b is not None and o is not None
++        safety = b.is_safety_bearing or o.is_safety_bearing
++        functions = tuple(sorted(set(b.implements) | set(o.implements)))
++
++        if not (b.is_comparable and o.is_comparable):
++            caveats.append(
++                f"{item_id} carries no hash in one or both manifests "
++                f"({b.hash_source.value} / {o.hash_source.value}), so a change to it "
++                "would not have been seen. It is NOT reported as unchanged."
++            )
++            if b.version != o.version:
++                changes.append(Change(
++                    item_id=item_id, kind=ChangeKind.VERSION_RELABELLED,
++                    severity=Severity.NOTABLE, name=o.name,
++                    detail=f"version went {b.version!r} → {o.version!r} and neither "
++                           "side is hashed, so whether the artefact changed is unknown.",
++                    before=_summary(b), after=_summary(o), functions=functions,
++                ))
++            continue
++
++        if b.content_hash != o.content_hash:
++            changes.append(Change(
++                item_id=item_id, kind=ChangeKind.CONTENT_CHANGED,
++                severity=Severity.SAFETY_RELEVANT if safety else Severity.NOTABLE,
++                name=o.name,
++                detail=f"the artefact changed: {b.content_hash[:12]} → "
++                       f"{o.content_hash[:12]}"
++                       + (f" (version {b.version!r} → {o.version!r})"
++                          if b.version != o.version
++                          else f", with the version still reported as {o.version!r}"),
++                before=_summary(b), after=_summary(o), functions=functions,
++            ))
++        elif b.version != o.version:
++            changes.append(Change(
++                item_id=item_id, kind=ChangeKind.VERSION_RELABELLED,
++                severity=Severity.ADMINISTRATIVE, name=o.name,
++                detail=f"version relabelled {b.version!r} → {o.version!r}; the "
++                       "artefact is byte-identical, so the machine did not change.",
++                before=_summary(b), after=_summary(o), functions=functions,
++            ))
++
++        if set(b.implements) != set(o.implements):
++            changes.append(Change(
++                item_id=item_id, kind=ChangeKind.ATTRIBUTION_CHANGED,
++                severity=Severity.NOTABLE, name=o.name,
++                detail="the safety functions this item is credited with were "
++                       f"re-declared: {sorted(b.implements)} → {sorted(o.implements)}. "
++                       "Nothing on the machine need have changed; what changed is "
++                       "what we claim about it.",
++                before=_summary(b), after=_summary(o), functions=functions,
++            ))
++
++    if observed.uncomparable_items:
++        caveats.append(
++            f"{len(observed.uncomparable_items)} of {len(observed.items)} observed "
++            "items carry no hash at all. Those items were not compared."
++        )
++    if not observed.source.value == "as_found":
++        caveats.append(
++            f"the observed manifest is recorded as {observed.source.value!r}, not "
++            "'as_found'. This compares two declarations, and says nothing about what "
++            "is actually on the machine."
++        )
++    for item in observed.field_modifiable_safety_items:
++        caveats.append(
++            f"{item.item_id} is a safety-bearing item that can be changed on site. "
++            "A divergence report is a snapshot; only an intervention record covers "
++            "what happened between snapshots."
++        )
++    undem = observed.undemonstrable_functions
++    if undem:
++        caveats.append(
++            "safety function(s) " + ", ".join(f.function_id for f in undem)
++            + " declare no verification check, so a change affecting them cannot be "
++            "traced to any evidence that would need re-running."
++        )
++
++    tier = min(baseline.tier_ceiling, observed.tier_ceiling)
++
++    return Divergence(
++        machine_key=observed.machine.key,
++        baseline_id=baseline.manifest_id,
++        baseline_hash=baseline.content_hash(),
++        observed_id=observed.manifest_id,
++        observed_hash=observed.content_hash(),
++        baseline_configuration=baseline.configuration_hash(),
++        observed_configuration=observed.configuration_hash(),
++        changes=tuple(changes),
++        checks_skipped=tuple(dict.fromkeys(caveats)),
++        tier=tier,
++    )
+diff --git a/src/assurance/machinery/intervention.py b/src/assurance/machinery/intervention.py
+new file mode 100644
+index 0000000..e3a7aae
+--- /dev/null
++++ b/src/assurance/machinery/intervention.py
+@@ -0,0 +1,298 @@
++"""Evidence of intervention in safety-relevant software.
++
++Annex III 1.1.9 of Machinery Regulation (EU) 2023/1230 asks for a record that a
++safety-relevant change was made. The regulation does not say what a good record
++contains, so this module takes a position: a record that names only *what*
++changed is a log, and a record that also names *who authorised it* and *what was
++re-run afterwards* is evidence.
++
++The distinction is the product. An intervention that carries no re-validation
++reference on an item implementing a safety function is not an administrative
++omission — it is the moment the machine stopped being covered by its own
++validation, and :mod:`assurance.machinery.staleness` will say so by name.
++
++An intervention is recorded whether or not it was authorised, and whether or not
++anything was re-run. Refusing to record an undocumented change would simply
++push it back to where it lives now, which is nowhere.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from datetime import datetime
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.core.identity import content_hash_of, format_utc, parse_utc
++
++__all__ = [
++    "Authorization",
++    "Intervention",
++    "InterventionError",
++    "InterventionKind",
++    "Revalidation",
++]
++
++
++class InterventionError(AssuranceError):
++    """An intervention record is incomplete or self-contradictory."""
++
++
++class InterventionKind(StrEnum):
++    UPDATE = "update"            # an artefact was replaced by a different one
++    PARAMETER_CHANGE = "parameter_change"   # a value inside it was edited
++    INSTALL = "install"          # an item that was not there before
++    REMOVAL = "removal"          # an item taken off the machine
++    RESTORE = "restore"          # rolled back to a previous artefact
++    #: Somebody found the machine already changed and is recording it after the
++    #: fact. Honest, common, and worth marking as what it is.
++    RECONSTRUCTED = "reconstructed"
++
++    @property
++    def is_contemporaneous(self) -> bool:
++        return self is not InterventionKind.RECONSTRUCTED
++
++
++@dataclass(frozen=True)
++class Authorization:
++    """Who permitted the change, on what basis."""
++
++    authorised_by: Actor
++    reference: str          # change request, work order, permit number
++    basis: str = ""         # the reason the change was allowed
++
++    def __post_init__(self) -> None:
++        if not self.authorised_by.identifier:
++            raise InterventionError(
++                "an authorisation with no named authoriser is not an authorisation."
++            )
++        if not self.reference:
++            raise InterventionError(
++                "an authorisation needs a reference an auditor can pull: a change "
++                "request, a work order, a permit number."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"authorised_by": self.authorised_by.to_dict(),
++                "reference": self.reference, "basis": self.basis}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> Authorization:
++        return cls(authorised_by=Actor.from_dict(d["authorised_by"]),
++                   reference=str(d["reference"]), basis=str(d.get("basis", "")))
++
++
++@dataclass(frozen=True)
++class Revalidation:
++    """What was re-run after the change, and what it produced.
++
++    ``evidence_hash`` points at a sealed verification bundle. A revalidation
++    that names no evidence is a claim that something was checked, with nothing
++    to check it against, and :attr:`is_evidenced` says so.
++    """
++
++    performed_at: datetime
++    performed_by: Actor
++    description: str
++    #: Content hash of the verification bundle produced. Empty means none exists.
++    evidence_hash: str = ""
++    #: Verification check names covered, when narrower than the whole bundle.
++    checks_covered: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        if self.performed_at.tzinfo is None:
++            raise InterventionError("Revalidation.performed_at has no timezone.")
++        if not self.description:
++            raise InterventionError(
++                "a revalidation needs a description of what was actually re-run."
++            )
++
++    @property
++    def is_evidenced(self) -> bool:
++        return bool(self.evidence_hash)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "performed_at": format_utc(self.performed_at),
++            "performed_by": self.performed_by.to_dict(),
++            "description": self.description,
++            "evidence_hash": self.evidence_hash,
++            "checks_covered": list(self.checks_covered),
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> Revalidation:
++        return cls(
++            performed_at=parse_utc(str(d["performed_at"])),
++            performed_by=Actor.from_dict(d["performed_by"]),
++            description=str(d["description"]),
++            evidence_hash=str(d.get("evidence_hash", "")),
++            checks_covered=tuple(str(c) for c in (d.get("checks_covered") or ())),
++        )
++
++
++@dataclass(frozen=True)
++class Intervention:
++    """One recorded change to safety-relevant software on one machine."""
++
++    intervention_id: str
++    machine_key: str
++    item_id: str
++    kind: InterventionKind
++    occurred_at: datetime
++    performed_by: Actor
++    reason: str
++    from_hash: str = ""
++    to_hash: str = ""
++    #: Safety function ids the changed item is credited with, as understood at
++    #: the time of the change. Copied in rather than looked up later, so the
++    #: record stays readable when the manifest is re-declared.
++    affects_functions: tuple[str, ...] = ()
++    authorization: Authorization | None = None
++    revalidation: Revalidation | None = None
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.intervention_id or not self.machine_key or not self.item_id:
++            raise InterventionError(
++                "an intervention needs an id, a machine and an item it touched."
++            )
++        if self.occurred_at.tzinfo is None:
++            raise InterventionError(
++                f"intervention {self.intervention_id!r} occurred_at has no timezone."
++            )
++        if not self.performed_by.identifier:
++            raise InterventionError(
++                f"intervention {self.intervention_id!r} names nobody who performed it. "
++                "An unattributed change to safety-relevant software is the exact "
++                "thing Annex III 1.1.9 exists to prevent."
++            )
++        if not self.reason:
++            raise InterventionError(
++                f"intervention {self.intervention_id!r} gives no reason. "
++                "'Why' is the field a reviewer reads first."
++            )
++        if self.kind is InterventionKind.UPDATE and self.from_hash and self.to_hash \
++                and self.from_hash == self.to_hash:
++            raise InterventionError(
++                f"intervention {self.intervention_id!r} is recorded as an update but "
++                "the before and after hashes are identical. Nothing changed."
++            )
++
++    # -- the questions a reviewer asks ------------------------------------
++    @property
++    def is_authorised(self) -> bool:
++        return self.authorization is not None
++
++    @property
++    def is_revalidated(self) -> bool:
++        """Re-run, and with a sealed bundle to point at."""
++        return self.revalidation is not None and self.revalidation.is_evidenced
++
++    @property
++    def is_safety_bearing(self) -> bool:
++        return bool(self.affects_functions)
++
++    @property
++    def findings(self) -> tuple[str, ...]:
++        """What is wrong with this record, in the order a reviewer would say it."""
++        out: list[str] = []
++        if self.is_safety_bearing and not self.is_revalidated:
++            if self.revalidation is None:
++                out.append(
++                    "a safety-bearing item was changed and nothing was re-run. Every "
++                    "verification of "
++                    + ", ".join(self.affects_functions)
++                    + " that predates this change no longer describes the machine."
++                )
++            else:
++                out.append(
++                    "a revalidation is claimed but names no sealed evidence, so there "
++                    "is nothing for a third party to re-check."
++                )
++        if self.is_safety_bearing and not self.is_authorised:
++            out.append("a safety-bearing item was changed with no recorded authorisation.")
++        if not self.kind.is_contemporaneous:
++            out.append(
++                "this record was reconstructed after the fact, so the times and the "
++                "attribution are somebody's recollection, not a contemporaneous log."
++            )
++        if self.kind in (InterventionKind.UPDATE, InterventionKind.PARAMETER_CHANGE) \
++                and not (self.from_hash and self.to_hash):
++            out.append(
++                "the before and after hashes are not both recorded, so what changed "
++                "cannot be established from this record alone."
++            )
++        return tuple(out)
++
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "intervention_id": self.intervention_id,
++            "machine_key": self.machine_key,
++            "item_id": self.item_id,
++            "kind": self.kind.value,
++            "occurred_at": format_utc(self.occurred_at),
++            "performed_by": self.performed_by.to_dict(),
++            "reason": self.reason,
++            "from_hash": self.from_hash,
++            "to_hash": self.to_hash,
++            "affects_functions": sorted(self.affects_functions),
++            "authorization": self.authorization.to_dict() if self.authorization else None,
++            "revalidation": self.revalidation.to_dict() if self.revalidation else None,
++            "notes": self.notes,
++        }
++
++    def content_hash(self) -> str:
++        return content_hash_of(self.hashable_payload())
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> Intervention:
++        auth = d.get("authorization")
++        reval = d.get("revalidation")
++        return cls(
++            intervention_id=str(d["intervention_id"]),
++            machine_key=str(d["machine_key"]),
++            item_id=str(d["item_id"]),
++            kind=InterventionKind(str(d["kind"])),
++            occurred_at=parse_utc(str(d["occurred_at"])),
++            performed_by=Actor.from_dict(d["performed_by"]),
++            reason=str(d["reason"]),
++            from_hash=str(d.get("from_hash", "")),
++            to_hash=str(d.get("to_hash", "")),
++            affects_functions=tuple(str(f) for f in (d.get("affects_functions") or ())),
++            authorization=Authorization.from_dict(auth) if auth else None,
++            revalidation=Revalidation.from_dict(reval) if reval else None,
++            notes=str(d.get("notes", "")),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> Intervention:
++        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
++
++    def summary(self) -> str:
++        head = (f"{self.intervention_id}  {format_utc(self.occurred_at)}  "
++                f"{self.kind.value}  {self.item_id}  by {self.performed_by}")
++        lines = [head, f"    {self.reason}"]
++        if self.from_hash and self.to_hash:
++            lines.append(f"    {self.from_hash[:12]} → {self.to_hash[:12]}")
++        if self.affects_functions:
++            lines.append(f"    affects {', '.join(sorted(self.affects_functions))}")
++        lines.append(
++            f"    authorised: {'yes — ' + self.authorization.reference if self.authorization else 'NO'}"
++        )
++        if self.revalidation is None:
++            lines.append("    revalidated: NO")
++        elif self.revalidation.is_evidenced:
++            lines.append(f"    revalidated: {self.revalidation.evidence_hash[:12]}")
++        else:
++            lines.append("    revalidated: claimed, no evidence named")
++        for f in self.findings:
++            lines.append(f"    !! {f}")
++        return "\n".join(lines)
+diff --git a/src/assurance/machinery/manifest.py b/src/assurance/machinery/manifest.py
+new file mode 100644
+index 0000000..5ae55a3
+--- /dev/null
++++ b/src/assurance/machinery/manifest.py
+@@ -0,0 +1,440 @@
++"""What safety-relevant software is on this machine, and how we know.
++
++Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
++1.1.9 requires a machine to identify its safety-relevant software and to record
++evidence of intervention in it. Almost nobody can do either today: the safety
++PLC program lives on a laptop, the scanner zones live in a vendor tool, the
++robot's safety parameters live in the controller, and the only record that a
++technician changed any of them is that technician's memory.
++
++A manifest is the answer to "what is running on this machine right now", in a
++form two manifests can be compared with. The whole product turns on one field
++per item: :class:`HashSource`. A hash read out of the machine and a hash a
++supplier emailed you are not the same evidence, and when the two disagree, the
++one that was read from the machine is the one that is true.
++
++A safety function is declared with the checks that exercise it. That is not
++bureaucracy — it is the link that lets an intervention invalidate the
++verification that preceded it, which is what :mod:`assurance.machinery.staleness`
++computes and what nobody else can currently produce.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from datetime import datetime
++from enum import StrEnum
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import Actor
++from assurance.core.identity import content_hash_of, format_utc, parse_utc
++from assurance.core.tiers import AssuranceTier
++
++__all__ = [
++    "HashSource",
++    "ItemKind",
++    "MachineIdentity",
++    "ManifestError",
++    "ManifestSource",
++    "SafetyFunction",
++    "SafetyItem",
++    "SafetyManifest",
++]
++
++
++class ManifestError(AssuranceError):
++    """A manifest is incomplete, inconsistent, or claims more than it evidences."""
++
++
++class ItemKind(StrEnum):
++    """What sort of software-or-configuration this is.
++
++    The distinction matters because the kinds fail differently. Firmware is
++    replaced wholesale and rarely; a scanner's zone configuration is edited on a
++    Tuesday afternoon by someone with a laptop and no change record.
++    """
++
++    FIRMWARE = "firmware"
++    SAFETY_PROGRAM = "safety_program"
++    SAFETY_CONFIGURATION = "safety_configuration"
++    PARAMETER_SET = "parameter_set"
++    LIBRARY = "library"
++
++
++class HashSource(StrEnum):
++    """How this item's identity was established. The ceiling on every claim about it."""
++
++    #: Computed from the artefact as it was read off the machine. The only
++    #: source that says anything about the unit in front of you.
++    READ_FROM_MACHINE = "read_from_machine"
++    #: Computed from a file the supplier provided. Says what should be there.
++    SUPPLIED_BY_VENDOR = "supplied_by_vendor"
++    #: Somebody typed a version number. Nothing was hashed.
++    DECLARED = "declared"
++
++    @property
++    def tier_ceiling(self) -> AssuranceTier:
++        if self is HashSource.READ_FROM_MACHINE:
++            return AssuranceTier.VALIDATED
++        if self is HashSource.SUPPLIED_BY_VENDOR:
++            return AssuranceTier.COMMUNITY
++        return AssuranceTier.PROFILE
++
++    @property
++    def describes_this_unit(self) -> bool:
++        """Whether this says anything about the machine in front of you."""
++        return self is HashSource.READ_FROM_MACHINE
++
++
++class ManifestSource(StrEnum):
++    """Why this manifest exists."""
++
++    #: The configuration the machine was CE-marked with. The baseline.
++    AS_DECLARED = "as_declared"
++    #: What was on the machine when somebody looked. The observation.
++    AS_FOUND = "as_found"
++    #: What the manufacturer intends to ship. A plan, not a fact.
++    AS_INTENDED = "as_intended"
++
++
++@dataclass(frozen=True)
++class MachineIdentity:
++    """The unit this manifest is about.
++
++    Serial number is required and not defaulted. Evidence about "the AR-7" is
++    worth nothing to an inspector standing in front of AR-7 #0412.
++    """
++
++    manufacturer: str
++    model: str
++    serial: str
++    #: Year of construction, per the Machinery Regulation's marking requirements.
++    year: str = ""
++    #: Where it physically is. Useful when a fleet manifest covers many sites.
++    site: str = ""
++
++    def __post_init__(self) -> None:
++        for name in ("manufacturer", "model", "serial"):
++            if not getattr(self, name):
++                raise ManifestError(
++                    f"MachineIdentity.{name} is empty. A manifest that does not "
++                    "identify one specific unit cannot be compared with another."
++                )
++
++    @property
++    def key(self) -> str:
++        """The ledger subject for everything about this machine."""
++        return f"{self.manufacturer}/{self.model}#{self.serial}"
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "manufacturer": self.manufacturer, "model": self.model,
++            "serial": self.serial, "year": self.year, "site": self.site,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> MachineIdentity:
++        return cls(
++            manufacturer=str(d["manufacturer"]), model=str(d["model"]),
++            serial=str(d["serial"]), year=str(d.get("year", "")),
++            site=str(d.get("site", "")),
++        )
++
++
++@dataclass(frozen=True)
++class SafetyFunction:
++    """A named safety function, and what actually demonstrates it.
++
++    ``verified_by`` names the checks in :mod:`assurance.machine.verify` that
++    exercise this function. A function with an empty ``verified_by`` is one this
++    system cannot tell you anything about, and it is reported as exactly that
++    rather than quietly passing.
++    """
++
++    function_id: str
++    description: str
++    #: Required performance level (ISO 13849-1, e.g. "PL d") or SIL (IEC 62061).
++    required_performance: str = ""
++    #: Names of machine-verification checks that exercise this function.
++    verified_by: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        if not self.function_id:
++            raise ManifestError("a safety function needs an identifier.")
++        if not self.description:
++            raise ManifestError(
++                f"safety function {self.function_id!r} has no description. "
++                "An identifier alone tells a reader nothing about what may be lost."
++            )
++
++    @property
++    def is_demonstrable(self) -> bool:
++        return bool(self.verified_by)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "function_id": self.function_id,
++            "description": self.description,
++            "required_performance": self.required_performance,
++            "verified_by": list(self.verified_by),
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> SafetyFunction:
++        return cls(
++            function_id=str(d["function_id"]),
++            description=str(d.get("description", "")),
++            required_performance=str(d.get("required_performance", "")),
++            verified_by=tuple(str(v) for v in (d.get("verified_by") or ())),
++        )
++
++
++@dataclass(frozen=True)
++class SafetyItem:
++    """One piece of safety-relevant software or configuration."""
++
++    item_id: str
++    kind: ItemKind
++    name: str
++    version: str
++    #: Hash of the artefact itself — the program export, the config file, the
++    #: firmware image. Empty is allowed only when ``hash_source`` is DECLARED,
++    #: and then the item cannot participate in divergence detection.
++    content_hash: str
++    hash_source: HashSource
++    supplier: str = ""
++    #: Safety function ids this item helps implement.
++    implements: tuple[str, ...] = ()
++    #: Whether a technician can change this on site. An item that can be changed
++    #: on site and is not covered by an intervention record is the exact gap
++    #: Annex III 1.1.9 exists to close.
++    modifiable_in_field: bool = False
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.item_id or not self.name:
++            raise ManifestError("a safety item needs an item_id and a name.")
++        if not self.content_hash and self.hash_source is not HashSource.DECLARED:
++            raise ManifestError(
++                f"item {self.item_id!r} claims hash_source "
++                f"{self.hash_source.value!r} but carries no hash. Either hash the "
++                "artefact or record the source as 'declared' and accept that this "
++                "item cannot be compared between manifests."
++            )
++
++    @property
++    def is_comparable(self) -> bool:
++        """Whether a change to this item would be detectable at all."""
++        return bool(self.content_hash)
++
++    @property
++    def is_safety_bearing(self) -> bool:
++        return bool(self.implements)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "item_id": self.item_id,
++            "kind": self.kind.value,
++            "name": self.name,
++            "version": self.version,
++            "content_hash": self.content_hash,
++            "hash_source": self.hash_source.value,
++            "supplier": self.supplier,
++            "implements": list(self.implements),
++            "modifiable_in_field": self.modifiable_in_field,
++            "notes": self.notes,
++        }
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> SafetyItem:
++        return cls(
++            item_id=str(d["item_id"]),
++            kind=ItemKind(str(d["kind"])),
++            name=str(d["name"]),
++            version=str(d.get("version", "")),
++            content_hash=str(d.get("content_hash", "")),
++            hash_source=HashSource(str(d["hash_source"])),
++            supplier=str(d.get("supplier", "")),
++            implements=tuple(str(v) for v in (d.get("implements") or ())),
++            modifiable_in_field=bool(d.get("modifiable_in_field", False)),
++            notes=str(d.get("notes", "")),
++        )
++
++    @classmethod
++    def from_file(
++        cls,
++        path: str | Path,
++        *,
++        item_id: str,
++        kind: ItemKind,
++        name: str,
++        version: str = "",
++        supplier: str = "",
++        implements: tuple[str, ...] = (),
++        modifiable_in_field: bool = False,
++        hash_source: HashSource = HashSource.READ_FROM_MACHINE,
++        notes: str = "",
++    ) -> SafetyItem:
++        """Hash an artefact on disk.
++
++        ``hash_source`` defaults to READ_FROM_MACHINE because that is the only
++        reason to point this at a file — but the caller may override it, and
++        must, when the file came from a vendor's download page rather than off
++        the controller.
++        """
++        import hashlib
++
++        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
++        return cls(
++            item_id=item_id, kind=kind, name=name, version=version,
++            content_hash=digest, hash_source=hash_source, supplier=supplier,
++            implements=implements, modifiable_in_field=modifiable_in_field,
++            notes=notes,
++        )
++
++
++@dataclass(frozen=True)
++class SafetyManifest:
++    """The safety-relevant software of one machine at one moment."""
++
++    manifest_id: str
++    machine: MachineIdentity
++    source: ManifestSource
++    taken_at: datetime
++    taken_by: Actor
++    items: tuple[SafetyItem, ...]
++    functions: tuple[SafetyFunction, ...] = ()
++    #: How the manifest was collected: the tool, the procedure, the work order.
++    method: str = ""
++    notes: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.items:
++            raise ManifestError(
++                f"manifest {self.manifest_id!r} lists no items. An empty manifest "
++                "asserts that the machine has no safety-relevant software, which "
++                "is a claim, not a default."
++            )
++        if self.taken_at.tzinfo is None:
++            raise ManifestError(f"manifest {self.manifest_id!r} taken_at has no timezone.")
++        seen: set[str] = set()
++        for item in self.items:
++            if item.item_id in seen:
++                raise ManifestError(
++                    f"manifest {self.manifest_id!r} lists item {item.item_id!r} twice."
++                )
++            seen.add(item.item_id)
++        known = {f.function_id for f in self.functions}
++        for item in self.items:
++            for fid in item.implements:
++                if fid not in known:
++                    raise ManifestError(
++                        f"item {item.item_id!r} implements safety function {fid!r}, "
++                        "which the manifest does not declare. An item credited to a "
++                        "function nobody defined cannot be reasoned about."
++                    )
++
++    # -- views ------------------------------------------------------------
++    def item(self, item_id: str) -> SafetyItem | None:
++        return next((i for i in self.items if i.item_id == item_id), None)
++
++    def function(self, function_id: str) -> SafetyFunction | None:
++        return next((f for f in self.functions if f.function_id == function_id), None)
++
++    @property
++    def tier_ceiling(self) -> AssuranceTier:
++        """The best any claim from this manifest could be worth.
++
++        One declared item among fifty read from the machine drags the whole
++        manifest down, and that is correct: the manifest is a statement about
++        the machine's configuration as a whole.
++        """
++        return min((i.hash_source.tier_ceiling for i in self.items),
++                   default=AssuranceTier.PROFILE)
++
++    @property
++    def uncomparable_items(self) -> tuple[SafetyItem, ...]:
++        """Items carrying no hash: a change to these would never be seen."""
++        return tuple(i for i in self.items if not i.is_comparable)
++
++    @property
++    def field_modifiable_safety_items(self) -> tuple[SafetyItem, ...]:
++        """Safety-bearing items a technician can change on site."""
++        return tuple(i for i in self.items
++                     if i.modifiable_in_field and i.is_safety_bearing)
++
++    @property
++    def undemonstrable_functions(self) -> tuple[SafetyFunction, ...]:
++        """Declared functions that no check exercises."""
++        return tuple(f for f in self.functions if not f.is_demonstrable)
++
++    def functions_of(self, item: SafetyItem) -> tuple[SafetyFunction, ...]:
++        return tuple(f for f in self.functions if f.function_id in item.implements)
++
++    def checks_for(self, function_ids: set[str]) -> set[str]:
++        """Every verification check that exercises any of these functions."""
++        out: set[str] = set()
++        for f in self.functions:
++            if f.function_id in function_ids:
++                out.update(f.verified_by)
++        return out
++
++    # -- identity ---------------------------------------------------------
++    def hashable_payload(self) -> dict[str, Any]:
++        return {
++            "manifest_id": self.manifest_id,
++            "machine": self.machine.to_dict(),
++            "source": self.source.value,
++            "taken_at": format_utc(self.taken_at),
++            "taken_by": self.taken_by.to_dict(),
++            "method": self.method,
++            "notes": self.notes,
++            "items": [i.to_dict() for i in sorted(self.items, key=lambda i: i.item_id)],
++            "functions": [f.to_dict() for f in
++                          sorted(self.functions, key=lambda f: f.function_id)],
++        }
++
++    def content_hash(self) -> str:
++        return content_hash_of(self.hashable_payload())
++
++    def configuration_hash(self) -> str:
++        """Identity of the configuration alone, ignoring who looked and when.
++
++        Two manifests of the same machine taken a year apart by different
++        engineers share this hash if nothing changed. That is the one-line
++        answer to "is it still the machine we signed off".
++        """
++        return content_hash_of({
++            "machine": self.machine.to_dict(),
++            "items": [
++                {"item_id": i.item_id, "kind": i.kind.value, "name": i.name,
++                 "version": i.version, "content_hash": i.content_hash,
++                 "implements": sorted(i.implements)}
++                for i in sorted(self.items, key=lambda i: i.item_id)
++            ],
++        })
++
++    def to_dict(self) -> dict[str, Any]:
++        return self.hashable_payload()
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> SafetyManifest:
++        return cls(
++            manifest_id=str(d["manifest_id"]),
++            machine=MachineIdentity.from_dict(d["machine"]),
++            source=ManifestSource(str(d["source"])),
++            taken_at=parse_utc(str(d["taken_at"])),
++            taken_by=Actor.from_dict(d["taken_by"]),
++            items=tuple(SafetyItem.from_dict(i) for i in d["items"]),
++            functions=tuple(SafetyFunction.from_dict(f)
++                            for f in (d.get("functions") or ())),
++            method=str(d.get("method", "")),
++            notes=str(d.get("notes", "")),
++        )
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> SafetyManifest:
++        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+diff --git a/src/assurance/machinery/record.py b/src/assurance/machinery/record.py
+new file mode 100644
+index 0000000..c68562e
+--- /dev/null
++++ b/src/assurance/machinery/record.py
+@@ -0,0 +1,406 @@
++"""Sealing manifests and interventions into the ledger, and the machine passport.
++
++A manifest in a file is a document. A manifest in the hash-chained ledger is a
++dated, attributed, tamper-evident record of what was on the machine on the day
++somebody looked — and the chain, not our word, is what makes a later
++"the baseline always said that" checkable.
++
++The passport is the deliverable a customer actually receives: the machine's
++identity, its current configuration, its change history, and the coverage
++position for every declared safety function, sealed as one object that anybody
++can re-check against the ledger it came from.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from assurance.core.errors import AssuranceError
++from assurance.core.evidence import (
++    Actor,
++    Confidence,
++    Evidence,
++    EvidenceRef,
++    Origin,
++    ValidationState,
++)
++from assurance.core.identity import format_utc, utc_now
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machinery.divergence import Divergence
++from assurance.machinery.intervention import Intervention
++from assurance.machinery.manifest import SafetyManifest
++from assurance.machinery.staleness import (
++    CoverageReport,
++    VerificationRecord,
++    assess_coverage,
++)
++
++__all__ = [
++    "DIVERGENCE_KIND",
++    "INTERVENTION_KIND",
++    "MANIFEST_KIND",
++    "PASSPORT_KIND",
++    "PASSPORT_SCHEMA",
++    "MachinePassport",
++    "PassportError",
++    "build_passport",
++    "interventions_from_ledger",
++    "manifests_from_ledger",
++    "record_divergence",
++    "record_intervention",
++    "record_manifest",
++    "verify_passport",
++]
++
++MANIFEST_KIND = "machinery.safety_manifest"
++INTERVENTION_KIND = "machinery.intervention"
++DIVERGENCE_KIND = "machinery.divergence"
++PASSPORT_KIND = "machinery.passport"
++PASSPORT_SCHEMA = "assurance.machinery.passport/1"
++
++
++class PassportError(AssuranceError):
++    """A passport is malformed, or does not match the ledger it names."""
++
++
++# -- sealing ---------------------------------------------------------------
++
++
++def record_manifest(
++    ledger: EvidenceLedger, manifest: SafetyManifest, *, actor: Actor | None = None,
++) -> Evidence:
++    """Seal a manifest into the ledger under the machine's key.
++
++    The actor defaults to whoever the manifest says took it, because a manifest
++    that arrives with no taker is refused at seal time rather than filed to a
++    placeholder.
++    """
++    who = actor or manifest.taken_by
++    evidence = Evidence(
++        kind=MANIFEST_KIND,
++        body={
++            "manifest": manifest.to_dict(),
++            "configuration_hash": manifest.configuration_hash(),
++            "tier_ceiling": manifest.tier_ceiling.value,
++        },
++        actor=who,
++        origin=Origin(
++            system="assurance.machinery",
++            reference=f"{manifest.machine.key} / {manifest.manifest_id}",
++            method=manifest.method or f"manifest recorded as {manifest.source.value}",
++        ),
++        validation_state=ValidationState.UNVERIFIED,
++        confidence=(
++            Confidence.HIGH if manifest.tier_ceiling.may_claim_physical_behaviour
++            else Confidence.LOW
++        ),
++        checks_skipped=tuple(
++            [f"{i.item_id} carries no hash ({i.hash_source.value}); a change to it "
++             "would not be detectable." for i in manifest.uncomparable_items]
++            + [f"{i.item_id} is safety-bearing and modifiable on site."
++               for i in manifest.field_modifiable_safety_items]
++            + ["this records what was collected. It does not establish that the "
++               "collection was complete: an item nobody listed is absent from every "
++               "comparison made from this manifest."]
++        ),
++    ).seal()
++    ledger.append(evidence, subject=manifest.machine.key)
++    return evidence
++
++
++def record_intervention(
++    ledger: EvidenceLedger, intervention: Intervention, *, actor: Actor | None = None,
++) -> Evidence:
++    """Seal an intervention record. Findings are carried, not suppressed.
++
++    An intervention with no authorisation and no revalidation is still recorded —
++    and its own ``findings`` become the evidence object's ``checks_skipped``, so
++    the gap travels with the record instead of being lost between systems.
++    """
++    findings = intervention.findings
++    evidence = Evidence(
++        kind=INTERVENTION_KIND,
++        body={"intervention": intervention.to_dict(),
++              "findings": list(findings)},
++        actor=actor or intervention.performed_by,
++        origin=Origin(
++            system="assurance.machinery",
++            reference=f"{intervention.machine_key} / {intervention.intervention_id}",
++            method=f"{intervention.kind.value} recorded against {intervention.item_id}",
++        ),
++        validation_state=(
++            ValidationState.VERIFIED if intervention.is_revalidated
++            else ValidationState.INDETERMINATE
++        ),
++        confidence=Confidence.HIGH if intervention.kind.is_contemporaneous
++        else Confidence.LOW,
++        checks_skipped=findings,
++        relations=tuple(
++            [EvidenceRef(relation="supersedes", content_hash=intervention.from_hash,
++                         note=f"the {intervention.item_id} artefact this replaced")]
++            if intervention.from_hash else []
++        ) + tuple(
++            [EvidenceRef(
++                relation="supports",
++                content_hash=intervention.revalidation.evidence_hash,
++                note="the verification re-run after this change")]
++            if intervention.revalidation and intervention.revalidation.is_evidenced
++            else []
++        ),
++    ).seal()
++    ledger.append(evidence, subject=intervention.machine_key)
++    return evidence
++
++
++def record_divergence(
++    ledger: EvidenceLedger, divergence: Divergence, *, actor: Actor,
++) -> Evidence:
++    """Seal a divergence report."""
++    evidence = Evidence(
++        kind=DIVERGENCE_KIND,
++        body=divergence.to_dict(),
++        actor=actor,
++        origin=Origin(
++            system="assurance.machinery",
++            reference=f"{divergence.machine_key} / {divergence.observed_id}",
++            method=f"baseline {divergence.baseline_id} compared against observed "
++                   f"{divergence.observed_id}",
++        ),
++        validation_state=(
++            ValidationState.VERIFIED if divergence.verdict == "matches"
++            else ValidationState.REFUTED
++        ),
++        confidence=Confidence.HIGH if divergence.tier.may_claim_physical_behaviour
++        else Confidence.MEDIUM,
++        checks_skipped=divergence.checks_skipped,
++        relations=(
++            EvidenceRef(relation="concerns", content_hash=divergence.baseline_hash,
++                        note="the as-declared baseline manifest"),
++            EvidenceRef(relation="derived_from", content_hash=divergence.observed_hash,
++                        note="the as-found manifest"),
++        ),
++    ).seal()
++    ledger.append(evidence, subject=divergence.machine_key)
++    return evidence
++
++
++# -- reading back ----------------------------------------------------------
++
++
++def manifests_from_ledger(
++    ledger: EvidenceLedger, machine_key: str,
++) -> list[SafetyManifest]:
++    """Every sealed manifest for a machine, oldest first, tampered ones dropped."""
++    out: list[SafetyManifest] = []
++    for entry in ledger.entries(kind=MANIFEST_KIND, subject=machine_key):
++        evidence = entry.evidence()
++        if not evidence.verify():
++            continue
++        out.append(SafetyManifest.from_dict(evidence.body["manifest"]))
++    return out
++
++
++def interventions_from_ledger(
++    ledger: EvidenceLedger, machine_key: str,
++) -> list[Intervention]:
++    """Every sealed intervention for a machine, in the order they occurred."""
++    out: list[Intervention] = []
++    for entry in ledger.entries(kind=INTERVENTION_KIND, subject=machine_key):
++        evidence = entry.evidence()
++        if not evidence.verify():
++            continue
++        out.append(Intervention.from_dict(evidence.body["intervention"]))
++    return sorted(out, key=lambda i: i.occurred_at)
++
++
++# -- the passport ----------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class MachinePassport:
++    """What the customer receives: identity, configuration, history, coverage."""
++
++    evidence: Evidence
++    manifest: SafetyManifest
++    coverage: CoverageReport
++    interventions: tuple[Intervention, ...]
++
++    @property
++    def content_hash(self) -> str:
++        return self.evidence.content_hash
++
++    @property
++    def verdict(self) -> str:
++        return self.coverage.verdict
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "schema": PASSPORT_SCHEMA,
++            "evidence": self.evidence.to_dict(),
++            "manifest": self.manifest.to_dict(),
++            "coverage": self.coverage.to_dict(),
++            "interventions": [i.to_dict() for i in self.interventions],
++        }
++
++    def write(self, path: str | Path) -> Path:
++        p = Path(path)
++        p.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n",
++                     encoding="utf-8")
++        return p
++
++    def summary(self) -> str:
++        return (f"{self.coverage.summary()}\n"
++                f"  {len(self.interventions)} recorded intervention(s)\n"
++                f"  sealed as {self.content_hash[:16]}")
++
++
++def build_passport(
++    ledger: EvidenceLedger,
++    manifest: SafetyManifest,
++    *,
++    actor: Actor,
++    interventions: list[Intervention] | None = None,
++    verifications: list[VerificationRecord] | None = None,
++    seal: bool = True,
++) -> MachinePassport:
++    """Assemble and seal the machine's current evidence position.
++
++    Interventions and verifications are read out of the ledger when not supplied,
++    which is the normal path: the passport is a view over what has been recorded,
++    not a document somebody assembles by hand.
++    """
++    key = manifest.machine.key
++    ivs = (interventions if interventions is not None
++           else interventions_from_ledger(ledger, key))
++    vfs = (verifications if verifications is not None
++           else VerificationRecord.from_ledger(ledger, subject=key))
++
++    coverage = assess_coverage(manifest, vfs, ivs)
++    chain_ok, chain_problems = ledger.verify_chain()
++
++    skipped = list(coverage.checks_skipped)
++    if not chain_ok:
++        skipped.insert(0, "THE LEDGER CHAIN DOES NOT VERIFY: "
++                          + "; ".join(chain_problems[:3])
++                          + ". Every statement below is drawn from a store whose "
++                            "integrity is in question.")
++    if not vfs:
++        skipped.append(
++            f"no machine verification in this ledger is filed under {key!r}. A "
++            "verification sealed under a product line rather than this unit will not "
++            "be found here — seal it with subject=<machine key> to link the two.")
++
++    evidence = Evidence(
++        kind=PASSPORT_KIND,
++        body={
++            "schema": PASSPORT_SCHEMA,
++            "machine": manifest.machine.to_dict(),
++            "manifest_id": manifest.manifest_id,
++            "manifest_hash": manifest.content_hash(),
++            "configuration_hash": manifest.configuration_hash(),
++            "verdict": coverage.verdict,
++            "functions": [f.to_dict() for f in coverage.functions],
++            "intervention_ids": [i.intervention_id for i in ivs],
++            "verification_hashes": [v.content_hash for v in vfs],
++            "ledger_chain_verified": chain_ok,
++            "ledger_head": ledger.head_attestation() if chain_ok else {},
++            "assessed_at": format_utc(utc_now()),
++        },
++        actor=actor,
++        origin=Origin(
++            system="assurance.machinery",
++            reference=key,
++            method="coverage assessed by joining verification bundles to "
++                   "intervention records through declared safety functions",
++        ),
++        validation_state=(
++            ValidationState.VERIFIED if coverage.verdict == "covered"
++            else ValidationState.INDETERMINATE
++        ),
++        confidence=Confidence.HIGH if (chain_ok and coverage.verdict == "covered")
++        else Confidence.LOW,
++        checks_skipped=tuple(dict.fromkeys(skipped)),
++        relations=(
++            EvidenceRef(relation="concerns", content_hash=manifest.content_hash(),
++                        note="the manifest this position is assessed against"),
++        ) + tuple(
++            EvidenceRef(relation="derived_from", content_hash=v.content_hash,
++                        note=f"verification {v.product_version}")
++            for v in vfs
++        ),
++    ).seal()
++
++    if seal:
++        ledger.append(evidence, subject=key)
++
++    return MachinePassport(
++        evidence=evidence, manifest=manifest, coverage=coverage,
++        interventions=tuple(ivs),
++    )
++
++
++def verify_passport(
++    passport_path: str | Path, *, ledger: EvidenceLedger | None = None,
++) -> tuple[bool, list[str]]:
++    """Re-check a passport without trusting whoever produced it.
++
++    Returns ``(ok, problems)``. As with a verification bundle, supplying nothing
++    to check against yields ``ok`` *with* a stated limitation rather than a clean
++    pass: the seal proves the file was not edited, not that the machine is safe.
++    """
++    problems: list[str] = []
++    raw = json.loads(Path(passport_path).read_text(encoding="utf-8"))
++
++    if raw.get("schema") != PASSPORT_SCHEMA:
++        return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r}."]
++
++    try:
++        evidence = Evidence.from_dict(raw["evidence"])
++    except Exception as exc:  # noqa: BLE001 - a verifier reports, it does not raise
++        return False, [f"the sealed evidence could not be read: {exc}"]
++
++    if not evidence.verify():
++        problems.append(
++            f"the evidence does not hash to the value it carries "
++            f"({evidence.content_hash[:16]}). The passport was edited after sealing.")
++
++    body = evidence.body
++    functions = body.get("functions") or []
++    uncovered = [f for f in functions if f.get("coverage") != "current"]
++    implied = "covered" if functions and not uncovered else (
++        "no_functions_declared" if not functions else "gaps")
++    if body.get("verdict") != implied:
++        problems.append(
++            f"the passport records verdict {body.get('verdict')!r} but its own "
++            f"function list implies {implied!r} ({len(uncovered)} not current).")
++
++    if body.get("ledger_chain_verified") is False:
++        problems.append(
++            "the passport itself records that the ledger chain did not verify when it "
++            "was produced.")
++
++    if ledger is not None:
++        entry = ledger.get(evidence.content_hash)
++        if entry is None:
++            problems.append(
++                "this passport is not in the ledger supplied. Either it came from a "
++                "different ledger, or it was never sealed into one.")
++        ok, chain_problems = ledger.verify_chain()
++        if not ok:
++            problems.append("the supplied ledger's chain does not verify: "
++                            + "; ".join(chain_problems[:3]))
++        for h in body.get("verification_hashes") or []:
++            if ledger.get(h) is None:
++                problems.append(
++                    f"verification {h[:12]} is named by this passport and is not in "
++                    "the supplied ledger.")
++    elif not problems:
++        problems.append(
++            "NOT CHECKED: no ledger was supplied, so only the passport's internal "
++            "integrity was confirmed. Nothing here shows the records it names exist.")
++        return True, problems
++
++    return not problems, problems
+diff --git a/src/assurance/machinery/staleness.py b/src/assurance/machinery/staleness.py
+new file mode 100644
+index 0000000..220dbfd
+--- /dev/null
++++ b/src/assurance/machinery/staleness.py
+@@ -0,0 +1,411 @@
++"""Which of this machine's safety functions are still covered by valid evidence?
++
++This is the join that neither half can make alone, and the reason both halves
++exist in one package.
++
++:mod:`assurance.machine` produces a verification: *on this run, the cell met its
++declared separation, speed and workspace limits.* :mod:`assurance.machinery`
++produces an intervention record: *on 14 March a technician replaced the safety
++controller firmware.* Separately, each is a file. Together they produce the
++sentence a plant manager has never been shown:
++
++    SF-02 protective stop — STALE. Last verified 9 February by bundle a41c…;
++    invalidated by INT-0007 on 14 March, which changed safety-controller
++    firmware and re-ran nothing. The cell has run for seven months on a
++    validation that stopped describing it.
++
++The inference is mechanical, not clever. An intervention names the item it
++touched; the manifest says which safety functions that item implements; each
++function declares the verification checks that exercise it. A verification
++recorded before the intervention, whose verified checks intersect that set, no
++longer describes the machine.
++
++Every step of that chain is declared by the customer and visible in the output,
++so a reviewer who disagrees can point at the link they disagree with. A function
++that declares no checks is reported as ``not_demonstrable`` — never as covered.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime
++from enum import StrEnum
++from typing import Any
++
++from assurance.core.identity import format_utc, parse_utc
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machine.bundle import BUNDLE_KIND
++from assurance.machinery.intervention import Intervention
++from assurance.machinery.manifest import SafetyManifest
++
++__all__ = [
++    "Coverage",
++    "CoverageReport",
++    "FunctionCoverage",
++    "VerificationRecord",
++    "assess_coverage",
++]
++
++
++class Coverage(StrEnum):
++    """The state of the evidence for one safety function."""
++
++    #: A passing verification exists and nothing since has disturbed it.
++    CURRENT = "current"
++    #: It was verified, and a later intervention invalidated that verification.
++    STALE = "stale"
++    #: A verification exists but the checks for this function did not pass.
++    FAILING = "failing"
++    #: No verification has ever exercised this function.
++    NEVER_VERIFIED = "never_verified"
++    #: The function declares no checks, so no verification could cover it.
++    NOT_DEMONSTRABLE = "not_demonstrable"
++
++    @property
++    def is_covered(self) -> bool:
++        return self is Coverage.CURRENT
++
++    @property
++    def rank(self) -> int:
++        """Worst first, for sorting a report a human reads top-down."""
++        return {"failing": 0, "stale": 1, "never_verified": 2,
++                "not_demonstrable": 3, "current": 4}[self.value]
++
++
++@dataclass(frozen=True)
++class VerificationRecord:
++    """A sealed machine verification, reduced to what staleness needs.
++
++    ``effective_at`` is when the machine was in the state the verification
++    describes — the start of the recorded run — not when the bundle was filed.
++    A run captured in February and filed in June is evidence about February.
++    """
++
++    content_hash: str
++    effective_at: datetime
++    ledger_seq: int
++    product: str
++    product_version: str
++    verdict: str
++    tier: str
++    checks_verified: tuple[str, ...]
++    checks_not_verified: tuple[str, ...] = ()
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "content_hash": self.content_hash,
++            "effective_at": format_utc(self.effective_at),
++            "ledger_seq": self.ledger_seq,
++            "product": self.product,
++            "product_version": self.product_version,
++            "verdict": self.verdict,
++            "tier": self.tier,
++            "checks_verified": list(self.checks_verified),
++            "checks_not_verified": list(self.checks_not_verified),
++        }
++
++    @classmethod
++    def from_ledger(
++        cls, ledger: EvidenceLedger, *, subject: str | None = None,
++    ) -> list[VerificationRecord]:
++        """Read every sealed machine verification out of a ledger.
++
++        A bundle whose evidence no longer matches its own hash is skipped rather
++        than trusted: a tampered record must not be able to make a stale
++        function look current.
++        """
++        out: list[VerificationRecord] = []
++        for entry in ledger.entries(kind=BUNDLE_KIND, subject=subject):
++            evidence = entry.evidence()
++            if not evidence.verify():
++                continue
++            body = evidence.body
++            checks = body.get("checks") or []
++            verified = tuple(c["name"] for c in checks
++                             if c.get("outcome") == "verified")
++            others = tuple(c["name"] for c in checks
++                           if c.get("outcome") != "verified")
++            raw = body.get("trace_started_at") or entry.at
++            try:
++                effective = parse_utc(str(raw))
++            except (ValueError, TypeError):
++                effective = parse_utc(entry.at)
++            out.append(cls(
++                content_hash=evidence.content_hash,
++                effective_at=effective,
++                ledger_seq=entry.seq,
++                product=str(body.get("product", "")),
++                product_version=str(body.get("product_version", "")),
++                verdict=str(body.get("verdict", "")),
++                tier=str(body.get("tier", "")),
++                checks_verified=verified,
++                checks_not_verified=others,
++            ))
++        return out
++
++
++@dataclass(frozen=True)
++class FunctionCoverage:
++    """The evidence position for one declared safety function."""
++
++    function_id: str
++    description: str
++    required_performance: str
++    coverage: Coverage
++    checks: tuple[str, ...]
++    #: The most recent verification that covered this function, if any.
++    last_verified_hash: str = ""
++    last_verified_at: str = ""
++    #: The intervention that invalidated it, when coverage is STALE.
++    invalidated_by: str = ""
++    invalidated_at: str = ""
++    invalidating_item: str = ""
++    #: Whether that intervention re-ran anything with sealed evidence.
++    intervention_revalidated: bool = False
++    detail: str = ""
++
++    @property
++    def days_uncovered(self) -> int | None:
++        """Days the machine has run without valid evidence for this function."""
++        if self.coverage is not Coverage.STALE or not self.invalidated_at:
++            return None
++        try:
++            from assurance.core.identity import utc_now
++            return max(0, (utc_now() - parse_utc(self.invalidated_at)).days)
++        except (ValueError, TypeError):
++            return None
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "function_id": self.function_id,
++            "description": self.description,
++            "required_performance": self.required_performance,
++            "coverage": self.coverage.value,
++            "checks": list(self.checks),
++            "last_verified_hash": self.last_verified_hash,
++            "last_verified_at": self.last_verified_at,
++            "invalidated_by": self.invalidated_by,
++            "invalidated_at": self.invalidated_at,
++            "invalidating_item": self.invalidating_item,
++            "intervention_revalidated": self.intervention_revalidated,
++            "days_uncovered": self.days_uncovered,
++            "detail": self.detail,
++        }
++
++
++@dataclass(frozen=True)
++class CoverageReport:
++    """Every declared safety function, and whether evidence still stands for it."""
++
++    machine_key: str
++    manifest_id: str
++    configuration_hash: str
++    assessed_at: str
++    functions: tuple[FunctionCoverage, ...]
++    #: Interventions that touched a safety-bearing item and re-ran nothing.
++    unrevalidated_interventions: tuple[str, ...]
++    checks_skipped: tuple[str, ...]
++
++    @property
++    def verdict(self) -> str:
++        """``covered`` | ``gaps`` | ``no_functions_declared``."""
++        if not self.functions:
++            return "no_functions_declared"
++        return "covered" if all(f.coverage.is_covered for f in self.functions) else "gaps"
++
++    @property
++    def stale(self) -> tuple[FunctionCoverage, ...]:
++        return tuple(f for f in self.functions if f.coverage is Coverage.STALE)
++
++    @property
++    def uncovered(self) -> tuple[FunctionCoverage, ...]:
++        return tuple(f for f in self.functions if not f.coverage.is_covered)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "machine": self.machine_key,
++            "manifest_id": self.manifest_id,
++            "configuration_hash": self.configuration_hash,
++            "assessed_at": self.assessed_at,
++            "verdict": self.verdict,
++            "functions": [f.to_dict() for f in self.functions],
++            "unrevalidated_interventions": list(self.unrevalidated_interventions),
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        mark = {"current": "ok    ", "stale": "STALE ", "failing": "FAIL  ",
++                "never_verified": "never ", "not_demonstrable": "n/a   "}
++        lines = [
++            f"{self.machine_key} — {self.verdict.upper()}",
++            f"  configuration {self.configuration_hash[:12]}  "
++            f"manifest {self.manifest_id}",
++        ]
++        for f in sorted(self.functions, key=lambda f: (f.coverage.rank, f.function_id)):
++            perf = f" [{f.required_performance}]" if f.required_performance else ""
++            lines.append(f"  [{mark[f.coverage.value]}] {f.function_id}{perf}  "
++                         f"{f.description}")
++            lines.append(f"           {f.detail}")
++            days = f.days_uncovered
++            if days is not None:
++                lines.append(f"           running {days} day(s) without valid evidence "
++                             "for this function.")
++        if self.unrevalidated_interventions:
++            lines.append("  Interventions on safety-bearing items with nothing re-run: "
++                         + ", ".join(self.unrevalidated_interventions))
++        return "\n".join(lines)
++
++
++def assess_coverage(
++    manifest: SafetyManifest,
++    verifications: list[VerificationRecord],
++    interventions: list[Intervention],
++) -> CoverageReport:
++    """Work out, function by function, whether the evidence still stands.
++
++    ``verifications`` and ``interventions`` need not be sorted; both are ordered
++    here by the time they describe, not the time they were filed.
++    """
++    from assurance.core.identity import utc_now
++
++    machine_key = manifest.machine.key
++    mine = sorted(
++        (i for i in interventions if i.machine_key == machine_key),
++        key=lambda i: i.occurred_at,
++    )
++    verifs = sorted(verifications, key=lambda v: v.effective_at)
++
++    caveats: list[str] = []
++    coverages: list[FunctionCoverage] = []
++
++    for fn in sorted(manifest.functions, key=lambda f: f.function_id):
++        checks = set(fn.verified_by)
++
++        if not checks:
++            coverages.append(FunctionCoverage(
++                function_id=fn.function_id, description=fn.description,
++                required_performance=fn.required_performance,
++                coverage=Coverage.NOT_DEMONSTRABLE, checks=(),
++                detail="this function declares no verification check, so no "
++                       "verification can cover it. Declare the checks that exercise "
++                       "it, or accept that its evidence lives outside this system.",
++            ))
++            continue
++
++        # Interventions that disturb this function, by the functions they name.
++        disturbing = [i for i in mine if checks & manifest.checks_for(set(i.affects_functions))]
++
++        # The most recent verification whose verified checks cover this function.
++        covering = [v for v in verifs if checks & set(v.checks_verified)]
++        attempted = [v for v in verifs
++                     if checks & (set(v.checks_verified) | set(v.checks_not_verified))]
++
++        if not covering:
++            if attempted:
++                last = attempted[-1]
++                coverages.append(FunctionCoverage(
++                    function_id=fn.function_id, description=fn.description,
++                    required_performance=fn.required_performance,
++                    coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
++                    last_verified_hash=last.content_hash,
++                    last_verified_at=format_utc(last.effective_at),
++                    detail=f"the most recent verification ({last.content_hash[:12]}, "
++                           f"{last.verdict}) ran the checks for this function and did "
++                           "not pass them. Coverage has never been established.",
++                ))
++            else:
++                coverages.append(FunctionCoverage(
++                    function_id=fn.function_id, description=fn.description,
++                    required_performance=fn.required_performance,
++                    coverage=Coverage.NEVER_VERIFIED, checks=tuple(sorted(checks)),
++                    detail="no verification in the ledger has ever run "
++                           + ", ".join(sorted(checks)) + " for this machine.",
++                ))
++            continue
++
++        last_good = covering[-1]
++        after = [i for i in disturbing if i.occurred_at > last_good.effective_at]
++
++        if not after:
++            coverages.append(FunctionCoverage(
++                function_id=fn.function_id, description=fn.description,
++                required_performance=fn.required_performance,
++                coverage=Coverage.CURRENT, checks=tuple(sorted(checks)),
++                last_verified_hash=last_good.content_hash,
++                last_verified_at=format_utc(last_good.effective_at),
++                detail=f"verified by {last_good.content_hash[:12]} on "
++                       f"{format_utc(last_good.effective_at)[:10]} at tier "
++                       f"{last_good.tier}; no recorded intervention since has "
++                       "touched an item implementing it.",
++            ))
++            continue
++
++        breaker = after[0]
++        revalidated = breaker.is_revalidated
++        coverages.append(FunctionCoverage(
++            function_id=fn.function_id, description=fn.description,
++            required_performance=fn.required_performance,
++            coverage=Coverage.STALE, checks=tuple(sorted(checks)),
++            last_verified_hash=last_good.content_hash,
++            last_verified_at=format_utc(last_good.effective_at),
++            invalidated_by=breaker.intervention_id,
++            invalidated_at=format_utc(breaker.occurred_at),
++            invalidating_item=breaker.item_id,
++            intervention_revalidated=revalidated,
++            detail=(
++                f"last verified by {last_good.content_hash[:12]} on "
++                f"{format_utc(last_good.effective_at)[:10]}; invalidated by "
++                f"{breaker.intervention_id} on {format_utc(breaker.occurred_at)[:10]}, "
++                f"which changed {breaker.item_id}"
++                + (f" and re-ran {breaker.revalidation.description!r} — but that "
++                   f"revalidation is not in this ledger, so it was not counted."
++                   if revalidated else " and re-ran nothing with sealed evidence.")
++            ),
++        ))
++
++    # -- what this assessment could not see -------------------------------
++    unrevalidated = tuple(
++        i.intervention_id for i in mine
++        if i.is_safety_bearing and not i.is_revalidated
++    )
++    if not mine:
++        caveats.append(
++            "no interventions were supplied for this machine. A function shown as "
++            "current is current only against the change records you have; an "
++            "unrecorded change is invisible here by construction."
++        )
++    unattributed = [i.intervention_id for i in mine if not i.is_safety_bearing]
++    if unattributed:
++        caveats.append(
++            "intervention(s) " + ", ".join(unattributed) + " name no safety function, "
++            "so they disturb nothing in this assessment. If any of them touched a "
++            "safety-bearing item, the attribution is missing, not the risk."
++        )
++    if manifest.uncomparable_items:
++        caveats.append(
++            f"{len(manifest.uncomparable_items)} manifest item(s) carry no hash, so a "
++            "change to them would not appear in a divergence report and would only "
++            "reach this assessment if somebody wrote an intervention record by hand."
++        )
++    for item in manifest.field_modifiable_safety_items:
++        caveats.append(
++            f"{item.item_id} is safety-bearing and modifiable on site; coverage for "
++            f"{', '.join(item.implements)} rests on every such change having been "
++            "recorded."
++        )
++    caveats.append(
++        "this joins verification bundles to intervention records through the safety "
++        "functions the manifest declares. It does not confirm the manifest is "
++        "complete, and a safety-relevant item nobody listed is covered by nothing "
++        "here and reported by nothing here."
++    )
++
++    return CoverageReport(
++        machine_key=machine_key,
++        manifest_id=manifest.manifest_id,
++        configuration_hash=manifest.configuration_hash(),
++        assessed_at=format_utc(utc_now()),
++        functions=tuple(coverages),
++        unrevalidated_interventions=unrevalidated,
++        checks_skipped=tuple(dict.fromkeys(caveats)),
++    )
+diff --git a/tests/test_assurance_machinery.py b/tests/test_assurance_machinery.py
+new file mode 100644
+index 0000000..13bbcb1
+--- /dev/null
++++ b/tests/test_assurance_machinery.py
+@@ -0,0 +1,705 @@
++"""Tests for the safety software manifest, interventions, and coverage.
++
++The test that matters most is
++``test_a_firmware_change_invalidates_the_verification_that_preceded_it``.
++Everything else in this package exists so that one inference is sound.
++"""
++
++from __future__ import annotations
++
++import json
++from datetime import UTC, datetime
++
++import pytest
++
++from assurance.core.evidence import Actor, ValidationState
++from assurance.core.tiers import AssuranceTier
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.machine.bundle import build_bundle
++from assurance.machine.envelope import (
++    FigureBasis,
++    SafetyEnvelope,
++    SensingUncertainty,
++    StopPerformance,
++    Workspace,
++)
++from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
++from assurance.machinery.divergence import ChangeKind, Severity, compare
++from assurance.machinery.intervention import (
++    Authorization,
++    Intervention,
++    InterventionError,
++    InterventionKind,
++    Revalidation,
++)
++from assurance.machinery.manifest import (
++    HashSource,
++    ItemKind,
++    MachineIdentity,
++    ManifestError,
++    ManifestSource,
++    SafetyFunction,
++    SafetyItem,
++    SafetyManifest,
++)
++from assurance.machinery.record import (
++    build_passport,
++    interventions_from_ledger,
++    record_intervention,
++    record_manifest,
++    verify_passport,
++)
++from assurance.machinery.staleness import (
++    Coverage,
++    VerificationRecord,
++    assess_coverage,
++)
++
++ENG = Actor(identifier="a.integrator", role="safety engineer")
++TECH = Actor(identifier="m.tech", role="service technician")
++
++MACHINE = MachineIdentity(manufacturer="Grimaldi", model="AR-7", serial="0412")
++
++FUNCS = (
++    SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
++                   verified_by=("ssm_separation", "stop_characterisation")),
++    SafetyFunction("SF-02", "Speed limit in collaborative operation", "PL d",
++                   verified_by=("speed_limit",)),
++    SafetyFunction("SF-03", "Emergency stop", "PL d"),
++)
++
++
++def item(item_id="ITM-FW", **over):
++    kw = {
++        "item_id": item_id,
++        "kind": ItemKind.FIRMWARE,
++        "name": "Safety controller firmware",
++        "version": "3.8.2",
++        "content_hash": "a" * 64,
++        "hash_source": HashSource.READ_FROM_MACHINE,
++        "implements": ("SF-01", "SF-02"),
++    }
++    kw.update(over)
++    return SafetyItem(**kw)
++
++
++def manifest(*items, **over):
++    kw = {
++        "manifest_id": "MAN-1",
++        "machine": MACHINE,
++        "source": ManifestSource.AS_FOUND,
++        "taken_at": datetime(2026, 1, 20, tzinfo=UTC),
++        "taken_by": ENG,
++        "items": items or (item(),),
++        "functions": FUNCS,
++        "method": "read via controller service port",
++    }
++    kw.update(over)
++    return SafetyManifest(**kw)
++
++
++def intervention(**over):
++    kw = {
++        "intervention_id": "INT-0007",
++        "machine_key": MACHINE.key,
++        "item_id": "ITM-FW",
++        "kind": InterventionKind.UPDATE,
++        "occurred_at": datetime(2026, 3, 14, 9, 30, tzinfo=UTC),
++        "performed_by": TECH,
++        "reason": "Vendor advisory: watchdog timeout under bus load.",
++        "from_hash": "a" * 64,
++        "to_hash": "d" * 64,
++        "affects_functions": ("SF-01", "SF-02"),
++    }
++    kw.update(over)
++    return Intervention(**kw)
++
++
++def verification(seq=1, at=datetime(2026, 2, 9, tzinfo=UTC), verified=("ssm_separation",
++                  "stop_characterisation", "speed_limit"), not_verified=()):
++    return VerificationRecord(
++        content_hash=f"{seq:064x}", effective_at=at, ledger_seq=seq,
++        product="AR-7", product_version="2.4.1", verdict="pass", tier="validated",
++        checks_verified=tuple(verified), checks_not_verified=tuple(not_verified),
++    )
++
++
++# =====================================================================
++# the join — the reason this package exists
++# =====================================================================
++
++class TestCoverage:
++    def test_a_verification_with_nothing_since_is_current(self):
++        r = assess_coverage(manifest(), [verification()], [])
++        assert r.functions[0].coverage is Coverage.CURRENT
++        assert r.verdict == "gaps"  # SF-03 declares no checks
++
++    def test_a_firmware_change_invalidates_the_verification_that_preceded_it(self):
++        """The whole product in one assertion."""
++        r = assess_coverage(manifest(), [verification()], [intervention()])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.STALE
++        assert sf01.invalidated_by == "INT-0007"
++        assert sf01.invalidating_item == "ITM-FW"
++        assert sf01.last_verified_at.startswith("2026-02-09")
++        assert sf01.invalidated_at.startswith("2026-03-14")
++
++    def test_it_names_every_function_the_changed_item_implements(self):
++        r = assess_coverage(manifest(), [verification()], [intervention()])
++        stale = {f.function_id for f in r.stale}
++        assert stale == {"SF-01", "SF-02"}
++
++    def test_a_change_before_the_verification_does_not_invalidate_it(self):
++        early = intervention(occurred_at=datetime(2026, 1, 3, tzinfo=UTC))
++        r = assess_coverage(manifest(), [verification()], [early])
++        assert all(f.coverage is not Coverage.STALE for f in r.functions)
++
++    def test_a_later_verification_restores_coverage(self):
++        after = verification(seq=2, at=datetime(2026, 4, 1, tzinfo=UTC))
++        r = assess_coverage(manifest(), [verification(), after], [intervention()])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.CURRENT
++        assert sf01.last_verified_hash == after.content_hash
++
++    def test_a_change_to_an_unrelated_function_leaves_coverage_alone(self):
++        other = intervention(item_id="ITM-ESTOP", affects_functions=("SF-03",))
++        r = assess_coverage(manifest(), [verification()], [other])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.CURRENT
++
++    def test_a_change_on_another_machine_is_ignored(self):
++        elsewhere = intervention(machine_key="Grimaldi/AR-7#9999")
++        r = assess_coverage(manifest(), [verification()], [elsewhere])
++        assert not r.stale
++
++    def test_a_function_with_no_checks_is_never_reported_as_covered(self):
++        r = assess_coverage(manifest(), [verification()], [])
++        sf03 = next(f for f in r.functions if f.function_id == "SF-03")
++        assert sf03.coverage is Coverage.NOT_DEMONSTRABLE
++        assert not sf03.coverage.is_covered
++
++    def test_a_function_never_exercised_is_never_verified(self):
++        r = assess_coverage(manifest(), [verification(verified=("speed_limit",))], [])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.NEVER_VERIFIED
++
++    def test_a_check_that_ran_and_failed_is_failing_not_never_verified(self):
++        v = verification(verified=("speed_limit",),
++                         not_verified=("ssm_separation", "stop_characterisation"))
++        r = assess_coverage(manifest(), [v], [])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.FAILING
++
++    def test_no_verification_at_all_is_never_verified(self):
++        r = assess_coverage(manifest(), [], [intervention()])
++        assert {f.coverage for f in r.functions} == {
++            Coverage.NEVER_VERIFIED, Coverage.NOT_DEMONSTRABLE}
++
++    def test_an_intervention_that_revalidated_is_still_listed_honestly(self):
++        reval = Revalidation(
++            performed_at=datetime(2026, 3, 14, 14, 0, tzinfo=UTC),
++            performed_by=ENG, description="re-ran the separation suite",
++            evidence_hash="f" * 64)
++        r = assess_coverage(manifest(), [verification()],
++                            [intervention(revalidation=reval)])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.STALE
++        assert sf01.intervention_revalidated is True
++        assert "not in this ledger" in sf01.detail
++
++    def test_unrevalidated_interventions_are_listed_by_id(self):
++        r = assess_coverage(manifest(), [verification()], [intervention()])
++        assert r.unrevalidated_interventions == ("INT-0007",)
++
++    def test_with_no_interventions_it_says_it_saw_no_change_records(self):
++        r = assess_coverage(manifest(), [verification()], [])
++        assert any("no interventions were supplied" in c for c in r.checks_skipped)
++
++    def test_days_uncovered_is_reported_for_a_stale_function(self):
++        r = assess_coverage(manifest(), [verification()], [intervention()])
++        sf01 = next(f for f in r.functions if f.function_id == "SF-01")
++        assert sf01.days_uncovered is not None
++        assert sf01.days_uncovered > 100
++
++    def test_it_never_claims_the_manifest_is_complete(self):
++        r = assess_coverage(manifest(), [verification()], [])
++        assert any("does not confirm the manifest is complete" in c
++                   for c in r.checks_skipped)
++
++
++# =====================================================================
++# manifests
++# =====================================================================
++
++class TestManifest:
++    def test_a_machine_without_a_serial_is_refused(self):
++        with pytest.raises(ManifestError, match="serial"):
++            MachineIdentity(manufacturer="G", model="AR-7", serial="")
++
++    def test_an_empty_manifest_is_refused(self):
++        with pytest.raises(ManifestError, match="no items"):
++            manifest(items=())
++
++    def test_a_duplicate_item_id_is_refused(self):
++        with pytest.raises(ManifestError, match="twice"):
++            manifest(item(), item())
++
++    def test_an_item_crediting_an_undeclared_function_is_refused(self):
++        with pytest.raises(ManifestError, match="does not declare"):
++            manifest(item(implements=("SF-99",)))
++
++    def test_an_unhashed_item_must_declare_itself_as_declared(self):
++        with pytest.raises(ManifestError, match="carries no hash"):
++            item(content_hash="", hash_source=HashSource.READ_FROM_MACHINE)
++
++    def test_a_declared_item_may_carry_no_hash_and_is_not_comparable(self):
++        i = item(content_hash="", hash_source=HashSource.DECLARED, implements=())
++        assert not i.is_comparable
++
++    def test_one_declared_item_drags_the_whole_manifest_to_profile(self):
++        m = manifest(item(),
++                     item("ITM-HMI", kind=ItemKind.LIBRARY, name="HMI", version="9",
++                          content_hash="", hash_source=HashSource.DECLARED,
++                          implements=()))
++        assert m.tier_ceiling is AssuranceTier.PROFILE
++
++    def test_a_manifest_read_from_the_machine_reaches_validated(self):
++        assert manifest().tier_ceiling is AssuranceTier.VALIDATED
++
++    def test_a_vendor_supplied_hash_caps_at_community(self):
++        m = manifest(item(hash_source=HashSource.SUPPLIED_BY_VENDOR))
++        assert m.tier_ceiling is AssuranceTier.COMMUNITY
++
++    def test_only_a_machine_read_describes_the_unit_in_front_of_you(self):
++        assert HashSource.READ_FROM_MACHINE.describes_this_unit
++        assert not HashSource.SUPPLIED_BY_VENDOR.describes_this_unit
++
++    def test_the_configuration_hash_ignores_who_looked_and_when(self):
++        a = manifest(taken_at=datetime(2026, 1, 1, tzinfo=UTC), manifest_id="A")
++        b = manifest(taken_at=datetime(2026, 9, 1, tzinfo=UTC), manifest_id="B",
++                     taken_by=TECH)
++        assert a.content_hash() != b.content_hash()
++        assert a.configuration_hash() == b.configuration_hash()
++
++    def test_the_configuration_hash_moves_when_an_artefact_moves(self):
++        a = manifest()
++        b = manifest(item(content_hash="d" * 64))
++        assert a.configuration_hash() != b.configuration_hash()
++
++    def test_field_modifiable_safety_items_are_surfaced(self):
++        m = manifest(item(modifiable_in_field=True))
++        assert m.field_modifiable_safety_items[0].item_id == "ITM-FW"
++
++    def test_functions_with_no_checks_are_surfaced(self):
++        assert [f.function_id for f in manifest().undemonstrable_functions] == ["SF-03"]
++
++    def test_checks_for_maps_functions_to_the_checks_that_exercise_them(self):
++        assert manifest().checks_for({"SF-02"}) == {"speed_limit"}
++
++    def test_it_survives_json(self, tmp_path):
++        m = manifest()
++        p = tmp_path / "m.json"
++        p.write_text(json.dumps(m.to_dict()))
++        assert SafetyManifest.from_json(p).content_hash() == m.content_hash()
++
++    def test_an_item_can_be_hashed_from_a_file(self, tmp_path):
++        f = tmp_path / "fw.bin"
++        f.write_bytes(b"firmware image")
++        i = SafetyItem.from_file(f, item_id="ITM-FW", kind=ItemKind.FIRMWARE,
++                                 name="fw", version="1")
++        assert len(i.content_hash) == 64
++        assert i.hash_source is HashSource.READ_FROM_MACHINE
++
++
++# =====================================================================
++# divergence
++# =====================================================================
++
++class TestDivergence:
++    def test_an_unchanged_machine_matches(self):
++        d = compare(manifest(manifest_id="BASE"), manifest(manifest_id="NOW"))
++        assert d.verdict == "matches"
++        assert d.identical
++
++    def test_a_changed_safety_artefact_is_safety_relevant_drift(self):
++        d = compare(manifest(manifest_id="BASE"),
++                    manifest(item(content_hash="d" * 64), manifest_id="NOW"))
++        assert d.verdict == "safety_relevant_drift"
++        assert d.changes[0].kind is ChangeKind.CONTENT_CHANGED
++        assert d.affected_functions == ("SF-01", "SF-02")
++
++    def test_a_silent_firmware_swap_is_caught_and_the_version_lie_is_named(self):
++        """The artefact changed and the version string did not."""
++        d = compare(manifest(manifest_id="BASE"),
++                    manifest(item(content_hash="d" * 64), manifest_id="NOW"))
++        assert "still reported as" in d.changes[0].detail
++
++    def test_a_relabelled_version_over_an_identical_artefact_is_administrative(self):
++        d = compare(manifest(manifest_id="BASE"),
++                    manifest(item(version="3.8.3"), manifest_id="NOW"))
++        assert d.changes[0].kind is ChangeKind.VERSION_RELABELLED
++        assert d.changes[0].severity is Severity.ADMINISTRATIVE
++        assert d.verdict == "drifted"
++
++    def test_a_non_safety_item_changing_is_notable_not_safety_relevant(self):
++        base = manifest(item(), item("ITM-HMI", kind=ItemKind.LIBRARY, name="HMI",
++                                     version="9", content_hash="e" * 64,
++                                     implements=()))
++        now = manifest(item(), item("ITM-HMI", kind=ItemKind.LIBRARY, name="HMI",
++                                    version="9", content_hash="f" * 64,
++                                    implements=()), manifest_id="NOW")
++        d = compare(base, now)
++        assert d.verdict == "drifted"
++        assert d.changes[0].severity is Severity.NOTABLE
++
++    def test_an_added_safety_item_is_a_finding(self):
++        base = manifest(manifest_id="BASE")
++        now = manifest(item(), item("ITM-NEW", name="Added", content_hash="e" * 64,
++                                    implements=("SF-01",)), manifest_id="NOW")
++        d = compare(base, now)
++        assert d.changes[0].kind is ChangeKind.ADDED
++        assert d.changes[0].severity is Severity.SAFETY_RELEVANT
++
++    def test_a_removed_safety_item_is_a_finding(self):
++        base = manifest(item(), item("ITM-OLD", name="Old", content_hash="e" * 64,
++                                     implements=("SF-01",)))
++        d = compare(base, manifest(manifest_id="NOW"))
++        assert d.changes[0].kind is ChangeKind.REMOVED
++
++    def test_re_attributing_a_function_is_reported_separately(self):
++        d = compare(manifest(manifest_id="BASE"),
++                    manifest(item(implements=("SF-01",)), manifest_id="NOW"))
++        kinds = {c.kind for c in d.changes}
++        assert ChangeKind.ATTRIBUTION_CHANGED in kinds
++
++    def test_an_unhashed_item_is_declared_uncomparable_not_unchanged(self):
++        unhashed = item("ITM-HMI", kind=ItemKind.LIBRARY, name="HMI", version="9",
++                        content_hash="", hash_source=HashSource.DECLARED,
++                        implements=())
++        d = compare(manifest(item(), unhashed), manifest(item(), unhashed,
++                                                         manifest_id="NOW"))
++        assert any("would not have been seen" in c for c in d.checks_skipped)
++
++    def test_comparing_two_different_machines_is_refused(self):
++        other = manifest(machine=MachineIdentity("Grimaldi", "AR-7", "9999"),
++                         manifest_id="OTHER")
++        with pytest.raises(ValueError, match="different machines"):
++            compare(manifest(), other)
++
++    def test_comparing_two_declarations_says_it_saw_no_machine(self):
++        d = compare(manifest(source=ManifestSource.AS_DECLARED),
++                    manifest(source=ManifestSource.AS_DECLARED, manifest_id="NOW"))
++        assert any("says nothing about what is actually on the machine" in c
++                   for c in d.checks_skipped)
++
++
++# =====================================================================
++# interventions
++# =====================================================================
++
++class TestIntervention:
++    def test_an_unattributed_change_is_refused(self):
++        with pytest.raises(InterventionError, match="names nobody"):
++            intervention(performed_by=Actor(identifier="", role=""))
++
++    def test_a_change_with_no_reason_is_refused(self):
++        with pytest.raises(InterventionError, match="no reason"):
++            intervention(reason="")
++
++    def test_an_update_from_a_hash_to_itself_is_refused(self):
++        with pytest.raises(InterventionError, match="Nothing changed"):
++            intervention(to_hash="a" * 64)
++
++    def test_a_safety_change_with_no_revalidation_is_a_finding(self):
++        f = intervention().findings
++        assert any("nothing was re-run" in x for x in f)
++
++    def test_a_safety_change_with_no_authorisation_is_a_finding(self):
++        assert any("no recorded authorisation" in x for x in intervention().findings)
++
++    def test_a_revalidation_naming_no_evidence_is_a_finding(self):
++        reval = Revalidation(performed_at=datetime(2026, 3, 14, 14, tzinfo=UTC),
++                             performed_by=ENG, description="re-ran it")
++        f = intervention(revalidation=reval).findings
++        assert any("names no sealed evidence" in x for x in f)
++
++    def test_a_properly_recorded_change_has_no_findings(self):
++        iv = intervention(
++            authorization=Authorization(authorised_by=ENG, reference="CR-2026-41",
++                                        basis="vendor advisory"),
++            revalidation=Revalidation(
++                performed_at=datetime(2026, 3, 14, 14, tzinfo=UTC),
++                performed_by=ENG, description="re-ran the separation suite",
++                evidence_hash="f" * 64))
++        assert iv.findings == ()
++        assert iv.is_revalidated and iv.is_authorised
++
++    def test_a_reconstructed_record_says_it_is_a_recollection(self):
++        iv = intervention(kind=InterventionKind.RECONSTRUCTED)
++        assert any("reconstructed after the fact" in x for x in iv.findings)
++
++    def test_an_authorisation_with_no_reference_is_refused(self):
++        with pytest.raises(InterventionError, match="reference"):
++            Authorization(authorised_by=ENG, reference="")
++
++    def test_it_survives_json(self, tmp_path):
++        iv = intervention()
++        p = tmp_path / "i.json"
++        p.write_text(json.dumps(iv.to_dict()))
++        assert Intervention.from_json(p).content_hash() == iv.content_hash()
++
++
++# =====================================================================
++# the ledger, and the passport
++# =====================================================================
++
++@pytest.fixture
++def ledger(tmp_path):
++    return EvidenceLedger(tmp_path / "machinery.db")
++
++
++def seal_a_real_verification(ledger, *, when, speed=400.0, separation=2200.0):
++    env = SafetyEnvelope(
++        envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
++        workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
++        max_tcp_speed_mm_s={OperatingMode.SSM: 400.0},
++        stop=StopPerformance(0.10, 0.25, 120.0, 500.0,
++                             FigureBasis("measured", "STOP-11", "2026-01-18")),
++        uncertainty=SensingUncertainty(100.0, 50.0,
++                                       FigureBasis("measured", "CAL-003")),
++        intrusion_distance_mm=850.0)
++    run = Trace(trace_id=f"RUN-{when:%Y%m%d}", provenance=Provenance.FIELD,
++                source_system="AR-7 fw", started_at=when, sample_rate_hz=50.0,
++                samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
++                                     tcp_speed=speed, mode=OperatingMode.SSM,
++                                     separation=separation) for i in range(10)))
++    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
++
++
++class TestLedgerIntegration:
++    def test_a_manifest_is_sealed_under_the_machine_key(self, ledger):
++        record_manifest(ledger, manifest())
++        assert ledger.entries(subject=MACHINE.key)[0].kind == "machinery.safety_manifest"
++
++    def test_an_intervention_round_trips_through_the_ledger(self, ledger):
++        record_intervention(ledger, intervention())
++        back = interventions_from_ledger(ledger, MACHINE.key)
++        assert [i.intervention_id for i in back] == ["INT-0007"]
++
++    def test_an_unrevalidated_change_is_sealed_as_indeterminate_not_verified(self, ledger):
++        e = record_intervention(ledger, intervention())
++        assert e.validation_state is ValidationState.INDETERMINATE
++        assert e.checks_skipped
++
++    def test_the_findings_travel_with_the_sealed_record(self, ledger):
++        e = record_intervention(ledger, intervention())
++        assert any("nothing was re-run" in c for c in e.checks_skipped)
++
++    def test_everything_together_still_verifies_as_one_chain(self, ledger):
++        record_manifest(ledger, manifest())
++        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
++        record_intervention(ledger, intervention())
++        ok, problems = ledger.verify_chain()
++        assert ok, problems
++        assert len(ledger) == 3
++
++    def test_a_real_verification_is_found_by_the_coverage_assessment(self, ledger):
++        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
++        records = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
++        assert len(records) == 1
++        assert records[0].effective_at == datetime(2026, 2, 9, tzinfo=UTC)
++        assert "ssm_separation" in records[0].checks_verified
++
++    def test_the_verification_is_dated_by_the_run_not_by_the_filing(self, ledger):
++        """A run captured in February and filed today is evidence about February."""
++        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
++        r = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)[0]
++        assert r.effective_at.year == 2026
++        assert r.effective_at.month == 2
++
++    def test_end_to_end_a_march_firmware_change_strands_a_february_signoff(self, ledger):
++        record_manifest(ledger, manifest())
++        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
++        record_intervention(ledger, intervention())
++
++        passport = build_passport(ledger, manifest(item(content_hash="d" * 64),
++                                                   manifest_id="MAN-SEP"), actor=ENG)
++        sf01 = next(f for f in passport.coverage.functions
++                    if f.function_id == "SF-01")
++        assert sf01.coverage is Coverage.STALE
++        assert sf01.invalidated_by == "INT-0007"
++        assert passport.verdict == "gaps"
++
++
++class TestPassport:
++    def test_it_is_sealed_and_lands_in_the_ledger(self, ledger):
++        record_manifest(ledger, manifest())
++        p = build_passport(ledger, manifest(), actor=ENG)
++        assert p.evidence.verify()
++        assert ledger.get(p.content_hash) is not None
++
++    def test_no_seal_leaves_the_ledger_alone(self, ledger):
++        before = len(ledger)
++        p = build_passport(ledger, manifest(), actor=ENG, seal=False)
++        assert len(ledger) == before
++        assert ledger.get(p.content_hash) is None
++
++    def test_it_says_when_no_verification_is_filed_under_the_machine(self, ledger):
++        p = build_passport(ledger, manifest(), actor=ENG)
++        assert any("seal it with subject=" in c for c in p.evidence.checks_skipped)
++
++    def test_an_auditor_can_re_verify_it_against_the_ledger(self, ledger, tmp_path):
++        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
++        p = build_passport(ledger, manifest(), actor=ENG).write(tmp_path / "p.json")
++        ok, problems = verify_passport(p, ledger=ledger)
++        assert ok, problems
++
++    def test_editing_the_verdict_after_sealing_is_caught(self, ledger, tmp_path):
++        p = build_passport(ledger, manifest(), actor=ENG).write(tmp_path / "p.json")
++        d = json.loads(p.read_text())
++        d["evidence"]["body"]["verdict"] = "covered"
++        p.write_text(json.dumps(d))
++        ok, problems = verify_passport(p)
++        assert not ok
++        assert any("edited after sealing" in x for x in problems)
++        assert any("its own function list implies" in x for x in problems)
++
++    def test_a_passport_from_another_ledger_is_caught(self, ledger, tmp_path):
++        p = build_passport(ledger, manifest(), actor=ENG,
++                           seal=False).write(tmp_path / "p.json")
++        ok, problems = verify_passport(p, ledger=ledger)
++        assert not ok
++        assert any("not in the ledger supplied" in x for x in problems)
++
++    def test_checking_only_the_seal_is_reported_as_a_limitation(self, ledger, tmp_path):
++        p = build_passport(ledger, manifest(), actor=ENG).write(tmp_path / "p.json")
++        ok, problems = verify_passport(p)
++        assert ok
++        assert any("NOT CHECKED" in x for x in problems)
++
++    def test_a_file_that_is_not_a_passport_is_rejected(self, tmp_path):
++        p = tmp_path / "x.json"
++        p.write_text(json.dumps({"schema": "nope/1"}))
++        ok, problems = verify_passport(p)
++        assert not ok
++
++
++# =====================================================================
++# HTTP
++# =====================================================================
++
++@pytest.fixture
++def client(tmp_path, monkeypatch):
++    from fastapi.testclient import TestClient
++
++    from assurance.api import deps
++
++    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "l.db"))
++    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "a.db"))
++    monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
++    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++    from assurance.api.service import create_app
++
++    with TestClient(create_app()) as c:
++        yield c
++    deps._register_for.cache_clear()
++    deps._accounts_for.cache_clear()
++
++
++@pytest.fixture
++def store(client):
++    from assurance.api import deps
++    return deps.get_accounts()
++
++
++def keyed(store, tier):
++    account = store.upsert_account(email=f"{tier}-mach@example.de", tier=tier)
++    return {"X-API-Key": store.issue_key(account.id)}
++
++
++class TestHttp:
++    def test_diff_needs_no_account(self, client):
++        r = client.post("/v1/machinery/diff", json={
++            "baseline": manifest(manifest_id="BASE").to_dict(),
++            "observed": manifest(item(content_hash="d" * 64),
++                                 manifest_id="NOW").to_dict()})
++        assert r.status_code == 200
++        assert r.json()["verdict"] == "safety_relevant_drift"
++        assert r.json()["affected_functions"] == ["SF-01", "SF-02"]
++
++    def test_diff_is_metered_on_the_free_tier(self, client):
++        r = client.post("/v1/machinery/diff", json={
++            "baseline": manifest(manifest_id="BASE").to_dict(),
++            "observed": manifest(manifest_id="NOW").to_dict()})
++        assert r.headers["x-assurance-quota-limit"] == "10"
++
++    def test_diff_refuses_two_different_machines(self, client):
++        other = manifest(machine=MachineIdentity("Grimaldi", "AR-7", "9999"),
++                         manifest_id="OTHER")
++        r = client.post("/v1/machinery/diff", json={
++            "baseline": manifest().to_dict(), "observed": other.to_dict()})
++        assert r.status_code == 422
++
++    def test_coverage_is_a_402_without_the_cell_plan(self, client, store):
++        r = client.post("/v1/machinery/coverage",
++                        json={"manifest": manifest().to_dict()},
++                        headers=keyed(store, "register"))
++        assert r.status_code == 402
++
++    def test_coverage_is_a_401_with_no_key(self, client):
++        r = client.post("/v1/machinery/coverage",
++                        json={"manifest": manifest().to_dict()})
++        assert r.status_code == 401
++
++    def test_the_cell_plan_can_seal_and_then_see_the_gap(self, client, store):
++        h = keyed(store, "cell")
++        assert client.post("/v1/machinery/manifest",
++                           json={"manifest": manifest().to_dict()},
++                           headers=h).status_code == 200
++        r = client.post("/v1/machinery/intervention",
++                        json={"intervention": intervention().to_dict()}, headers=h)
++        assert r.status_code == 200
++        assert r.json()["revalidated"] is False
++        assert r.json()["findings"]
++
++        cov = client.post("/v1/machinery/coverage",
++                          json={"manifest": manifest().to_dict()}, headers=h)
++        assert cov.status_code == 200
++        assert cov.json()["verdict"] == "gaps"
++
++    def test_a_sealed_manifest_reports_what_it_could_not_see(self, client, store):
++        m = manifest(item(), item("ITM-HMI", kind=ItemKind.LIBRARY, name="HMI",
++                                  version="9", content_hash="",
++                                  hash_source=HashSource.DECLARED, implements=()))
++        r = client.post("/v1/machinery/manifest", json={"manifest": m.to_dict()},
++                        headers=keyed(store, "cell"))
++        assert r.json()["uncomparable_items"] == ["ITM-HMI"]
++        assert r.json()["undemonstrable_functions"] == ["SF-03"]
++
++    def test_a_passport_can_be_re_checked_by_anyone(self, client, store):
++        built = client.post("/v1/machinery/passport",
++                            json={"manifest": manifest().to_dict(),
++                                  "actor": "a.integrator"},
++                            headers=keyed(store, "cell"))
++        assert built.status_code == 200, built.text
++        r = client.post("/v1/machinery/passport/check",
++                        json={"passport": built.json()})
++        assert r.status_code == 200
++        assert r.json()["ok"] is True
++        assert r.json()["checked"]["against_ledger"] is False
++
++    def test_the_free_checker_is_not_metered(self, client, store):
++        built = client.post("/v1/machinery/passport",
++                            json={"manifest": manifest().to_dict(),
++                                  "actor": "a.integrator"},
++                            headers=keyed(store, "cell")).json()
++        for _ in range(15):
++            assert client.post("/v1/machinery/passport/check",
++                               json={"passport": built}).status_code == 200
++
++    def test_only_the_cell_plan_advertises_machinery(self, client):
++        plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
++        assert any("Annex III 1.1.9" in i for i in plans["cell"]["includes"])
++        assert plans["free"]["limits"]["diffs_per_day"] == 10
+diff --git a/tests/test_sandbox.py b/tests/test_sandbox.py
+index fe8e6ec..12ce347 100644
+--- a/tests/test_sandbox.py
++++ b/tests/test_sandbox.py
+@@ -10,14 +10,13 @@ from __future__ import annotations
+ import pytest
+ 
+ from neuralbridge.security.sandbox import (
+-    IsolationLevel,
+     POLICY_STRICT,
++    IsolationLevel,
+     SandboxEngine,
+     SandboxPolicy,
+     SandboxResult,
+ )
+ 
+-
+ # ── Fixtures ────────────────────────────────────────────────────
+ 
+ 
+-- 
+2.43.0
+
