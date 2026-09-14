@@ -1,0 +1,31 @@
+{
+  "advisory_id": "CTRL-2026-11",
+  "issued_by": "ControlCo",
+  "issued_at": "2026-09-12T08:00:00Z",
+  "title": "Watchdog may not trip under sustained safety-bus load",
+  "summary": "Under sustained load on the safety bus the watchdog can fail to trigger the safety-rated stop within the specified reaction time. The declared stop performance is not achieved.",
+  "severity": "safety_relevant",
+  "affected": [
+    {
+      "supplier": "ControlCo",
+      "name": "Safety controller firmware",
+      "versions": [
+        "3.8.0",
+        "3.8.1",
+        "3.8.2"
+      ],
+      "content_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "version_note": "All 3.8.x releases before 3.9.0."
+    }
+  ],
+  "remedy": "Update to 3.9.0 and re-run the stop-performance test. The declared reaction time must be re-established, not assumed.",
+  "reference": "https://controlco.example/advisories/CTRL-2026-11",
+  "fixed_versions": [
+    "3.9.0"
+  ],
+  "fixed_hashes": [
+    "3333333333333333333333333333333333333333333333333333333333333333"
+  ]
+}

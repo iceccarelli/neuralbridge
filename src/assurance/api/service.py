@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from .. import __version__
 from .billing_routes import billing_router
 from .deps import auth_mode
+from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
 from .routes import free_router, public_router, router
@@ -74,6 +75,10 @@ def create_app(**kwargs: Any) -> FastAPI:
                                                  "evidence of intervention, and which "
                                                  "safety functions still have valid "
                                                  "evidence."},
+            {"name": "fleet", "description": "Every enrolled machine at once: "
+                                             "component advisories fanned out to "
+                                             "serial numbers, and Declarations of "
+                                             "Conformity bound to a configuration."},
             {"name": "billing", "description": "Plans, checkout, and your own account."},
             {"name": "service", "description": "Liveness and configuration."},
         ],
@@ -93,6 +98,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(free_router)
     application.include_router(machine_router)
     application.include_router(machinery_router)
+    application.include_router(fleet_router)
     application.include_router(router)
     return application
 

@@ -1,0 +1,20 @@
+{
+  "doc_id": "DOC-AR7-0412",
+  "machine_key": "Grimaldi/AR-7#0412",
+  "issued_by": "Grimaldi Engineering",
+  "issued_at": "2026-01-20T09:00:00Z",
+  "configuration_hash": "REPLACE WITH THE configuration_hash OF THE MANIFEST THIS WAS SIGNED AGAINST \u2014 `assurance fleet declare` fills this in for you",
+  "legislation": [
+    "Regulation (EU) 2023/1230",
+    "Regulation (EU) 2024/2847"
+  ],
+  "standards": [
+    "EN ISO 10218-1:2025",
+    "EN ISO 10218-2:2025",
+    "EN ISO 13849-1:2023"
+  ],
+  "notified_body": "",
+  "notified_body_number": "",
+  "signatory": "V. Grimaldi",
+  "place": "Turin"
+}
