@@ -1,0 +1,1949 @@
+From 9612e14a01d1fc59e0df80e58d8a03fe6e8d34ed Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 14 Sep 2026 16:57:15 +0000
+Subject: [PATCH] assurance.kit: the offline enrolment kit, and a guard that
+ proves it stayed offline
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The blocker on an industrial pilot is not price and it is not features. It is
+the eleven weeks it takes to get an unknown tool past a plant's IT department.
+Everything built so far assumes somebody already decided to adopt it; nothing
+ran before that decision.
+
+The kit runs before it. An engineer copies a folder onto a machine already
+inside the plant, edits two files, runs one command, and gets back a sealed
+evidence ledger, an HTML report and an attestation request — their ledger,
+their data, their disk. No account, no key, no upload, nothing to procure and
+nothing for security to review, because nothing left.
+
+  assurance kit init <folder>    a runnable kit: config, plan, README
+  assurance kit check <config>   what a run would open. Reads only
+  assurance kit run <config>     enrol every machine, offline
+
+`check` is the command to put in front of whoever has to approve this: it names
+every file the run would open and every plan item that matches no file, and
+touches nothing. Exit codes are the interface — 0 quiet, 1 a finding, 2 could
+not run. A refused connection attempt is a 1: the run is still valid, nothing
+got out, but somebody needs to know which line tried.
+
+assurance.kit.airgap is the part that makes the sales claim checkable rather
+than promised. Every vendor says "nothing leaves your network"; plant IT has
+heard it, cannot check it, and correctly treats it as worth nothing. This arms
+a guard over the process's socket layer — connect, connect_ex,
+create_connection, sendto, and getaddrinfo, because a tool that resolves a name
+has already told a DNS server something — refuses every outbound connection,
+records each attempt with the line of code that made it, and seals that record
+into the customer's own ledger. The claim ends up as a hash in a file they hold.
+
+Two design points that are decisions, not accidents:
+
+  * AirgapError is not an OSError. Every HTTP client catches OSError as a
+    transient failure: it would retry three times, or fall back to a cache and
+    carry on as though nothing happened. A refusal here is not a network
+    problem and must not be mistakable for one, so it travels up through every
+    library's error handling untouched and stops the run.
+  * The limits travel with the claim. The guard does not cover a subprocess
+    (the kit spawns none), does not cover a C extension opening its own file
+    descriptor, and records intent rather than enforcing containment —
+    containment is a firewall's job. Those four sentences are in the evidence
+    record and numbered in the report. A claim next to its limits is worth more
+    to a reviewer than a broader claim with none.
+
+Ordering inside a run, each step for a reason: collection and sealing happen
+inside the guard; the airgap record is sealed after it releases, because a
+record of a guard cannot be written while the guard it describes is running;
+the run record is sealed before the head is read, so the attestation request
+covers it. A head taken before the last append is stale the moment it is
+written, and an attestation of a stale head looks like coverage and is not.
+
+Refusals that protect a document nobody has written yet: the kit will not run
+while organisation, prepared_by or site still hold a starter template value, or
+while the plan says manufacturer "CHANGE ME". Those are printed at the top of a
+report that goes to an auditor, and a manifest with a template manufacturer
+cannot be matched to a supplier advisory later.
+
+KitRun.verdict is deliberately not degraded by the standing caveat every
+collection carries — that a plan only finds what it names. That sentence is
+true of every run that will ever happen, so letting it force PARTIAL every time
+would teach the reader the verdict means nothing, which is how a signal is
+destroyed. It goes in what-was-not-checked. What moves the verdict is a machine
+that did not enrol, a required item not found, or a connection attempt.
+
+Every run ends by naming what it did not establish — no watch, no advisory
+fan-out, no signature on the head, no physical behaviour, manifests read from
+exports rather than machines. That list is the honest statement of the gap and
+a better argument for the paid product than any claim about it: every line
+names the thing that closes it.
+
+ReportInput gains extra_limits, so a caller that knows something the engines
+cannot — the airgap guard, the kit — joins the numbered limits section
+verbatim like every other limit.
+
+The kit is free, and in the free plan's entitlements: something that needed a
+licence would need a procurement review, which is the thing it exists to avoid.
+
+Tests: 32 new, 671 total, all passing. ruff clean, mypy clean on the new module.
+The load-bearing ones point urllib at a real URL rather than calling connect by
+hand, and run the whole commercial loop — offline enrolment, three numbers
+counter-signed by a party that never saw the ledger, then a rewind of that
+ledger caught by joining the two back together.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/KIT.md        | 161 ++++++++++
+ pyproject.toml                 |   1 +
+ src/assurance/__init__.py      |   2 +
+ src/assurance/billing/plans.py |   5 +
+ src/assurance/cli.py           |   1 +
+ src/assurance/kit/__init__.py  |  46 +++
+ src/assurance/kit/airgap.py    | 247 ++++++++++++++++
+ src/assurance/kit/cli.py       | 355 +++++++++++++++++++++++
+ src/assurance/kit/enrol.py     | 516 +++++++++++++++++++++++++++++++++
+ src/assurance/report/render.py |   8 +
+ tests/test_assurance_kit.py    | 392 +++++++++++++++++++++++++
+ 11 files changed, 1734 insertions(+)
+ create mode 100644 deploy/assurance/KIT.md
+ create mode 100644 src/assurance/kit/__init__.py
+ create mode 100644 src/assurance/kit/airgap.py
+ create mode 100644 src/assurance/kit/cli.py
+ create mode 100644 src/assurance/kit/enrol.py
+ create mode 100644 tests/test_assurance_kit.py
+
+diff --git a/deploy/assurance/KIT.md b/deploy/assurance/KIT.md
+new file mode 100644
+index 0000000..7fb85f3
+--- /dev/null
++++ b/deploy/assurance/KIT.md
+@@ -0,0 +1,161 @@
++# The enrolment kit — the thing you actually send a prospect
++
++## What it is for
++
++Everything else in this package assumes somebody has already decided to adopt
++it. This is what runs *before* that decision.
++
++A plant engineer copies a folder onto a machine that is already inside their
++network, edits two files, and runs one command. They get back a sealed evidence
++ledger, an HTML report and an attestation request — **their** ledger, **their**
++data, on **their** disk. No account. No API key. No upload. Nothing to procure
++and nothing for security to review, because nothing left the building.
++
++That last part is the whole reason this exists. The blocker on every industrial
++pilot is not price and it is not features: it is the eleven weeks it takes to
++get an unknown tool past a plant's IT department. This kit does not ask to be
++let through. It runs on the inside and proves it stayed there.
++
++## The three commands
++
++```bash
++python -m assurance kit init plant/            # write a runnable kit
++python -m assurance kit check plant/kit.json   # what it would touch. Reads only
++python -m assurance kit run  plant/kit.json --out plant/out
++```
++
++`check` is the command to put in front of whoever has to approve this. It reads
++the configuration and the collection plan, lists every file the run would open,
++names every plan item that matches no file, and touches nothing. Give them that
++output before you ask for anything.
++
++Exit codes are the interface:
++
++| code | meaning |
++|-----:|---------|
++| 0 | every machine enrolled, nothing tried to reach the network |
++| 1 | a **finding** — a machine incomplete, a required item missing, a refused connection attempt. Evidence was still produced. Read it |
++| 2 | the kit could not run |
++
++A refused connection attempt is a 1, not a 2, deliberately: the run is still
++valid — nothing got out — but somebody needs to know which line tried.
++
++## The airgap guard
++
++Every vendor selling software that runs inside a plant says "it works offline,
++nothing leaves your network". Plant IT has heard it before, cannot check it, and
++correctly treats it as worth nothing.
++
++This run arms a guard over the process's socket layer, refuses every outbound
++connection, records any attempt **with the line of code that made it**, and
++seals that record into the customer's own ledger. Afterwards, "did this tool
++send anything anywhere" has an answer with a hash on it, in a file the customer
++holds. That is a different kind of object from a bullet point on a datasheet.
++
++What the guard covers, stated precisely because a security reviewer will ask and
++a vague answer is worse than a narrow one:
++
++* It covers outbound connections made by this Python process through the
++  `socket` module — `connect`, `connect_ex`, `create_connection`, `sendto`, and
++  name resolution via `getaddrinfo`. Every Python HTTP and TLS client goes
++  through that layer. Resolution alone is refused too: a tool that resolves a
++  name has already told a DNS server something, which is exactly what a network
++  team is asking about.
++* It does **not** cover a subprocess, which has its own socket layer. The kit
++  spawns none.
++* It does **not** cover a C extension that opens a socket file descriptor
++  without going through the `socket` module.
++* It records **intent**, it does not enforce containment. Code determined to
++  evade it could. Containment is a firewall's job, and the plant already has
++  one. This answers whether the tool tried.
++
++Those four sentences are in the evidence record and printed in the report. A
++claim next to its limits is worth more to a reviewer than a broader claim with
++none.
++
++One implementation detail that is a decision, not an accident: the refusal is
++**not** an `OSError`. Every HTTP client catches `OSError` and treats it as a
++transient failure — it would retry three times, or fall back to a cache and
++carry on as though nothing happened. A refusal here is not a network problem and
++must not be mistakable for one, so it travels up through every library's error
++handling untouched and stops the run.
++
++## What the run writes
++
++```
++out/report.html                 open this first
++out/evidence.db                 their ledger. Back it up like a drawing
++out/run.json                    machine by machine, what was recorded
++out/attestation-request.json    three numbers, for later
++```
++
++The order inside a run is fixed and each step is there for a reason:
++
++1. Collection and sealing happen **inside** the guard.
++2. The airgap record is sealed **after** the guard releases, because a record of
++   a guard cannot be written while the guard it describes is still running.
++   That sentence is in the record.
++3. The run record is sealed **before** the head is read, so the attestation
++   request covers it. A head taken before the last append is stale the moment it
++   is written, and an attestation of a stale head looks like coverage and is
++   not.
++
++## Refusals that exist to protect a document nobody has written yet
++
++The kit refuses to run when `organisation`, `prepared_by` or `site` still hold
++a starter template value, and when the collection plan still says
++`manufacturer: "CHANGE ME"`. Those values are printed at the top of a report
++that goes to an auditor, an insurer or a customer, and a manifest carrying a
++template manufacturer cannot be matched to a supplier advisory later. Better to
++stop here than to produce a document addressed from nobody about a machine made
++by nobody.
++
++## Closing the loop: the counter-signature
++
++`attestation-request.json` holds exactly three numbers and a note:
++
++```json
++{
++  "ledger_length": 412,
++  "head_seq": 412,
++  "head_link_hash": "9f2c..."
++}
++```
++
++POST that to `/v1/ledger/attest` with a Cell-plan key and the head is
++counter-signed by a key the plant does not hold. The ledger never moves. See
++`ATTEST.md` for what that buys and what it does not.
++
++Then, back inside the plant and still offline:
++
++```bash
++python -m assurance attest verify \
++    --log attestations.jsonl \
++    --public-key counter-signer.pub \
++    --ledger out/evidence.db
++```
++
++That command is what makes the whole thing worth having: the customer's own
++administrator can no longer quietly shorten the ledger, because the removed
++records were counted in a statement signed by a key nobody there holds.
++
++## What one offline run does not establish
++
++Printed at the end of every run and numbered in the report:
++
++1. It recorded what was in the export folders at one moment. Nothing watches for
++   the next change — a firmware update tomorrow strands every sign-off in this
++   ledger and nothing says so until somebody runs it again. (`assurance watch`)
++2. No supplier advisory was matched. A component with a published vulnerability
++   appears in this manifest as an ordinary item. (`assurance fleet`)
++3. The head is not signed. A hash chain detects editing, not deletion.
++   (`ATTEST.md`)
++4. No physical behaviour was verified. Nothing here says a machine stops in the
++   distance its datasheet claims. (`assurance machine verify`)
++5. Manifests were read from exported files, not from machines. They are as good
++   as the export.
++
++That list is the honest statement of the gap, and it is a better argument for
++the paid product than any claim about it — every line names the thing that
++closes it. A kit that pretended to cover them would be caught the first time it
++mattered, which is the one time it cannot be.
+diff --git a/pyproject.toml b/pyproject.toml
+index c26f4b5..d7e88dc 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -129,6 +129,7 @@ ignore = [
+ "src/assurance/bridge/cli.py" = ["T20"]
+ "src/assurance/watch/cli.py" = ["T20"]
+ "src/assurance/attest/cli.py" = ["T20"]
++"src/assurance/kit/cli.py" = ["T20"]
+ "src/assurance/api/service.py" = ["T20"]
+ 
+ [tool.pytest.ini_options]
+diff --git a/src/assurance/__init__.py b/src/assurance/__init__.py
+index 9d129e3..ffedf25 100644
+--- a/src/assurance/__init__.py
++++ b/src/assurance/__init__.py
+@@ -12,6 +12,8 @@ Layout
+ ``assurance.evidence``  the tamper-evident ledger every record lands in
+ ``assurance.attest``    signed head attestations — the part of the ledger a
+                         rewind cannot reach, because the key left the building
++``assurance.kit``       the offline enrolment kit: one command inside a plant,
++                        with a guard over the socket layer proving it stayed there
+ ``assurance.security``  product-security obligations. ``security.art14`` is the
+                         EU CRA reporting duty that has applied since 2026-09-11.
+ 
+diff --git a/src/assurance/billing/plans.py b/src/assurance/billing/plans.py
+index 102d746..5b88fed 100644
+--- a/src/assurance/billing/plans.py
++++ b/src/assurance/billing/plans.py
+@@ -110,6 +110,11 @@ PLANS: dict[Tier, Plan] = {
+             "POST /v1/fleet/declaration/check — whether a Declaration of Conformity "
+             "still describes the machine you were sold. Always free: the person who "
+             "most needs this is the buyer, not the seller",
++            "The offline enrolment kit — `assurance kit run` collects your "
++            "machines inside your own plant, into your own ledger, with a guard "
++            "over the socket layer proving nothing left. No account, no upload, "
++            "and free: if it needed a licence it would need a procurement "
++            "review, which is the thing it exists to avoid",
+             "POST /v1/ledger/attest/verify and GET /v1/ledger/attest/key — check "
+             "anybody's signed head attestations. Always free: the audience for an "
+             "attestation is a regulator or an insurer, not an account holder",
+diff --git a/src/assurance/cli.py b/src/assurance/cli.py
+index 7cf944a..9435d5d 100644
+--- a/src/assurance/cli.py
++++ b/src/assurance/cli.py
+@@ -14,6 +14,7 @@ _DOMAINS = {
+     "bridge": "assurance.bridge.cli",
+     "watch": "assurance.watch.cli",
+     "attest": "assurance.attest.cli",
++    "kit": "assurance.kit.cli",
+ }
+ 
+ 
+diff --git a/src/assurance/kit/__init__.py b/src/assurance/kit/__init__.py
+new file mode 100644
+index 0000000..99af16b
+--- /dev/null
++++ b/src/assurance/kit/__init__.py
+@@ -0,0 +1,46 @@
++"""The offline enrolment kit: the first thing a customer ever runs.
++
++    airgap   a guard over the socket layer, and a record of what it saw
++    enrol    one command, inside the plant, producing their ledger and report
++
++Everything else in this package assumes somebody has already decided to adopt
++it. This is the part that runs before that decision, on their disk, with the
++network provably untouched — because a claim a plant's IT department can check
++is a different object from a claim they cannot.
++"""
++
++from assurance.kit.airgap import (
++    AIRGAP_LIMITS,
++    AirgapError,
++    AirgapResult,
++    NetworkAttempt,
++    no_network,
++)
++from assurance.kit.enrol import (
++    AIRGAP_KIND,
++    KIT_RUN_KIND,
++    KitConfig,
++    KitError,
++    KitRun,
++    MachineEntry,
++    MachineResult,
++    run_kit,
++    starter_config,
++)
++
++__all__ = [
++    "AIRGAP_KIND",
++    "AIRGAP_LIMITS",
++    "AirgapError",
++    "AirgapResult",
++    "KIT_RUN_KIND",
++    "KitConfig",
++    "KitError",
++    "KitRun",
++    "MachineEntry",
++    "MachineResult",
++    "NetworkAttempt",
++    "no_network",
++    "run_kit",
++    "starter_config",
++]
+diff --git a/src/assurance/kit/airgap.py b/src/assurance/kit/airgap.py
+new file mode 100644
+index 0000000..e7668c7
+--- /dev/null
++++ b/src/assurance/kit/airgap.py
+@@ -0,0 +1,247 @@
++"""Proving a tool did not phone home, rather than promising it.
++
++Every vendor selling software that runs inside a plant says the same sentence:
++"it works offline, nothing leaves your network". Plant IT has heard it before,
++cannot check it, and therefore treats it as worth nothing — which is the correct
++response to an unverifiable claim, and the reason a pilot takes eleven weeks to
++get through a security review instead of an afternoon.
++
++This module makes the sentence checkable. It arms a guard over the socket layer
++for the duration of a run, refuses every outbound connection, records any
++attempt with the line of code that made it, and produces a result that is sealed
++into the customer's own evidence ledger alongside the work. Afterwards the
++question "did this tool send anything anywhere" has an answer with a hash on it,
++in a file the customer holds, which is a different kind of object from a bullet
++point on a datasheet.
++
++The rule this repository runs on — *if it is not gated in code, it is not on the
++pricing page* — applied to the claim that sells the kit.
++
++What the guard actually covers, stated precisely because a security reviewer
++will ask and a vague answer is worse than a narrow one:
++
++* It covers outbound connections made by **this Python process** through the
++  ``socket`` module: ``connect``, ``connect_ex``, ``create_connection``,
++  ``sendto``, and name resolution via ``getaddrinfo``. Everything in the Python
++  ecosystem that speaks TCP or TLS — ``httpx``, ``requests``, ``urllib``,
++  ``ssl``, every HTTP client worth naming — goes through that layer.
++* It does **not** cover a subprocess. If this process spawns a command, that
++  command has its own socket layer and this guard cannot see it. The kit
++  spawns nothing, and that is enforced separately.
++* It does **not** cover a C extension that opens a file descriptor itself
++  without going through the ``socket`` module.
++* It is a **proof of intent, not a containment boundary**. Code that wanted to
++  evade it could. Containment is a firewall's job, and a firewall is what a
++  plant already has. What this answers is whether the tool *tried*.
++
++Those four sentences travel with the evidence. A claim whose limits are printed
++next to it is worth more to a reviewer than a broader claim with none.
++"""
++
++from __future__ import annotations
++
++import socket
++import traceback
++from collections.abc import Iterator
++from contextlib import contextmanager
++from dataclasses import dataclass, field
++from typing import Any
++
++from ..core.errors import AssuranceError
++from ..core.identity import format_utc, utc_now
++
++__all__ = [
++    "AIRGAP_LIMITS",
++    "AirgapResult",
++    "AirgapError",
++    "NetworkAttempt",
++    "no_network",
++]
++
++#: Carried verbatim into every record this guard produces, and from there into
++#: the report. The limits are part of the claim, not a footnote to it.
++AIRGAP_LIMITS: tuple[str, ...] = (
++    "The guard covers outbound connections made by this Python process through "
++    "the socket module (connect, connect_ex, create_connection, sendto, and "
++    "getaddrinfo). Every Python HTTP and TLS client goes through that layer.",
++    "It does not cover a subprocess, which has its own socket layer. This run "
++    "spawned none.",
++    "It does not cover a C extension that opens a socket file descriptor "
++    "without going through the socket module.",
++    "It records intent, it does not enforce containment. Code determined to "
++    "evade it could. Containment is a firewall's job; this answers whether the "
++    "tool tried.",
++)
++
++_LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost", "127.0.1.1"})
++
++
++class AirgapError(AssuranceError):
++    """Something in this process tried to open a connection. It did not succeed.
++
++    Raised at the point of the attempt so the traceback names the line, rather
++    than being collected quietly and reported later — a caller that swallows
++    this and carries on has produced a run whose airgap record is a lie.
++
++    Deliberately **not** an :class:`OSError`. Every HTTP client in existence
++    catches ``OSError`` and treats it as a transient network failure: it would
++    retry three times, turning one refusal into three records of the same
++    mistake, or fall back to a cached path and carry on as though nothing had
++    happened. A refusal by this guard is not a network problem and must not be
++    mistakable for one, so it travels up through every library's error handling
++    untouched and stops the run.
++    """
++
++
++@dataclass(frozen=True)
++class NetworkAttempt:
++    """One refused connection, with enough context to find the line."""
++
++    at: str
++    api: str
++    target: str
++    caller: str
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"at": self.at, "api": self.api, "target": self.target,
++                "caller": self.caller}
++
++
++@dataclass
++class AirgapResult:
++    """What the guard saw between arming and release."""
++
++    armed_at: str
++    released_at: str = ""
++    attempts: list[NetworkAttempt] = field(default_factory=list)
++    loopback_allowed: bool = False
++    loopback_used: bool = False
++
++    @property
++    def held(self) -> bool:
++        """True only if nothing in this process tried to reach the network."""
++        return not self.attempts
++
++    def summary(self) -> str:
++        if self.held:
++            return (
++                f"No outbound connection was attempted between {self.armed_at} "
++                f"and {self.released_at}."
++            )
++        return (
++            f"{len(self.attempts)} outbound connection attempt(s) were refused "
++            f"between {self.armed_at} and {self.released_at}."
++        )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "armed_at": self.armed_at,
++            "released_at": self.released_at,
++            "held": self.held,
++            "attempts": [a.to_dict() for a in self.attempts],
++            "loopback_allowed": self.loopback_allowed,
++            "loopback_used": self.loopback_used,
++            "summary": self.summary(),
++            "limits": list(AIRGAP_LIMITS),
++        }
++
++
++def _target_of(address: Any) -> str:
++    if isinstance(address, (tuple, list)) and address:
++        host = str(address[0])
++        port = address[1] if len(address) > 1 else ""
++        return f"{host}:{port}" if port != "" else host
++    return str(address)
++
++
++def _host_of(address: Any) -> str:
++    if isinstance(address, (tuple, list)) and address:
++        return str(address[0])
++    return str(address)
++
++
++def _caller() -> str:
++    """The first frame outside this module. Where the attempt came from."""
++    for frame in reversed(traceback.extract_stack()[:-2]):
++        if not frame.filename.endswith("airgap.py"):
++            return f"{frame.filename}:{frame.lineno} in {frame.name}"
++    return "unknown"
++
++
++@contextmanager
++def no_network(*, allow_loopback: bool = False) -> Iterator[AirgapResult]:
++    """Refuse every outbound connection for the duration of the block.
++
++    Yields the :class:`AirgapResult` being filled in; it is complete once the
++    block exits. ``allow_loopback`` permits connections to this machine only —
++    needed if something in the run talks to a local service, recorded either
++    way so that "offline" never quietly means "offline except one thing".
++
++    The guard restores the original functions on the way out, including when
++    the block raises, because a process left unable to open a socket after a
++    library call is a far worse bug than the one being prevented.
++    """
++    result = AirgapResult(
++        armed_at=format_utc(utc_now()), loopback_allowed=allow_loopback)
++
++    real_connect = socket.socket.connect
++    real_connect_ex = socket.socket.connect_ex
++    real_create = socket.create_connection
++    real_getaddrinfo = socket.getaddrinfo
++    real_sendto = socket.socket.sendto
++
++    def refuse(api: str, address: Any) -> None:
++        host = _host_of(address)
++        if allow_loopback and host in _LOOPBACK:
++            result.loopback_used = True
++            return
++        attempt = NetworkAttempt(
++            at=format_utc(utc_now()), api=api,
++            target=_target_of(address), caller=_caller())
++        result.attempts.append(attempt)
++        raise AirgapError(
++            f"refused {api} to {attempt.target} from {attempt.caller}. This run "
++            "is under an airgap guard: nothing here may reach the network. If "
++            "this call is legitimate, it belongs outside the guarded block, "
++            "where the customer can see it."
++        )
++
++    def guarded_connect(self: Any, address: Any) -> Any:
++        refuse("socket.connect", address)
++        return real_connect(self, address)
++
++    def guarded_connect_ex(self: Any, address: Any) -> Any:
++        refuse("socket.connect_ex", address)
++        return real_connect_ex(self, address)
++
++    def guarded_create(address: Any, *args: Any, **kwargs: Any) -> Any:
++        refuse("socket.create_connection", address)
++        return real_create(address, *args, **kwargs)
++
++    def guarded_sendto(self: Any, data: Any, *args: Any) -> Any:
++        # sendto's address is the last positional argument; with flags it is
++        # (data, flags, address), without it is (data, address).
++        refuse("socket.sendto", args[-1] if args else "")
++        return real_sendto(self, data, *args)
++
++    def guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
++        # Resolution is refused too. A tool that resolves a name has already
++        # told a DNS server something, which is exactly what a plant's network
++        # team is asking about.
++        refuse("socket.getaddrinfo", (host, port))
++        return real_getaddrinfo(host, port, *args, **kwargs)
++
++    socket.socket.connect = guarded_connect  # type: ignore[method-assign]
++    socket.socket.connect_ex = guarded_connect_ex  # type: ignore[method-assign]
++    socket.socket.sendto = guarded_sendto  # type: ignore[method-assign]
++    socket.create_connection = guarded_create
++    socket.getaddrinfo = guarded_getaddrinfo
++    try:
++        yield result
++    finally:
++        socket.socket.connect = real_connect  # type: ignore[method-assign]
++        socket.socket.connect_ex = real_connect_ex  # type: ignore[method-assign]
++        socket.socket.sendto = real_sendto  # type: ignore[method-assign]
++        socket.create_connection = real_create
++        socket.getaddrinfo = real_getaddrinfo
++        result.released_at = format_utc(utc_now())
+diff --git a/src/assurance/kit/cli.py b/src/assurance/kit/cli.py
+new file mode 100644
+index 0000000..d0e7515
+--- /dev/null
++++ b/src/assurance/kit/cli.py
+@@ -0,0 +1,355 @@
++"""``assurance kit`` — enrol a plant's machines without anything leaving it.
++
++    init    write a runnable kit into a folder: config, plan skeleton, README
++    run     collect every machine listed, offline, into your own ledger
++    check   read a kit and say what it would do, touching nothing
++
++The order is ``init`` once per site, then ``run`` whenever something might have
++changed. ``check`` is for the person who has to approve this before it runs on
++their network, and it is the first command they will ask for.
++
++Exit codes are the interface:
++
++    0  every machine enrolled, nothing tried to reach the network
++    1  a finding — a machine incomplete, a required item missing, or a refused
++       connection attempt. The run still produced evidence; read it.
++    2  the kit could not run at all.
++
++A refused connection attempt is a 1, not a 2, on purpose. The run is still
++valid — nothing got out — but somebody needs to know which line tried.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++from typing import Any
++
++from assurance.collect.plan import CollectionPlan
++from assurance.core.errors import AssuranceError
++from assurance.kit.enrol import (
++    KitConfig,
++    KitError,
++    _is_placeholder,
++    run_kit,
++    starter_config,
++)
++
++__all__ = ["build_parser", "main"]
++
++_README = """# Offline enrolment kit — {kit_id}
++
++This folder records what safety-relevant software is on your machines, seals it
++into an evidence ledger **that stays on this disk**, and produces a report you
++can hand to an auditor, an insurer or a customer.
++
++Nothing is uploaded. Nothing is registered. There is no account and no key.
++
++## Before you run it
++
++1. Open `kit.json` and put your company, site and name in it.
++2. For each machine, make a folder under `exports/` named after its serial and
++   drop that machine's vendor exports into it — the scanner zone file, the robot
++   parameter export, the safety PLC project, the controller firmware. Whatever
++   your tools produce. Do not rename them.
++3. Open `plans/cell.json` and make the four `source` entries match the file
++   names your tools actually produce. That file is the only thing you have to
++   edit that needs any thought, and getting it wrong is visible: the run will
++   say which items it could not find.
++
++## Run it
++
++    python -m assurance kit run kit.json --out out/
++
++You get, in `out/`:
++
++    report.html                  open this first
++    evidence.db                  your ledger. Back it up like a drawing
++    run.json                     machine-by-machine, what was recorded
++    attestation-request.json     three numbers, if you ever want the head
++                                 counter-signed by somebody who is not you
++
++## Before you let it near anything
++
++    python -m assurance kit check kit.json
++
++`check` reads the configuration and prints what the run would touch, without
++touching it. The run itself arms a guard over this process's socket layer and
++refuses every outbound connection, recording any attempt with the line of code
++that made it — and seals that record into your own ledger. So "it does not phone
++home" is not a promise in a document; it is a hash in a file you hold.
++
++The guard covers this Python process's socket calls. It does not cover a
++subprocess (this kit spawns none), nor a C extension that opens a file
++descriptor itself, and it records intent rather than enforcing containment.
++Those four sentences are in the evidence record too, because a claim printed
++next to its limits is worth more to a reviewer than a broader claim with none.
++
++## What one run of this does not establish
++
++Printed at the end of every run, and in the report. Read it. It is the honest
++part, and it is where the remaining work is.
++"""
++
++_PLAN = {
++    "plan_id": "PLAN-CELL-1",
++    "manufacturer": "CHANGE ME",
++    "model": "CHANGE ME",
++    "procedure": (
++        "Export from each vendor tool into this machine's folder under "
++        "exports/. Do not rename the files; the plan matches them by name."
++    ),
++    "functions": [
++        {"function_id": "SF-01",
++         "description": "Protective separation is maintained in collaborative operation",
++         "required_performance": "PL d",
++         "verified_by": ["ssm_separation", "stop_characterisation"]},
++        {"function_id": "SF-02",
++         "description": "Speed is limited in collaborative operation",
++         "required_performance": "PL d",
++         "verified_by": ["speed_limit"]},
++    ],
++    "items": [
++        {"item_id": "ITM-ZONES", "kind": "safety_configuration",
++         "name": "Safety scanner zone set", "source": "scanner-zones.cfg",
++         "supplier": "CHANGE ME", "implements": ["SF-01"],
++         "modifiable_in_field": True,
++         "rule": {"kind": "text_excluding",
++                  "patterns": ["^#\\\\s*Exported ", "^#\\\\s*Export sequence no:"],
++                  "note": "most scanner tools stamp the time and the operator "
++                          "into the header; run `assurance collect probe` to "
++                          "find out what yours does."}},
++        {"item_id": "ITM-PARAMS", "kind": "parameter_set",
++         "name": "Robot safety parameter set", "source": "robot-params.json",
++         "supplier": "CHANGE ME", "implements": ["SF-01", "SF-02"],
++         "rule": {"kind": "json_excluding",
++                  "keys": ["export.timestamp", "export.operator"],
++                  "note": "the export block records who exported and when."},
++         "version": {"kind": "json", "value": "firmware.version"}},
++        {"item_id": "ITM-PLC", "kind": "safety_program",
++         "name": "Safety PLC project", "source": "plc-project.zip",
++         "supplier": "CHANGE ME", "implements": ["SF-01"],
++         "rule": {"kind": "zip_members", "members": ["program/main.st"],
++                  "note": "archive member timestamps move on every save."}},
++        {"item_id": "ITM-FW", "kind": "firmware",
++         "name": "Safety controller firmware", "source": "controller-fw.bin",
++         "supplier": "CHANGE ME", "implements": ["SF-01", "SF-02"]},
++    ],
++}
++
++
++def build_parser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="assurance kit",
++        description=__doc__,
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++    )
++    verbs = p.add_subparsers(dest="command", required=True)
++
++    i = verbs.add_parser("init", help="write a runnable kit into a folder")
++    i.add_argument("folder", type=Path)
++    i.add_argument("--kit-id", default="site-kit")
++
++    r = verbs.add_parser("run", help="enrol every machine, offline")
++    r.add_argument("config", type=Path)
++    r.add_argument("--out", type=Path, default=Path("out"))
++    r.add_argument("--allow-loopback", action="store_true",
++                   help="permit connections to this machine only; recorded either way")
++    r.add_argument("--json", action="store_true")
++
++    c = verbs.add_parser("check", help="what this kit would do, touching nothing")
++    c.add_argument("config", type=Path)
++    c.add_argument("--json", action="store_true")
++
++    return p
++
++
++def _cmd_init(args: argparse.Namespace) -> int:
++    folder = Path(args.folder)
++    if folder.exists() and any(folder.iterdir()):
++        print(f"error: {folder} is not empty. Refusing to write over somebody's "
++              "work; pick an empty folder.", file=sys.stderr)
++        return 2
++
++    (folder / "plans").mkdir(parents=True, exist_ok=True)
++    (folder / "exports" / "CELL-0412").mkdir(parents=True, exist_ok=True)
++
++    config = starter_config(args.kit_id)
++    (folder / "kit.json").write_text(
++        json.dumps(config, indent=2) + "\n", encoding="utf-8")
++    (folder / "plans" / "cell.json").write_text(
++        json.dumps(_PLAN, indent=2) + "\n", encoding="utf-8")
++    (folder / "README.md").write_text(
++        _README.format(kit_id=args.kit_id), encoding="utf-8")
++    (folder / "exports" / "CELL-0412" / "PUT-EXPORTS-HERE.txt").write_text(
++        "Drop this machine's vendor exports into this folder, then delete this "
++        "file.\n\nThe plan in plans/cell.json expects, by name:\n"
++        "  scanner-zones.cfg\n  robot-params.json\n  plc-project.zip\n"
++        "  controller-fw.bin\n\nIf your tools produce different names, change "
++        "the `source` entries in the plan rather than renaming the exports — a "
++        "renamed export is one more thing nobody can reproduce later.\n",
++        encoding="utf-8")
++
++    print(f"kit written to {folder}")
++    print("\n  1. edit kit.json          your company, site, and machines")
++    print("  2. edit plans/cell.json   the four source file names")
++    print("  3. fill exports/<serial>/ with the vendor exports")
++    print(f"\n  then: python -m assurance kit run {folder}/kit.json --out {folder}/out")
++    print(f"  first: python -m assurance kit check {folder}/kit.json")
++    return 0
++
++
++def _cmd_check(args: argparse.Namespace) -> int:
++    """What a run would read, and whether the files the plan names are there.
++
++    The useful question is not "is the export folder empty" — it is "does every
++    item this plan declares actually resolve to a file". An item that does not
++    is left out of the manifest entirely, and a manifest silently missing an
++    item is the failure mode this whole package exists to prevent. Better to
++    find it here, before the engineer walks away thinking they are done.
++    """
++    config = KitConfig.from_json(args.config)
++    rows: list[dict[str, Any]] = []
++    problems = 0
++
++    for entry in config.machines:
++        plan_path = config.resolve(entry.plan)
++        exports = config.resolve(entry.exports)
++        row: dict[str, Any] = {
++            "serial": entry.serial,
++            "plan": str(plan_path),
++            "exports": str(exports),
++            "ready": False,
++            "items": [],
++            "problem": "",
++        }
++        if not plan_path.exists():
++            row["problem"] = "plan does not exist"
++        elif not exports.is_dir():
++            row["problem"] = "export folder does not exist"
++        else:
++            try:
++                plan = CollectionPlan.from_json(plan_path)
++            except AssuranceError as exc:
++                row["problem"] = f"plan is unusable: {exc}"
++            else:
++                row["plan_id"] = plan.plan_id
++                placeholders = [
++                    f"{label}={value!r}"
++                    for label, value in (("manufacturer", plan.manufacturer),
++                                         ("model", plan.model))
++                    if _is_placeholder(value)
++                ]
++                if placeholders:
++                    row["problem"] = (
++                        "plan still carries template values: "
++                        + ", ".join(placeholders))
++                for spec in plan.items:
++                    found = sorted(
++                        f.name for f in exports.glob(spec.source) if f.is_file())
++                    row["items"].append({
++                        "item_id": spec.item_id, "source": spec.source,
++                        "found": found, "required": spec.required,
++                    })
++                missing = [i for i in row["items"] if not i["found"]]
++                if missing:
++                    row["problem"] = "; ".join(filter(None, [
++                        row["problem"],
++                        f"{len(missing)} of {len(row['items'])} item(s) match no "
++                        "file in the export folder"]))
++                row["ready"] = not row["problem"]
++        if not row["ready"]:
++            problems += 1
++        rows.append(row)
++
++    if args.json:
++        print(json.dumps({"kit_id": config.kit_id, "machines": rows,
++                          "problems": problems}, indent=2))
++        return 1 if problems else 0
++
++    print(f"{config.kit_id} — {config.organisation}"
++          + (f" — {config.site}" if config.site else ""))
++    print(f"  prepared by {config.prepared_by}")
++    print(f"\n  {len(config.machines)} machine(s):")
++    for row in rows:
++        print(f"  {' ' if row['ready'] else '!'} {row['serial']}"
++              + (f"   [{row['plan_id']}]" if row.get("plan_id") else ""))
++        print(f"      plan     {row['plan']}")
++        print(f"      exports  {row['exports']}")
++        for item in row["items"]:
++            mark = "  " if item["found"] else "->"
++            detail = ", ".join(item["found"]) if item["found"] else "NO MATCH"
++            flag = "" if item["found"] or not item["required"] else "  (required)"
++            print(f"      {mark} {item['item_id']:<12} {item['source']:<24} "
++                  f"{detail}{flag}")
++        if row["problem"]:
++            print(f"      ! {row['problem']}")
++
++    print("\n  What a run would touch: only the paths above, for reading, and "
++          "the --out folder,")
++    print("  for writing. What it would send: nothing. The run arms a guard over "
++          "this process's")
++    print("  socket layer, refuses every outbound connection, and seals the "
++          "result into your")
++    print("  own ledger, so the claim is checkable rather than promised.")
++    if problems:
++        print(f"\n  {problems} machine(s) are not ready. An item that matches no "
++              "file is left out of")
++        print("  the manifest entirely — fix the `source` entries, or drop the "
++              "missing exports in,")
++        print("  before you run.")
++    return 1 if problems else 0
++
++
++def _cmd_run(args: argparse.Namespace) -> int:
++    config = KitConfig.from_json(args.config)
++    run = run_kit(config, args.out, allow_loopback=args.allow_loopback)
++
++    if args.json:
++        print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
++    else:
++        print(run.summary())
++        print()
++        for m in run.machines:
++            print(f"  {m.status:<11} {m.serial:<16} {m.items} item(s)"
++                  + (f"   {m.detail}" if m.detail else ""))
++            for w in m.warnings:
++                print(f"      ! {w}")
++        print(f"\n  airgap: {run.airgap.summary()}")
++        for attempt in run.airgap.attempts:
++            print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")
++        print(f"\n  report   {run.report_path}")
++        print(f"  ledger   {run.ledger_path}")
++        print(f"  request  {run.attest_request_path}")
++        print(f"  head     seq {run.head.get('head_seq')} "
++              f"{str(run.head.get('head_link_hash', ''))[:12]} "
++              f"over {run.head.get('length')} record(s)")
++        print("\n  What this run does not establish:")
++        for c in run.checks_skipped:
++            print(f"    - {c}")
++
++    if run.verdict == "failed":
++        return 2
++    return 0 if (run.verdict == "complete" and run.airgap.held) else 1
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    handlers = {"init": _cmd_init, "run": _cmd_run, "check": _cmd_check}
++    try:
++        return handlers[args.command](args)
++    except KitError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except FileNotFoundError as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++    except (AssuranceError, ValueError) as exc:
++        print(f"error: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/src/assurance/kit/enrol.py b/src/assurance/kit/enrol.py
+new file mode 100644
+index 0000000..f63a8c1
+--- /dev/null
++++ b/src/assurance/kit/enrol.py
+@@ -0,0 +1,516 @@
++"""The enrolment kit: one command, inside the plant, with nothing leaving it.
++
++The commercial problem this solves is not technical. Everything needed to
++produce a machine's safety evidence already exists in this package, and none of
++it is reachable by the person who needs it, because reaching it means installing
++a toolchain, writing a collection plan, learning six verbs, and — fatally —
++convincing a plant's IT department to let an unknown tool near an unknown
++network. That review takes eleven weeks. Most pilots die in it.
++
++So the kit inverts the order. The integrator copies a folder onto a machine that
++is already inside the plant, runs one command, and gets back a sealed evidence
++ledger, an HTML report, and a signed-attestation request — **their** ledger,
++**their** data, on **their** disk, with the network provably untouched
++(:mod:`assurance.kit.airgap`). No account. No upload. No key. Nothing to
++procure and nothing to review, because nothing left.
++
++What the kit deliberately does not do is the work that needs a second party:
++fanning a supplier advisory across a fleet, counter-signing a head with a key
++the plant does not hold, running every week without anybody remembering to, and
++joining machines that belong to different sites. Those are named at the end of
++every run, next to what was established, because the honest statement of the gap
++is a better argument than any claim about the product — and because a kit that
++pretended to cover them would be caught the first time it mattered.
++
++The order of operations is fixed and the reason is the airgap record:
++
++1. Everything substantive — collect, seal, render, write — happens inside the
++   guard.
++2. The airgap record is sealed **after** the guard releases, because a record of
++   a guard cannot be written while the guard it describes is still running. That
++   sentence is in the record.
++3. The head is read last, so it covers the airgap record as well.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass, field, replace
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++from ..collect.collector import collect
++from ..collect.plan import CollectionPlan
++from ..core.errors import AssuranceError
++from ..core.evidence import Actor, Evidence, Origin, ValidationState
++from ..core.identity import format_utc, utc_now
++from ..evidence.ledger import EvidenceLedger
++from ..machinery.manifest import ManifestSource
++from ..machinery.record import record_manifest
++from ..report.render import ReportInput, render_report
++from .airgap import AIRGAP_LIMITS, AirgapResult, no_network
++
++__all__ = [
++    "AIRGAP_KIND",
++    "KIT_RUN_KIND",
++    "KitConfig",
++    "KitError",
++    "KitRun",
++    "MachineEntry",
++    "MachineResult",
++    "run_kit",
++    "starter_config",
++]
++
++KIT_RUN_KIND = "kit.run"
++AIRGAP_KIND = "kit.airgap"
++
++
++class KitError(AssuranceError):
++    """The kit cannot run, and the message says what to fix."""
++
++
++#: Values the starter files ship with. A run that reaches a report with one of
++#: these still in it has produced a document nobody can act on, addressed from
++#: nobody, about a machine made by nobody.
++_PLACEHOLDERS = frozenset({
++    "change me", "changeme", "your company gmbh", "your company",
++    "your.name@yourcompany.example", "yourcompany", "tbd", "todo", "xxx",
++})
++
++
++def _is_placeholder(value: str) -> bool:
++    return value.strip().lower() in _PLACEHOLDERS
++
++
++@dataclass(frozen=True)
++class MachineEntry:
++    """One machine the kit will enrol."""
++
++    serial: str
++    plan: str
++    exports: str
++    year: str = ""
++    notes: str = ""
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any]) -> MachineEntry:
++        missing = [k for k in ("serial", "plan", "exports") if not d.get(k)]
++        if missing:
++            raise KitError(
++                "a machine entry needs " + ", ".join(missing)
++                + ". A machine with no serial cannot be told apart from another "
++                "one later, which is the only thing a fleet record is for."
++            )
++        return cls(
++            serial=str(d["serial"]), plan=str(d["plan"]),
++            exports=str(d["exports"]), year=str(d.get("year", "")),
++            notes=str(d.get("notes", "")),
++        )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"serial": self.serial, "plan": self.plan, "exports": self.exports,
++                "year": self.year, "notes": self.notes}
++
++
++@dataclass(frozen=True)
++class KitConfig:
++    """The one file an integrator fills in. Everything else is derived."""
++
++    kit_id: str
++    organisation: str
++    prepared_by: str
++    machines: tuple[MachineEntry, ...]
++    site: str = ""
++    country: str = ""
++    role: str = "integrator"
++    #: Directory paths in this file resolve against the file's own location, so
++    #: the kit can be copied anywhere and still work.
++    base: Path = field(default=Path("."), compare=False)
++
++    def __post_init__(self) -> None:
++        if not self.kit_id.strip():
++            raise KitError("kit_id is empty.")
++        if not self.organisation.strip():
++            raise KitError(
++                "organisation is empty. It is printed at the top of the report "
++                "that somebody outside this room will read."
++            )
++        for field_name, value in (
++            ("organisation", self.organisation),
++            ("prepared_by", self.prepared_by),
++            ("site", self.site),
++        ):
++            if _is_placeholder(value):
++                raise KitError(
++                    f"{field_name} is still the placeholder {value!r}. It is "
++                    "printed at the top of a report that goes to an auditor, an "
++                    "insurer or a customer. Refusing to produce evidence with a "
++                    "template value on it."
++                )
++        if not self.prepared_by.strip():
++            raise KitError(
++                "prepared_by is empty. An unattributed record is not evidence — "
++                "the first question anybody asks of a finding is who looked."
++            )
++        if not self.machines:
++            raise KitError("no machines listed; there is nothing to enrol.")
++        seen: set[str] = set()
++        for m in self.machines:
++            if m.serial in seen:
++                raise KitError(
++                    f"serial {m.serial} appears twice. Two machines sharing a "
++                    "serial produce one record that describes neither."
++                )
++            seen.add(m.serial)
++        if self.country and (len(self.country) != 2 or not self.country.isalpha()):
++            raise KitError(
++                f"country {self.country!r} is not an ISO 3166-1 alpha-2 code. It "
++                "is carried into Article 14 filings, where a guess moves a legal "
++                "deadline."
++            )
++
++    @property
++    def actor(self) -> Actor:
++        return Actor(identifier=self.prepared_by, role=self.role, kind="person")
++
++    def resolve(self, relative: str) -> Path:
++        p = Path(relative)
++        return p if p.is_absolute() else (self.base / p)
++
++    @classmethod
++    def from_json(cls, path: str | Path) -> KitConfig:
++        p = Path(path)
++        if not p.exists():
++            raise KitError(
++                f"{p} does not exist. Run `assurance kit init <folder>` to write "
++                "a working one and edit it."
++            )
++        try:
++            data = json.loads(p.read_text("utf-8"))
++        except json.JSONDecodeError as exc:
++            raise KitError(f"{p} is not valid JSON: {exc}") from exc
++        return cls(
++            kit_id=str(data.get("kit_id", "")),
++            organisation=str(data.get("organisation", "")),
++            prepared_by=str(data.get("prepared_by", "")),
++            site=str(data.get("site", "")),
++            country=str(data.get("country", "")).upper(),
++            role=str(data.get("role", "integrator")),
++            machines=tuple(
++                MachineEntry.from_dict(m) for m in data.get("machines", [])),
++            base=p.parent.resolve(),
++        )
++
++
++@dataclass(frozen=True)
++class MachineResult:
++    """What happened to one machine. ``enrolled`` is not the only good outcome."""
++
++    serial: str
++    status: str            # enrolled | incomplete | failed
++    items: int = 0
++    configuration_hash: str = ""
++    plan_id: str = ""
++    warnings: tuple[str, ...] = ()
++    detail: str = ""
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "serial": self.serial, "status": self.status, "items": self.items,
++            "configuration_hash": self.configuration_hash, "plan_id": self.plan_id,
++            "warnings": list(self.warnings), "detail": self.detail,
++        }
++
++
++@dataclass(frozen=True)
++class KitRun:
++    """One complete pass, and everything it is honest about not having done."""
++
++    kit_id: str
++    started_at: str
++    finished_at: str
++    organisation: str
++    machines: tuple[MachineResult, ...]
++    airgap: AirgapResult
++    ledger_path: str
++    report_path: str
++    attest_request_path: str
++    head: dict[str, Any]
++    checks_skipped: tuple[str, ...]
++
++    @property
++    def enrolled(self) -> tuple[MachineResult, ...]:
++        return tuple(m for m in self.machines if m.status == "enrolled")
++
++    @property
++    def verdict(self) -> str:
++        """``complete``, ``partial`` or ``failed``. Never a boolean.
++
++        Deliberately not degraded by the standing caveat every collection
++        carries — that a plan only finds what it names. That sentence is true of
++        every run that will ever happen, so letting it force PARTIAL every time
++        would teach the reader that the verdict means nothing, which is how a
++        signal is destroyed. It belongs in what-was-not-checked, and that is
++        where it goes. What moves the verdict is a machine that did not enrol,
++        a required item that was not found, or a connection attempt.
++        """
++        if not self.enrolled:
++            return "failed"
++        if len(self.enrolled) != len(self.machines):
++            return "partial"
++        if not self.airgap.held:
++            return "partial"
++        return "complete"
++
++    def summary(self) -> str:
++        return (
++            f"{self.kit_id} — {len(self.enrolled)}/{len(self.machines)} machine(s) "
++            f"enrolled — {self.verdict.upper()}"
++        )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "kit_id": self.kit_id,
++            "started_at": self.started_at,
++            "finished_at": self.finished_at,
++            "organisation": self.organisation,
++            "verdict": self.verdict,
++            "machines": [m.to_dict() for m in self.machines],
++            "airgap": self.airgap.to_dict(),
++            "ledger": self.ledger_path,
++            "report": self.report_path,
++            "attest_request": self.attest_request_path,
++            "head": self.head,
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++
++#: What one offline run cannot establish, whatever it finds. Carried into the
++#: run record and printed at the end, because the gap is the argument.
++_KIT_LIMITS: tuple[str, ...] = (
++    "This run recorded what was in the export folders at one moment. Nothing "
++    "here watches for the next change; a firmware update tomorrow strands every "
++    "sign-off in this ledger and nothing will say so until somebody runs this "
++    "again.",
++    "No supplier advisory was matched against these machines. A component with "
++    "a published vulnerability would appear in this manifest as an ordinary "
++    "item.",
++    "The head of this ledger is not signed. A hash chain detects editing, not "
++    "deletion: whoever holds this database can remove records and rebuild a "
++    "chain that verifies. The attestation request written beside the report is "
++    "the first half of closing that.",
++    "No physical behaviour was verified. Nothing here says a machine stops in "
++    "the distance its datasheet claims; that needs a recorded run against a "
++    "declared safety envelope.",
++    "Manifests were read from exported files, not from the machines. They are "
++    "as good as the export, and the export is as good as whoever produced it.",
++)
++
++
++def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
++    """A configuration that runs as written, so the first attempt succeeds."""
++    return {
++        "kit_id": kit_id,
++        "organisation": "YOUR COMPANY GmbH",
++        "site": "Plant 1",
++        "country": "DE",
++        "prepared_by": "your.name@yourcompany.example",
++        "role": "integrator",
++        "machines": [
++            {
++                "serial": "CELL-0412",
++                "plan": "plans/cell.json",
++                "exports": "exports/CELL-0412",
++                "year": "2025",
++                "notes": "",
++            },
++        ],
++    }
++
++
++def _enrol_one(
++    entry: MachineEntry,
++    config: KitConfig,
++    ledger: EvidenceLedger,
++    taken_at: datetime | None,
++) -> MachineResult:
++    plan_path = config.resolve(entry.plan)
++    exports = config.resolve(entry.exports)
++
++    if not plan_path.exists():
++        return MachineResult(
++            serial=entry.serial, status="failed",
++            detail=f"plan {plan_path} does not exist")
++    if not exports.is_dir():
++        return MachineResult(
++            serial=entry.serial, status="failed",
++            detail=f"export folder {exports} does not exist")
++
++    try:
++        plan = CollectionPlan.from_json(plan_path)
++    except AssuranceError as exc:
++        return MachineResult(
++            serial=entry.serial, status="failed",
++            detail=f"plan {plan_path.name} is unusable: {exc}")
++
++    for label, value in (("manufacturer", plan.manufacturer), ("model", plan.model)):
++        if _is_placeholder(value):
++            return MachineResult(
++                serial=entry.serial, status="failed", plan_id=plan.plan_id,
++                detail=(
++                    f"plan {plan_path.name} still says {label}={value!r}. The "
++                    "manufacturer and model are the machine's identity; a "
++                    "manifest carrying a template value describes nothing and "
++                    "cannot be matched to a supplier advisory later."
++                ))
++
++    try:
++        result = collect(
++            plan, exports,
++            serial=entry.serial,
++            taken_by=config.actor,
++            site=config.site,
++            country=config.country,
++            year=entry.year,
++            source=ManifestSource.AS_FOUND,
++            taken_at=taken_at,
++            notes=entry.notes,
++        )
++    except AssuranceError as exc:
++        return MachineResult(
++            serial=entry.serial, status="failed",
++            plan_id=plan.plan_id, detail=str(exc))
++
++    record_manifest(ledger, result.manifest, actor=config.actor)
++    return MachineResult(
++        serial=entry.serial,
++        # "incomplete" is a first-class outcome: a manifest missing a required
++        # item is still evidence, and pretending otherwise loses the finding.
++        status="enrolled" if result.complete else "incomplete",
++        items=len(result.manifest.items),
++        configuration_hash=result.manifest.configuration_hash(),
++        plan_id=plan.plan_id,
++        warnings=tuple(result.warnings),
++        detail=result.summary().splitlines()[0] if result.summary() else "",
++    )
++
++
++def run_kit(
++    config: KitConfig,
++    out_dir: str | Path,
++    *,
++    allow_loopback: bool = False,
++    now: datetime | None = None,
++) -> KitRun:
++    """Enrol every machine in *config*, offline, into a ledger under *out_dir*.
++
++    Everything substantive happens under the airgap guard. The airgap record is
++    sealed afterwards — see the module docstring for why — and the head is read
++    last so that it covers that record too.
++    """
++    out = Path(out_dir)
++    out.mkdir(parents=True, exist_ok=True)
++    started = format_utc(now if now is not None else utc_now())
++
++    ledger_path = out / "evidence.db"
++    report_path = out / "report.html"
++    request_path = out / "attestation-request.json"
++    run_path = out / "run.json"
++
++    ledger = EvidenceLedger(ledger_path)
++    results: list[MachineResult] = []
++
++    with no_network(allow_loopback=allow_loopback) as airgap:
++        for entry in config.machines:
++            results.append(_enrol_one(entry, config, ledger, now))
++
++    # Outside the guard, deliberately: a record of a guard cannot be written
++    # while the guard it describes is still running.
++    ledger.append(
++        Evidence(
++            kind=AIRGAP_KIND,
++            body={
++                **airgap.to_dict(),
++                "covers": (
++                    "Reading the export folders and sealing every manifest for "
++                    "this run — the whole of the part that touches the "
++                    "customer's files. Report rendering and this record itself "
++                    "happened after the guard released."
++                ),
++            },
++            actor=config.actor,
++            origin=Origin(
++                system="assurance.kit.airgap",
++                reference=config.kit_id,
++                method="socket-layer guard armed for the duration of the run",
++            ),
++            validation_state=ValidationState.VERIFIED,
++            checks_skipped=AIRGAP_LIMITS,
++        ).seal(),
++        subject=config.kit_id,
++    )
++
++    finished = format_utc(now if now is not None else utc_now())
++    run = KitRun(
++        kit_id=config.kit_id,
++        started_at=started,
++        finished_at=finished,
++        organisation=config.organisation,
++        machines=tuple(results),
++        airgap=airgap,
++        ledger_path=str(ledger_path),
++        report_path=str(report_path),
++        attest_request_path=str(request_path),
++        head={},
++        checks_skipped=_KIT_LIMITS,
++    )
++
++    # The run record is sealed before the head is read, so that the attestation
++    # request covers it. A head taken before the last append would be stale the
++    # moment it was written, and an attestation of a stale head is worse than
++    # none: it looks like coverage and is not.
++    ledger.append(
++        Evidence(
++            kind=KIT_RUN_KIND,
++            body={k: v for k, v in run.to_dict().items() if k != "head"},
++            actor=config.actor,
++            origin=Origin(
++                system="assurance.kit",
++                reference=config.kit_id,
++                method="offline enrolment kit",
++            ),
++            validation_state=ValidationState.VERIFIED,
++            checks_skipped=_KIT_LIMITS,
++        ).seal(),
++        subject=config.kit_id,
++    )
++
++    report_path.write_text(
++        render_report(ReportInput(
++            ledger=ledger,
++            organisation=config.organisation,
++            prepared_by=config.prepared_by,
++            generated_at=now,
++            extra_limits=AIRGAP_LIMITS + _KIT_LIMITS,
++        )),
++        encoding="utf-8")
++
++    head = ledger.head_attestation()
++    request_path.write_text(json.dumps({
++        "ledger_length": head["length"],
++        "head_seq": head["head_seq"],
++        "head_link_hash": head["head_link_hash"],
++        "note": f"{config.kit_id} offline enrolment {finished}",
++        "how": (
++            "POST this body to /v1/ledger/attest with your API key to have the "
++            "head counter-signed by a key you do not hold. Your ledger stays "
++            "here; these three numbers are all that travels."
++        ),
++    }, indent=2) + "\n", encoding="utf-8")
++
++    run = replace(run, head=head)
++    run_path.write_text(
++        json.dumps(run.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return run
+diff --git a/src/assurance/report/render.py b/src/assurance/report/render.py
+index f020707..6bd59e4 100644
+--- a/src/assurance/report/render.py
++++ b/src/assurance/report/render.py
+@@ -65,6 +65,10 @@ class ReportInput:
+     declarations: tuple[DeclarationOfConformity, ...] = ()
+     #: A banner shown at the very top, e.g. the demonstration-data notice.
+     notice: str = ""
++    #: Limits from outside the engines — the airgap guard, a collection kit,
++    #: anything else that knows something about this run that the fleet record
++    #: cannot. They join the numbered list verbatim, like every other limit.
++    extra_limits: tuple[str, ...] = ()
+     generated_at: datetime | None = None
+ 
+ 
+@@ -425,6 +429,10 @@ def render_report(data: ReportInput) -> str:
+             if c not in seen:
+                 seen.add(c)
+                 limits.append(c)
++    for c in data.extra_limits:
++        if c not in seen:
++            seen.add(c)
++            limits.append(c)
+ 
+     parts.append(f"<section><h2>{n + 2} · What this report does not establish</h2>")
+     parts.append("<p class='lede'>Carried verbatim from the engines that produced "
+diff --git a/tests/test_assurance_kit.py b/tests/test_assurance_kit.py
+new file mode 100644
+index 0000000..f0dacb1
+--- /dev/null
++++ b/tests/test_assurance_kit.py
+@@ -0,0 +1,392 @@
++"""The kit that runs inside somebody else's plant, and the claim it has to prove.
++
++Two things here are load-bearing and neither is about collection. The first is
++that the airgap guard actually catches a real HTTP client rather than a
++hand-rolled socket call, because a guard that only stops the calls you thought
++of is worse than none. The second is the whole commercial loop end to end: an
++offline run produces three numbers, a party who has never seen the ledger signs
++them, and a rewind of that ledger afterwards is caught by joining the two back
++together.
++"""
++
++from __future__ import annotations
++
++import json
++import socket
++import urllib.request
++
++import pytest
++
++from assurance.attest import (
++    AttestationLog,
++    HeadAttestation,
++    SigningKey,
++    attest,
++    verify_log,
++)
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.kit.airgap import AIRGAP_LIMITS, AirgapError, no_network
++from assurance.kit.enrol import (
++    AIRGAP_KIND,
++    KIT_RUN_KIND,
++    KitConfig,
++    KitError,
++    MachineEntry,
++    run_kit,
++    starter_config,
++)
++
++from .test_assurance_collect import plan_dict, write_export
++
++
++def _plan_file(tmp_path, **over):
++    d = plan_dict()
++    d["manufacturer"] = "Grimaldi"
++    d["model"] = "AR-7"
++    d.update(over)
++    p = tmp_path / "plans" / "cell.json"
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(json.dumps(d), encoding="utf-8")
++    return p
++
++
++def _kit(tmp_path, serials=("CELL-0412",), **over):
++    _plan_file(tmp_path)
++    for n, serial in enumerate(serials):
++        write_export(tmp_path / "exports" / serial,
++                     stamp="2026-09-14T06:02:11Z", operator="m.keller",
++                     seq=f"004{n}")
++    body = {
++        "kit_id": "test-kit",
++        "organisation": "Grimaldi Engineering S.r.l.",
++        "site": "Plant 1",
++        "country": "IT",
++        "prepared_by": "v.grimaldi@example.com",
++        "role": "integrator",
++        "machines": [
++            {"serial": s, "plan": "plans/cell.json", "exports": f"exports/{s}"}
++            for s in serials
++        ],
++    }
++    body.update(over)
++    path = tmp_path / "kit.json"
++    path.write_text(json.dumps(body), encoding="utf-8")
++    return path
++
++
++# =====================================================================
++class TestAirgap:
++    def test_a_real_http_client_is_stopped_not_just_a_raw_socket(self):
++        """urllib, not socket.connect by hand. A guard that only catches the
++        obvious call is a guard nobody should trust."""
++        with no_network() as result:
++            # Not URLError: the refusal is not an OSError, so urllib does not
++            # wrap it and no client can mistake it for a transient failure and
++            # retry. That is the point — see AirgapError's docstring.
++            with pytest.raises(AirgapError):
++                urllib.request.urlopen("http://example.com", timeout=1)
++        assert not result.held
++        assert len(result.attempts) == 1
++        assert "example.com" in result.attempts[0].target
++
++    def test_the_attempt_names_the_line_that_made_it(self):
++        with no_network() as result:
++            with pytest.raises(AirgapError):
++                socket.create_connection(("192.0.2.1", 443), timeout=1)
++        caller = result.attempts[0].caller
++        assert "test_assurance_kit.py" in caller
++
++    def test_name_resolution_alone_is_refused(self):
++        """Resolving a name has already told a DNS server something."""
++        with no_network() as result:
++            with pytest.raises(AirgapError):
++                socket.getaddrinfo("telemetry.example.com", 443)
++        assert result.attempts[0].api == "socket.getaddrinfo"
++
++    def test_a_quiet_run_holds(self):
++        with no_network() as result:
++            sum(range(1000))
++        assert result.held
++        assert "No outbound connection was attempted" in result.summary()
++
++    def test_the_guard_is_released_even_when_the_block_raises(self):
++        with pytest.raises(ValueError):
++            with no_network():
++                raise ValueError("boom")
++        # If the guard leaked, this would raise instead of resolving.
++        assert socket.getaddrinfo("localhost", 80)
++
++    def test_loopback_can_be_allowed_and_is_recorded_either_way(self):
++        with no_network(allow_loopback=True) as result:
++            with pytest.raises(AirgapError):
++                socket.getaddrinfo("elsewhere.example.com", 443)
++            try:
++                socket.create_connection(("127.0.0.1", 1), timeout=0.1)
++            except OSError:
++                pass  # nothing listening; the guard let it through, which is the point
++        assert result.loopback_allowed
++        assert result.loopback_used
++        assert len(result.attempts) == 1
++
++    def test_the_limits_travel_with_the_result(self):
++        with no_network() as result:
++            pass
++        assert result.to_dict()["limits"] == list(AIRGAP_LIMITS)
++        assert any("subprocess" in limit for limit in AIRGAP_LIMITS)
++        assert any("firewall" in limit for limit in AIRGAP_LIMITS)
++
++
++# =====================================================================
++class TestConfig:
++    def test_a_template_value_never_reaches_a_report(self, tmp_path):
++        path = _kit(tmp_path, organisation="YOUR COMPANY GmbH")
++        with pytest.raises(KitError, match="placeholder"):
++            KitConfig.from_json(path)
++
++    def test_an_unattributed_kit_is_refused(self, tmp_path):
++        path = _kit(tmp_path, prepared_by="")
++        with pytest.raises(KitError, match="prepared_by"):
++            KitConfig.from_json(path)
++
++    def test_two_machines_may_not_share_a_serial(self, tmp_path):
++        path = _kit(tmp_path)
++        body = json.loads(path.read_text())
++        body["machines"].append(dict(body["machines"][0]))
++        path.write_text(json.dumps(body))
++        with pytest.raises(KitError, match="twice"):
++            KitConfig.from_json(path)
++
++    def test_a_malformed_country_is_refused_because_it_moves_a_deadline(self, tmp_path):
++        path = _kit(tmp_path, country="ITA")
++        with pytest.raises(KitError, match="alpha-2"):
++            KitConfig.from_json(path)
++
++    def test_paths_resolve_against_the_config_so_the_kit_can_be_copied(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path))
++        assert config.resolve("plans/cell.json") == tmp_path / "plans" / "cell.json"
++
++    def test_a_machine_entry_needs_a_serial(self):
++        with pytest.raises(KitError, match="serial"):
++            MachineEntry.from_dict({"plan": "p.json", "exports": "e"})
++
++    def test_the_starter_config_is_shaped_like_a_real_one(self):
++        body = starter_config("demo")
++        assert body["kit_id"] == "demo"
++        assert body["machines"][0]["serial"]
++
++
++# =====================================================================
++class TestRun:
++    def test_a_clean_run_is_complete_and_writes_four_files(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path, ("CELL-0412", "CELL-0501")))
++        run = run_kit(config, tmp_path / "out")
++
++        assert run.verdict == "complete"
++        assert len(run.enrolled) == 2
++        for name in ("report.html", "evidence.db", "run.json",
++                     "attestation-request.json"):
++            assert (tmp_path / "out" / name).exists(), name
++
++    def test_the_standing_collection_caveat_does_not_degrade_the_verdict(self, tmp_path):
++        """Every collection carries it, so letting it force PARTIAL every time
++        would teach the reader that the verdict means nothing."""
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        assert run.machines[0].warnings  # the caveat is still reported
++        assert run.verdict == "complete"
++
++    def test_nothing_reached_the_network(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        assert run.airgap.held
++        assert run.airgap.attempts == []
++
++    def test_the_airgap_record_is_sealed_into_the_customers_own_ledger(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        ledger = EvidenceLedger(run.ledger_path)
++        kinds = [e.kind for e in ledger.entries()]
++        assert AIRGAP_KIND in kinds
++        assert KIT_RUN_KIND in kinds
++        record = next(e for e in ledger.entries() if e.kind == AIRGAP_KIND)
++        assert record.payload["body"]["held"] is True
++        assert "after the guard released" in record.payload["body"]["covers"]
++
++    def test_the_attested_head_covers_every_record_including_the_run_record(
++            self, tmp_path):
++        """A head read before the last append is stale the moment it is written,
++        and an attestation of a stale head looks like coverage and is not."""
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        ledger = EvidenceLedger(run.ledger_path)
++        entries = ledger.entries()
++
++        assert run.head["length"] == len(entries)
++        assert run.head["head_link_hash"] == entries[-1].link_hash
++        request = json.loads(
++            (tmp_path / "out" / "attestation-request.json").read_text())
++        assert request["ledger_length"] == len(entries)
++        assert request["head_link_hash"] == entries[-1].link_hash
++        assert entries[-1].kind == KIT_RUN_KIND
++
++    def test_the_ledger_verifies_and_the_report_carries_the_limits(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        assert EvidenceLedger(run.ledger_path).verify_chain()[0] is True
++        html = (tmp_path / "out" / "report.html").read_text()
++        assert "socket module" in html
++        assert "hash chain detects editing, not deletion" in html
++
++    def test_a_missing_export_folder_is_a_named_failure_not_a_crash(self, tmp_path):
++        path = _kit(tmp_path, ("CELL-0412",))
++        body = json.loads(path.read_text())
++        body["machines"].append({"serial": "CELL-9999", "plan": "plans/cell.json",
++                                 "exports": "exports/CELL-9999"})
++        path.write_text(json.dumps(body))
++        run = run_kit(KitConfig.from_json(path), tmp_path / "out")
++
++        assert run.verdict == "partial"
++        failed = next(m for m in run.machines if m.serial == "CELL-9999")
++        assert failed.status == "failed"
++        assert "does not exist" in failed.detail
++        # and the machine that worked still produced evidence
++        assert len(run.enrolled) == 1
++
++    def test_a_plan_still_carrying_a_template_value_is_refused(self, tmp_path):
++        _kit(tmp_path)
++        _plan_file(tmp_path, manufacturer="CHANGE ME")
++        run = run_kit(KitConfig.from_json(tmp_path / "kit.json"), tmp_path / "out")
++        assert run.verdict == "failed"
++        assert "manufacturer" in run.machines[0].detail
++
++    def test_every_run_states_what_it_did_not_establish(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path))
++        run = run_kit(config, tmp_path / "out")
++        joined = " ".join(run.checks_skipped)
++        assert "not signed" in joined
++        assert "No supplier advisory" in joined
++        assert "No physical behaviour" in joined
++
++
++# =====================================================================
++class TestTheWholeLoop:
++    """Offline run -> three numbers -> counter-signature -> rewind caught.
++
++    This is the product in one test. If it passes, an integrator with no
++    account and no network produced evidence that a second party can vouch for
++    and that its own holder cannot quietly shorten.
++    """
++
++    def test_a_rewind_after_counter_signature_is_caught(self, tmp_path):
++        config = KitConfig.from_json(_kit(tmp_path, ("CELL-0412", "CELL-0501")))
++        run = run_kit(config, tmp_path / "out")
++
++        # The customer sends three numbers. Nothing else leaves.
++        request = json.loads(
++            (tmp_path / "out" / "attestation-request.json").read_text())
++        assert set(request) == {"ledger_length", "head_seq", "head_link_hash",
++                                "note", "how"}
++
++        # A party who has never seen the ledger signs them.
++        from assurance.attest import LedgerHead
++
++        service_key = SigningKey.generate().save(tmp_path / "service.pem")
++        signer = SigningKey.load(tmp_path / "service.pem")
++        service_log = AttestationLog(tmp_path / "service-attestations.jsonl")
++        signed = attest(
++            LedgerHead(length=request["ledger_length"],
++                       head_seq=request["head_seq"],
++                       head_link_hash=request["head_link_hash"]),
++            signer, service_log, note=request["note"])
++        assert signed.basis.value == "declared_by_holder"
++        assert service_key.exists()
++
++        ledger = EvidenceLedger(run.ledger_path)
++        good = verify_log([signed], signer.verifying, ledger=ledger)
++        assert good.ok, good.problems
++
++        # Now the holder removes a record and rebuilds the chain.
++        import sqlite3
++
++        db = sqlite3.connect(run.ledger_path)
++        db.execute("DELETE FROM chain WHERE seq > 2")
++        db.commit()
++        db.close()
++        rewound = EvidenceLedger(run.ledger_path)
++        assert rewound.verify_chain()[0] is True   # the chain is happy
++
++        caught = verify_log(
++            [HeadAttestation.from_dict(signed.to_dict())],
++            signer.verifying, ledger=rewound)
++        assert not caught.ok
++        assert any("were removed after being attested" in p
++                   for p in caught.problems)
++
++
++# =====================================================================
++class TestCli:
++    def _run(self, *argv) -> int:
++        from assurance.kit.cli import main
++
++        return main(list(argv))
++
++    def test_init_writes_a_kit_and_refuses_a_non_empty_folder(self, tmp_path, capsys):
++        assert self._run("init", str(tmp_path / "plant"), "--kit-id", "p1") == 0
++        for name in ("kit.json", "plans/cell.json", "README.md"):
++            assert (tmp_path / "plant" / name).exists(), name
++        capsys.readouterr()
++        assert self._run("init", str(tmp_path / "plant")) == 2
++        assert "not empty" in capsys.readouterr().err
++
++    def test_check_refuses_the_freshly_written_kit_until_it_is_filled_in(
++            self, tmp_path, capsys):
++        self._run("init", str(tmp_path / "plant"))
++        capsys.readouterr()
++        # The starter organisation is a placeholder, so the config itself refuses.
++        assert self._run("check", str(tmp_path / "plant" / "kit.json")) == 2
++        assert "placeholder" in capsys.readouterr().err
++
++    def test_check_names_every_item_that_matches_no_file(self, tmp_path, capsys):
++        path = _kit(tmp_path)
++        (tmp_path / "exports" / "CELL-0412" / "controller-fw.bin").unlink()
++        assert self._run("check", str(path)) == 1
++        out = capsys.readouterr().out
++        assert "ITM-FW" in out
++        assert "NO MATCH" in out
++        assert "(required)" in out
++
++    def test_check_passes_a_ready_kit_and_touches_nothing(self, tmp_path, capsys):
++        path = _kit(tmp_path)
++        assert self._run("check", str(path)) == 0
++        assert not (tmp_path / "out").exists()
++        assert "would send: nothing" in capsys.readouterr().out
++
++    def test_run_exits_zero_when_complete_and_quiet(self, tmp_path, capsys):
++        path = _kit(tmp_path)
++        assert self._run("run", str(path), "--out", str(tmp_path / "out")) == 0
++        out = capsys.readouterr().out
++        assert "COMPLETE" in out
++        assert "No outbound connection was attempted" in out
++        assert "What this run does not establish" in out
++
++    def test_run_exits_one_on_a_finding(self, tmp_path):
++        path = _kit(tmp_path)
++        body = json.loads(path.read_text())
++        body["machines"].append({"serial": "X", "plan": "plans/cell.json",
++                                 "exports": "exports/nope"})
++        path.write_text(json.dumps(body))
++        assert self._run("run", str(path), "--out", str(tmp_path / "out")) == 1
++
++    def test_run_exits_two_when_nothing_enrolled(self, tmp_path):
++        _kit(tmp_path)
++        _plan_file(tmp_path, model="CHANGE ME")
++        assert self._run("run", str(tmp_path / "kit.json"),
++                         "--out", str(tmp_path / "out")) == 2
++
++    def test_json_output_is_machine_readable(self, tmp_path, capsys):
++        path = _kit(tmp_path)
++        assert self._run("run", str(path), "--out", str(tmp_path / "out"),
++                         "--json") == 0
++        body = json.loads(capsys.readouterr().out)
++        assert body["verdict"] == "complete"
++        assert body["airgap"]["held"] is True
+-- 
+2.43.0
+

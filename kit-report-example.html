@@ -1,0 +1,113 @@
+<title>Machine safety evidence report</title><style>
+:root{
+  --ink:#14181a; --ink-2:#3d4745; --muted:#626d6a;
+  --ground:#ffffff; --panel:#f4f6f3; --rule:#d2d7d2; --rule-firm:#a7b0ac;
+  --accent:#0d6a6b; --accent-soft:#e3efee;
+  --bad:#a11220; --bad-soft:#fbeaec;
+  --warn:#8a5a06; --warn-soft:#fbf1dd;
+  --good:#2c6535; --good-soft:#e7f0e7;
+  --mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+     font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.sheet{max-width:1000px;margin:0 auto;padding:0 20px 64px}
+h1,h2,h3{margin:0;text-wrap:balance}
+a{color:var(--accent)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+header.masthead{padding:36px 0 18px;border-bottom:2px solid var(--ink);
+  display:flex;flex-wrap:wrap;gap:14px 32px;align-items:flex-end}
+.masthead h1{font-size:clamp(24px,4vw,34px);letter-spacing:-.01em;line-height:1.08}
+.masthead .who{font-size:13px;color:var(--muted);margin-top:6px}
+.masthead .meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  margin-left:auto;text-align:right;line-height:1.7}
+
+.banner{margin:18px 0 0;padding:12px 14px;border-left:4px solid var(--accent);
+  background:var(--accent-soft);font-size:13.5px}
+.banner.bad{border-color:var(--bad);background:var(--bad-soft);color:var(--bad);
+  font-weight:600}
+.banner.warn{border-color:var(--warn);background:var(--warn-soft)}
+.banner b{font-weight:700}
+
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:0;margin-top:22px;border:1px solid var(--rule)}
+.tile{padding:14px 16px;border-right:1px solid var(--rule)}
+.tile:last-child{border-right:0}
+.tile .n{font-family:var(--mono);font-size:30px;line-height:1;font-weight:500;
+  letter-spacing:-.02em}
+.tile .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin-top:7px}
+.tile.bad .n{color:var(--bad)} .tile.warn .n{color:var(--warn)}
+.tile.good .n{color:var(--good)}
+
+section{margin-top:38px;break-inside:auto}
+section>h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--rule-firm)}
+section>.lede{margin:12px 0 0;color:var(--ink-2);max-width:72ch}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:14px}
+th,td{text-align:left;padding:7px 10px;border-top:1px solid var(--rule);
+  vertical-align:top}
+thead th{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);border-top:0;border-bottom:1px solid var(--rule-firm)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+tbody tr:hover{background:var(--panel)}
+.wide{overflow-x:auto}
+
+.pill{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.07em;
+  text-transform:uppercase;padding:2px 7px;border-radius:2px;white-space:nowrap}
+.pill.current{background:var(--good-soft);color:var(--good)}
+.pill.stale{background:var(--bad-soft);color:var(--bad)}
+.pill.failing{background:var(--bad);color:#fff}
+.pill.never_verified{background:var(--warn-soft);color:var(--warn)}
+.pill.not_demonstrable{background:var(--panel);color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--rule-firm)}
+.pill.confirmed{background:var(--bad-soft);color:var(--bad)}
+.pill.contradictory{background:var(--warn);color:#fff}
+.pill.probable{background:var(--warn-soft);color:var(--warn)}
+.pill.possible{background:var(--panel);color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--rule-firm)}
+
+.machine{border:1px solid var(--rule);margin-top:16px;break-inside:avoid}
+.machine>header{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;
+  padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--rule)}
+.machine h3{font-size:16px}
+.machine .site{color:var(--muted);font-size:13px}
+.machine .cfg{margin-left:auto;font-family:var(--mono);font-size:11.5px;
+  color:var(--muted)}
+.machine .body{padding:4px 16px 14px}
+.fn{padding:9px 0;border-top:1px solid var(--rule)}
+.fn:first-child{border-top:0}
+.fn .top{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.fn .id{font-family:var(--mono);font-weight:600}
+.fn .perf{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.fn .why{color:var(--ink-2);font-size:13px;margin-top:3px;max-width:78ch}
+.fn .days{color:var(--bad);font-weight:600;font-size:13px;margin-top:3px}
+
+.note{margin-top:12px;padding:10px 12px;border-left:3px solid var(--rule-firm);
+  background:var(--panel);font-size:13px;color:var(--ink-2)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note b{color:var(--ink)}
+
+ol.limits{margin:14px 0 0;padding-left:22px}
+ol.limits li{margin-bottom:9px;color:var(--ink-2);max-width:80ch}
+
+footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--rule);
+  font-size:12px;color:var(--muted);max-width:80ch}
+footer code{font-family:var(--mono);font-size:11.5px;background:var(--panel);
+  padding:1px 5px;border:1px solid var(--rule)}
+footer p{margin:0 0 8px}
+
+@media print{
+  body{font-size:11pt}
+  .sheet{max-width:none;padding:0}
+  section{break-inside:auto}
+  .machine,.tiles,.banner,.note{break-inside:avoid}
+  tbody tr:hover{background:none}
+  header.masthead{padding-top:0}
+}
+</style><div class='sheet'><header class='masthead'><div><h1>Machine safety evidence report</h1><div class='who'>Grimaldi Engineering S.r.l. · 2 machine(s) · 4 declared safety function(s) · prepared by v.grimaldi@grimaldi.example</div></div><div class='meta'>generated 2026-09-14T16:52:48Z<br>ledger evidence.db · 4 sealed record(s)</div></header><div class='banner'><b>Ledger chain verifies.</b> All 4 record(s) hash to their recorded values and each links to the one before it. Head <span class='mono'>5ffc960b79b7455f0adba584</span>.</div><div class='tiles'><div class="tile "><div class="n">2</div><div class="k">machines</div></div><div class="tile "><div class="n">0</div><div class="k">functions covered</div></div><div class="tile "><div class="n">0</div><div class="k">stale</div></div><div class="tile warn"><div class="n">4</div><div class="k">otherwise uncovered</div></div></div><section><h2>1 · Fleet</h2><p class='lede'>Weakest function first, because that is the order somebody acts in. “Stale” means a recorded change to safety-relevant software invalidated a verification that had passed.</p><div class='wide'><table><thead><tr><th>Machine</th><th>Site</th><th>Weakest function</th><th class='n'>Stale</th><th class='n'>Functions</th><th class='n'>Changes</th><th class='n'>Verifications</th><th>Configuration</th><th>Last collected</th></tr></thead><tbody><tr><td class='mono'>Grimaldi Engineering/AR-7 collaborative cell#CELL-0412</td><td>Plant 1 — Cell Hall B</td><td><span class='pill never_verified'>Never verified</span></td><td class='n'>0</td><td class='n'>2</td><td class='n'>0</td><td class='n'>0</td><td class='mono'>2bd58bf67aa4</td><td class='mono'>2026-09-14</td></tr><tr><td class='mono'>Grimaldi Engineering/AR-7 collaborative cell#CELL-0501</td><td>Plant 1 — Cell Hall B</td><td><span class='pill never_verified'>Never verified</span></td><td class='n'>0</td><td class='n'>2</td><td class='n'>0</td><td class='n'>0</td><td class='mono'>8ddddf029982</td><td class='mono'>2026-09-14</td></tr></tbody></table></div></section><section><h2>2 · Machine by machine</h2><article class='machine'><header><h3 class='mono'>CELL-0412</h3><span class='site'>Grimaldi Engineering AR-7 collaborative cell · Plant 1 — Cell Hall B</span><span class='cfg'>config 2bd58bf67aa4fffc · 4 item(s) · tier validated</span></header><div class='body'><div class='fn'><div class='top'><span class='id'>SF-01</span><span>Protective separation is maintained in collaborative operation</span><span class='perf'>PL d</span><span class='pill never_verified'>Never verified</span></div><div class='why'>no verification in the ledger has ever run ssm_separation, stop_characterisation for this machine.</div></div><div class='fn'><div class='top'><span class='id'>SF-02</span><span>Speed is limited in collaborative operation</span><span class='perf'>PL d</span><span class='pill never_verified'>Never verified</span></div><div class='why'>no verification in the ledger has ever run speed_limit for this machine.</div></div></div></article><article class='machine'><header><h3 class='mono'>CELL-0501</h3><span class='site'>Grimaldi Engineering AR-7 collaborative cell · Plant 1 — Cell Hall B</span><span class='cfg'>config 8ddddf0299822ffe · 4 item(s) · tier validated</span></header><div class='body'><div class='fn'><div class='top'><span class='id'>SF-01</span><span>Protective separation is maintained in collaborative operation</span><span class='perf'>PL d</span><span class='pill never_verified'>Never verified</span></div><div class='why'>no verification in the ledger has ever run ssm_separation, stop_characterisation for this machine.</div></div><div class='fn'><div class='top'><span class='id'>SF-02</span><span>Speed is limited in collaborative operation</span><span class='perf'>PL d</span><span class='pill never_verified'>Never verified</span></div><div class='why'>no verification in the ledger has ever run speed_limit for this machine.</div></div></div></article></section><section><h2>3 · What this report does not establish</h2><p class='lede'>Carried verbatim from the engines that produced the findings above. A report that hides its own limits is worth less than no report, because somebody will rely on it.</p><ol class='limits'><li>no interventions were supplied for this machine. A function shown as current is current only against the change records you have; an unrecorded change is invisible here by construction.</li><li>ITM-ZONES is safety-bearing and modifiable on site; coverage for SF-01 rests on every such change having been recorded.</li><li>this joins verification bundles to intervention records through the safety functions the manifest declares. It does not confirm the manifest is complete, and a safety-relevant item nobody listed is covered by nothing here and reported by nothing here.</li><li>The guard covers outbound connections made by this Python process through the socket module (connect, connect_ex, create_connection, sendto, and getaddrinfo). Every Python HTTP and TLS client goes through that layer.</li><li>It does not cover a subprocess, which has its own socket layer. This run spawned none.</li><li>It does not cover a C extension that opens a socket file descriptor without going through the socket module.</li><li>It records intent, it does not enforce containment. Code determined to evade it could. Containment is a firewall&#x27;s job; this answers whether the tool tried.</li><li>This run recorded what was in the export folders at one moment. Nothing here watches for the next change; a firmware update tomorrow strands every sign-off in this ledger and nothing will say so until somebody runs this again.</li><li>No supplier advisory was matched against these machines. A component with a published vulnerability would appear in this manifest as an ordinary item.</li><li>The head of this ledger is not signed. A hash chain detects editing, not deletion: whoever holds this database can remove records and rebuild a chain that verifies. The attestation request written beside the report is the first half of closing that.</li><li>No physical behaviour was verified. Nothing here says a machine stops in the distance its datasheet claims; that needs a recorded run against a declared safety envelope.</li><li>Manifests were read from exported files, not from the machines. They are as good as the export, and the export is as good as whoever produced it.</li></ol></section><footer><p><b>How to check this without trusting whoever sent it.</b> Every finding above comes from a hash-chained ledger. Run <code>assurance machinery check &lt;passport&gt; --ledger &lt;register.db&gt;</code> against the ledger this was generated from: it re-runs the engine on the original records and reports any statement that does not reproduce.</p><p>Coverage joins verification bundles to intervention records through the safety functions the manifest declares. A verification is dated by when the run happened, not when it was filed. A function that declares no verification check is reported as not demonstrable, never as covered.</p><p>Nothing in this report is legal advice. Whether a changed configuration amounts to a substantial modification requiring a new conformity assessment is a question for the manufacturer and, where one is involved, the notified body.</p></footer></div>
