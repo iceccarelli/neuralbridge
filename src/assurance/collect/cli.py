@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--actor", required=True)
     rn.add_argument("--role", default="safety engineer")
     rn.add_argument("--site", default="")
+    rn.add_argument("--country", default="",
+                    help="ISO 3166-1 alpha-2 of the territory this unit was made "
+                         "available in. CRA Article 14(2)(a) asks for it, and 24 "
+                         "hours is not long enough to find out.")
     rn.add_argument("--year", default="")
     rn.add_argument("--manifest-id", default="")
     rn.add_argument("--taken-at", default="", help="ISO timestamp; defaults to now")
@@ -131,7 +135,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     result = collect(
         plan, args.root, serial=args.serial,
         taken_by=Actor(identifier=args.actor, role=args.role, kind="person"),
-        site=args.site, year=args.year, manifest_id=args.manifest_id,
+        site=args.site, country=args.country, year=args.year,
+        manifest_id=args.manifest_id,
         source=ManifestSource.AS_DECLARED if args.as_declared
         else ManifestSource.AS_FOUND,
         taken_at=parse_utc(args.taken_at) if args.taken_at else None,

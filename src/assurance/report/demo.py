@@ -219,23 +219,23 @@ def build_demo(workdir: str | Path) -> DemoFleet:
     sept = datetime(2026, 9, 13, 7, 20, tzinfo=UTC)
 
     spec = [
-        # serial, site, radius, firmware, verified, intervened
-        ("0412", "Plant 2, Line 4", 1500, _FW_382, True, False),
-        ("0418", "Plant 2, Line 6", 1500, _FW_RELABELLED, True, False),
-        ("0501", "Plant 7, Cell A", 1200, _FW_382, True, True),
-        ("0620", "Plant 7, Cell C", 1500, _FW_390, True, False),
+        # serial, site, country, radius, firmware, verified, intervened
+        ("0412", "Plant 2, Line 4", "DE", 1500, _FW_382, True, False),
+        ("0418", "Plant 2, Line 6", "DE", 1500, _FW_RELABELLED, True, False),
+        ("0501", "Plant 7, Cell A", "IT", 1200, _FW_382, True, True),
+        ("0620", "Plant 7, Cell C", "CH", 1500, _FW_390, True, False),
     ]
 
     declarations: list[DeclarationOfConformity] = []
 
-    for serial, site, radius, firmware, verified, intervened in spec:
+    for serial, site, country, radius, firmware, verified, intervened in spec:
         root = _write_export(
             exports / serial,
             stamp=f"2026-09-13T0{len(serial) % 7}:11:04Z", operator="m.tech",
             seq=f"41{serial[-2:]}", radius=radius, firmware=firmware)
 
         result = collect(plan, root, serial=serial, taken_by=ENG, site=site,
-                         year="2026", taken_at=sept,
+                         country=country, year="2026", taken_at=sept,
                          manifest_id=f"MAN-{serial}-2026-09")
         record_manifest(ledger, result.manifest)
 
