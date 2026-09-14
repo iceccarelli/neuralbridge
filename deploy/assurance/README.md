@@ -43,6 +43,7 @@ webhook is a way for anyone to grant themselves a subscription.
 curl https://<app>.fly.dev/                       # what the service is
 curl https://<app>.fly.dev/healthz                # auth_mode must not be "open"
 curl https://<app>.fly.dev/v1/plans               # purchasable must be true
+curl https://<app>.fly.dev/v1/ledger/attest/key   # 503 means no signing key set
 curl -X POST https://<app>.fly.dev/v1/spec/validate \
      -H 'content-type: application/json' \
      -d '{"track":"actively_exploited_vulnerability","stage":"early_warning",
@@ -65,3 +66,10 @@ fly ssh console -C "sqlite3 /data/art14-register.db .dump" > ledger-$(date +%F).
 
 The ledger is append-only and self-verifying, so a restored copy can be checked
 with `GET /v1/ledger/verify` rather than trusted.
+
+That check answers "was anything **edited**?" and not "was anything
+**removed**?" — a chain rebuilt without the inconvenient records verifies
+perfectly. Closing that is what `ATTEST.md` is for, and it is the difference
+between a backup and an alibi. Set `ASSURANCE_ATTEST_KEY_PEM` and put
+`POST /v1/ledger/attest` on a timer before you tell a customer their evidence
+is tamper-proof.

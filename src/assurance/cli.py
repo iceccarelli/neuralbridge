@@ -13,6 +13,7 @@ _DOMAINS = {
     "fleet": "assurance.fleet.cli",
     "bridge": "assurance.bridge.cli",
     "watch": "assurance.watch.cli",
+    "attest": "assurance.attest.cli",
 }
 
 
