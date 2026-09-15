@@ -1,0 +1,1091 @@
+From 23f282a034a8211b57fcae505482ef05db05f39e Mon Sep 17 00:00:00 2001
+From: i <v@g>
+Date: Mon, 14 Sep 2026 18:48:17 +0000
+Subject: [PATCH] assurance.watch: draft the Article 14 intake, and decide
+ nothing
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The watch finds a stop-use advisory against a still machine at 09:00. Then
+nothing happened. Somebody read the output, opened a spreadsheet, and started
+working out which Member States the affected serial numbers went to — field 5
+of the ENISA form, and the reason a 24-hour deadline is hard rather than short.
+
+This closes the gap and stops exactly where honesty requires it.
+
+It assembles the intake from evidence that already exists: the signal, the
+affected product versions, and the Member States built from serial numbers in
+the fleet. It records when the signal was received, because the interval
+between receipt and awareness is the number a market surveillance authority asks
+about first and cannot be reconstructed afterwards.
+
+It establishes no awareness and chooses no track. Art. 14(2)(a) runs twenty-four
+hours from awareness, not from receipt, and a tool that quietly equated the two
+would either start a manufacturer's clock early — inventing a filing obligation
+— or start it late, which is worse. C(2026) 5252 Annex §213 defines awareness as
+a reasonable degree of certainty after an initial assessment and §214 requires
+that assessment to be prompt; the word "prompt" is doing the work, and only a
+person can be prompt. srp_prefill still omits notification_type and
+awareness_datetime.
+
+So what it reports instead is the signal nobody assessed. If a previous run
+recorded receipt and no awareness record has appeared since, every later run
+says so and says how long it has been, with the provision that makes it matter.
+Nobody is told they are late — the window runs from awareness and awareness has
+not been established, so it is deliberately not called a breach. That is the
+alarm worth paying for: not "you have a deadline", which everybody knows, but
+"this one has been sitting for thirty-nine hours and nobody has made the
+determination".
+
+Receipt is carried forward between runs rather than recomputed. Resetting it
+every run would turn the one number an authority asks about first into a number
+that is always small. And the prompt stops the moment a person records
+awareness: from there the register holds the clock, and a second system nagging
+about a decision already taken is how people learn to close the tab.
+
+The duty is declared, never inferred. Only a manufacturer placing the product on
+the Union market carries it; an integrator installing somebody else's cells may
+or may not be one, and that is a legal question about a role. While article_14
+is absent from the configuration nothing is drafted at all, which is the safe
+direction to be wrong in. Declaring it without naming who receives signals is
+refused, because an unattributed receipt cannot evidence the interval.
+
+The CLI prints confirmed and unconfirmed separately and always. "0 machines" on
+its own reads as "you are fine"; in the worked case it means the supplier
+published no artefact hashes, so nothing is confirmed and field 5 cannot be
+completed — the opposite of fine. Same argument SUPPLIER.md makes to suppliers,
+arriving from the other end.
+
+Tests: 15 new, 734 total, all passing. ruff clean, mypy clean on the new module.
+The load-bearing ones assert that no duty declared drafts nothing, that the
+prefill never contains awareness_datetime or notification_type, that a
+label-only match confirms nothing and says so, that thirty-nine hours unassessed
+escalates while three hours does not, and that recording real awareness in the
+register stops the prompt.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ deploy/assurance/WATCH.md             |  93 +++++++++
+ src/assurance/watch/__init__.py       |  14 ++
+ src/assurance/watch/cli.py            |  50 +++++
+ src/assurance/watch/config.py         |  45 +++-
+ src/assurance/watch/filings.py        | 280 +++++++++++++++++++++++++
+ src/assurance/watch/runner.py         |  93 ++++++++-
+ tests/test_assurance_watch_filings.py | 282 ++++++++++++++++++++++++++
+ 7 files changed, 855 insertions(+), 2 deletions(-)
+ create mode 100644 src/assurance/watch/filings.py
+ create mode 100644 tests/test_assurance_watch_filings.py
+
+diff --git a/deploy/assurance/WATCH.md b/deploy/assurance/WATCH.md
+index ab29ad5..d0b45bf 100644
+--- a/deploy/assurance/WATCH.md
++++ b/deploy/assurance/WATCH.md
+@@ -218,3 +218,96 @@ Carried in `checks_skipped` on every run:
+   the subscribed file changes. Whatever puts the supplier's feed there is
+   outside this system, and a sync that silently stopped looks exactly like a
+   supplier with nothing to report. Make the thing that fetches it fail loudly.
++
++
++---
++
++# From an advisory to a drafted filing
++
++The watch finds a stop-use advisory against a still machine at 09:00. Then what?
++Without this: somebody reads the output, opens a spreadsheet, and starts working
++out which Member States the affected serial numbers went to. That is field 5 of
++the ENISA form, and it is the reason a 24-hour deadline is hard rather than
++merely short.
++
++Declare the duty — **explicitly, because it is a legal question about your role
++and not something a fleet can imply**:
++
++```json
++{
++  "watch_id": "plant-1",
++  "targets": [ ... ],
++  "feeds":   [ ... ],
++  "article_14": {
++    "as_manufacturer": true,
++    "received_by": "product.security@yourcompany.example"
++  }
++}
++```
++
++Only a manufacturer placing the product on the Union market carries the Art. 14
++duty. While `article_14` is absent, **no intake is drafted at all** — the safe
++direction to be wrong in.
++
++## What a run produces
++
++```
++  Article 14: 1 newly drafted
++    drafted    CTRL-2026-11  received 2026-09-14T18:45:36Z
++               0 confirmed affected (matched by hash)
++               2 machine(s) in NEITHER column — a person has to look:
++                 Grimaldi/AR-7#CELL-0412
++                 Grimaldi/AR-7#CELL-0501
++               field 5: CANNOT BE COMPLETED
++               still to be decided by a person:
++                 - Whether this is an actively exploited vulnerability, a severe
++                   incident, or neither...
++                 - Whether and when awareness was established, per C(2026) 5252
++                   Annex §213...
++```
++
++Confirmed and unconfirmed are printed separately and always. **`0 machines` on
++its own reads as "you are fine"**, and here it means ControlCo published no
++artefact hashes, so nothing is confirmed and field 5 cannot be completed — the
++opposite of fine. This is the same argument `SUPPLIER.md` makes to suppliers,
++arriving from the other end.
++
++## What it refuses to decide
++
++Awareness is a determination; the track is a decision. **This makes neither.**
++
++Art. 14(2)(a) runs twenty-four hours from *awareness*, not from receipt. A tool
++that quietly equated the two would either start a manufacturer's clock early —
++inventing a filing obligation — or start it late, which is worse. C(2026) 5252
++Annex §213 defines awareness as a reasonable degree of certainty after an
++initial assessment; §214 requires that assessment to be prompt. The word
++"prompt" is doing the work, and only a person can be prompt.
++
++So `srp_prefill()` still omits `notification_type` and `awareness_datetime`, and
++always will.
++
++## What it watches instead: the signal nobody assessed
++
++```
++  ** UNASSESSED 39h ** CTRL-2026-11
++       Art. 14(2)(a) runs 24 hours from AWARENESS, not from receipt — but
++       C(2026) 5252 Annex §214 requires the initial assessment to be prompt,
++       and this has been outstanding since 2026-09-14T18:45:36Z.
++```
++
++Nobody is told they are late. They are told what is outstanding, how long it has
++been, and the provision that makes it matter. That is the alarm worth paying
++for: not "you have a deadline", which everybody knows, but *"this one has been
++sitting for thirty-nine hours and nobody has made the determination."*
++
++Deliberately not called a breach: the window runs from awareness and awareness
++has not been established, so nothing is late yet.
++
++**Receipt is measured from the run that first saw the advisory**, carried
++forward between runs. Resetting it each run would turn the one number a market
++surveillance authority asks about first — the interval from receipt to awareness
++— into a number that is always small.
++
++**The prompt stops when a person records awareness.** From that moment the
++register holds the clock, and a second system nagging about a decision already
++taken is how people learn to close the tab.
+diff --git a/src/assurance/watch/__init__.py b/src/assurance/watch/__init__.py
+index d5ace44..3b63983 100644
+--- a/src/assurance/watch/__init__.py
++++ b/src/assurance/watch/__init__.py
+@@ -15,11 +15,19 @@ from assurance.watch.advisories import (
+     check_feeds,
+ )
+ from assurance.watch.config import (
++    Article14Duty,
+     FeedSubscription,
+     WatchConfig,
+     WatchError,
+     WatchTarget,
+ )
++from assurance.watch.filings import (
++    ARTICLE_14_WINDOW,
++    FILING_KIND,
++    FilingPrompt,
++    FilingsPass,
++    draft_filings,
++)
+ from assurance.watch.runner import (
+     OBSERVATION_KIND,
+     RUN_KIND,
+@@ -31,6 +39,12 @@ from assurance.watch.runner import (
+ 
+ __all__ = [
+     "ADVISORY_KIND",
++    "ARTICLE_14_WINDOW",
++    "Article14Duty",
++    "FILING_KIND",
++    "FilingPrompt",
++    "FilingsPass",
++    "draft_filings",
+     "AdvisoryFinding",
+     "AdvisoryPass",
+     "FeedOutcome",
+diff --git a/src/assurance/watch/cli.py b/src/assurance/watch/cli.py
+index 9a29f05..1af1295 100644
+--- a/src/assurance/watch/cli.py
++++ b/src/assurance/watch/cli.py
+@@ -99,6 +99,56 @@ def _cmd_run(args: argparse.Namespace) -> int:
+                       "changed a machine because")
+                 print("               of it, that change now rests on a "
+                       "retracted advisory.")
++            fil = run.filings
++            if fil.enabled and fil.prompts:
++                print(f"\n  Article 14: {fil.summary()}")
++                # Escalations first. An advisory received and never assessed is
++                # the finding; the draft is merely the help.
++                for prompt in fil.escalating:
++                    print(f"\n  ** UNASSESSED {prompt.hours_since_receipt:.0f}h ** "
++                          f"{prompt.advisory_id}")
++                    print("       Art. 14(2)(a) runs 24 hours from AWARENESS, not "
++                          "from receipt — but")
++                    print("       C(2026) 5252 Annex §214 requires the initial "
++                          "assessment to be prompt,")
++                    print(f"       and this has been outstanding since "
++                          f"{prompt.received_at}.")
++                    if prompt.draft:
++                        print(f"       draft: {len(prompt.draft.machines)} machine(s), "
++                              f"Member States "
++                              f"{', '.join(prompt.draft.member_states) or '—'}")
++                for prompt in fil.drafted:
++                    draft = prompt.draft
++                    print(f"    drafted    {prompt.advisory_id}  "
++                          f"received {prompt.received_at}")
++                    if draft is not None:
++                        # Confirmed and unconfirmed are printed separately and
++                        # always. "0 machines" on its own reads as "you are
++                        # fine"; it usually means the supplier published no
++                        # hashes, which is the opposite of fine.
++                        print(f"               {len(draft.machines)} confirmed "
++                              f"affected (matched by hash)")
++                        if draft.machines_needing_a_human:
++                            print(f"               {len(draft.machines_needing_a_human)}"
++                                  " machine(s) in NEITHER column — a person has "
++                                  "to look:")
++                            for key in draft.machines_needing_a_human:
++                                print(f"                 {key}")
++                        print(f"               field 5: "
++                              f"{', '.join(draft.member_states) or 'CANNOT BE COMPLETED'}")
++                        if draft.machines_without_country:
++                            print(f"               !! "
++                                  f"{len(draft.machines_without_country)} affected "
++                                  "machine(s) have no country recorded")
++                        print("               still to be decided by a person:")
++                        for decision in draft.decisions_required:
++                            print(f"                 - {decision}")
++                for prompt in fil.unassessed:
++                    if prompt.is_escalating:
++                        continue
++                    print(f"    unassessed {prompt.advisory_id}  "
++                          f"{prompt.hours_since_receipt:.1f}h since receipt")
++
+             for feed in adv.degraded:
+                 print(f"    !! {feed.supplier_id}: {feed.status} — {feed.detail}")
+                 for problem in feed.problems:
+diff --git a/src/assurance/watch/config.py b/src/assurance/watch/config.py
+index 391e64c..4075dc4 100644
+--- a/src/assurance/watch/config.py
++++ b/src/assurance/watch/config.py
+@@ -16,7 +16,7 @@ that ambiguity into an alarm.
+ from __future__ import annotations
+ 
+ import json
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -109,6 +109,44 @@ class FeedSubscription:
+         )
+ 
+ 
++@dataclass(frozen=True)
++class Article14Duty:
++    """Whether this operator carries the Art. 14 reporting duty, stated explicitly.
++
++    Only a manufacturer placing the product on the Union market carries it. An
++    integrator who installs somebody else's cells may or may not be one, and
++    that is a legal question about a role, not something a fleet can imply. So
++    this is declared or it is absent, and while it is absent no regulatory
++    intake is drafted at all — which is the safe direction to be wrong in.
++    """
++
++    as_manufacturer: bool = False
++    #: Who receives supplier signals. The interval from receipt to awareness is
++    #: the number a market surveillance authority asks about first, and an
++    #: unattributed receipt cannot evidence it.
++    received_by: str = ""
++
++    def __post_init__(self) -> None:
++        if self.as_manufacturer and not self.received_by.strip():
++            raise WatchError(
++                "article_14.received_by is required when as_manufacturer is "
++                "true. A signal nobody received is not a signal, and the "
++                "interval between arrival and awareness cannot be "
++                "reconstructed from an unattributed record."
++            )
++
++    def to_dict(self) -> dict[str, Any]:
++        return {"as_manufacturer": self.as_manufacturer,
++                "received_by": self.received_by}
++
++    @classmethod
++    def from_dict(cls, d: dict[str, Any] | None) -> Article14Duty:
++        if not d:
++            return cls()
++        return cls(as_manufacturer=bool(d.get("as_manufacturer", False)),
++                   received_by=str(d.get("received_by", "")))
++
++
+ @dataclass(frozen=True)
+ class WatchConfig:
+     """A standing instruction to keep looking."""
+@@ -119,6 +157,8 @@ class WatchConfig:
+     #: "did anything here change"; these answer "did the world change underneath
+     #: machines that did not", which is the half nobody notices in time.
+     feeds: tuple[FeedSubscription, ...] = ()
++    #: Declared, never inferred. See Article14Duty.
++    article_14: Article14Duty = field(default_factory=Article14Duty)
+     #: Who the watch runs as. Every record it seals is attributed here, and an
+     #: automated actor is marked as automation rather than dressed as a person.
+     operator: str = "assurance-watch"
+@@ -171,6 +211,7 @@ class WatchConfig:
+                         sorted(self.targets, key=lambda t: t.serial)],
+             "feeds": [f.to_dict() for f in
+                       sorted(self.feeds, key=lambda f: f.supplier_id)],
++            "article_14": self.article_14.to_dict(),
+         }
+ 
+     def content_hash(self) -> str:
+@@ -186,6 +227,7 @@ class WatchConfig:
+             targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
+             feeds=tuple(FeedSubscription.from_dict(f)
+                         for f in (d.get("feeds") or ())),
++            article_14=Article14Duty.from_dict(d.get("article_14")),
+             operator=str(d.get("operator", "assurance-watch")),
+             organisation=str(d.get("organisation", "")),
+             max_age_hours=float(d.get("max_age_hours", 168.0)),
+@@ -227,4 +269,5 @@ class WatchConfig:
+                 )
+                 for f in config.feeds
+             ),
++            article_14=config.article_14,
+         )
+diff --git a/src/assurance/watch/filings.py b/src/assurance/watch/filings.py
+new file mode 100644
+index 0000000..e860978
+--- /dev/null
++++ b/src/assurance/watch/filings.py
+@@ -0,0 +1,280 @@
++"""From a signed advisory to a drafted Article 14 intake, without deciding anything.
++
++The watch now finds a stop-use advisory against a still machine at 09:00. Then
++what? Today: nothing. Somebody reads the output, opens a spreadsheet, and starts
++working out which Member States the affected serial numbers went to — which is
++field 5 of the ENISA form, and the reason a 24-hour deadline is hard rather than
++merely short.
++
++This closes that gap and stops exactly where honesty requires it.
++
++**What it does.** Assembles the intake from evidence that already exists: the
++signal, the affected product versions, and the Member States, built from the
++serial numbers in the fleet. Records the moment the signal was received, because
++the interval between receipt and awareness is the number a market surveillance
++authority asks about first, and it cannot be reconstructed afterwards.
++
++**What it refuses.** Awareness is a determination and the track is a decision,
++and this makes neither. Art. 14(2)(a) runs twenty-four hours from awareness, not
++from receipt, and a tool that quietly equated the two would either start a
++manufacturer's clock early — a filing obligation invented by software — or start
++it late, which is worse. C(2026) 5252 Annex §213 defines awareness as a
++reasonable degree of certainty after an initial assessment, and §214 requires
++that assessment to be prompt. The word "prompt" is doing the work, and only a
++person can be prompt.
++
++**What it therefore watches instead.** A signal received and never assessed. If
++a previous run recorded receipt of a safety-relevant advisory and no awareness
++record has appeared since, every subsequent run says so and says how long it has
++been. Nobody is told they are late — they are told what is outstanding, with the
++provision that makes it matter. That is the alarm that is worth paying for: not
++"you have a deadline", which everybody knows, but "this one has been sitting for
++thirty-nine hours and nobody has made the determination".
++
++**Who this is for.** Only a manufacturer carries the Art. 14 duty. An integrator
++who installs somebody else's cells may or may not be one, and this will not
++guess: the configuration has to say so explicitly, and until it does, no intake
++is drafted at all.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime, timedelta
++from typing import Any
++
++from ..bridge.art14 import BridgeError, CaseDraft, draft_from_advisory
++from ..core.identity import format_utc, parse_utc
++from ..fleet.advisory import AdvisorySeverity, ComponentAdvisory
++from ..fleet.impact import assess_impact
++from ..fleet.registry import Fleet
++from .advisories import AdvisoryFinding
++
++__all__ = [
++    "ARTICLE_14_WINDOW",
++    "FILING_KIND",
++    "FilingPrompt",
++    "FilingsPass",
++    "draft_filings",
++]
++
++FILING_KIND = "watch.article14.intake"
++
++#: Reg. (EU) 2024/2847 Art. 14(2)(a). Measured from awareness, never from
++#: receipt. Held here so that nothing in this module has to spell "24" twice.
++ARTICLE_14_WINDOW = timedelta(hours=24)
++
++#: Severities that imply a product-security matter worth an intake. An
++#: informational advisory is not one, and drafting a regulatory intake for every
++#: newsletter is how a manufacturer learns to ignore the drafts.
++_WORTH_AN_INTAKE = frozenset({
++    AdvisorySeverity.STOP_USE, AdvisorySeverity.SAFETY_RELEVANT,
++})
++
++
++@dataclass(frozen=True)
++class FilingPrompt:
++    """One advisory, the intake it implies, and what is outstanding on it."""
++
++    advisory_id: str
++    supplier_id: str
++    severity: str
++    received_at: str
++    draft: CaseDraft | None
++    #: Hours since the signal was received. Not since awareness: awareness has
++    #: not been established, and that is the point of this record.
++    hours_since_receipt: float
++    #: ``drafted`` on the run that first saw it, ``unassessed`` on every run
++    #: afterwards until somebody records awareness, ``blocked`` when the intake
++    #: could not be assembled.
++    state: str
++    detail: str = ""
++
++    @property
++    def is_escalating(self) -> bool:
++        """Outstanding for longer than the window the Regulation allows.
++
++        Deliberately not called ``breach``. The window runs from awareness and
++        awareness has not been established, so nothing here is late yet. What
++        this says is that the assessment §214 calls prompt has now taken longer
++        than the whole filing window, which is a fact worth putting in front of
++        somebody.
++        """
++        return (self.state == "unassessed"
++                and self.hours_since_receipt
++                > ARTICLE_14_WINDOW.total_seconds() / 3600)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "advisory_id": self.advisory_id,
++            "supplier_id": self.supplier_id,
++            "severity": self.severity,
++            "received_at": self.received_at,
++            "hours_since_receipt": round(self.hours_since_receipt, 2),
++            "state": self.state,
++            "escalating": self.is_escalating,
++            "detail": self.detail,
++            "draft": self.draft.to_dict() if self.draft else None,
++        }
++
++    def summary(self) -> str:
++        head = (f"{self.advisory_id} ({self.supplier_id}) — received "
++                f"{self.received_at}, {self.hours_since_receipt:.1f}h ago")
++        if self.state == "blocked":
++            return f"{head}\n  intake could not be drafted: {self.detail}"
++        if self.state == "unassessed":
++            return (
++                f"{head}\n  NO AWARENESS RECORD. Art. 14(2)(a) runs 24 hours "
++                "from awareness, not from receipt — but C(2026) 5252 Annex §214 "
++                "requires the initial assessment to be prompt, and this has been "
++                f"outstanding for {self.hours_since_receipt:.1f} hours."
++            )
++        return f"{head}\n  intake drafted; a person must establish awareness."
++
++
++@dataclass(frozen=True)
++class FilingsPass:
++    """What one run established about Article 14 intakes."""
++
++    enabled: bool = False
++    prompts: tuple[FilingPrompt, ...] = ()
++    checks_skipped: tuple[str, ...] = ()
++
++    @property
++    def drafted(self) -> tuple[FilingPrompt, ...]:
++        return tuple(p for p in self.prompts if p.state == "drafted")
++
++    @property
++    def unassessed(self) -> tuple[FilingPrompt, ...]:
++        return tuple(p for p in self.prompts if p.state == "unassessed")
++
++    @property
++    def escalating(self) -> tuple[FilingPrompt, ...]:
++        return tuple(p for p in self.prompts if p.is_escalating)
++
++    @property
++    def is_finding(self) -> bool:
++        return bool(self.drafted or self.unassessed)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "enabled": self.enabled,
++            "prompts": [p.to_dict() for p in self.prompts],
++            "checks_skipped": list(self.checks_skipped),
++        }
++
++    def summary(self) -> str:
++        if not self.enabled:
++            return "no Article 14 duty declared; no intake drafted"
++        parts = []
++        if self.escalating:
++            parts.append(f"{len(self.escalating)} unassessed beyond 24h")
++        elif self.unassessed:
++            parts.append(f"{len(self.unassessed)} awaiting assessment")
++        if self.drafted:
++            parts.append(f"{len(self.drafted)} newly drafted")
++        return "; ".join(parts) if parts else "nothing outstanding"
++
++
++def _hours_between(earlier: str, now: datetime) -> float:
++    try:
++        return max(0.0, (now - parse_utc(earlier)).total_seconds() / 3600)
++    except ValueError:
++        return 0.0
++
++
++def draft_filings(
++    findings: tuple[AdvisoryFinding, ...],
++    advisories: dict[str, ComponentAdvisory],
++    fleet: Fleet,
++    *,
++    as_manufacturer: bool,
++    received_by: str,
++    now: datetime,
++    previously_received: dict[str, str] | None = None,
++    assessed: frozenset[str] = frozenset(),
++) -> FilingsPass:
++    """Draft an intake for every advisory that implies one, and decide nothing.
++
++    ``previously_received`` carries forward the moment each advisory was first
++    seen, so the interval from receipt is measured from the first run that saw
++    it rather than resetting every time the watch runs — which would turn the
++    one number a market surveillance authority asks about into a number that is
++    always small.
++
++    ``assessed`` names advisories for which an awareness record already exists.
++    Those stop being reported here, because the determination has been made and
++    the register is where the clock lives from that point on.
++    """
++    if not as_manufacturer:
++        return FilingsPass(
++            enabled=False,
++            checks_skipped=(
++                "No Article 14 duty is declared in this watch, so no regulatory "
++                "intake was drafted. Only a manufacturer placing the product on "
++                "the Union market carries the Art. 14 reporting duty; whether "
++                "that is you is a legal question about your role, not something "
++                "this can infer from a fleet. Declare it explicitly if it "
++                "applies.",
++            ),
++        )
++
++    seen = dict(previously_received or {})
++    prompts: list[FilingPrompt] = []
++
++    for finding in findings:
++        if finding.state == "withdrawn":
++            continue
++        advisory = advisories.get(finding.advisory_id)
++        if advisory is None or advisory.severity not in _WORTH_AN_INTAKE:
++            continue
++        if not finding.machines:
++            continue
++        if finding.advisory_id in assessed:
++            continue
++
++        received_at = seen.get(finding.advisory_id) or format_utc(now)
++        hours = _hours_between(received_at, now)
++        first_time = finding.advisory_id not in seen
++
++        draft: CaseDraft | None = None
++        state = "drafted" if first_time else "unassessed"
++        detail = ""
++        try:
++            draft = draft_from_advisory(
++                advisory, assess_impact(advisory, fleet), fleet,
++                received_by=received_by,
++                case_id=f"CASE-{finding.advisory_id}",
++            )
++        except BridgeError as exc:
++            state = "blocked"
++            detail = str(exc)
++
++        prompts.append(FilingPrompt(
++            advisory_id=finding.advisory_id,
++            supplier_id=finding.supplier_id,
++            severity=finding.severity,
++            received_at=received_at,
++            draft=draft,
++            hours_since_receipt=hours,
++            state=state,
++            detail=detail,
++        ))
++
++    caveats = [
++        "Awareness was not established and no track was chosen. Art. 14(2)(a) "
++        "runs 24 hours from awareness, not from receipt; C(2026) 5252 Annex "
++        "§213 defines awareness as a reasonable degree of certainty after an "
++        "initial assessment, and §214 requires that assessment to be prompt. "
++        "Only a person can make it.",
++        "The Member States in a draft are assembled from the countries recorded "
++        "against affected serial numbers in this ledger. A machine with no "
++        "country recorded contributes nothing to field 5, and the draft says "
++        "when that has happened.",
++        "An intake is drafted from a supplier's advisory about a component. "
++        "Whether the finished product you placed on the market is itself "
++        "reportable under Art. 14 is a judgement about your product, not about "
++        "the component.",
++    ]
++    return FilingsPass(
++        enabled=True, prompts=tuple(prompts), checks_skipped=tuple(caveats))
+diff --git a/src/assurance/watch/runner.py b/src/assurance/watch/runner.py
+index da63772..0231598 100644
+--- a/src/assurance/watch/runner.py
++++ b/src/assurance/watch/runner.py
+@@ -63,6 +63,7 @@ from assurance.machinery.staleness import (
+ )
+ from assurance.watch.advisories import AdvisoryPass, check_feeds
+ from assurance.watch.config import WatchConfig, WatchTarget
++from assurance.watch.filings import FilingsPass, draft_filings
+ 
+ __all__ = [
+     "OBSERVATION_KIND",
+@@ -137,6 +138,8 @@ class WatchRun:
+     stale_observations: tuple[str, ...]
+     #: What the subscribed supplier feeds said. Empty when none are subscribed.
+     advisories: AdvisoryPass = field(default_factory=AdvisoryPass)
++    #: Article 14 intakes drafted, and signals still awaiting an assessment.
++    filings: FilingsPass = field(default_factory=FilingsPass)
+     previous_run_hash: str = ""
+     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
+     sealed: tuple[str, ...] = field(default_factory=tuple)
+@@ -165,7 +168,7 @@ class WatchRun:
+         if self.uncollectable or self.stale_observations \
+                 or self.advisories.degraded:
+             return "degraded"
+-        if self.findings or self.advisories.is_finding:
++        if self.findings or self.advisories.is_finding or self.filings.is_finding:
+             return "findings"
+         return "quiet"
+ 
+@@ -182,6 +185,7 @@ class WatchRun:
+             "outcomes": [o.to_dict() for o in self.outcomes],
+             "stale_observations": list(self.stale_observations),
+             "advisories": self.advisories.to_dict(),
++            "filings": self.filings.to_dict(),
+             "sealed": list(self.sealed),
+             "checks_skipped": list(self.checks_skipped),
+         }
+@@ -269,6 +273,76 @@ def last_run(ledger: EvidenceLedger, watch_id: str) -> dict[str, Any] | None:
+     return None
+ 
+ 
++def _advisories_by_id(
++    advisories: AdvisoryPass, config: WatchConfig,
++) -> list[tuple[Any, Any]]:
++    """Pair each finding with the advisory object behind it.
++
++    Re-read from the feeds rather than carried through the advisory pass,
++    because the pass deliberately hands on findings — what an advisory means for
++    this fleet — and an intake needs the advisory itself.
++    """
++    from assurance.attest.keys import VerifyingKey
++    from assurance.core.errors import AssuranceError
++    from assurance.supplier.publish import AdvisoryFeed, verify_feed
++
++    out: list[tuple[Any, Any]] = []
++    wanted = {f.advisory_id for f in advisories.findings}
++    for sub in config.feeds:
++        try:
++            records = AdvisoryFeed(sub.feed).read()
++            verdict = verify_feed(records, VerifyingKey.from_file(sub.public_key),
++                                  expect_supplier=sub.supplier_id)
++        except (AssuranceError, OSError):
++            # The advisory pass has already read this feed and reported exactly
++            # why it could not be used, and that report is what degrades the
++            # run. Reporting it a second time here would double every message.
++            continue
++        if not verdict.ok:
++            continue
++        for record in verdict.live:
++            if record.advisory_id in wanted:
++                finding = next(f for f in advisories.findings
++                               if f.advisory_id == record.advisory_id)
++                out.append((finding, record.component()))
++    return out
++
++
++def _previously_received(run: dict[str, Any] | None) -> dict[str, str]:
++    """Advisory id -> when this operator first received it.
++
++    Carried forward so that the interval from receipt is measured from the run
++    that first saw it. Resetting it every run would turn the one number a market
++    surveillance authority asks about into a number that is always small.
++    """
++    if not run:
++        return {}
++    body = run.get("filings") or {}
++    return {
++        str(p.get("advisory_id", "")): str(p.get("received_at", ""))
++        for p in body.get("prompts", ())
++        if p.get("advisory_id") and p.get("received_at")
++    }
++
++
++def _already_assessed(ledger: EvidenceLedger) -> frozenset[str]:
++    """Advisories for which an awareness record already exists.
++
++    Once a person has made the determination, the register is where the clock
++    lives, and repeating the prompt here would be a second system nagging about
++    a decision that has been taken.
++    """
++    out: set[str] = set()
++    for entry in ledger.entries(kind="art14.awareness"):
++        evidence = entry.evidence()
++        if not evidence.verify():
++            continue
++        case_id = str(entry.subject or "")
++        if case_id.startswith("CASE-"):
++            out.add(case_id[len("CASE-"):])
++    return frozenset(out)
++
++
+ def _previously_reported(run: dict[str, Any] | None) -> dict[str, str]:
+     """Advisory id -> the state it was last reported in.
+ 
+@@ -444,6 +518,22 @@ def run_watch(
+         )
+         caveats.extend(advisories.checks_skipped)
+ 
++    # Intakes are drafted from the advisories this run just established, and
++    # only when the operator has declared the duty. See watch.filings.
++    filings = FilingsPass()
++    if config.feeds:
++        filings = draft_filings(
++            advisories.findings,
++            {f.advisory_id: a for f, a in _advisories_by_id(advisories, config)},
++            Fleet.from_ledger(ledger),
++            as_manufacturer=config.article_14.as_manufacturer,
++            received_by=config.article_14.received_by,
++            now=started,
++            previously_received=_previously_received(previous),
++            assessed=_already_assessed(ledger),
++        )
++        caveats.extend(filings.checks_skipped)
++
+     caveats.extend([
+         "a watch reports what its plans look for in the folders it was pointed "
+         "at. A machine not listed in the configuration is not watched, and its "
+@@ -466,6 +556,7 @@ def run_watch(
+         outcomes=tuple(outcomes),
+         stale_observations=tuple(sorted(stale)),
+         advisories=advisories,
++        filings=filings,
+         previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
+         checks_skipped=tuple(dict.fromkeys(caveats)),
+         sealed=tuple(sealed),
+diff --git a/tests/test_assurance_watch_filings.py b/tests/test_assurance_watch_filings.py
+new file mode 100644
+index 0000000..0044c59
+--- /dev/null
++++ b/tests/test_assurance_watch_filings.py
+@@ -0,0 +1,282 @@
++"""From a signed advisory to a drafted Article 14 intake, deciding nothing.
++
++The interesting tests are the refusals. A tool that quietly equated receipt with
++awareness would either invent a filing obligation or start a real clock late,
++and the second is worse. So: no duty declared means no intake at all; awareness
++is never established here; and the thing that actually gets reported is a signal
++that has been sitting unassessed, with the provision that makes it matter.
++"""
++
++from __future__ import annotations
++
++import json
++from datetime import timedelta
++
++import pytest
++
++from assurance.attest.keys import SigningKey
++from assurance.core.evidence import Actor
++from assurance.core.identity import parse_utc, utc_now
++from assurance.evidence.ledger import EvidenceLedger
++from assurance.fleet.advisory import (
++    AdvisorySeverity,
++    AffectedArtefact,
++    ComponentAdvisory,
++)
++from assurance.security.art14.engine import Art14Register
++from assurance.security.art14.model import Awareness, Track
++from assurance.supplier import AdvisoryFeed, SupplierIdentity, publish
++from assurance.watch.config import Article14Duty, WatchConfig, WatchError
++from assurance.watch.filings import ARTICLE_14_WINDOW
++from assurance.watch.runner import run_watch
++
++from .test_assurance_collect import plan_dict, write_export
++
++IDENTITY = SupplierIdentity(supplier_id="controlco", legal_name="ControlCo GmbH",
++                            key_contact="the 2025 supply contract")
++
++
++def _advisory(advisory_id="CTRL-2026-11", *, severity=AdvisorySeverity.STOP_USE,
++              hashes=()) -> ComponentAdvisory:
++    return ComponentAdvisory(
++        advisory_id=advisory_id, issued_by="controlco",
++        issued_at=parse_utc("2026-09-10T08:00:00Z"),
++        title="Authentication bypass in safety controller firmware",
++        summary="A crafted frame permits a safety parameter write.",
++        severity=severity,
++        reference="https://controlco.example/psirt/x",
++        remedy="Update to 3.9.1.",
++        affected=(AffectedArtefact(supplier="ControlCo",
++                                   name="Safety controller firmware",
++                                   versions=("3.8.2", "3.9.0"),
++                                   content_hashes=tuple(hashes)),),
++    )
++
++
++@pytest.fixture()
++def site(tmp_path):
++    plan = plan_dict()
++    plan["manufacturer"], plan["model"] = "Grimaldi", "AR-7"
++    for item in plan["items"]:
++        item["supplier"] = {
++            "ITM-ZONES": "ScanCo", "ITM-PARAMS": "RoboCo",
++            "ITM-PLC": "ControlCo", "ITM-FW": "ControlCo"}[item["item_id"]]
++    (tmp_path / "plans").mkdir()
++    (tmp_path / "plans" / "cell.json").write_text(json.dumps(plan))
++    for n, serial in enumerate(("CELL-0412", "CELL-0501")):
++        write_export(tmp_path / "exports" / serial,
++                     stamp="2026-09-14T06:02:11Z", operator="ci", seq=f"004{n}")
++
++    key = SigningKey.generate()
++    (tmp_path / "controlco.pub").write_text(key.verifying.pem())
++    feed = AdvisoryFeed(tmp_path / "feed.jsonl")
++
++    def write_config(article_14: dict | None = None) -> None:
++        body = {
++            "watch_id": "plant-1",
++            "targets": [
++                {"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
++                 "site": "Plant 1", "country": "IT"}
++                for s in ("CELL-0412", "CELL-0501")],
++            "feeds": [{"supplier_id": "controlco", "feed": "feed.jsonl",
++                       "public_key": "controlco.pub"}],
++        }
++        if article_14 is not None:
++            body["article_14"] = article_14
++        (tmp_path / "watch.json").write_text(json.dumps(body))
++
++    write_config({"as_manufacturer": True,
++                  "received_by": "v.grimaldi@example.com"})
++    return {"dir": tmp_path, "key": key, "feed": feed,
++            "ledger": EvidenceLedger(tmp_path / "evidence.db"),
++            "write_config": write_config}
++
++
++def _run(site, **kw):
++    return run_watch(WatchConfig.from_json(site["dir"] / "watch.json"),
++                     site["ledger"], **kw)
++
++
++# =====================================================================
++class TestTheDutyIsDeclaredNeverInferred:
++    def test_without_a_declaration_nothing_is_drafted(self, site):
++        site["write_config"](None)
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++
++        assert run.advisories.new          # the advisory was still found
++        assert run.filings.enabled is False
++        assert run.filings.prompts == ()
++        assert any("legal question about your role" in c
++                   for c in run.filings.checks_skipped)
++
++    def test_a_declared_duty_with_nobody_receiving_is_refused(self):
++        with pytest.raises(WatchError, match="received_by is required"):
++            Article14Duty(as_manufacturer=True, received_by="")
++
++    def test_declaring_no_duty_needs_no_recipient(self):
++        assert Article14Duty().as_manufacturer is False
++
++
++# =====================================================================
++class TestDrafting:
++    def test_an_advisory_that_matches_produces_an_intake(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++
++        assert run.filings.enabled
++        assert len(run.filings.drafted) == 1
++        prompt = run.filings.drafted[0]
++        assert prompt.advisory_id == "CTRL-2026-11"
++        assert prompt.draft is not None
++        assert prompt.draft.case_id == "CASE-CTRL-2026-11"
++
++    def test_awareness_is_never_established_here(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++        prefill = run.filings.drafted[0].draft.srp_prefill()
++
++        # The two fields a tool must never guess.
++        assert "awareness_datetime" not in prefill
++        assert "notification_type" not in prefill
++        assert any("Only a person can make it" in c
++                   for c in run.filings.checks_skipped)
++
++    def test_a_label_only_match_confirms_nothing_and_says_so(self, site):
++        """ControlCo published no hashes, so nothing is confirmed affected and
++        field 5 cannot be completed. '0 machines' must never read as 'fine'."""
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        draft = _run(site).filings.drafted[0].draft
++
++        assert draft.machines == ()
++        assert len(draft.machines_needing_a_human) == 2
++        assert not draft.can_complete_field_5
++
++    def test_an_informational_advisory_does_not_draft_an_intake(self, site):
++        _run(site)
++        publish(_advisory(severity=AdvisorySeverity.INFORMATIONAL),
++                IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++        assert run.advisories.findings          # still reported as an advisory
++        assert run.filings.prompts == ()        # but no regulatory intake
++
++    def test_an_advisory_matching_nothing_drafts_nothing(self, site):
++        _run(site)
++        publish(ComponentAdvisory(
++            advisory_id="OTHER-1", issued_by="controlco",
++            issued_at=parse_utc("2026-09-10T08:00:00Z"),
++            title="Unrelated", summary="x",
++            severity=AdvisorySeverity.STOP_USE,
++            reference="https://controlco.example/psirt/y",
++            affected=(AffectedArtefact(supplier="Nobody", name="Nothing",
++                                       versions=("1.0",)),)),
++            IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++        assert run.filings.prompts == ()
++
++
++# =====================================================================
++class TestTheUnassessedSignal:
++    def test_receipt_is_measured_from_the_run_that_first_saw_it(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        first = _run(site)
++        received = first.filings.drafted[0].received_at
++
++        later = _run(site, now=utc_now() + timedelta(hours=5))
++        assert later.filings.unassessed[0].received_at == received
++        assert later.filings.unassessed[0].hours_since_receipt == pytest.approx(
++            5, abs=0.1)
++
++    def test_beyond_the_window_it_escalates_without_calling_it_a_breach(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        _run(site)
++
++        hours = ARTICLE_14_WINDOW.total_seconds() / 3600 + 15
++        run = _run(site, now=utc_now() + timedelta(hours=hours))
++        assert len(run.filings.escalating) == 1
++        prompt = run.filings.escalating[0]
++        assert "runs 24 hours from awareness, not from receipt" in prompt.summary()
++        assert "§214" in prompt.summary()
++        assert run.verdict == "findings"
++
++    def test_inside_the_window_it_is_outstanding_but_not_escalating(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        _run(site)
++        run = _run(site, now=utc_now() + timedelta(hours=3))
++        assert run.filings.unassessed
++        assert run.filings.escalating == ()
++
++    def test_once_a_person_records_awareness_the_prompt_stops(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        run = _run(site)
++        draft = run.filings.drafted[0].draft
++
++        register = Art14Register(site["ledger"])
++        actor = Actor(identifier="v.grimaldi@example.com", role="product security")
++        register.record_signal(draft.case_id, draft.signal, actor)
++        moment = utc_now()
++        register.record_awareness(
++            draft.case_id,
++            Awareness(established_at=moment,
++                      assessment_started_at=moment - timedelta(hours=1),
++                      assessment_completed_at=moment,
++                      determined_by="v.grimaldi@example.com",
++                      reasoning="Firmware confirmed as 3.9.0 on both cells after "
++                                "reading the controllers directly."),
++            Track.VULNERABILITY, actor)
++
++        after = _run(site, now=utc_now() + timedelta(hours=48))
++        assert after.filings.prompts == ()
++        assert after.filings.escalating == ()
++
++    def test_a_withdrawn_advisory_stops_prompting(self, site):
++        from assurance.supplier import withdraw
++
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        _run(site)
++        withdraw("CTRL-2026-11", "the range was wrong", IDENTITY, site["key"],
++                 site["feed"])
++        run = _run(site, now=utc_now() + timedelta(hours=48))
++        assert run.filings.prompts == ()
++
++
++# =====================================================================
++class TestCli:
++    def _cli(self, *argv) -> int:
++        from assurance.watch.cli import main
++
++        return main(list(argv))
++
++    def test_the_draft_never_prints_a_bare_zero(self, site, capsys):
++        """'0 machines' alone reads as 'you are fine'. It usually means the
++        supplier published no hashes, which is the opposite of fine."""
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        capsys.readouterr()
++        self._cli("run", str(site["dir"] / "watch.json"),
++                  "--ledger", str(site["dir"] / "evidence.db"))
++        out = capsys.readouterr().out
++        assert "0 confirmed affected (matched by hash)" in out
++        assert "2 machine(s) in NEITHER column" in out
++        assert "field 5: CANNOT BE COMPLETED" in out
++        assert "still to be decided by a person" in out
++
++    def test_an_escalation_cites_the_provision(self, site):
++        _run(site)
++        publish(_advisory(), IDENTITY, site["key"], site["feed"])
++        _run(site)
++        # Driven through the library: the CLI has no clock flag, deliberately.
++        run = _run(site, now=utc_now() + timedelta(hours=39))
++        assert run.filings.escalating
++        summary = run.filings.escalating[0].summary()
++        assert "§214" in summary
++        assert "not from receipt" in summary
+-- 
+2.43.0
+
