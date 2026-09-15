@@ -1,0 +1,90 @@
+From 2f505ccd1d7f8f7d6a15a5896d1b4f92949b12b3 Mon Sep 17 00:00:00 2001
+From: i <v@g>
+Date: Tue, 15 Sep 2026 13:41:23 +0000
+Subject: [PATCH] HANDOFF.md: name the three traps at the repo root
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A handoff that lists what exists but not what misleads sends the next agent into
+the same holes. Three files at the root look current and are not.
+
+`nb` is a repository-maintenance script from earlier in this project, now
+superseded by the explicit `git am` flow. It cost four rounds of debugging —
+`git am` returns inconsistently on an already-applied patch, and `git checkout
+main` fails while a tracked file is modified, which its fallback then made worse
+by trying to create a branch that already existed. The next agent will find it,
+try it, and lose the same afternoon. Now it says so.
+
+The two `0001-*.patch` files are superseded by `0002-baseline-patches-001-and-002`,
+which is the applied result of both plus the patch-002 script; applying either
+0001 fails or duplicates. The chain starts at 0002.
+
+`patch-002-remove-fabricated-compliance.py` is historical but worth reading once:
+it is the commit that deleted fabricated SBOM hashes and a hardcoded
+"integrity": "hash_chain_verified" literal, and it is the origin of the rule the
+whole codebase runs on.
+
+All three are documented rather than deleted, with the one-line command to
+remove them, because they are the operator's files and quietly deleting somebody
+else's work is the same species of unhelpfulness as `git clean` eating a patch
+that was uploaded ten seconds earlier.
+
+Also corrects the header: 16 assurance commits became 17 when HANDOFF.md itself
+was committed. In a document whose whole claim is that every number in it is
+checkable, a stale self-reference is the one error that costs the most.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EbFk79aLoaf1kbeRKtuWJa
+---
+ HANDOFF.md | 27 ++++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/HANDOFF.md b/HANDOFF.md
+index f345d37..dac21dc 100644
+--- a/HANDOFF.md
++++ b/HANDOFF.md
+@@ -5,7 +5,8 @@ repository; where something is unproven or unsold it says so, because a handoff
+ that flatters the work is worse than no handoff.
+ 
+ **Repository** `github.com/iceccarelli/neuralbridge` — one branch `main`, zero
+-tags, 16 assurance commits, 734 tests passing on Python 3.11 / 3.12 / 3.13 / 3.14.
++tags, 17 assurance commits, 734 tests passing on Python 3.11 / 3.12 / 3.13 / 3.14.
++Latest: `8e20916` — HANDOFF.md.
+ 
+ ---
+ 
+@@ -75,6 +76,30 @@ TESTS / SUCCESS CONDITION.
+ Every patch reversible, testable, small, reviewable. **Never a giant migration
+ patch simply because two things are related.**
+ 
++### Traps at the repo root — read before touching any of them
++
++Three files at the root will waste your time if you assume they are current.
++They are left in place rather than deleted because they are the operator's, not
++mine; none of them is needed.
++
++| File | |
++|---|---|
++| `nb` | A repository-maintenance script written earlier in this project and **now superseded**. It cost four rounds of debugging because `git am` returns inconsistently on an already-applied patch and `git checkout main` fails while a tracked file is modified. **Do not use it.** The explicit `git pull --ff-only && git am --3way <patch>` flow above is the supported path. |
++| `0001-assurance-core-and-cra-article-14.patch`, `0001-assurance-core-art14-register-and-api.patch` | **Superseded** by `0002-baseline-patches-001-and-002.patch`, which is the applied result of both plus the patch-002 script. Applying either 0001 will fail or duplicate. The chain starts at 0002. |
++| `patch-002-remove-fabricated-compliance.py` | Already applied inside the 0002 baseline. Historical only — but worth reading once: it is the commit that deleted fabricated SBOM hashes and a hardcoded `"integrity": "hash_chain_verified"` literal, and it is why the "if it is not gated in code it is not on the pricing page" rule exists. |
++
++To clear them once you have read this:
++
++```bash
++git rm nb 0001-assurance-core-and-cra-article-14.patch \
++       0001-assurance-core-art14-register-and-api.patch
++git commit -m "Remove the superseded maintenance script and the two 0001 patches"
++```
++
++The `00NN-*.patch` files from 0002 onward are the reproducible history and should
++stay: `HANDOFF.md` §2 and `0002-baseline` are what let a fresh clone be rebuilt
++from scratch.
++
+ ### Definition of done
+ 
+ ```bash
+-- 
+2.43.0
+
