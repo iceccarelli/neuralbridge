@@ -1,107 +1,56 @@
+# Getting started
 
-# Getting Started
+Every command below is checked against this repository's own CI (the
+"Offline kit, from a bare checkout" job runs this exact sequence on a fresh
+Python 3.11/3.12/3.13 install on every push) — not hand-typed and hoped for.
 
-This guide will get you up and running with NeuralBridge in minutes. We offer two primary methods for installation: Docker Compose (recommended for a full-stack experience) and pip for a lightweight, server-only setup.
-
-## Prerequisites
-
-- Docker and Docker Compose (for Docker installation)
-- Python 3.11+ (for pip installation)
-
-## 1. Docker Compose (Recommended)
-
-This is the easiest way to get started. It spins up the NeuralBridge API server, the React dashboard, and all necessary services like Postgres and Redis.
+## Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/iceccarelli/neuralbridge.git
 cd neuralbridge
-
-# Start all services in the background
-docker compose up -d
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[assurance-attest]'
 ```
 
-That's it! You can now access:
-
-- **The React Dashboard** at `http://localhost:3000`
-- **The FastAPI Backend & API Docs** at `http://localhost:8000/docs`
-
-## 2. pip Installation
-
-If you only need the core NeuralBridge server and do not require the dashboard or other services, you can install it directly from PyPI.
+## The free path: the offline enrolment kit
 
 ```bash
-pip install neuralbridge
+python -m assurance kit init plant/
+python -m assurance kit check plant/kit.json   # reads only — the report your IT department signs off on
+python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
-Once installed, you can start the server:
+You get `plant/out/report.html`, `plant/out/evidence.db`, and
+`plant/out/attestation-request.json`. The run arms a guard over the
+process's own socket layer, refuses every outbound connection — including
+name resolution — and seals a record of any attempt into your own ledger.
+
+## Run the API
 
 ```bash
-neuralbridge serve
+pip install -e '.[assurance-api]'
+uvicorn assurance.api.service:app --port 8000
+# http://127.0.0.1:8000/docs
 ```
 
-This will start the FastAPI server on `http://127.0.0.1:8000`.
+`GET /v1/plans` returns the pricing table generated from the entitlements
+the software enforces — the same table on [Pricing](pricing.md) and on
+[neuralbridge.io](https://neuralbridge.io/#pricing).
 
-## Example: Connecting an Agent to Salesforce
-
-Let's walk through a simple example of using NeuralBridge to connect an AI agent to Salesforce.
-
-### Step 1: Create a YAML Configuration
-
-Create a file named `salesforce.yaml`. This file tells NeuralBridge how to connect to Salesforce and what permissions to grant.
-
-```yaml
-adapters:
-  salesforce-prod:
-    type: salesforce
-    description: "Production Salesforce instance for the sales team."
-    auth:
-      type: oauth2
-      client_id: ${SALESFORCE_CLIENT_ID}      # Loaded from environment variables
-      client_secret: ${SALESFORCE_CLIENT_SECRET} # Loaded from environment variables
-      instance_url: https://your-org.my.salesforce.com
-    permissions:
-      - role: sales_agent
-        allowed_operations:
-          - query
-        allowed_queries:
-          - "SELECT Id, Name, Amount FROM Opportunity WHERE IsWon = true"
-          - "SELECT Id, Name FROM Account WHERE Industry = 'Technology'"
-    rate_limit: 1000/hour
-    cache:
-      enabled: true
-      ttl: 600 # 10 minutes
-```
-
-### Step 2: Set Environment Variables
-
-NeuralBridge securely loads credentials from environment variables. Set your Salesforce credentials:
+## See a full worked example
 
 ```bash
-export SALESFORCE_CLIENT_ID="your_client_id"
-export SALESFORCE_CLIENT_SECRET="your_client_secret"
+python -m assurance report demo --out demo/
 ```
 
-### Step 3: Run the Connection
+Builds a worked fleet — real collection, real normalisation, real findings —
+and writes `demo/report.html`, a self-contained page with no scripts and no
+network calls.
 
-Use the `neuralbridge` CLI to load and manage your adapter configurations.
+## Next
 
-```bash
-neuralbridge connect --config salesforce.yaml
-```
-
-### Step 4: Use the Tool in Your Agent
-
-Now, any AI agent that can make a REST API call can use the `salesforce-prod_query` tool through the NeuralBridge MCP gateway. The agent simply needs to make a POST request:
-
-```json
-{
-  "adapter": "salesforce-prod",
-  "operation": "query",
-  "params": {
-    "soql": "SELECT Id, Name FROM Account WHERE Industry = 'Technology'"
-  }
-}
-```
-
-NeuralBridge handles the authentication, authorization, execution, and audit logging, providing a secure and compliant bridge between your agent and your enterprise data.
+- [Assurance engines](assurance/index.md) — what each command establishes,
+  and the finding nobody else produces.
+- [Deploying the register](assurance/deploy.md) — Fly.io, Stripe, and what
+  to check after deploying.

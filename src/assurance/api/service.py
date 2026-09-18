@@ -27,6 +27,7 @@ from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
 from .routes import free_router, public_router, router
+from .supplier_routes import supplier_router
 
 __all__ = ["create_app", "app"]
 
@@ -81,6 +82,10 @@ def create_app(**kwargs: Any) -> FastAPI:
                                              "component advisories fanned out to "
                                              "serial numbers, and Declarations of "
                                              "Conformity bound to a configuration."},
+            {"name": "supplier", "description": "Publish a signed component advisory "
+                                                "to a hosted feed (Supplier tier, "
+                                                "sales-assigned). Reading any feed "
+                                                "needs no account."},
             {"name": "billing", "description": "Plans, checkout, and your own account."},
             {"name": "service", "description": "Liveness and configuration."},
         ],
@@ -112,6 +117,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(machinery_router)
     application.include_router(fleet_router)
     application.include_router(attest_router)
+    application.include_router(supplier_router)
     application.include_router(router)
     return application
 
