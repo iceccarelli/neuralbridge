@@ -36,7 +36,7 @@ from assurance.kit.enrol import (
     starter_config,
 )
 
-from .test_assurance_collect import plan_dict, write_export
+from .support import plan_dict, write_export
 
 
 def _plan_file(tmp_path, **over):

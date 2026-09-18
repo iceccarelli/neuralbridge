@@ -56,40 +56,40 @@ const products = [
     badgeClass: 'source',
     name: 'Machine safety verification',
     body: 'A recorded run checked against the declared safety envelope — separation, speed limit, workspace containment, stop characterisation, power-and-force — each with a worst margin, each able to answer unchecked.',
-    href: `${SRC}/machine`,
-    cta: 'View source →',
+    href: `${DEPLOY_BLOB}/MACHINE.md`,
+    cta: 'Read the engine guide →',
   },
   {
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Machinery Annex III',
     body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
-    href: `${SRC}/machinery`,
-    cta: 'View source →',
+    href: `${DEPLOY_BLOB}/MACHINERY.md`,
+    cta: 'Read the engine guide →',
   },
   {
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Fleet advisory',
     body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, never flattened into a boolean.',
-    href: `${SRC}/fleet`,
-    cta: 'View source →',
+    href: `${DEPLOY_BLOB}/FLEET.md`,
+    cta: 'Read the engine guide →',
   },
   {
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Watch',
     body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
-    href: `${SRC}/watch`,
-    cta: 'View source →',
+    href: `${DEPLOY_BLOB}/WATCH.md`,
+    cta: 'Read the engine guide →',
   },
   {
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Attest',
     body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened.',
-    href: `${SRC}/attest`,
-    cta: 'View source →',
+    href: `${DEPLOY_BLOB}/ATTEST.md`,
+    cta: 'Read the engine guide →',
   },
   {
     badge: 'Engine',
@@ -201,9 +201,24 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>Plans, engines, and the API, in one place.</h2>
             <p>
               Every row below maps to code that runs. Nothing on this page is listed that the software does not do.
-              Engine tiles link to source; plan tiles link to pricing.
+              Engine tiles link to the buyer-facing guide for that engine; plan tiles link to pricing.
             </p>
           </div>
+
+          <div className="hero-panel" style={{ marginBottom: '2rem' }}>
+            <div className="hero-panel-title">The free validator, called directly &mdash; no install</div>
+            <div className="hero-code">{`curl -X POST https://<your-host>/v1/spec/validate \\
+     -H 'content-type: application/json' \\
+     -d '{"track":"actively_exploited_vulnerability","stage":"early_warning",
+          "payload":{"product_name":"x","member_states_available":["DE","CH"]}}'`}</div>
+            <p className="hero-panel-note">
+              Captured from a real run of this service today: the response flags five missing required fields and
+              that <strong>Switzerland is not an EU Member State</strong> &mdash; a live regulatory check, not a mockup.
+              This route is not hosted publicly yet (see the pricing section); run it yourself with{' '}
+              <code>uvicorn assurance.api.service:app</code> after <code>pip install -e &apos;.[assurance-api]&apos;</code>.
+            </p>
+          </div>
+
           <div className="tile-grid">
             {products.map((product) => (
               <article className="tile" key={product.name}>
@@ -380,10 +395,15 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             </table>
           </div>
           <p className="pricing-note">
-            Checkout is not live on this page yet. Register and Cell route to a sales inquiry on GitHub; the billing
-            API (Stripe-backed, entitlement-gated) exists in the codebase but is not deployed to a public endpoint.
-            See <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a> for
-            what is already enforced in code.
+            Checkout is not live on this page yet. Register and Cell route to a sales inquiry on GitHub. The billing
+            API is real and tested &mdash; run locally today, <code>POST /v1/checkout</code> refuses to take a payment
+            it cannot provision (&quot;no Stripe price is configured&quot;) rather than pretending to charge you, and every
+            register route fails closed (503) with no API keys configured rather than defaulting open. It is not
+            deployed to a public endpoint or connected to a live Stripe account yet &mdash; that needs a Fly.io token and
+            Stripe secret keys neither of which exist in this environment. See{' '}
+            <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a>{' '}
+            and <a href={`${DEPLOY_BLOB}/README.md`} target="_blank" rel="noreferrer">the deploy guide</a> for the exact
+            remaining steps.
           </p>
         </div>
       </section>
