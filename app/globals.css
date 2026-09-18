@@ -88,10 +88,16 @@ img {
 }
 
 /* ====================== MAIN NAV ====================== */
-.topbar {
+/* Dual sticky chrome: the dark utility bar and the white-on-navy primary bar
+   stick together as one ~110px unit, matching aws.amazon.com's rhythm. */
+.sticky-chrome {
   position: sticky;
   top: 0;
   z-index: 40;
+}
+
+.topbar {
+  position: relative;
   background: var(--navy-800);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -172,32 +178,325 @@ img {
   opacity: 0.8;
 }
 
+/* Small dropdown panels (language picker) stay anchored under their own
+   nav-item and open on the .open class the way the old single-pane menus did. */
 .mega-panel {
   position: absolute;
   top: 100%;
   left: 0;
-  min-width: 620px;
+  min-width: 220px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-top: 3px solid var(--orange);
   box-shadow: 0 12px 32px rgba(15, 27, 45, 0.25);
-  padding: 1.5rem;
+  padding: 1rem;
   display: none;
-  z-index: 50;
+  z-index: 60;
 }
 
-.nav-item.open .mega-panel {
+.nav-item.open .mega-panel:not(.mega-panel-full) {
   display: grid;
 }
 
-.mega-panel.cols-3 {
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
+.lang-panel {
+  right: 0;
+  left: auto;
 }
 
-.mega-panel.cols-2 {
+.lang-stub {
+  display: block;
+  padding: 0.4rem 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Full-width click-to-open megas (Products, Solutions, Pricing, Resources):
+   rendered as siblings of the nav, not nested in .nav-item, so they can span
+   the full viewport width the way aws.amazon.com's do. */
+.mega-panel-full {
+  display: block;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border-top: 3px solid var(--orange);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 20px 40px rgba(15, 27, 45, 0.3);
+  z-index: 55;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 220ms ease, opacity 180ms ease;
+}
+
+.mega-panel-full.is-open {
+  max-height: 640px;
+  opacity: 1;
+  overflow-y: auto;
+}
+
+.mega-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  background: none;
+  border: none;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0.4rem;
+  z-index: 2;
+}
+
+.mega-close:hover {
+  color: var(--ink);
+}
+
+/* Backdrop: dims and blurs the page content beneath an open mega, the way
+   aws.amazon.com's click-open panels do. Sits below the panel, above the page. */
+.mega-backdrop {
+  position: fixed;
+  inset: 0;
+  border: none;
+  padding: 0;
+  background: rgba(15, 27, 45, 0.35);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  /* Below .sticky-chrome (z-index 40): the backdrop dims the page content,
+     never the header itself, so clicking straight from one open mega to
+     another nav item switches panels instead of being swallowed by the dim. */
+  z-index: 35;
+  cursor: default;
+}
+
+.mega-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Products: two-pane (category rail + card grid) */
+.two-pane-inner {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 2rem;
+  padding: 2rem 0;
+}
+
+.pane-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  border-right: 1px solid var(--border-soft);
+  padding-right: 1rem;
+}
+
+.pane-rail-item {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.pane-rail-item:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+
+.pane-rail-item.active {
+  background: #e8f0fb;
+  color: var(--link);
+}
+
+.mega-panel-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.mega-panel-grid.cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.mega-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.mega-card:hover {
+  background: var(--surface-alt);
+  border-color: var(--border-soft);
+}
+
+.mega-card strong {
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.mega-card span {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.mega-promo-row {
+  display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 1.5rem;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.mega-promo {
+  padding: 0.9rem;
+  border-radius: 6px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-soft);
+}
+
+.mega-promo-kicker {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--link);
+  margin-bottom: 0.3rem;
+}
+
+.mega-promo strong {
+  font-size: 0.9rem;
+}
+
+/* Solutions: editorial layout (topic cards + an About rail) */
+.editorial-inner {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 2rem;
+  padding: 2rem 0;
+}
+
+.editorial-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.1rem;
+}
+
+.editorial-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 1.1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-alt);
+}
+
+.editorial-card strong {
+  font-size: 0.95rem;
+}
+
+.editorial-card span {
+  font-size: 0.83rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.editorial-cta {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--link);
+}
+
+.editorial-about {
+  border-left: 1px solid var(--border-soft);
+  padding-left: 1.5rem;
+}
+
+.editorial-about h4 {
+  margin: 0.3rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+.editorial-about p {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0 0 0.75rem;
+}
+
+.editorial-about a {
+  font-size: 0.85rem;
+  font-weight: 650;
+  color: var(--link);
+}
+
+/* Pricing / Resources: finder-style compact panel */
+.finder-inner {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  padding: 1.75rem 0;
+}
+
+.finder-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+}
+
+.finder-item:hover {
+  background: var(--surface-alt);
+}
+
+.finder-item strong {
+  font-size: 0.9rem;
+}
+
+.finder-item span {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 2.2rem;
+  height: 2.2rem;
+  padding: 0 0.5rem;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #e4eaf2;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lang-button {
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .mega-col h4 {
@@ -285,29 +584,95 @@ img {
   border-radius: 2px;
 }
 
-.mobile-menu {
+/* Mobile: full-screen drill-in nav, hidden entirely above the mobile breakpoint. */
+.mobile-drill {
   display: none;
+}
+
+.mobile-drill.open {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  inset: 0;
+  z-index: 70;
   background: var(--navy-900);
-  padding: 0.5rem 0 1rem;
+}
+
+.mobile-drill-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-weight: 650;
+}
+
+.mobile-back,
+.mobile-drill-close {
+  background: none;
+  border: none;
+  color: #e4eaf2;
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 0.4rem;
+}
+
+.mobile-drill-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
   flex-direction: column;
 }
 
-.mobile-menu.open {
+.mobile-drill-item {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  text-align: left;
+  color: #e4eaf2;
+  padding: 1rem 1.25rem;
+  font-size: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
 }
 
-.mobile-menu a {
-  color: #e4eaf2;
-  padding: 0.6rem 1.25rem;
-  font-size: 0.95rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+.mobile-drill-item span {
+  color: #8296ae;
+}
+
+.mobile-drill-sticky {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--navy-900);
+}
+
+.mobile-drill-sticky .btn {
+  flex: 1 1 0;
 }
 
 /* ====================== HERO ====================== */
 .hero {
+  position: relative;
   background: linear-gradient(120deg, var(--navy-900) 0%, var(--navy-800) 55%, #10233a 100%);
   color: #ffffff;
-  padding: 3.5rem 0;
+  padding: 3.5rem 0 4.5rem;
+}
+
+.hero-seam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  width: 100%;
+  height: 40px;
+  display: block;
+  pointer-events: none;
 }
 
 .hero-grid {
@@ -525,12 +890,11 @@ img {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  transition: box-shadow 150ms ease, border-color 150ms ease;
+  transition: border-color 150ms ease;
 }
 
 .tile:hover {
   border-color: #9fb3cc;
-  box-shadow: 0 6px 18px rgba(15, 27, 45, 0.1);
 }
 
 .tile-badge {
@@ -569,14 +933,38 @@ img {
   flex: 1 1 auto;
 }
 
+/* Arrow alone at rest; the label reveals on hover/focus, per the aws.amazon.com
+   card pattern — no heavy drop-shadow lift, just the text appearing. */
 .tile-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.85rem;
   font-weight: 650;
   color: var(--link);
 }
 
-.tile-link:hover {
-  text-decoration: underline;
+.tile-link-label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width 200ms ease, opacity 150ms ease;
+}
+
+.tile:hover .tile-link-label,
+.tile-link:focus-visible .tile-link-label {
+  max-width: 16rem;
+  opacity: 1;
+}
+
+.tile-link-arrow {
+  transition: transform 150ms ease;
+}
+
+.tile:hover .tile-link-arrow,
+.tile-link:focus-visible .tile-link-arrow {
+  transform: translateX(2px);
 }
 
 /* ====================== SOLUTIONS ====================== */
@@ -806,6 +1194,39 @@ table.status-table tbody tr:last-child td {
   line-height: 1.6;
 }
 
+/* ====================== FOOTER CTA BAND ====================== */
+.footer-cta {
+  background: var(--navy-800);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.footer-cta-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1.5rem 0;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.footer-link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  color: #b6c4d6;
+  cursor: pointer;
+  text-align: left;
+}
+
+.footer-link-button:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
 /* ====================== FOOTER ====================== */
 .site-footer {
   background: var(--navy-900);
@@ -815,7 +1236,7 @@ table.status-table tbody tr:last-child td {
 
 .footer-columns {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 2rem;
   padding: 2.75rem 0 1.5rem;
 }
@@ -866,6 +1287,239 @@ table.status-table tbody tr:last-child td {
   color: #ffffff;
 }
 
+/* ====================== SEARCH OVERLAY ====================== */
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  padding-top: 8vh;
+}
+
+.search-overlay-scrim {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: rgba(15, 27, 45, 0.55);
+  backdrop-filter: blur(3px);
+  cursor: default;
+}
+
+.search-panel {
+  position: relative;
+  width: min(calc(100% - 2rem), 720px);
+  max-height: 78vh;
+  background: var(--surface);
+  border-radius: 10px;
+  box-shadow: 0 30px 80px rgba(2, 8, 23, 0.4);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+}
+
+.search-icon {
+  color: var(--ink-soft);
+}
+
+.search-input {
+  flex: 1 1 auto;
+  border: none;
+  outline: none;
+  font-size: 1rem;
+  background: none;
+  color: var(--ink);
+}
+
+.search-close {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.2rem;
+}
+
+.search-results {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.search-group h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--link);
+}
+
+.search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.5rem;
+  border-radius: 6px;
+}
+
+.search-result:hover {
+  background: var(--surface-alt);
+}
+
+.search-result-title {
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.search-result-blurb {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.search-result-pills {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.search-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #eef1f6;
+  color: var(--ink-soft);
+}
+
+.search-empty,
+.search-note {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+/* ====================== COOKIE CONSENT ====================== */
+.cookie-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  background: var(--navy-900);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 -12px 32px rgba(2, 8, 23, 0.35);
+}
+
+.cookie-banner-inner {
+  width: min(calc(100% - 2.5rem), var(--max-width));
+  margin: 0 auto;
+  padding: 1.1rem 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.cookie-banner p {
+  margin: 0;
+  color: #cbd7e6;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  max-width: 60ch;
+}
+
+.cookie-banner a {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.cookie-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* ====================== FEEDBACK / CSAT ====================== */
+.feedback-widget {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 60;
+}
+
+.feedback-trigger {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(15, 27, 45, 0.18);
+  cursor: pointer;
+}
+
+.feedback-panel {
+  position: relative;
+  width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  box-shadow: 0 18px 40px rgba(15, 27, 45, 0.22);
+}
+
+.feedback-panel p {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--ink);
+  line-height: 1.5;
+}
+
+.feedback-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.feedback-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+/* Motion is decorative here, never load-bearing for comprehension. */
+@media (prefers-reduced-motion: reduce) {
+  .mega-panel-full,
+  .mega-backdrop,
+  .tile-link-label,
+  .tile-link-arrow,
+  .topbar,
+  .tile,
+  .hamburger .bar {
+    transition: none !important;
+  }
+}
+
 /* Grid/flex items default to min-width: auto (their max-content size), which
    can force a track wider than its column and overflow the viewport. */
 .hero-grid > *,
@@ -894,8 +1548,22 @@ table.status-table tbody tr:last-child td {
   .footer-columns {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .mega-panel {
-    min-width: 480px;
+  .two-pane-inner {
+    grid-template-columns: 160px 1fr;
+  }
+  .mega-panel-grid.cols-3,
+  .editorial-cards,
+  .finder-inner {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .editorial-inner {
+    grid-template-columns: 1fr;
+  }
+  .editorial-about {
+    border-left: none;
+    border-top: 1px solid var(--border-soft);
+    padding-left: 0;
+    padding-top: 1.25rem;
   }
 }
 
@@ -906,8 +1574,26 @@ table.status-table tbody tr:last-child td {
   .nav-cta {
     display: none;
   }
+  .lang-item {
+    display: none;
+  }
   .hamburger {
     display: flex;
+  }
+  .mega-panel-full,
+  .mega-backdrop {
+    display: none;
+  }
+  .brand-name {
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 480px) {
+  .brand-name {
+    display: none;
   }
 }
 
@@ -933,5 +1619,26 @@ table.status-table tbody tr:last-child td {
   }
   .utility-links {
     display: none;
+  }
+  .footer-cta-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cookie-banner-inner,
+  .search-input-row {
+    flex-wrap: wrap;
+  }
+  .cookie-actions {
+    width: 100%;
+  }
+  .cookie-actions .btn {
+    flex: 1 1 auto;
+  }
+  .feedback-widget {
+    right: 0.75rem;
+    bottom: 0.75rem;
+  }
+  .feedback-panel {
+    width: min(78vw, 260px);
   }
 }
