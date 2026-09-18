@@ -1,12 +1,16 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import Header from './Header';
+import CookieConsent from './components/CookieConsent';
+import CookiePreferencesLink from './components/CookiePreferencesLink';
+import Feedback from './components/Feedback';
+import { REPO } from './lib/links';
 import './globals.css';
 
-const REPO = 'https://github.com/iceccarelli/neuralbridge';
+const SITE_URL = 'https://neuralbridge.io';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://neuralbridge.vercel.app'),
+  metadataBase: new URL(SITE_URL),
   title: 'Industrial Autonomous Assurance | CRA Article 14 & Machinery Regulation evidence',
   description:
     'Evidence infrastructure for machines whose software can hurt someone. A hash-chained record of what is on each machine, what was verified, and when — built for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230). Free Validator tier, paid Register and Cell plans.',
@@ -29,7 +33,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'Industrial Autonomous Assurance',
     description: 'A hash-chained record of what is on each machine, what was verified, and when. CRA Art. 14 and Machinery Regulation Annex III 1.1.9, satisfied from evidence instead of a spreadsheet.',
-    url: 'https://neuralbridge.vercel.app/',
+    url: `${SITE_URL}/`,
     siteName: 'Industrial Autonomous Assurance',
     locale: 'en_GB',
     type: 'website',
@@ -45,7 +49,7 @@ const structuredData = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: 'Industrial Autonomous Assurance',
-  url: 'https://neuralbridge.vercel.app/',
+  url: `${SITE_URL}/`,
   applicationCategory: 'BusinessApplication',
   operatingSystem: 'Cross-platform',
   offers: [
@@ -71,6 +75,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <Header />
 
           {children}
+
+          <section className="footer-cta">
+            <div className="shell footer-cta-inner">
+              <span>Verify one Declaration for free — no account, no upload.</span>
+              <a className="btn btn-primary" href="#pricing">Start free</a>
+            </div>
+          </section>
 
           <footer className="site-footer">
             <div className="shell footer-columns">
@@ -122,6 +133,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a></li>
                 </ul>
               </div>
+
+              <div>
+                <h4>Legal</h4>
+                <ul>
+                  <li><a href="/privacy">Privacy</a></li>
+                  <li><CookiePreferencesLink className="footer-link-button" /></li>
+                  <li><a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a></li>
+                </ul>
+              </div>
             </div>
 
             <div className="shell footer-bottom">
@@ -130,6 +150,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </div>
           </footer>
         </div>
+
+        <CookieConsent />
+        <Feedback />
 
         <script
           type="application/ld+json"
