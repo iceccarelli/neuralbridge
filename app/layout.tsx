@@ -5,6 +5,7 @@ import CookieConsent from './components/CookieConsent';
 import CookiePreferencesLink from './components/CookiePreferencesLink';
 import Feedback from './components/Feedback';
 import { DOCS, REPO } from './lib/links';
+import { SOLUTIONS } from './lib/solutions';
 import './globals.css';
 
 const SITE_URL = 'https://neuralbridge.io';
@@ -106,10 +107,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h4>Solutions</h4>
                 <ul>
-                  <li><a href="#solutions">Manufacturer</a></li>
-                  <li><a href="#solutions">Plant operator</a></li>
-                  <li><a href="#solutions">Compliance officer</a></li>
-                  <li><a href="#solutions">Insurer / auditor</a></li>
+                  {SOLUTIONS.map((s) => (
+                    <li key={s.slug}><a href={`/solutions/${s.slug}`}>{s.role}</a></li>
+                  ))}
                 </ul>
               </div>
 
