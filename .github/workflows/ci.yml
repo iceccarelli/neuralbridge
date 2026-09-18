@@ -136,4 +136,4 @@ jobs:
         run: |
           pip install "mkdocs-material<10" "mkdocs<2"
       - name: Build and deploy docs
-        run: mkdocs gh-deploy --force
+        run: mkdocs gh-deploy --force --strict
