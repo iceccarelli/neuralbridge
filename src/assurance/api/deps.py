@@ -33,6 +33,7 @@ from __future__ import annotations
 import hmac
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
@@ -47,11 +48,15 @@ __all__ = [
     "require_attestation",
     "require_machine",
     "require_register",
+    "require_supplier",
     "spend",
     "auth_mode",
     "ledger_path",
     "accounts_path",
     "public_url",
+    "marketing_url",
+    "allowed_origins",
+    "supplier_feeds_dir",
 ]
 
 _LEDGER_ENV = "ASSURANCE_LEDGER"
@@ -68,8 +73,29 @@ def accounts_path() -> str:
     return os.environ.get(_ACCOUNTS_ENV, "accounts.db")
 
 
+def supplier_feeds_dir() -> Path:
+    """Where hosted supplier feeds live: one append-only JSONL file per account.
+
+    Keyed by account id, not the supplier_id inside the advisory body — the
+    account id is already a safe, server-issued token, so this sidesteps
+    trusting a customer-chosen string as a filename.
+    """
+    return Path(os.environ.get("ASSURANCE_SUPPLIER_FEEDS", "supplier-feeds"))
+
+
 def public_url() -> str:
     return os.environ.get("ASSURANCE_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def marketing_url() -> str:
+    """Where a paying customer's browser should land after Stripe checkout.
+
+    Defaults to the real marketing site rather than this API's own host: a
+    customer who just paid should see a page that explains what happened, not
+    raw JSON. Falls back to this API's own /v1/checkout/complete (still
+    functional, just unstyled) only if explicitly pointed there.
+    """
+    return os.environ.get("ASSURANCE_MARKETING_URL", "https://neuralbridge.io").rstrip("/")
 
 
 _ORIGINS_ENV = "ASSURANCE_ALLOWED_ORIGINS"
@@ -302,7 +328,51 @@ async def require_attestation(
     return principal
 
 
+async def require_supplier(
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The door to publishing a signed advisory.
+
+    The second payer HANDOFF.md's P1 names: a component supplier, not a
+    manufacturer. There is no self-serve Stripe price for this tier yet — see
+    ADR-0001 — so today the only way in is a sales-assigned account tier.
+    Reading a feed (GET /v1/supplier/feed/{id}) is deliberately outside this
+    gate and needs no account, same reasoning as every other free-forever
+    verification route: the audience for a supplier's advisory is every
+    integrator who might be affected, not a paying subscriber.
+    """
+    if auth_mode() == "open" and principal.account is None:
+        return Principal(
+            account=Account(id="operator", email="", company="operator",
+                             tier="supplier", status="active"),
+            key_prefix="open-mode",
+        )
+    if principal.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    if not principal.plan.supplier_publish:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "plan_does_not_include_supplier_publish",
+                "tier": principal.tier,
+                "account_status": principal.account.status,
+                "remedy": (
+                    "Publishing a signed advisory needs the Supplier tier, "
+                    "which is sales-assigned today (no self-serve price yet). "
+                    "Reading any supplier's feed stays free at "
+                    "GET /v1/supplier/feed/{supplier_id}. Contact sales."
+                ),
+            },
+        )
+    return principal
+
+
 Registered = Depends(require_register)
 Machine = Depends(require_machine)
 Attesting = Depends(require_attestation)
+Supplying = Depends(require_supplier)
 Anyone = Depends(current_principal)

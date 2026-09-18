@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { DEPLOY_BLOB, REPO, SALES, SRC } from './lib/links';
+import { DEPLOY_BLOB, DOCS, REPO, SALES, SRC } from './lib/links';
+import { SOLUTIONS } from './lib/solutions';
 import SearchOverlay from './components/SearchOverlay';
 
 type MenuKey = 'products' | 'solutions' | 'pricing' | 'resources';
@@ -204,9 +205,9 @@ export default function Header() {
                   ))}
                 </div>
                 <div className="mega-promo-row">
-                  <a className="mega-promo" href={`${REPO}#readme`} target="_blank" rel="noreferrer" onClick={closeAll}>
+                  <a className="mega-promo" href={DOCS} target="_blank" rel="noreferrer" onClick={closeAll}>
                     <span className="mega-promo-kicker">Docs</span>
-                    <strong>Read the full README</strong>
+                    <strong>Browse the docs site</strong>
                   </a>
                   <a className="mega-promo" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
                     <span className="mega-promo-kicker">Roadmap</span>
@@ -222,16 +223,10 @@ export default function Header() {
             <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
             <div className="shell editorial-inner">
               <div className="editorial-cards">
-                {[
-                  { role: 'Manufacturer', body: 'Bind a Declaration of Conformity to a configuration hash.' },
-                  { role: 'Plant operator', body: 'Verify the safety-relevant software actually on a cell.' },
-                  { role: 'Compliance officer', body: 'File Article 14 within the 24-hour clock.' },
-                  { role: 'Insurer / auditor', body: 'Check evidence for free, forever — no account.' },
-                  { role: 'AI / ops platform team', body: 'The NeuralBridge MCP gateway underneath.' },
-                ].map((item) => (
-                  <a className="editorial-card" href="#solutions" key={item.role} onClick={closeAll}>
+                {SOLUTIONS.map((item) => (
+                  <a className="editorial-card" href={`/solutions/${item.slug}`} key={item.slug} onClick={closeAll}>
                     <strong>{item.role}</strong>
-                    <span>{item.body}</span>
+                    <span>{item.headline}</span>
                     <span className="editorial-cta">View solution →</span>
                   </a>
                 ))}
@@ -268,9 +263,9 @@ export default function Header() {
           <div className={`mega-panel mega-panel-full finder ${openMenu === 'resources' ? 'is-open' : ''}`}>
             <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
             <div className="shell finder-inner">
-              <a className="finder-item" href={`${REPO}#readme`} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <a className="finder-item" href={DOCS} target="_blank" rel="noreferrer" onClick={closeAll}>
                 <strong>Documentation</strong>
-                <span>The full README, and per-engine deploy guides.</span>
+                <span>The full docs site — getting started, every engine, deploying.</span>
               </a>
               <a className="finder-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
                 <strong>Roadmap</strong>
@@ -330,16 +325,21 @@ export default function Header() {
           )}
           {mobileView === 'solutions' && (
             <>
-              <a className="mobile-drill-item" href="#solutions" onClick={() => setMobileOpen(false)}>Manufacturer</a>
-              <a className="mobile-drill-item" href="#solutions" onClick={() => setMobileOpen(false)}>Plant operator</a>
-              <a className="mobile-drill-item" href="#solutions" onClick={() => setMobileOpen(false)}>Compliance officer</a>
-              <a className="mobile-drill-item" href="#solutions" onClick={() => setMobileOpen(false)}>Insurer / auditor</a>
-              <a className="mobile-drill-item" href="#solutions" onClick={() => setMobileOpen(false)}>AI / ops platform team</a>
+              {SOLUTIONS.map((item) => (
+                <a
+                  className="mobile-drill-item"
+                  href={`/solutions/${item.slug}`}
+                  key={item.slug}
+                  onClick={() => setMobileOpen(false)}
+                >
+                  {item.role}
+                </a>
+              ))}
             </>
           )}
           {mobileView === 'resources' && (
             <>
-              <a className="mobile-drill-item" href={`${REPO}#readme`} target="_blank" rel="noreferrer">Documentation</a>
+              <a className="mobile-drill-item" href={DOCS} target="_blank" rel="noreferrer">Documentation</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>

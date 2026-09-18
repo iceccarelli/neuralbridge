@@ -52,6 +52,11 @@ class Plan:
     separations_per_day: int | None = None
     #: Manifest comparisons per UTC day on the free tier.
     diffs_per_day: int | None = None
+    #: May publish signed advisories to a hosted feed under POST
+    #: /v1/supplier/advisory. See ADR-0001 (deploy/assurance/ADR-0001-supplier-api.md):
+    #: this is the second payer HANDOFF.md's P1 names — a component supplier,
+    #: not a manufacturer — and it has no self-serve Stripe price yet.
+    supplier_publish: bool = False
     included: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -80,6 +85,7 @@ class Plan:
                 "machine_verification": self.machine_verification,
                 "separations_per_day": self.separations_per_day,
                 "diffs_per_day": self.diffs_per_day,
+                "supplier_publish": self.supplier_publish,
             },
         }
 
@@ -186,6 +192,29 @@ PLANS: dict[Tier, Plan] = {
             "contradicts a signed statement. Your ledger is never uploaded — "
             "we sign three numbers and never see a record",
             "Priority response",
+        ),
+    ),
+    # Not in public_catalogue(): this is a second, different buyer — a
+    # component supplier, not a manufacturer — and there is no Stripe price
+    # for it yet. Granting it is a manual, sales-assigned account tier until
+    # a real self-serve price exists; see ADR-0001. Keeping it out of the
+    # pricing page GET /v1/plans already serves means the existing frontend
+    # (which renders exactly three cards) never has to reason about a plan
+    # it cannot sell.
+    "supplier": Plan(
+        tier="supplier",
+        name="Supplier",
+        blurb=(
+            "Publish signed component advisories to a feed every enrolled "
+            "integrator can subscribe to. Sales-assigned; contact us."
+        ),
+        price_label="Contact sales",
+        supplier_publish=True,
+        included=(
+            "POST /v1/supplier/advisory — publish a signed advisory to your "
+            "hosted feed",
+            "GET /v1/supplier/feed/{supplier_id} — always free to read, for "
+            "any integrator",
         ),
     ),
 }

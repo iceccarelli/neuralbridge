@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..billing import stripe_gateway as stripe
 from ..billing.accounts import AccountStore, Principal
 from ..billing.plans import PLANS, plan_for_price, public_catalogue
-from .deps import current_principal, get_accounts, public_url
+from .deps import current_principal, get_accounts, marketing_url, public_url
 
 __all__ = ["billing_router"]
 
@@ -79,14 +79,14 @@ def post_checkout(body: CheckoutIn, request: Request) -> CheckoutOut:
                 ),
             },
         )
-    base = public_url()
+    market = marketing_url()
     try:
         session = stripe.create_checkout_session(
             price_id=plan.price_id,
             email=body.email,
             company=body.company,
-            success_url=f"{base}/v1/checkout/complete?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{base}/v1/plans",
+            success_url=f"{market}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{market}/#pricing",
             tier=plan.tier,
         )
     except stripe.StripeError as exc:

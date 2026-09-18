@@ -69,3 +69,4 @@ attestations/
 evidence.db
 *.orig
 *.rej
+site/
