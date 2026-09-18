@@ -1119,6 +1119,251 @@ table.compare-table td.check {
   max-width: 72ch;
 }
 
+.pricing-live-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  font-size: 0.82rem;
+  color: var(--success);
+}
+
+.live-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--success);
+  flex: 0 0 auto;
+}
+
+/* ====================== SIZING CALCULATOR ====================== */
+.calc-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.6rem;
+  background: var(--surface-alt);
+  margin-bottom: 2rem;
+}
+
+.calc-panel-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: 1.1rem;
+}
+
+.calc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+
+.calc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.calc-field input[type='number'] {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  background: var(--surface);
+}
+
+.calc-needs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.calc-needs-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 0.15rem;
+}
+
+.calc-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+.calc-checkbox input {
+  margin-top: 0.2rem;
+  flex: 0 0 auto;
+}
+
+.calc-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.1rem;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.calc-result-tier {
+  font-size: 1.3rem;
+  font-weight: 750;
+  color: var(--orange-dark);
+}
+
+.calc-result-reason {
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.calc-result-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.calc-footnote {
+  margin: 1rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+/* ====================== VALIDATOR PLAYGROUND ====================== */
+.playground {
+  margin-top: 0.5rem;
+}
+
+.playground-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+.playground-input,
+.playground-output {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.playground-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9fb2c8;
+}
+
+.playground-textarea {
+  width: 100%;
+  min-height: 180px;
+  background: #0a1420;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #b7f2c4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  padding: 0.85rem;
+  resize: vertical;
+}
+
+.playground-output {
+  background: rgba(7, 12, 23, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 0.85rem;
+  min-height: 180px;
+}
+
+.playground-placeholder {
+  font-size: 0.85rem;
+  color: #9fb2c8;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.playground-error {
+  font-size: 0.85rem;
+  color: #ffb4a8;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.playground-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.playground-verdict {
+  display: inline-flex;
+  align-self: flex-start;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+}
+
+.playground-verdict.ok {
+  background: rgba(6, 125, 104, 0.25);
+  color: #6ee7c9;
+}
+
+.playground-verdict.blocked {
+  background: rgba(236, 114, 17, 0.22);
+  color: #ffc27a;
+}
+
+.playground-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.playground-issues li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.82rem;
+  color: #cbd7e6;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.5rem;
+}
+
+.playground-issues strong {
+  color: #ffffff;
+  font-size: 0.82rem;
+}
+
+/* ====================== CHECKOUT ====================== */
+.checkout-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.checkout-input {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 /* ====================== PLATFORM (NEURALBRIDGE) ====================== */
 .status-table-wrap {
   overflow-x: auto;
@@ -1528,7 +1773,9 @@ table.status-table tbody tr:last-child td {
 .pricing-grid > *,
 .footer-columns > *,
 .trust-grid > *,
-.final-cta-inner > * {
+.final-cta-inner > *,
+.calc-grid > *,
+.playground-grid > * {
   min-width: 0;
 }
 
@@ -1604,7 +1851,9 @@ table.status-table tbody tr:last-child td {
   .tile-grid,
   .solutions-grid,
   .pricing-grid,
-  .trust-grid {
+  .trust-grid,
+  .calc-grid,
+  .playground-grid {
     grid-template-columns: 1fr;
   }
   .footer-columns {

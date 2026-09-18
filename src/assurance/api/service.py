@@ -16,12 +16,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .. import __version__
 from .attest_routes import attest_router
 from .billing_routes import billing_router
-from .deps import auth_mode
+from .deps import allowed_origins, auth_mode
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
@@ -84,6 +85,16 @@ def create_app(**kwargs: Any) -> FastAPI:
             {"name": "service", "description": "Liveness and configuration."},
         ],
         **kwargs,
+    )
+
+    # Bearer-token auth, never cookies — allow_credentials stays False so a
+    # wide origin list can never be combined with credentialed requests.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(allowed_origins()),
+        allow_methods=["GET", "POST"],
+        allow_headers=["content-type", "authorization"],
+        allow_credentials=False,
     )
 
     @application.exception_handler(ValueError)
