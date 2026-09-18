@@ -72,6 +72,25 @@ def public_url() -> str:
     return os.environ.get("ASSURANCE_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
+_ORIGINS_ENV = "ASSURANCE_ALLOWED_ORIGINS"
+# The marketing site's own known origins, plus local dev. A browser enforces
+# CORS on the *caller's* side — curl and server-to-server calls never see
+# this — so its absence is invisible to every test that does not run in an
+# actual browser, which is exactly how it went unnoticed until now.
+_DEFAULT_ORIGINS: tuple[str, ...] = (
+    "https://neuralbridge.io",
+    "https://www.neuralbridge.io",
+    "http://localhost:3000",
+)
+
+
+def allowed_origins() -> tuple[str, ...]:
+    raw = os.environ.get(_ORIGINS_ENV, "")
+    if raw:
+        return tuple(o.strip() for o in raw.split(",") if o.strip())
+    return _DEFAULT_ORIGINS
+
+
 def _operator_keys() -> tuple[str, ...]:
     raw = os.environ.get(_KEYS_ENV, "")
     return tuple(k.strip() for k in raw.split(",") if k.strip())

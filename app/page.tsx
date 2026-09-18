@@ -1,4 +1,7 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import PricingPlans from './components/PricingPlans';
+import SizingCalculator from './components/SizingCalculator';
+import ValidatorPlayground from './components/ValidatorPlayground';
 
 const trustStrip = [
   {
@@ -206,16 +209,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
 
           <div className="hero-panel" style={{ marginBottom: '2rem' }}>
-            <div className="hero-panel-title">The free validator, called directly &mdash; no install</div>
-            <div className="hero-code">{`curl -X POST https://<your-host>/v1/spec/validate \\
-     -H 'content-type: application/json' \\
-     -d '{"track":"actively_exploited_vulnerability","stage":"early_warning",
-          "payload":{"product_name":"x","member_states_available":["DE","CH"]}}'`}</div>
+            <div className="hero-panel-title">The free validator &mdash; try it right here</div>
+            <ValidatorPlayground />
             <p className="hero-panel-note">
-              Captured from a real run of this service today: the response flags five missing required fields and
-              that <strong>Switzerland is not an EU Member State</strong> &mdash; a live regulatory check, not a mockup.
-              This route is not hosted publicly yet (see the pricing section); run it yourself with{' '}
-              <code>uvicorn assurance.api.service:app</code> after <code>pip install -e &apos;.[assurance-api]&apos;</code>.
+              This calls the real <code>POST /v1/spec/validate</code> endpoint. A prior run against this exact
+              service flagged five missing required fields and that <strong>Switzerland is not an EU Member
+              State</strong> &mdash; a live regulatory check, not a mockup. See the pricing section for whether this
+              route is hosted publicly right now.
             </p>
           </div>
 
@@ -273,59 +273,9 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             </p>
           </div>
 
-          <div className="pricing-grid">
-            <div className="price-card">
-              <p className="price-name">Validator</p>
-              <p className="price-amount">Free</p>
-              <p className="price-tagline">The free lead magnet. No card, no account required.</p>
-              <ul className="price-list">
-                <li>Article 14 draft validation</li>
-                <li>ISO/TS 15066 separation calculator</li>
-                <li>Manifest diff</li>
-                <li>Advisory check</li>
-                <li>Declaration check</li>
-                <li>Bundle re-verification</li>
-                <li>Attestation verification</li>
-                <li>Offline enrolment kit</li>
-              </ul>
-              <a className="btn btn-secondary" href={QUICKSTART} target="_blank" rel="noreferrer">
-                Get the quickstart
-              </a>
-            </div>
+          <SizingCalculator />
 
-            <div className="price-card featured">
-              <p className="price-name">Register</p>
-              <p className="price-amount">&euro;390 <span>/ month</span></p>
-              <p className="price-tagline">The Article 14 register for one manufacturer.</p>
-              <ul className="price-list">
-                <li>Unlimited Article 14 cases</li>
-                <li>Both deadline clocks, computed correctly</li>
-                <li>Hash-chained ledger with verifiable export</li>
-                <li>25 product families</li>
-                <li>Everything in Validator</li>
-              </ul>
-              <a className="btn btn-primary" href={SALES} target="_blank" rel="noreferrer">
-                Talk to sales
-              </a>
-            </div>
-
-            <div className="price-card">
-              <p className="price-name">Cell</p>
-              <p className="price-amount">&euro;1,290 <span>/ month</span></p>
-              <p className="price-tagline">Everything in Register, for the full cell.</p>
-              <ul className="price-list">
-                <li>Machine safety verification</li>
-                <li>Annex III manifests and passports</li>
-                <li>Fleet advisory fan-out</li>
-                <li>Declarations bound to a configuration hash</li>
-                <li>Counter-signed head attestation</li>
-                <li>Everything in Register</li>
-              </ul>
-              <a className="btn btn-secondary" href={SALES} target="_blank" rel="noreferrer">
-                Talk to sales
-              </a>
-            </div>
-          </div>
+          <PricingPlans />
 
           <div className="compare-table-wrap">
             <table className="compare-table">
@@ -396,12 +346,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             </table>
           </div>
           <p className="pricing-note">
-            Checkout is not live on this page yet. Register and Cell route to a sales inquiry on GitHub. The billing
-            API is real and tested &mdash; run locally today, <code>POST /v1/checkout</code> refuses to take a payment
-            it cannot provision (&quot;no Stripe price is configured&quot;) rather than pretending to charge you, and every
-            register route fails closed (503) with no API keys configured rather than defaulting open. It is not
-            deployed to a public endpoint or connected to a live Stripe account yet &mdash; that needs a Fly.io token and
-            Stripe secret keys neither of which exist in this environment. See{' '}
+            The plan cards above render live from <code>GET /v1/plans</code> when this page can reach a deployed
+            API, and fall back to this static table (identical data) otherwise &mdash; that is the honest state
+            right now: the billing API is real and tested (<code>POST /v1/checkout</code> refuses a payment it
+            cannot provision rather than faking one, and every register route fails closed with no API keys
+            configured), but it is not deployed to a public endpoint. Deploying it needs outbound access to Fly.io
+            from wherever runs <code>fly deploy</code>, plus live Stripe keys &mdash; neither is available in the
+            environment that built this page. See{' '}
             <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a>{' '}
             and <a href={`${DEPLOY_BLOB}/README.md`} target="_blank" rel="noreferrer">the deploy guide</a> for the exact
             remaining steps.
