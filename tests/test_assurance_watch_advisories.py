@@ -27,7 +27,7 @@ from assurance.watch.advisories import check_feeds
 from assurance.watch.config import FeedSubscription, WatchConfig, WatchError
 from assurance.watch.runner import run_watch
 
-from .test_assurance_collect import plan_dict, write_export
+from .support import plan_dict, write_export
 
 IDENTITY = SupplierIdentity(supplier_id="controlco", legal_name="ControlCo GmbH",
                             key_contact="the 2025 supply contract")

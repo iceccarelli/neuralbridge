@@ -30,7 +30,7 @@ from assurance.watch.config import Article14Duty, WatchConfig, WatchError
 from assurance.watch.filings import ARTICLE_14_WINDOW
 from assurance.watch.runner import run_watch
 
-from .test_assurance_collect import plan_dict, write_export
+from .support import plan_dict, write_export
 
 IDENTITY = SupplierIdentity(supplier_id="controlco", legal_name="ControlCo GmbH",
                             key_contact="the 2025 supply contract")
