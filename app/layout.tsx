@@ -3,85 +3,64 @@ import type { ReactNode } from 'react';
 import Header from './Header';
 import './globals.css';
 
+const REPO = 'https://github.com/iceccarelli/neuralbridge';
+
 export const metadata: Metadata = {
   metadataBase: new URL('https://neuralbridge.vercel.app'),
-  title: 'NeuralBridge | Lightweight Integration Hub for AI Agents & External Systems',
+  title: 'Industrial Autonomous Assurance | CRA Article 14 & Machinery Regulation evidence',
   description:
-    'Open-source middleware that lets any AI agent (LangChain, AutoGPT, OpenClaw, Claude, ChatGPT) securely connect to any API, database, or enterprise system via simple YAML configuration. FastAPI backend • MCP Gateway • React Dashboard • 22+ Adapters • Audit Trail • Zero-Trust Foundations. Production-ready foundation for deterministic agentic workflows.',
+    'Evidence infrastructure for machines whose software can hurt someone. A hash-chained record of what is on each machine, what was verified, and when — built for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230). Free Validator tier, paid Register and Cell plans.',
   keywords: [
-    'NeuralBridge',
-    'AI Integration Middleware',
-    'MCP Gateway',
-    'LangChain Tools',
-    'AutoGPT Integration',
-    'OpenClaw Plugin',
-    'FastAPI Backend',
-    'YAML Configuration',
-    'Agentic AI Infrastructure',
-    'Secure AI Adapters',
-    'Audit Trail for AI',
-    'Model Context Protocol',
-    'Deterministic AI Workflows',
-    'Enterprise System Connectors',
-    'PostgreSQL Adapter',
-    'REST API Gateway for AI',
+    'CRA Article 14',
+    'Cyber Resilience Act compliance',
+    'Machinery Regulation 2023/1230',
+    'Annex III 1.1.9',
+    'ISO/TS 15066',
+    'Declaration of Conformity evidence',
+    'hash-chained ledger',
+    'industrial safety attestation',
+    'robot cell compliance',
+    'safety software manifest',
   ],
   authors: [{ name: 'Vincenzo Grimaldi', url: 'https://github.com/iceccarelli' }],
   creator: 'Vincenzo Grimaldi',
-  publisher: 'NeuralBridge Project',
+  publisher: 'Industrial Autonomous Assurance',
   alternates: { canonical: '/' },
   openGraph: {
-    title: 'NeuralBridge | Lightweight Integration Hub for AI Agents',
-    description: 'The missing infrastructure layer for agentic AI. Securely bridge AI reasoning to real-world systems with YAML config, MCP gateway, and full auditability. Open source on GitHub.',
+    title: 'Industrial Autonomous Assurance',
+    description: 'A hash-chained record of what is on each machine, what was verified, and when. CRA Art. 14 and Machinery Regulation Annex III 1.1.9, satisfied from evidence instead of a spreadsheet.',
     url: 'https://neuralbridge.vercel.app/',
-    siteName: 'NeuralBridge',
+    siteName: 'Industrial Autonomous Assurance',
     locale: 'en_GB',
     type: 'website',
-    images: [
-      {
-        url: 'https://neuralbridge.vercel.app/og-image.jpg',
-        width: 1200,
-        height: 630,
-      },
-    ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'NeuralBridge | AI Integration Middleware',
-    description: 'Connect any AI agent to any system. FastAPI • MCP • Adapters • Dashboard. Open source.',
+    title: 'Industrial Autonomous Assurance',
+    description: 'Evidence infrastructure for machines whose software can hurt someone. Free to verify, always.',
   },
 };
 
 const structuredData = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
-  name: 'NeuralBridge',
+  name: 'Industrial Autonomous Assurance',
   url: 'https://neuralbridge.vercel.app/',
-  applicationCategory: 'DeveloperApplication',
+  applicationCategory: 'BusinessApplication',
   operatingSystem: 'Cross-platform',
-  offers: {
-    '@type': 'Offer',
-    price: '0',
-    priceCurrency: 'USD',
-  },
+  offers: [
+    { '@type': 'Offer', name: 'Validator', price: '0', priceCurrency: 'EUR' },
+    { '@type': 'Offer', name: 'Register', price: '390', priceCurrency: 'EUR' },
+    { '@type': 'Offer', name: 'Cell', price: '1290', priceCurrency: 'EUR' },
+  ],
   description:
-    'Lightweight open-source integration hub that enables AI agents to securely interact with external systems through a clean backend, MCP gateway, modular adapters, and comprehensive audit trail.',
+    'Evidence infrastructure for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230): a hash-chained record of what is on each machine, what was verified against it, and when.',
   creator: {
     '@type': 'Person',
     name: 'Vincenzo Grimaldi',
     url: 'https://github.com/iceccarelli',
   },
-  sameAs: ['https://github.com/iceccarelli/neuralbridge'],
-  featureList: [
-    '22+ Production Adapters (PostgreSQL, REST, Slack, Notion, and more)',
-    'MCP Gateway for AI Tool Exposure',
-    'FastAPI Backend with Connection Management',
-    'React + TypeScript Dashboard',
-    'Built-in Audit Trail & Observability',
-    'YAML-Driven Configuration',
-    'Zero-Trust Security Foundations',
-    'EU CRA & Compliance Building Blocks',
-  ],
+  sameAs: [REPO],
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -89,80 +68,65 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body>
         <div className="site-chrome">
-          <div className="background-orb orb-one" />
-          <div className="background-orb orb-two" />
-          <div className="background-orb orb-three" />
-
           <Header />
 
           {children}
 
           <footer className="site-footer">
-            <div className="section-shell">
-              <div className="footer-content">
-                {/* Column 1 – Entity */}
-                <div>
-                  <div className="brand-lockup" style={{ marginBottom: '1rem' }}>
-                    <span className="brand-monogram" style={{ width: '42px', height: '42px', fontSize: '1.25rem', background: 'linear-gradient(135deg, #34d399, #10b981)' }}>NB</span>
-                    <span className="brand-copy"><strong>NeuralBridge</strong></span>
-                  </div>
-                  <p style={{ color: 'var(--muted-strong)', lineHeight: '1.6', fontSize: '0.95rem' }}>
-                    Lightweight Integration Hub for Agentic AI<br />
-                    Connect AI reasoning to real-world systems — deterministically, audibly, and securely.<br />
-                    <span style={{ color: '#34d399' }}>Open source • Self-hostable • Production foundation</span>
-                  </p>
-                  <p style={{ marginTop: '2rem', fontSize: '0.85rem', color: 'var(--muted)' }}>
-                    © 2026 NeuralBridge Project • MIT Licensed • Built by Vincenzo Grimaldi
-                  </p>
-                </div>
-
-                {/* Column 2 – Platform */}
-                <div className="footer-column">
-                  <h4>Platform</h4>
-                  <div className="footer-links" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    <a className="footer-link" href="#architecture">Architecture</a>
-                    <a className="footer-link" href="#adapters">Supported Adapters</a>
-                    <a className="footer-link" href="#live-hub">Live Intelligence</a>
-                    <a className="footer-link" href="https://github.com/iceccarelli/neuralbridge#readme" target="_blank" rel="noopener noreferrer">Documentation</a>
-                    <a className="footer-link" href="https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md" target="_blank" rel="noopener noreferrer">Roadmap</a>
-                  </div>
-                </div>
-
-                {/* Column 3 – Ecosystem */}
-                <div className="footer-column">
-                  <h4>Ecosystem</h4>
-                  <div className="footer-links" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    <a className="footer-link" href="https://github.com/iceccarelli/neuralbridge" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
-                    <a className="footer-link" href="https://github.com/iceccarelli/neuralbridge/stargazers" target="_blank" rel="noopener noreferrer">Star on GitHub ★</a>
-                    <a className="footer-link" href="https://openclawdir.com/plugins/neuralbridge-cdez2o" target="_blank" rel="noopener noreferrer">OpenClaw Plugin</a>
-                    <div className="footer-status">
-                      <span className="live-dot" />
-                      <span>Active Development • v0.1.1</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Column 4 – System Status */}
-                <div className="footer-column">
-                  <h4>System Status</h4>
-                  <div className="footer-status" style={{ marginBottom: '1rem' }}>
-                    <span className="live-dot" />
-                    <span style={{ color: 'var(--success)', fontWeight: 600 }}>Ready for Production Use</span>
-                  </div>
-                  <p style={{ color: 'var(--muted)', fontSize: '0.9rem', lineHeight: '1.55' }}>
-                    Self-host anywhere • Docker ready<br />
-                    Connect your AI agents today.
-                  </p>
-                  <a 
-                    href="https://github.com/iceccarelli/neuralbridge" 
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--accent-strong)', marginTop: '1.5rem', display: 'inline-block' }}
-                  >
-                    Clone &amp; Deploy on GitHub →
-                  </a>
-                </div>
+            <div className="shell footer-columns">
+              <div>
+                <h4>Industrial Autonomous Assurance</h4>
+                <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
+                  Evidence infrastructure for machines whose software can hurt someone. Verification is free at
+                  every tier, always.
+                </p>
               </div>
+
+              <div>
+                <h4>Products</h4>
+                <ul>
+                  <li><a href="#products">Validator (free)</a></li>
+                  <li><a href="#pricing">Register — &euro;390/mo</a></li>
+                  <li><a href="#pricing">Cell — &euro;1,290/mo</a></li>
+                  <li><a href={`${REPO}/tree/main/src/assurance/api`} target="_blank" rel="noreferrer">Assurance API</a></li>
+                </ul>
+              </div>
+
+              <div>
+                <h4>Solutions</h4>
+                <ul>
+                  <li><a href="#solutions">Manufacturer</a></li>
+                  <li><a href="#solutions">Plant operator</a></li>
+                  <li><a href="#solutions">Compliance officer</a></li>
+                  <li><a href="#solutions">Insurer / auditor</a></li>
+                </ul>
+              </div>
+
+              <div>
+                <h4>Compliance &amp; trust</h4>
+                <ul>
+                  <li><a href="#top">CRA Article 14</a></li>
+                  <li><a href="#top">Machinery Reg. Annex III 1.1.9</a></li>
+                  <li><a href={`${REPO}/tree/main/src/assurance/evidence`} target="_blank" rel="noreferrer">Hash-chained ledger</a></li>
+                  <li><a href={`${REPO}/blob/main/deploy/assurance/KIT.md`} target="_blank" rel="noreferrer">Offline enrolment kit</a></li>
+                </ul>
+              </div>
+
+              <div>
+                <h4>Developers</h4>
+                <ul>
+                  <li><a href={`${REPO}#readme`} target="_blank" rel="noreferrer">Documentation</a></li>
+                  <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
+                  <li><a href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a></li>
+                  <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
+                  <li><a href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a></li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="shell footer-bottom">
+              <span>&copy; 2026 Industrial Autonomous Assurance &middot; MIT Licensed &middot; Built by Vincenzo Grimaldi</span>
+              <a href={REPO} target="_blank" rel="noreferrer">github.com/iceccarelli/neuralbridge</a>
             </div>
           </footer>
         </div>
