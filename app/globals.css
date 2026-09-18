@@ -975,10 +975,16 @@ img {
 }
 
 .solution-card {
+  display: block;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1.25rem;
   background: var(--surface);
+  transition: border-color 150ms ease;
+}
+
+.solution-card:hover {
+  border-color: #9fb3cc;
 }
 
 .solution-card .solution-role {
@@ -1236,6 +1242,67 @@ table.compare-table td.check {
   margin: 1rem 0 0;
   font-size: 0.78rem;
   color: var(--ink-soft);
+}
+
+/* ====================== INTENT MODULE ====================== */
+.intent-module {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.6rem;
+  background: var(--surface-alt);
+}
+
+.intent-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 650;
+  margin-bottom: 0.5rem;
+}
+
+.intent-select {
+  width: 100%;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  background: var(--surface);
+  margin-bottom: 1.5rem;
+}
+
+.intent-proof {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  align-items: start;
+  margin-bottom: 1.5rem;
+}
+
+.intent-proof-kicker {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--link);
+  margin-bottom: 0.4rem;
+}
+
+.intent-proof-body {
+  font-size: 0.9rem;
+  color: var(--ink);
+  line-height: 1.55;
+  margin: 0 0 0.6rem;
+}
+
+.intent-proof-source {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 0;
+}
+
+.intent-output {
+  font-size: 0.76rem;
+  min-height: 0;
 }
 
 /* ====================== VALIDATOR PLAYGROUND ====================== */
@@ -1775,7 +1842,8 @@ table.status-table tbody tr:last-child td {
 .trust-grid > *,
 .final-cta-inner > *,
 .calc-grid > *,
-.playground-grid > * {
+.playground-grid > *,
+.intent-proof > * {
   min-width: 0;
 }
 
@@ -1853,7 +1921,8 @@ table.status-table tbody tr:last-child td {
   .pricing-grid,
   .trust-grid,
   .calc-grid,
-  .playground-grid {
+  .playground-grid,
+  .intent-proof {
     grid-template-columns: 1fr;
   }
   .footer-columns {

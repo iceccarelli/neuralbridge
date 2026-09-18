@@ -213,6 +213,60 @@ class TestCheckout:
         )
         assert response.status_code == 422
 
+    def test_checkout_sends_the_browser_to_the_marketing_site_not_raw_json(
+        self, env, monkeypatch
+    ):
+        # A customer who just paid should land on a page that explains what
+        # happened, not the API's own JSON. Regression test for the redirect
+        # that used to point straight at /v1/checkout/complete.
+        monkeypatch.setenv("ASSURANCE_PRICE_REGISTER", "price_test_register")
+        monkeypatch.setenv("ASSURANCE_MARKETING_URL", "https://neuralbridge.io")
+        from assurance.billing import stripe_gateway
+
+        captured: dict[str, str] = {}
+
+        def fake_create_checkout_session(*, success_url, cancel_url, **_kw):
+            captured["success_url"] = success_url
+            captured["cancel_url"] = cancel_url
+            return stripe_gateway.CheckoutSession(id="cs_test_1", url="https://checkout.stripe.com/cs_test_1")
+
+        monkeypatch.setattr(stripe_gateway, "create_checkout_session", fake_create_checkout_session)
+
+        from assurance.api import service
+
+        with TestClient(service.create_app()) as c:
+            response = c.post(
+                "/v1/checkout",
+                json={"tier": "register", "email": "m.braun@example.de"},
+            )
+        assert response.status_code == 200
+        assert captured["success_url"] == (
+            "https://neuralbridge.io/checkout/success?session_id={CHECKOUT_SESSION_ID}"
+        )
+        assert captured["cancel_url"] == "https://neuralbridge.io/#pricing"
+
+    def test_marketing_url_defaults_to_the_real_site(self, env, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_PRICE_CELL", "price_test_cell")
+        monkeypatch.delenv("ASSURANCE_MARKETING_URL", raising=False)
+        from assurance.billing import stripe_gateway
+
+        captured: dict[str, str] = {}
+
+        def fake_create_checkout_session(*, success_url, cancel_url, **_kw):
+            captured["success_url"] = success_url
+            return stripe_gateway.CheckoutSession(id="cs_test_2", url="https://checkout.stripe.com/cs_test_2")
+
+        monkeypatch.setattr(stripe_gateway, "create_checkout_session", fake_create_checkout_session)
+
+        from assurance.api import service
+
+        with TestClient(service.create_app()) as c:
+            response = c.post(
+                "/v1/checkout", json={"tier": "cell", "email": "a@b.de"}
+            )
+        assert response.status_code == 200
+        assert captured["success_url"].startswith("https://neuralbridge.io/checkout/success")
+
 
 class TestWebhook:
     def test_an_unsigned_webhook_is_refused(self, client):

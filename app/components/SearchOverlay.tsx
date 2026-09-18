@@ -87,7 +87,7 @@ export default function SearchOverlay({ open, onClose }: { open: boolean; onClos
         )}
 
         <p className="search-note">
-          This searches this page's own sections and the repository's real docs — not a hosted index yet.
+          This searches this site's own sections and links out to the docs site, which has its own full-text search.
         </p>
       </div>
     </div>

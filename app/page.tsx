@@ -1,4 +1,6 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import { SOLUTIONS } from './lib/solutions';
+import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
@@ -109,29 +111,6 @@ const products = [
   },
 ];
 
-const solutions = [
-  {
-    role: 'Manufacturer',
-    body: 'Bind a Declaration of Conformity to a configuration hash. The moment it stops matching the machine on the floor becomes a date, not an argument.',
-  },
-  {
-    role: 'Plant operator',
-    body: 'Verify the safety-relevant software actually on a cell before you take the blame for a firmware change nobody told you about.',
-  },
-  {
-    role: 'Compliance officer',
-    body: 'File Article 14 within the 24-hour clock, with awareness records and the reasoning that defends the filing — both deadline clocks computed correctly.',
-  },
-  {
-    role: 'Insurer / auditor',
-    body: 'Check a Declaration, a manifest, or an attestation for free, forever. The person who most needs to verify evidence is never the one paying for it.',
-  },
-  {
-    role: 'AI / ops platform team',
-    body: 'Layer the NeuralBridge MCP gateway underneath to expose supported adapters and connection state to agents, with a full audit trail.',
-  },
-];
-
 const platformStatus = [
   { area: 'FastAPI backend', status: 'Supported' },
   { area: 'Connection management model', status: 'Supported' },
@@ -196,6 +175,18 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         </div>
       </section>
 
+      {/* INTENT ROUTER */}
+      <section className="section" id="intent">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Start here</span>
+            <h2>Find your proof in one click.</h2>
+            <p>Every answer below is a real terminal capture from this exact codebase &mdash; not a mockup.</p>
+          </div>
+          <IntentModule />
+        </div>
+      </section>
+
       {/* EXPLORE PRODUCTS */}
       <section className="section" id="products">
         <div className="shell">
@@ -249,12 +240,16 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <p>Five buyers, five reasons the paperwork stopped describing the machine.</p>
           </div>
           <div className="solutions-grid">
-            {solutions.map((solution) => (
-              <article className="solution-card" key={solution.role}>
+            {SOLUTIONS.map((solution) => (
+              <a className="solution-card" href={`/solutions/${solution.slug}`} key={solution.slug}>
                 <span className="solution-role">{solution.role}</span>
-                <h3>{solution.body.split('.')[0]}.</h3>
-                <p>{solution.body}</p>
-              </article>
+                <h3>{solution.headline}</h3>
+                <p>{solution.lead}</p>
+                <span className="tile-link" style={{ marginTop: '0.75rem' }}>
+                  <span className="tile-link-label">See the {solution.role.toLowerCase()} page</span>
+                  <span className="tile-link-arrow" aria-hidden>{'→'}</span>
+                </span>
+              </a>
             ))}
           </div>
         </div>

@@ -1,4 +1,5 @@
-import { DEPLOY_BLOB, REPO, SRC } from './links';
+import { DEPLOY_BLOB, DOCS, REPO, SRC } from './links';
+import { SOLUTIONS } from './solutions';
 
 export type SearchGroup = 'Products' | 'Solutions' | 'Docs';
 
@@ -11,9 +12,10 @@ export interface SearchEntry {
 }
 
 // A static index of this site's own sections and the real docs in the repo —
-// not a hosted search service. There is no backend to query yet (see
-// deploy/assurance/README.md); this is the honest version of "search" until
-// a docs site (MkDocs, per ROADMAP) exists to index against Pagefind or similar.
+// not a hosted search service. The MkDocs site at DOCS has its own built-in
+// search (mkdocs-material's `search` plugin); this index only covers the
+// marketing site itself and links out to the docs site's pages, rather than
+// duplicating the docs site's own search.
 export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Validator — free', group: 'Products', href: '#pricing', blurb: 'Article 14 draft validation, calculators, offline kit. No account.' },
   { title: 'Article 14 Register — €390/mo', group: 'Products', href: '#pricing', blurb: 'The CRA register for one manufacturer.' },
@@ -25,12 +27,14 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Attest', group: 'Products', href: `${DEPLOY_BLOB}/ATTEST.md`, blurb: 'Counter-signed head attestation; catches deletion, not just editing.', external: true },
   { title: 'Offline enrolment kit', group: 'Products', href: `${DEPLOY_BLOB}/KIT.md`, blurb: 'Your ledger, your disk. No account, no upload.', external: true },
   { title: 'Assurance API', group: 'Products', href: `${SRC}/api`, blurb: 'FastAPI surface for billing and entitlements.', external: true },
-  { title: 'Manufacturer', group: 'Solutions', href: '#solutions', blurb: 'Bind a Declaration of Conformity to a configuration hash.' },
-  { title: 'Plant operator', group: 'Solutions', href: '#solutions', blurb: 'Verify the safety-relevant software actually on a cell.' },
-  { title: 'Compliance officer', group: 'Solutions', href: '#solutions', blurb: 'File Article 14 within the 24-hour clock.' },
-  { title: 'Insurer / auditor', group: 'Solutions', href: '#solutions', blurb: 'Check evidence for free, forever.' },
-  { title: 'AI / ops platform team', group: 'Solutions', href: '#solutions', blurb: 'The NeuralBridge MCP gateway underneath.' },
-  { title: 'README — full documentation', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },
+  ...SOLUTIONS.map((s) => ({
+    title: s.role,
+    group: 'Solutions' as const,
+    href: `/solutions/${s.slug}`,
+    blurb: s.headline,
+  })),
+  { title: 'Documentation', group: 'Docs', href: DOCS, blurb: 'Getting started, every engine, deploying the register.', external: true },
+  { title: 'README — full source', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },
   { title: 'Deploy guide', group: 'Docs', href: `${DEPLOY_BLOB}/README.md`, blurb: 'fly.io, Stripe, backups, what to check after deploying.', external: true },
   { title: 'Roadmap', group: 'Docs', href: `${REPO}/blob/main/ROADMAP.md`, blurb: 'What is planned and not yet built.', external: true },
   { title: 'Security policy', group: 'Docs', href: `${REPO}/blob/main/SECURITY.md`, blurb: 'How to report a vulnerability.', external: true },

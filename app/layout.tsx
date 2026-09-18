@@ -4,7 +4,7 @@ import Header from './Header';
 import CookieConsent from './components/CookieConsent';
 import CookiePreferencesLink from './components/CookiePreferencesLink';
 import Feedback from './components/Feedback';
-import { REPO } from './lib/links';
+import { DOCS, REPO } from './lib/links';
 import './globals.css';
 
 const SITE_URL = 'https://neuralbridge.io';
@@ -126,7 +126,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h4>Developers</h4>
                 <ul>
-                  <li><a href={`${REPO}#readme`} target="_blank" rel="noreferrer">Documentation</a></li>
+                  <li><a href={DOCS} target="_blank" rel="noreferrer">Documentation</a></li>
                   <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
                   <li><a href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a></li>
                   <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
