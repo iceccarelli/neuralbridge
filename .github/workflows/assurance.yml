@@ -49,7 +49,7 @@ jobs:
           python - <<'PY'
           import json, pathlib, sys
           sys.path.insert(0, "tests")
-          from test_assurance_collect import write_export
+          from support import write_export
 
           base = pathlib.Path("plant")
           for n, serial in enumerate(("CELL-0412", "CELL-0501")):

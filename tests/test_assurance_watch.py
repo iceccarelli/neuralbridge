@@ -26,7 +26,7 @@ from assurance.watch.runner import (
     run_watch,
 )
 
-from .test_assurance_collect import plan_dict, write_export
+from .support import plan_dict, write_export
 
 T0 = datetime(2026, 9, 14, 6, tzinfo=UTC)
 
