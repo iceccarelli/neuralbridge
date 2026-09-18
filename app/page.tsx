@@ -1,7 +1,4 @@
-const REPO = 'https://github.com/iceccarelli/neuralbridge';
-const SRC = `${REPO}/tree/main/src/assurance`;
-const DEPLOY_BLOB = `${REPO}/blob/main/deploy/assurance`;
-const SALES = `${REPO}/issues/new?title=Sales+inquiry`;
+import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
 
 const trustStrip = [
   {
@@ -33,7 +30,7 @@ const products = [
     name: 'Validator',
     body: 'Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, and attestation verification.',
     href: '#pricing',
-    cta: 'Start free →',
+    cta: 'Start free',
   },
   {
     badge: '€390/mo',
@@ -41,7 +38,7 @@ const products = [
     name: 'Article 14 Register',
     body: 'The CRA register for one manufacturer: unlimited cases, both deadline clocks computed correctly, hash-chained ledger with verifiable export, 25 product families.',
     href: '#pricing',
-    cta: 'See pricing →',
+    cta: 'See pricing',
   },
   {
     badge: '€1,290/mo',
@@ -49,7 +46,7 @@ const products = [
     name: 'Cell',
     body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
     href: '#pricing',
-    cta: 'See pricing →',
+    cta: 'See pricing',
   },
   {
     badge: 'Engine',
@@ -57,7 +54,7 @@ const products = [
     name: 'Machine safety verification',
     body: 'A recorded run checked against the declared safety envelope — separation, speed limit, workspace containment, stop characterisation, power-and-force — each with a worst margin, each able to answer unchecked.',
     href: `${DEPLOY_BLOB}/MACHINE.md`,
-    cta: 'Read the engine guide →',
+    cta: 'Read the engine guide',
   },
   {
     badge: 'Engine',
@@ -65,7 +62,7 @@ const products = [
     name: 'Machinery Annex III',
     body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
     href: `${DEPLOY_BLOB}/MACHINERY.md`,
-    cta: 'Read the engine guide →',
+    cta: 'Read the engine guide',
   },
   {
     badge: 'Engine',
@@ -73,7 +70,7 @@ const products = [
     name: 'Fleet advisory',
     body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, never flattened into a boolean.',
     href: `${DEPLOY_BLOB}/FLEET.md`,
-    cta: 'Read the engine guide →',
+    cta: 'Read the engine guide',
   },
   {
     badge: 'Engine',
@@ -81,7 +78,7 @@ const products = [
     name: 'Watch',
     body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
     href: `${DEPLOY_BLOB}/WATCH.md`,
-    cta: 'Read the engine guide →',
+    cta: 'Read the engine guide',
   },
   {
     badge: 'Engine',
@@ -89,7 +86,7 @@ const products = [
     name: 'Attest',
     body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened.',
     href: `${DEPLOY_BLOB}/ATTEST.md`,
-    cta: 'Read the engine guide →',
+    cta: 'Read the engine guide',
   },
   {
     badge: 'Engine',
@@ -97,7 +94,7 @@ const products = [
     name: 'Offline enrolment kit',
     body: 'Your ledger, your disk. No account, no API key, no upload. `kit check` lists every file a run would open and touches nothing.',
     href: `${DEPLOY_BLOB}/KIT.md`,
-    cta: 'Read the kit guide →',
+    cta: 'Read the kit guide',
   },
   {
     badge: 'API',
@@ -105,7 +102,7 @@ const products = [
     name: 'Assurance API',
     body: 'FastAPI surface for billing and entitlements. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
     href: `${SRC}/api`,
-    cta: 'View source →',
+    cta: 'View source',
   },
 ];
 
@@ -176,6 +173,9 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             </p>
           </div>
         </div>
+        <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface-alt)" />
+        </svg>
       </section>
 
       {/* TRUST STRIP */}
@@ -231,7 +231,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   target={product.href.startsWith('#') ? undefined : '_blank'}
                   rel={product.href.startsWith('#') ? undefined : 'noreferrer'}
                 >
-                  {product.cta}
+                  <span className="tile-link-label">{product.cta}</span>
+                  <span className="tile-link-arrow" aria-hidden>→</span>
                 </a>
               </article>
             ))}
@@ -287,7 +288,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                 <li>Attestation verification</li>
                 <li>Offline enrolment kit</li>
               </ul>
-              <a className="btn btn-secondary" href={`${REPO}#start-here-one-command-inside-your-plant-nothing-uploaded`} target="_blank" rel="noreferrer">
+              <a className="btn btn-secondary" href={QUICKSTART} target="_blank" rel="noreferrer">
                 Get the quickstart
               </a>
             </div>
@@ -458,7 +459,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <p>No account, no upload, no procurement cycle to start. The Validator tier runs on your machine today.</p>
           </div>
           <div className="hero-actions">
-            <a className="btn btn-primary" href={`${REPO}#start-here-one-command-inside-your-plant-nothing-uploaded`} target="_blank" rel="noreferrer">
+            <a className="btn btn-primary" href={QUICKSTART} target="_blank" rel="noreferrer">
               Get the quickstart
             </a>
             <a className="btn btn-outline" href={SALES} target="_blank" rel="noreferrer">
