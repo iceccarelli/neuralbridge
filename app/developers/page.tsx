@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import { REPO, SRC } from '../lib/links';
+import { IMAGES } from '../lib/images';
+import RotatingImage from '../components/RotatingImage';
 
 const SITE_URL = 'https://neuralbridge.io';
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
@@ -89,6 +91,12 @@ export default function DevelopersPage() {
             <a className="btn btn-primary" href="/openapi.json">Get openapi.json</a>
             <a className="btn btn-outline" href={`${SRC}/api`} target="_blank" rel="noreferrer">Read the source</a>
           </div>
+          <RotatingImage
+            slot={IMAGES['api-fastapi-docs']}
+            aspect="21/9"
+            sizes="100vw"
+            className="pricing-media"
+          />
         </div>
       </section>
 

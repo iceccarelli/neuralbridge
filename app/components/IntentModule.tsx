@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { IMAGES } from '../lib/images';
+import RotatingImage from './RotatingImage';
 
 interface Intent {
   key: string;
@@ -101,6 +103,12 @@ export default function IntentModule() {
 
   return (
     <div className="intent-module">
+      <RotatingImage
+        slot={IMAGES['intent-fleet-advisory']}
+        aspect="21/9"
+        sizes="100vw"
+        className="pricing-media"
+      />
       <label className="intent-label" htmlFor="intent-select">What are you trying to do?</label>
       <select
         id="intent-select"

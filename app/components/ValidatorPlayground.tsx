@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { IMAGES } from '../lib/images';
+import RotatingImage from './RotatingImage';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -86,11 +88,19 @@ export default function ValidatorPlayground() {
         <div className="playground-output">
           <span className="playground-label">Response</span>
           {!result && !error && (
-            <p className="playground-placeholder">
-              {API_BASE
-                ? 'Edit the payload and click Validate to call the live free endpoint.'
-                : 'This endpoint is not hosted publicly yet — click Validate to see exactly what that means and how to run it yourself.'}
-            </p>
+            <>
+              <RotatingImage
+                slot={IMAGES['playground-validate-placeholder']}
+                aspect="4/3"
+                sizes="(max-width: 768px) 100vw, 40vw"
+                className="playground-media"
+              />
+              <p className="playground-placeholder">
+                {API_BASE
+                  ? 'Edit the payload and click Validate to call the live free endpoint.'
+                  : 'This endpoint is not hosted publicly yet — click Validate to see exactly what that means and how to run it yourself.'}
+              </p>
+            </>
           )}
           {error && <p className="playground-error">{error}</p>}
           {result && (

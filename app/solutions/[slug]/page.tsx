@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { SOLUTIONS, getSolution } from '../../lib/solutions';
+import { IMAGES } from '../../lib/images';
+import RotatingImage from '../../components/RotatingImage';
 
 export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
@@ -58,6 +60,14 @@ export default function SolutionPage({ params }: { params: { slug: string } }) {
               {solution.secondaryCta.label}
             </a>
           </div>
+          <RotatingImage
+            slot={IMAGES[solution.images.hero]}
+            aspect="21/9"
+            priority
+            sizes="100vw"
+            dots
+            className="pricing-media"
+          />
         </div>
         <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
           <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface-alt)" />
@@ -100,8 +110,16 @@ export default function SolutionPage({ params }: { params: { slug: string } }) {
             <h2>Proof, not a pitch</h2>
           </div>
           <div className="tile-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
-            {solution.proof.map((item) => (
+            {solution.proof.map((item, i) => (
               <article className="tile" key={item.title}>
+                {solution.images.supporting[i] && (
+                  <RotatingImage
+                    slot={IMAGES[solution.images.supporting[i]]}
+                    aspect="4/3"
+                    offsetMs={i * 900}
+                    className="tile-media"
+                  />
+                )}
                 <h3>{item.title}</h3>
                 <p>{item.body}</p>
                 <a
