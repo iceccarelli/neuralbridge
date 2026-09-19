@@ -2754,3 +2754,13 @@ table.status-table tbody tr:last-child td {
     max-height: 260px;
   }
 }
+
+/* ====================== STANDALONE DOC PAGES (roadmap, security) ====================== */
+.docs-standalone {
+  max-width: 74ch;
+}
+
+.docs-standalone .docs-nav-edit {
+  display: inline-block;
+  margin-top: 2rem;
+}
