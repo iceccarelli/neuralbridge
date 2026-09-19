@@ -63,20 +63,26 @@ export default function StatusPage() {
 
   return (
     <main id="top">
-      <section className="section" style={{ paddingTop: '3rem' }}>
-        <div className="shell" style={{ maxWidth: '76ch' }}>
-          <div className="section-head">
-            <span className="eyebrow">Status</span>
-            <h2>What's between this build and a live, sellable deployment</h2>
-            <p>
-              A founder checklist, not a code blocker — every item below is deploy/ops work outside this
-              repository's CI. {doneCount} of {items.length} checkable from this build are confirmed; the rest
-              need a real deployment to verify, which is expected. See{' '}
-              <a href={`${REPO}/blob/main/DEPLOY_NOW.md`} target="_blank" rel="noreferrer">DEPLOY_NOW.md</a> for the
-              exact command sequence and <code>.env.example</code> for every variable name.
-            </p>
+      <section className="hero" style={{ padding: '3rem 0 3.5rem' }}>
+        <div className="shell">
+          <span className="kicker">FOUNDER CHECKLIST, NOT A CODE BLOCKER</span>
+          <h1 style={{ maxWidth: '26ch' }}>What&apos;s between this build and a live, sellable deployment</h1>
+          <p className="hero-lead" style={{ maxWidth: '68ch' }}>
+            Every item below is deploy/ops work outside this repository&apos;s CI — nothing here is something a PR
+            can fix. See <a href={`${REPO}/blob/main/DEPLOY_NOW.md`} target="_blank" rel="noreferrer">DEPLOY_NOW.md</a>{' '}
+            for the exact command sequence and <code>.env.example</code> for every variable name.
+          </p>
+          <div className="status-progress">
+            <div className="status-progress-bar">
+              <div className="status-progress-fill" style={{ width: `${(doneCount / items.length) * 100}%` }} />
+            </div>
+            <span>{doneCount} of {items.length} checkable from this build confirmed — the rest need a real deployment to verify, which is expected.</span>
           </div>
+        </div>
+      </section>
 
+      <section className="section" style={{ paddingTop: '2.5rem' }}>
+        <div className="shell" style={{ maxWidth: '76ch' }}>
           <div className="status-checklist">
             {items.map((item) => (
               <div className={`status-checklist-item ${item.done ? 'done' : 'pending'}`} key={item.label}>
