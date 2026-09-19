@@ -2,12 +2,13 @@
 // See app/DESIGN.md → Imagery for the file layout and rotation rules.
 //
 // `a` and `b` are two independently generated photoreal frames of the same
-// scene (see MANIFEST.md in each pack) — never a fake vs. a real photo, and
-// never two crops of the same file. Each carries its own alt text because
-// they are genuinely different compositions; when only `a` exists (a
-// portrait crop, or the one pack-zip file that shipped 0 bytes —
-// solution-aiops-mcp-gateway — see assets/illustrations/README if you need
-// the story), the slot has no `b` and renders as a single static image.
+// scene — never a fake vs. a real photo, and never two crops of the same
+// file. Each carries its own alt text because they are genuinely different
+// compositions; when only `a` exists (a portrait crop, or
+// solution-aiops-mcp-gateway, whose source shipped 0 bytes for `b`), the
+// slot has no `b` and renders as a single static image. The source archives
+// have been extracted into public/images/variants/{a,b} and are not kept in
+// the repo.
 
 export interface ImageVariant {
   src: string;

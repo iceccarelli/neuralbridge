@@ -33,6 +33,12 @@ it. Full detail: `deploy/assurance/README.md`.
 
 ## 2. Set the Fly secrets
 
+Every name below is documented in `.env.example` under "ASSURANCE PRODUCT",
+alongside what each one does and what happens when it's left unset — that
+file is the full reference; this is the exact command. Replace `REPLACE_*`
+and `sk_live_...`/`whsec_...`/`price_...` with real values — no other code
+change is needed.
+
 ```bash
 fly secrets set \
   ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \

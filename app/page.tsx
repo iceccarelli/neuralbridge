@@ -40,7 +40,7 @@ const products = [
     badgeClass: '',
     name: 'Validator',
     body: 'Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, and attestation verification.',
-    href: '#pricing',
+    href: QUICKSTART,
     cta: 'Start free',
     imageKey: 'card-plan-validator',
   },
@@ -67,7 +67,7 @@ const products = [
     badgeClass: 'source',
     name: 'Machine safety verification',
     body: 'A recorded run checked against the declared safety envelope — separation, speed limit, workspace containment, stop characterisation, power-and-force — each with a worst margin, each able to answer unchecked.',
-    href: `${DEPLOY_BLOB}/MACHINE.md`,
+    href: `/docs/assurance/machine`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-machine-safety',
   },
@@ -76,7 +76,7 @@ const products = [
     badgeClass: 'source',
     name: 'Machinery Annex III',
     body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
-    href: `${DEPLOY_BLOB}/MACHINERY.md`,
+    href: `/docs/assurance/machinery`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-annex-iii',
   },
@@ -85,7 +85,7 @@ const products = [
     badgeClass: 'source',
     name: 'Fleet advisory',
     body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, never flattened into a boolean.',
-    href: `${DEPLOY_BLOB}/FLEET.md`,
+    href: `/docs/assurance/fleet`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-fleet',
   },
@@ -94,7 +94,7 @@ const products = [
     badgeClass: 'source',
     name: 'Watch',
     body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
-    href: `${DEPLOY_BLOB}/WATCH.md`,
+    href: `/docs/assurance/watch`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-watch',
   },
@@ -103,7 +103,7 @@ const products = [
     badgeClass: 'source',
     name: 'Attest',
     body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened.',
-    href: `${DEPLOY_BLOB}/ATTEST.md`,
+    href: `/docs/assurance/attest`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-attest',
   },
@@ -112,7 +112,7 @@ const products = [
     badgeClass: 'source',
     name: 'Offline enrolment kit',
     body: 'Your ledger, your disk. No account, no API key, no upload. `kit check` lists every file a run would open and touches nothing.',
-    href: `${DEPLOY_BLOB}/KIT.md`,
+    href: `/docs/assurance/kit`,
     cta: 'Read the kit guide',
     imageKey: 'card-engine-kit',
   },
@@ -153,8 +153,8 @@ export default function IndustrialAutonomousAssuranceSite() {
               intervention. Neither is satisfiable from a spreadsheet. This is built from the record instead.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-primary" href="#pricing">Start free — Validator</a>
-              <a className="btn btn-outline" href={SALES} target="_blank" rel="noreferrer">Talk to sales</a>
+              <a className="btn btn-primary" href="#products">Start free — Validator</a>
+              <a className="btn btn-outline" href={SALES}>Talk to sales</a>
               <a className="btn btn-outline" href="#pricing">See pricing</a>
             </div>
           </div>
@@ -231,15 +231,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               connection, including name resolution.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-outline" href={`${DEPLOY_BLOB}/KIT.md`} target="_blank" rel="noreferrer">
+              <a className="btn btn-outline" href="/docs/assurance/kit">
                 Read the kit guide
               </a>
             </div>
             <a
               className="docs-preview-card"
-              href={`${DEPLOY_BLOB}/KIT.md`}
-              target="_blank"
-              rel="noreferrer"
+              href="/docs/assurance/kit"
               style={{ marginTop: '1.25rem' }}
             >
               <RotatingImage slot={IMAGES['docs-offline-enrolment']} aspect="4/3" className="docs-preview-media" />
@@ -319,8 +317,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                 <a
                   className="tile-link"
                   href={product.href}
-                  target={product.href.startsWith('#') ? undefined : '_blank'}
-                  rel={product.href.startsWith('#') ? undefined : 'noreferrer'}
+                  target={product.href.startsWith('http') ? '_blank' : undefined}
+                  rel={product.href.startsWith('http') ? 'noreferrer' : undefined}
                 >
                   <span className="tile-link-label">{product.cta}</span>
                   <span className="tile-link-arrow" aria-hidden>→</span>
@@ -456,7 +454,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             from wherever runs <code>fly deploy</code>, plus live Stripe keys &mdash; neither is available in the
             environment that built this page. See{' '}
             <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a>{' '}
-            and <a href={`${DEPLOY_BLOB}/README.md`} target="_blank" rel="noreferrer">the deploy guide</a> for the exact
+            and <a href="/docs/assurance/deploy">the deploy guide</a> for the exact
             remaining steps.
           </p>
         </div>
@@ -518,10 +516,10 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <p>No account, no upload, no procurement cycle to start. The Validator tier runs on your machine today.</p>
           </div>
           <div className="hero-actions">
-            <a className="btn btn-primary" href={QUICKSTART} target="_blank" rel="noreferrer">
+            <a className="btn btn-primary" href={QUICKSTART}>
               Get the quickstart
             </a>
-            <a className="btn btn-outline" href={SALES} target="_blank" rel="noreferrer">
+            <a className="btn btn-outline" href={SALES}>
               Talk to sales
             </a>
           </div>
