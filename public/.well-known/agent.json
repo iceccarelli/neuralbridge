@@ -1,0 +1,37 @@
+{
+  "$schema_note": "A NeuralBridge-authored machine-readable descriptor for agents and tool-calling frameworks. Not a claim of conformance to any particular external agent-manifest standard — those are still unsettled as of writing. Treat this as a structured, always-current sibling of /llms.txt.",
+  "name": "Industrial Autonomous Assurance",
+  "short_name": "neuralbridge",
+  "description": "Evidence infrastructure for CRA Article 14 (Reg. (EU) 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230): a hash-chained record of what is on each machine, what was verified, and when.",
+  "homepage": "https://neuralbridge.io/",
+  "documentation": [
+    "https://neuralbridge.io/developers",
+    "https://neuralbridge.io/llms.txt",
+    "https://github.com/iceccarelli/neuralbridge/blob/main/docs/index.md"
+  ],
+  "api": {
+    "openapi_url": "https://neuralbridge.io/openapi.json",
+    "auth": {
+      "type": "api_key",
+      "in": "header",
+      "name": "X-API-Key",
+      "note": "A missing key is 401. A valid key on a plan that doesn't include the route is 402 (never 403), with a structured JSON body naming the required plan and the exact remedy — safe to parse and act on automatically."
+    }
+  },
+  "pricing": {
+    "currency": "EUR",
+    "tiers": [
+      { "name": "Validator", "price": 0, "period": "forever", "self_serve": true },
+      { "name": "Register", "price": 390, "period": "month", "self_serve": true },
+      { "name": "Cell", "price": 1290, "period": "month", "self_serve": true },
+      { "name": "Supplier", "price": null, "period": "month", "self_serve": false, "note": "Sales-assigned pricing, no self-serve price yet." }
+    ]
+  },
+  "honesty_note": "Checkout and the live plans API are real code paths, but they only activate once the operator finishes deploying the hosted API and setting NEXT_PUBLIC_ASSURANCE_API_URL. Do not report purchase as available unless you have independently confirmed the live API responds.",
+  "contact": {
+    "issues": "https://github.com/iceccarelli/neuralbridge/issues",
+    "sales": "https://github.com/iceccarelli/neuralbridge/issues/new?title=Sales+inquiry"
+  },
+  "source": "https://github.com/iceccarelli/neuralbridge",
+  "license": "MIT"
+}
