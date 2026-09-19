@@ -46,8 +46,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'OpenAPI schema', group: 'Docs', href: '/openapi.json', blurb: 'The real OpenAPI 3 schema, generated from the FastAPI app.' },
   { title: 'README — full source', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },
   { title: 'Deploy guide', group: 'Docs', href: `/docs/assurance/deploy`, blurb: 'fly.io, Stripe, backups, what to check after deploying.' },
-  { title: 'Roadmap', group: 'Docs', href: `${REPO}/blob/main/ROADMAP.md`, blurb: 'What is planned and not yet built.', external: true },
-  { title: 'Security policy', group: 'Docs', href: `${REPO}/blob/main/SECURITY.md`, blurb: 'How to report a vulnerability.', external: true },
+  { title: 'Roadmap', group: 'Docs', href: '/roadmap', blurb: 'What is planned and not yet built.' },
+  { title: 'Security policy', group: 'Docs', href: '/security', blurb: 'How to report a vulnerability.' },
   { title: 'Contributing', group: 'Docs', href: `${REPO}/blob/main/CONTRIBUTING.md`, blurb: 'How to propose a change to this repository.', external: true },
   { title: 'Privacy', group: 'Docs', href: '/privacy', blurb: 'What this site collects — today, nothing tracked.' },
 ];

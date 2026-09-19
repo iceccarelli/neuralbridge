@@ -58,7 +58,7 @@ export default function PrivacyPage() {
           <p>
             Runs entirely on your machine, writes only to disk you control, and arms a guard that refuses every
             outbound network connection — including DNS lookups — for the duration of the run. This is not a
-            policy; it is checkable in <a href={`${REPO}/blob/main/deploy/assurance/KIT.md`} target="_blank" rel="noreferrer">the kit's own source</a>.
+            policy; it is checkable in <a href="/docs/assurance/kit">the kit's own docs</a>.
           </p>
 
           <h3>The paid Register / Cell tiers</h3>
@@ -70,7 +70,7 @@ export default function PrivacyPage() {
           <h3>Contact</h3>
           <p>
             Questions about this page: <a href={`${REPO}/issues/new?title=Privacy+question`} target="_blank" rel="noreferrer">open an issue</a>.
-            Security issues: see <a href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">SECURITY.md</a>.
+            Security issues: see <a href="/security">the security policy</a>.
           </p>
         </div>
       </section>

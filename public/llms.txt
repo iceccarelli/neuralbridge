@@ -68,7 +68,8 @@ have independently confirmed the live API responds.
 - Structured agent descriptor (JSON sibling of this file):
   https://neuralbridge.io/.well-known/agent.json
 - Source repository: https://github.com/iceccarelli/neuralbridge
-- Roadmap (shipped vs. planned, honestly): https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md
+- Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
+- Security policy (how to report a vulnerability): https://neuralbridge.io/security
 - Deploy status (founder checklist, what's left before this takes real
   money): https://neuralbridge.io/status
 - Privacy: https://neuralbridge.io/privacy

@@ -124,7 +124,7 @@ export default function Header() {
           <div className="shell utility-bar-inner">
             <span>Evidence infrastructure for CRA Art. 14 and Machinery Reg. 2023/1230</span>
             <div className="utility-links">
-              <a href={`${REPO}/blob/main/deploy/assurance/README.md`} target="_blank" rel="noreferrer">Deploy docs</a>
+              <a href="/docs/assurance/deploy">Deploy docs</a>
               <a href={SALES}>Contact sales</a>
               <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
             </div>
@@ -238,7 +238,7 @@ export default function Header() {
                     <span className="mega-promo-kicker">Docs</span>
                     <strong>Browse the docs site</strong>
                   </a>
-                  <a className="mega-promo" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
+                  <a className="mega-promo" href="/roadmap" onClick={closeAll}>
                     <span className="mega-promo-kicker">Roadmap</span>
                     <strong>What&apos;s planned next</strong>
                   </a>
@@ -316,11 +316,11 @@ export default function Header() {
                 <strong>Console</strong>
                 <span>Paste an API key, call real /v1 routes from your browser.</span>
               </a>
-              <a className="finder-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <a className="finder-item" href="/roadmap" onClick={closeAll}>
                 <strong>Roadmap</strong>
                 <span>What is planned and not yet built.</span>
               </a>
-              <a className="finder-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <a className="finder-item" href="/security" onClick={closeAll}>
                 <strong>Security</strong>
                 <span>How to report a vulnerability.</span>
               </a>
@@ -394,8 +394,8 @@ export default function Header() {
               <a className="mobile-drill-item" href="/cli" onClick={() => setMobileOpen(false)}>CLI</a>
               <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>Connectors</a>
               <a className="mobile-drill-item" href="/console" onClick={() => setMobileOpen(false)}>Console</a>
-              <a className="mobile-drill-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a>
-              <a className="mobile-drill-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a>
+              <a className="mobile-drill-item" href="/roadmap">Roadmap</a>
+              <a className="mobile-drill-item" href="/security">Security</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>
             </>
           )}
