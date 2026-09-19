@@ -86,6 +86,35 @@ export default function Header() {
     };
   }, [mobileOpen, searchOpen]);
 
+  // Basic focus trap: while a mega panel or the mobile drill-in is open,
+  // move focus into it and keep Tab from escaping to the page behind it.
+  useEffect(() => {
+    const container = mobileOpen
+      ? headerRef.current?.querySelector<HTMLElement>('.mobile-drill.open')
+      : headerRef.current?.querySelector<HTMLElement>('.mega-panel.is-open');
+    if (!container) return;
+
+    const focusable = container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
+    );
+    focusable[0]?.focus();
+
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    container.addEventListener('keydown', onTab);
+    return () => container.removeEventListener('keydown', onTab);
+  }, [openMenu, mobileOpen]);
+
   const pane = PRODUCTS_PANES[productsPane];
 
   return (

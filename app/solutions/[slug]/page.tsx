@@ -9,9 +9,23 @@ export function generateStaticParams() {
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const solution = getSolution(params.slug);
   if (!solution) return {};
+  const title = `${solution.role} | Industrial Autonomous Assurance`;
+  const url = `/solutions/${solution.slug}`;
   return {
-    title: `${solution.role} | Industrial Autonomous Assurance`,
+    title,
     description: solution.headline,
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description: solution.headline,
+      url,
+      type: 'website',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description: solution.headline,
+    },
   };
 }
 
