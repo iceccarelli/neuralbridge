@@ -2754,3 +2754,32 @@ table.status-table tbody tr:last-child td {
     max-height: 260px;
   }
 }
+
+/* ====================== STATUS PROGRESS ====================== */
+.status-progress {
+  margin-top: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 42rem;
+}
+
+.status-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.status-progress-fill {
+  height: 100%;
+  background: var(--orange);
+  border-radius: 999px;
+  transition: width 400ms var(--ease);
+}
+
+.status-progress span {
+  font-size: 0.82rem;
+  color: #cbd7e6;
+  line-height: 1.5;
+}
