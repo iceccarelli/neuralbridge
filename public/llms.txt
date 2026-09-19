@@ -49,17 +49,28 @@ have independently confirmed the live API responds.
   - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
   - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
   - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
-- Documentation: https://github.com/iceccarelli/neuralbridge/blob/main/docs/index.md
-  (interim: the built MkDocs site can't publish to GitHub Pages until a repo
-  admin does one manual Settings step — see ROADMAP.md history if you need
-  the reason; this link always resolves either way)
+- Documentation: https://neuralbridge.io/docs (renders the same docs/ and
+  deploy/assurance/ markdown this repository ships, on-site — no GitHub
+  detour needed; a GitHub Pages mirror may also exist once a repo admin
+  enables it, see /status)
 - Developers / API reference: https://neuralbridge.io/developers
+- Applications (by capability, each mapped to a real gated route):
+  https://neuralbridge.io/applications
+- CLI (python -m assurance, the real command tree):
+  https://neuralbridge.io/cli
+- Connectors: https://neuralbridge.io/connectors/cursor and
+  https://neuralbridge.io/connectors/mcp
+- Browser REST console (paste an API key, call real /v1 routes):
+  https://neuralbridge.io/console
+- Contact / sales: https://neuralbridge.io/contact
 - OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
   https://neuralbridge.io/openapi.json
 - Structured agent descriptor (JSON sibling of this file):
   https://neuralbridge.io/.well-known/agent.json
 - Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md
+- Deploy status (founder checklist, what's left before this takes real
+  money): https://neuralbridge.io/status
 - Privacy: https://neuralbridge.io/privacy
 
 ## For AI agents evaluating or integrating with this product

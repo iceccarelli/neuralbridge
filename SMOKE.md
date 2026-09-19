@@ -29,3 +29,7 @@ to the API, Stripe config, or `NEXT_PUBLIC_ASSURANCE_API_URL`.
 
 If all five pass, the product takes real money. If any fails, do not
 announce the site as live — fix the matching step in `DEPLOY_NOW.md` first.
+
+None of this needs a code change — every value it depends on is a
+`REPLACE_*` placeholder or an example host in `.env.example`. Fill those in
+with real Fly/Stripe values and redeploy; nothing else moves.

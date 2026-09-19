@@ -32,11 +32,11 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'You need evidence, not a promise', body: 'A Declaration bound to a configuration hash can be shown to have stopped describing the machine — on a date, not an argument.' },
     ],
     proof: [
-      { title: 'Declarations bound to a configuration hash', body: 'The Cell tier binds a Declaration of Conformity to a configuration hash, so drift becomes a checkable date.', href: `${DEPLOY_BLOB}/FLEET.md`, external: true },
-      { title: 'Fleet advisory fan-out', body: 'One supplier advisory matched against every enrolled serial by hash, then version, then name — never version-range arithmetic.', href: `${DEPLOY_BLOB}/FLEET.md`, external: true },
+      { title: 'Declarations bound to a configuration hash', body: 'The Cell tier binds a Declaration of Conformity to a configuration hash, so drift becomes a checkable date.', href: `/docs/assurance/fleet` },
+      { title: 'Fleet advisory fan-out', body: 'One supplier advisory matched against every enrolled serial by hash, then version, then name — never version-range arithmetic.', href: `/docs/assurance/fleet` },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
-    secondaryCta: { label: 'Talk to sales', href: SALES, external: true },
+    secondaryCta: { label: 'Talk to sales', href: SALES },
     images: { hero: 'solution-manufacturer-hero', supporting: ['solution-manufacturer-drift', 'solution-manufacturer-fanout'] },
   },
   {
@@ -54,10 +54,10 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'You need your own record, independent of the OEM', body: 'The offline enrolment kit runs on your machine, into your own ledger — you do not have to trust anyone else’s bookkeeping.' },
     ],
     proof: [
-      { title: 'The staleness join', body: 'A sign-off from February, a firmware change in March, and the named safety functions whose evidence stopped applying — dated, not argued.', href: `${DEPLOY_BLOB}/MACHINERY.md`, external: true },
-      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that proves nothing left your network.', href: `${DEPLOY_BLOB}/KIT.md`, external: true },
+      { title: 'The staleness join', body: 'A sign-off from February, a firmware change in March, and the named safety functions whose evidence stopped applying — dated, not argued.', href: `/docs/assurance/machinery` },
+      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that proves nothing left your network.', href: `/docs/assurance/kit` },
     ],
-    primaryCta: { label: 'Run the offline kit', href: QUICKSTART, external: true },
+    primaryCta: { label: 'Run the offline kit', href: QUICKSTART },
     secondaryCta: { label: 'See pricing', href: '/#pricing' },
     images: { hero: 'solution-plant-operator-hero', supporting: ['solution-plant-operator-inspector'] },
   },
@@ -77,7 +77,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     proof: [
       { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — free, no account, forever.', href: '/#products' },
-      { title: 'Both deadline clocks, computed correctly', href: `${DEPLOY_BLOB}/README.md`, external: true, body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
+      { title: 'Both deadline clocks, computed correctly', href: `/docs/assurance/deploy`, body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
     secondaryCta: { label: 'See the Register plan', href: '/#pricing' },
@@ -99,10 +99,10 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     proof: [
       { title: 'Free forever, by design', body: 'Declaration check, bundle re-verification, and attestation verification are engineered as always-free — the buyer or auditor is never the paying customer.', href: '/#pricing' },
-      { title: 'Counter-signed head attestation', body: 'A signature over the ledger head by a key the operator does not hold — the one thing that catches a ledger that was quietly shortened.', href: `${DEPLOY_BLOB}/ATTEST.md`, external: true },
+      { title: 'Counter-signed head attestation', body: 'A signature over the ledger head by a key the operator does not hold — the one thing that catches a ledger that was quietly shortened.', href: `/docs/assurance/attest` },
     ],
     primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
-    secondaryCta: { label: 'Read how attestation works', href: `${DEPLOY_BLOB}/ATTEST.md`, external: true },
+    secondaryCta: { label: 'Read how attestation works', href: `/docs/assurance/attest` },
     images: { hero: 'solution-auditor-hero', supporting: ['solution-auditor-mismatch'] },
   },
   {

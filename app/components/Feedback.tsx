@@ -33,10 +33,8 @@ export default function Feedback() {
             </>
           ) : (
             <p>
-              Thanks — this isn&apos;t wired to anywhere yet, so nothing was sent. Real feedback:{' '}
-              <a href="https://github.com/iceccarelli/neuralbridge/issues/new" target="_blank" rel="noreferrer">
-                open an issue
-              </a>.
+              Thanks — this widget doesn&apos;t send anywhere yet, so nothing was recorded. For anything you want a
+              human to actually see: <a href="/contact?intent=other">reach out here</a>.
             </p>
           )}
         </div>

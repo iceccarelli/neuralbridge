@@ -6,8 +6,10 @@
   "homepage": "https://neuralbridge.io/",
   "documentation": [
     "https://neuralbridge.io/developers",
-    "https://neuralbridge.io/llms.txt",
-    "https://github.com/iceccarelli/neuralbridge/blob/main/docs/index.md"
+    "https://neuralbridge.io/docs",
+    "https://neuralbridge.io/cli",
+    "https://neuralbridge.io/applications",
+    "https://neuralbridge.io/llms.txt"
   ],
   "api": {
     "openapi_url": "https://neuralbridge.io/openapi.json",
@@ -30,7 +32,7 @@
   "honesty_note": "Checkout and the live plans API are real code paths, but they only activate once the operator finishes deploying the hosted API and setting NEXT_PUBLIC_ASSURANCE_API_URL. Do not report purchase as available unless you have independently confirmed the live API responds.",
   "contact": {
     "issues": "https://github.com/iceccarelli/neuralbridge/issues",
-    "sales": "https://github.com/iceccarelli/neuralbridge/issues/new?title=Sales+inquiry"
+    "sales": "https://neuralbridge.io/contact"
   },
   "source": "https://github.com/iceccarelli/neuralbridge",
   "license": "MIT"

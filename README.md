@@ -153,9 +153,13 @@ ruff check src/
 ## Working on this repository
 
 One branch — `main` — and no tags. `./nb doctor` reports the state, `./nb
-rebuild` reconstructs `main` from the patch files at the root as real commits,
-and `./nb apply <patch>` applies one patch, runs the full suite, and hard-resets
-if anything fails. A red suite never leaves a half-applied tree.
+normalise` clears stray branches/tags, and `./nb verify`/`./nb ship` run the
+suite and push. The repository used to be developed as a chain of root-level
+`00NN-*.patch` files applied with `./nb apply`; that workflow ended once the
+product landed on main, and the archived chain now lives under
+`assets/historical-patches/` for reference only. `./nb rebuild` and `./nb
+apply` are deprecated and refuse to run — make changes on a branch and open a
+PR instead.
 
 ---
 
