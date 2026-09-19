@@ -7,11 +7,11 @@ const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
 export const metadata: Metadata = {
   title: 'Cursor connector | Industrial Autonomous Assurance',
-  description: 'Point Cursor at the real Assurance API and openapi.json — no separate plugin, no account, free routes work today.',
+  description: 'Install assurance-mcp as a Cursor MCP server, or point Cursor at the real openapi.json — no account needed for free routes.',
   alternates: { canonical: '/connectors/cursor' },
   openGraph: {
     title: 'Cursor connector | Industrial Autonomous Assurance',
-    description: 'Wire Cursor to the Assurance API via its OpenAPI schema.',
+    description: 'Wire Cursor to the Assurance API — as an MCP server or via its OpenAPI schema.',
     url: '/connectors/cursor',
     type: 'website',
   },
@@ -22,15 +22,15 @@ export default function CursorConnectorPage() {
     <main id="top">
       <section className="hero" style={{ padding: '3rem 0 4.5rem' }}>
         <div className="shell">
-          <span className="kicker">FOR CURSOR, AND ANY AGENT THAT READS AN OPENAPI SCHEMA</span>
+          <span className="kicker">FOR CURSOR, VIA MCP OR RAW OPENAPI</span>
           <h1 style={{ maxWidth: '22ch' }}>Point Cursor at the Assurance API</h1>
           <p className="hero-lead" style={{ maxWidth: '68ch' }}>
-            There is no separate Cursor plugin to install — <a href="/openapi.json">openapi.json</a> is a real,
-            generated OpenAPI 3 schema, and Cursor (and most agent tooling) can read one directly. This page is the
-            exact steps and what to expect on each plan.
+            <code>assurance-mcp</code> installs as a real MCP server Cursor can call directly — no plugin to write.
+            Prefer plain HTTP instead? <a href="/openapi.json">openapi.json</a> is a real, generated OpenAPI 3
+            schema most agent tooling can read on its own.
           </p>
           <div className="hero-actions">
-            <a className="btn btn-primary" href="/openapi.json">Get openapi.json</a>
+            <a className="btn btn-primary" href="#mcp-setup">Install the MCP server</a>
             <a className="btn btn-outline" href="/developers">Read the route table</a>
           </div>
           <RotatingImage
@@ -50,19 +50,53 @@ export default function CursorConnectorPage() {
               <strong>{API_BASE ? 'A live base URL is configured' : 'No live base URL yet'}</strong>
               <span>
                 {API_BASE
-                  ? 'This deployment is live — Cursor can call it once you add the schema below.'
-                  : 'This marketing site was built without a live API URL. The steps below are real and will work against your own local run (uvicorn assurance.api.service:app) today — there is nothing public to call until the founder finishes deploy/assurance/README.md.'}
+                  ? 'This deployment is live — point ASSURANCE_API_URL (MCP) or your OpenAPI client at it.'
+                  : 'This marketing site was built without a live API URL. The steps below are real and will work against your own local run (uvicorn assurance.api.service:app) today.'}
               </span>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="section" id="setup">
+      <section className="section" id="mcp-setup">
         <div className="shell" style={{ maxWidth: '72ch' }}>
           <div className="section-head">
-            <span className="eyebrow">Setup</span>
-            <h2>Three steps, no account for the free tier</h2>
+            <span className="eyebrow">Recommended: MCP</span>
+            <h2>assurance-mcp, in Cursor's own config</h2>
+          </div>
+          <ol className="cli-steps">
+            <li>
+              <strong>Install the server.</strong>
+              <pre className="code-panel">{`pip install -e '.[assurance-mcp]'`}</pre>
+            </li>
+            <li>
+              <strong>Add it to Cursor's <code>mcp.json</code></strong> (Cursor Settings → MCP):
+              <pre className="code-panel">{`{
+  "mcpServers": {
+    "assurance": {
+      "command": "assurance-mcp",
+      "env": {
+        "ASSURANCE_API_URL": "${API_BASE || 'http://127.0.0.1:8000'}",
+        "ASSURANCE_API_KEY": ""
+      }
+    }
+  }
+}`}</pre>
+            </li>
+            <li>
+              <strong>Ask Cursor to call <code>plans</code> or <code>spec_validate</code> first</strong> — both
+              work with an empty <code>ASSURANCE_API_KEY</code>. See <a href="/connectors/mcp">the full tool
+              table</a> for what else ships and what's next.
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section className="section section-alt" id="setup">
+        <div className="shell" style={{ maxWidth: '72ch' }}>
+          <div className="section-head">
+            <span className="eyebrow">Alternative: raw OpenAPI</span>
+            <h2>For tools that read a schema directly</h2>
           </div>
           <ol className="cli-steps">
             <li>
