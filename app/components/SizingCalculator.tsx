@@ -105,7 +105,7 @@ export default function SizingCalculator() {
         <div className="calc-result-actions">
           <a className="btn btn-primary" href="#pricing">See {result.tier} pricing</a>
           {result.tier !== 'Validator' && (
-            <a className="btn btn-outline" href={SALES} target="_blank" rel="noreferrer">Talk to sales</a>
+            <a className="btn btn-outline" href={SALES}>Talk to sales</a>
           )}
         </div>
       </div>

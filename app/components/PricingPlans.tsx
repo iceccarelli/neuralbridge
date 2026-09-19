@@ -195,7 +195,7 @@ export default function PricingPlans() {
           {register.purchasable ? (
             <CheckoutForm tier="register" />
           ) : (
-            <a className="btn btn-primary" href={SALES} target="_blank" rel="noreferrer">Talk to sales</a>
+            <a className="btn btn-primary" href={SALES}>Talk to sales</a>
           )}
         </div>
 
@@ -211,7 +211,7 @@ export default function PricingPlans() {
           {cell.purchasable ? (
             <CheckoutForm tier="cell" />
           ) : (
-            <a className="btn btn-secondary" href={SALES} target="_blank" rel="noreferrer">Talk to sales</a>
+            <a className="btn btn-secondary" href={SALES}>Talk to sales</a>
           )}
         </div>
       </div>

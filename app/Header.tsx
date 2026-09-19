@@ -13,29 +13,29 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
   plans: {
     label: 'Plans',
     cards: [
-      { name: 'Validator — free', blurb: 'Article 14 draft validation, calculators, offline kit. No account.', href: '#pricing' },
-      { name: 'Register — €390/mo', blurb: 'The Article 14 register for one manufacturer.', href: '#pricing' },
-      { name: 'Cell — €1,290/mo', blurb: 'Register, plus machine and fleet-level assurance.', href: '#pricing' },
+      { name: 'Validator — free', blurb: 'Article 14 draft validation, calculators, offline kit. No account.', href: '/#pricing' },
+      { name: 'Register — €390/mo', blurb: 'The Article 14 register for one manufacturer.', href: '/#pricing' },
+      { name: 'Cell — €1,290/mo', blurb: 'Register, plus machine and fleet-level assurance.', href: '/#pricing' },
     ],
   },
   engines: {
     label: 'Engines',
     cards: [
-      { name: 'Machine safety verification', blurb: 'ISO/TS 15066 checks against a declared envelope.', href: `${DEPLOY_BLOB}/MACHINE.md`, external: true },
-      { name: 'Machinery Annex III', blurb: 'The safety software manifest and the staleness join.', href: `${DEPLOY_BLOB}/MACHINERY.md`, external: true },
-      { name: 'Fleet advisory', blurb: 'One advisory, fanned out by hash across a fleet.', href: `${DEPLOY_BLOB}/FLEET.md`, external: true },
-      { name: 'Watch', blurb: 'The component that runs when nobody is looking.', href: `${DEPLOY_BLOB}/WATCH.md`, external: true },
-      { name: 'Attest', blurb: 'Counter-signed head attestation; catches deletion.', href: `${DEPLOY_BLOB}/ATTEST.md`, external: true },
-      { name: 'Offline enrolment kit', blurb: 'Your ledger, your disk. No account, no upload.', href: `${DEPLOY_BLOB}/KIT.md`, external: true },
+      { name: 'Machine safety verification', blurb: 'ISO/TS 15066 checks against a declared envelope.', href: `/docs/assurance/machine` },
+      { name: 'Machinery Annex III', blurb: 'The safety software manifest and the staleness join.', href: `/docs/assurance/machinery` },
+      { name: 'Fleet advisory', blurb: 'One advisory, fanned out by hash across a fleet.', href: `/docs/assurance/fleet` },
+      { name: 'Watch', blurb: 'The component that runs when nobody is looking.', href: `/docs/assurance/watch` },
+      { name: 'Attest', blurb: 'Counter-signed head attestation; catches deletion.', href: `/docs/assurance/attest` },
+      { name: 'Offline enrolment kit', blurb: 'Your ledger, your disk. No account, no upload.', href: `/docs/assurance/kit` },
     ],
   },
   platform: {
     label: 'Platform',
     cards: [
-      { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '#platform' },
-      { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '#platform' },
+      { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
+      { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '/#platform' },
       { name: 'Assurance API', blurb: '42 routes; GET /v1/plans mirrors enforced entitlements.', href: `${SRC}/api`, external: true },
-      { name: 'Dashboard', blurb: 'Next.js console — not yet integrated with assurance.', href: '#platform' },
+      { name: 'Dashboard', blurb: 'Next.js console — not yet integrated with assurance.', href: '/#platform' },
     ],
   },
 };
@@ -125,7 +125,7 @@ export default function Header() {
             <span>Evidence infrastructure for CRA Art. 14 and Machinery Reg. 2023/1230</span>
             <div className="utility-links">
               <a href={`${REPO}/blob/main/deploy/assurance/README.md`} target="_blank" rel="noreferrer">Deploy docs</a>
-              <a href={SALES} target="_blank" rel="noreferrer">Contact sales</a>
+              <a href={SALES}>Contact sales</a>
               <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
@@ -184,8 +184,8 @@ export default function Header() {
                 </div>
               </div>
 
-              <a className="nav-cta ghost" href={SALES} target="_blank" rel="noreferrer">Talk to sales</a>
-              <a className="nav-cta primary" href="#pricing">Start free</a>
+              <a className="nav-cta ghost" href={SALES}>Talk to sales</a>
+              <a className="nav-cta primary" href="/#products">Start free</a>
 
               <button
                 className="hamburger"
@@ -234,7 +234,7 @@ export default function Header() {
                   ))}
                 </div>
                 <div className="mega-promo-row">
-                  <a className="mega-promo" href={DOCS} target="_blank" rel="noreferrer" onClick={closeAll}>
+                  <a className="mega-promo" href={DOCS} onClick={closeAll}>
                     <span className="mega-promo-kicker">Docs</span>
                     <strong>Browse the docs site</strong>
                   </a>
@@ -273,15 +273,15 @@ export default function Header() {
           <div className={`mega-panel mega-panel-full finder ${openMenu === 'pricing' ? 'is-open' : ''}`}>
             <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
             <div className="shell finder-inner">
-              <a className="finder-item" href="#pricing" onClick={closeAll}>
+              <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Free tier</strong>
                 <span>Validator — Article 14 validation and calculators, no account.</span>
               </a>
-              <a className="finder-item" href="#pricing" onClick={closeAll}>
+              <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Compare plans</strong>
                 <span>Validator, Register, Cell — full capability table.</span>
               </a>
-              <a className="finder-item" href={SALES} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <a className="finder-item" href={SALES} onClick={closeAll}>
                 <strong>Talk to sales</strong>
                 <span>Register and Cell route to a real inquiry — checkout isn&apos;t live yet.</span>
               </a>
@@ -292,7 +292,7 @@ export default function Header() {
           <div className={`mega-panel mega-panel-full finder ${openMenu === 'resources' ? 'is-open' : ''}`}>
             <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
             <div className="shell finder-inner">
-              <a className="finder-item" href={DOCS} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <a className="finder-item" href={DOCS} onClick={closeAll}>
                 <strong>Documentation</strong>
                 <span>The full docs site — getting started, every engine, deploying.</span>
               </a>
@@ -342,18 +342,18 @@ export default function Header() {
             <>
               <button className="mobile-drill-item" onClick={() => setMobileView('products')}>Products <span>›</span></button>
               <button className="mobile-drill-item" onClick={() => setMobileView('solutions')}>Solutions <span>›</span></button>
-              <a className="mobile-drill-item" href="#pricing" onClick={() => setMobileOpen(false)}>Pricing</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Pricing</a>
               <button className="mobile-drill-item" onClick={() => setMobileView('resources')}>Resources <span>›</span></button>
               <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
             </>
           )}
           {mobileView === 'products' && (
             <>
-              <a className="mobile-drill-item" href="#pricing" onClick={() => setMobileOpen(false)}>Validator — free</a>
-              <a className="mobile-drill-item" href="#pricing" onClick={() => setMobileOpen(false)}>Register — €390/mo</a>
-              <a className="mobile-drill-item" href="#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo</a>
-              <a className="mobile-drill-item" href="#products" onClick={() => setMobileOpen(false)}>All engines</a>
-              <a className="mobile-drill-item" href="#platform" onClick={() => setMobileOpen(false)}>Platform</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Validator — free</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Register — €390/mo</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo</a>
+              <a className="mobile-drill-item" href="/#products" onClick={() => setMobileOpen(false)}>All engines</a>
+              <a className="mobile-drill-item" href="/#platform" onClick={() => setMobileOpen(false)}>Platform</a>
             </>
           )}
           {mobileView === 'solutions' && (
@@ -372,7 +372,7 @@ export default function Header() {
           )}
           {mobileView === 'resources' && (
             <>
-              <a className="mobile-drill-item" href={DOCS} target="_blank" rel="noreferrer">Documentation</a>
+              <a className="mobile-drill-item" href={DOCS} onClick={() => setMobileOpen(false)}>Documentation</a>
               <a className="mobile-drill-item" href="/developers" onClick={() => setMobileOpen(false)}>Developers</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a>
@@ -382,8 +382,8 @@ export default function Header() {
         </div>
 
         <div className="mobile-drill-sticky">
-          <a className="btn btn-outline" href={SALES} target="_blank" rel="noreferrer" onClick={() => setMobileOpen(false)}>Talk to sales</a>
-          <a className="btn btn-primary" href="#pricing" onClick={() => setMobileOpen(false)}>Start free</a>
+          <a className="btn btn-outline" href={SALES} onClick={() => setMobileOpen(false)}>Talk to sales</a>
+          <a className="btn btn-primary" href="/#pricing" onClick={() => setMobileOpen(false)}>Start free</a>
         </div>
       </div>
     </header>

@@ -123,7 +123,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <section className="footer-cta">
             <div className="shell footer-cta-inner">
               <span>Verify one Declaration for free — no account, no upload.</span>
-              <a className="btn btn-primary" href="#pricing">Start free</a>
+              <a className="btn btn-primary" href="/#pricing">Start free</a>
             </div>
           </section>
 
@@ -140,9 +140,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h4>Products</h4>
                 <ul>
-                  <li><a href="#products">Validator (free)</a></li>
-                  <li><a href="#pricing">Register — &euro;390/mo</a></li>
-                  <li><a href="#pricing">Cell — &euro;1,290/mo</a></li>
+                  <li><a href="/#products">Validator (free)</a></li>
+                  <li><a href="/#pricing">Register — &euro;390/mo</a></li>
+                  <li><a href="/#pricing">Cell — &euro;1,290/mo</a></li>
                   <li><a href={`${REPO}/tree/main/src/assurance/api`} target="_blank" rel="noreferrer">Assurance API</a></li>
                 </ul>
               </div>
@@ -184,6 +184,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/privacy">Privacy</a></li>
                   <li><CookiePreferencesLink className="footer-link-button" /></li>
                   <li><a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a></li>
+                  <li><a href="/status">Deploy status</a></li>
                 </ul>
               </div>
             </div>
