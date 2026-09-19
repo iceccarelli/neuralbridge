@@ -170,6 +170,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <h4>Developers</h4>
                 <ul>
                   <li><a href={DOCS} target="_blank" rel="noreferrer">Documentation</a></li>
+                  <li><a href="/developers">API reference</a></li>
                   <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
                   <li><a href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a></li>
                   <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
