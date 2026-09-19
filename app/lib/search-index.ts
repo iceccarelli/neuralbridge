@@ -34,6 +34,8 @@ export const SEARCH_INDEX: SearchEntry[] = [
     blurb: s.headline,
   })),
   { title: 'Documentation', group: 'Docs', href: DOCS, blurb: 'Getting started, every engine, deploying the register.', external: true },
+  { title: 'Developers — API reference', group: 'Docs', href: '/developers', blurb: 'Auth, the real free-vs-paid route table, curl and Python examples.' },
+  { title: 'OpenAPI schema', group: 'Docs', href: '/openapi.json', blurb: 'The real OpenAPI 3 schema, generated from the FastAPI app.' },
   { title: 'README — full source', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },
   { title: 'Deploy guide', group: 'Docs', href: `${DEPLOY_BLOB}/README.md`, blurb: 'fly.io, Stripe, backups, what to check after deploying.', external: true },
   { title: 'Roadmap', group: 'Docs', href: `${REPO}/blob/main/ROADMAP.md`, blurb: 'What is planned and not yet built.', external: true },
