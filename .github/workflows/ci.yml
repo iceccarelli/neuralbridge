@@ -125,15 +125,24 @@ jobs:
   # gh-deploy only pushes a built site to the gh-pages branch — it does
   # not itself turn Pages on, so a repo where Pages was never enabled in
   # Settings stays a 404 forever even with a perfectly good gh-pages
-  # branch. `configure-pages` defaults to NOT creating a Pages site
-  # (`enablement: false`) — it only manages one that already exists, so
-  # it fails outright on a repo where Pages was never turned on. Passing
-  # `enablement: true` makes it call the Pages API with `pages: write`
-  # to create the site automatically on first run, so this workflow is
-  # what makes https://iceccarelli.github.io/neuralbridge/ live with no
-  # manual Settings step required. (Confirmed the failure mode live:
-  # the first version of this workflow left `enablement` at its default
-  # and failed with "Get Pages site failed ... Not Found".)
+  # branch.
+  #
+  # `configure-pages` with `enablement: true` calls the Pages API to try
+  # to create the site — but confirmed live that the default GITHUB_TOKEN
+  # cannot do this at all, regardless of the `pages: write` permission
+  # declared below: "Create Pages site failed. Error: Resource not
+  # accessible by integration". This is a hard GitHub restriction, not a
+  # workflow config problem — creating a Pages site for the first time
+  # needs repo admin rights that no Actions token carries. There is a
+  # one-time, unavoidable manual step: a repo admin visits Settings ->
+  # Pages -> Build and deployment -> Source, and picks "GitHub Actions".
+  # Once that is set, this job starts publishing automatically and no
+  # further manual steps are needed on future pushes.
+  #
+  # Until that happens, `continue-on-error` on configure-pages keeps this
+  # from being a permanent red X on every push to main, and the later
+  # steps are skipped rather than failing against a site that doesn't
+  # exist yet. See SMOKE.md / DEPLOY_NOW.md for the founder checklist.
   deploy-docs:
     name: Deploy Docs to GitHub Pages
     runs-on: ubuntu-latest
@@ -156,12 +165,25 @@ jobs:
           pip install "mkdocs-material<10" "mkdocs<2"
       - name: Build docs
         run: mkdocs build --strict
-      - uses: actions/configure-pages@v5
+      - name: Configure Pages
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
         with:
           enablement: true
+      - name: Pages not enabled yet
+        if: steps.pages.outcome != 'success'
+        run: |
+          echo "::warning::GitHub Pages is not enabled for this repo and the" \
+               "default GITHUB_TOKEN cannot enable it (GitHub restriction, not" \
+               "a config bug). A repo admin must visit Settings > Pages >" \
+               "Build and deployment > Source and choose 'GitHub Actions' once." \
+               "This job will publish automatically on the next push after that."
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outcome == 'success'
         with:
           path: site
       - name: Deploy to GitHub Pages
         id: deployment
+        if: steps.pages.outcome == 'success'
         uses: actions/deploy-pages@v4
