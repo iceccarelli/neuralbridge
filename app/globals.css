@@ -2783,3 +2783,13 @@ table.status-table tbody tr:last-child td {
   color: #cbd7e6;
   line-height: 1.5;
 }
+
+/* ====================== STANDALONE DOC PAGES (roadmap, security) ====================== */
+.docs-standalone {
+  max-width: 74ch;
+}
+
+.docs-standalone .docs-nav-edit {
+  display: inline-block;
+  margin-top: 2rem;
+}

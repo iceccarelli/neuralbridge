@@ -45,22 +45,39 @@ export const DOCS_NAV: { label: string; href: string; children?: { label: string
   { label: 'Platform status', href: '/docs/platform' },
 ];
 
-// Rewrite the mkdocs-relative .md links in the source into on-site /docs
-// routes so a reader never falls through to a raw GitHub blob mid-article.
+// Rewrite the mkdocs-relative .md links (and root-doc-relative ones, for
+// ROADMAP.md/SECURITY.md) into on-site routes so a reader never falls
+// through to a raw GitHub blob mid-article.
 const LINK_MAP: Record<string, string> = {
   'getting-started.md': '/docs/getting-started',
   'pricing.md': '/docs/pricing',
   'platform.md': '/docs/platform',
+  'docs/platform.md': '/docs/platform',
+  'docs/index.md': '/docs',
   'assurance/index.md': '/docs/assurance',
   'assurance/deploy.md': '/docs/assurance/deploy',
+  'ROADMAP.md': '/roadmap',
+  'SECURITY.md': '/security',
   ...Object.fromEntries(ENGINE_PAGES.map((p) => [`${p.slug}.md`, `/docs/assurance/${p.slug}`])),
 };
 
+// README.md#some-anchor is a root-relative link only ROADMAP.md uses today,
+// pointing at the platform section — the on-site equivalent is the
+// homepage's own platform section.
+const FRAGMENT_LINK_MAP: Record<string, string> = {
+  'README.md#neuralbridge--the-platform-underneath': '/#platform',
+};
+
 function rewriteLinks(markdown: string): string {
-  return markdown.replace(/\]\(([a-zA-Z0-9/_-]+\.md)\)/g, (match, target: string) => {
-    const mapped = LINK_MAP[target];
-    return mapped ? `](${mapped})` : match;
-  });
+  return markdown
+    .replace(/\]\(([a-zA-Z0-9/_-]+\.md#[a-zA-Z0-9-]+)\)/g, (match, target: string) => {
+      const mapped = FRAGMENT_LINK_MAP[target];
+      return mapped ? `](${mapped})` : match;
+    })
+    .replace(/\]\(([a-zA-Z0-9/_-]+\.md)\)/g, (match, target: string) => {
+      const mapped = LINK_MAP[target];
+      return mapped ? `](${mapped})` : match;
+    });
 }
 
 function stripFrontmatter(markdown: string): string {
@@ -103,6 +120,20 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
   const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
 
   return { title, html, editPath: resolved.file };
+}
+
+// Root-level meta docs (ROADMAP.md, SECURITY.md) ported on-site the same
+// way — same source of truth, read at build time, not a copy that can
+// drift. These aren't part of the /docs tree (no sidebar), just rendered
+// standalone with the same markdown pipeline.
+export function loadRootDoc(file: string, title: string): { title: string; html: string; editPath: string } | null {
+  const abs = path.join(REPO_ROOT, file);
+  if (!fs.existsSync(abs)) return null;
+
+  const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
+  const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
+
+  return { title, html, editPath: file };
 }
 
 export function listDocSlugs(): { slug: string[] }[] {
