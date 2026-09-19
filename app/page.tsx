@@ -1,7 +1,9 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
+import { IMAGES } from './lib/images';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
+import RotatingImage from './components/RotatingImage';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
@@ -10,23 +12,27 @@ const trustStrip = [
     label: 'CRA Art. 14',
     title: 'Reg. (EU) 2024/2847',
     body: 'Applies since 11 Sep 2026. An actively exploited vulnerability means 24 hours to file an early warning.',
+    imageKey: 'strip-cra-clock',
   },
   {
     label: 'Annex III 1.1.9',
     title: 'Machinery Reg. 2023/1230',
     body: 'Applies 20 Jan 2027. The machine must identify its safety-relevant software and record evidence of intervention.',
+    imageKey: 'strip-machinery-annex',
   },
   {
     label: 'Ledger',
     title: 'Hash-chained evidence',
     body: 'A hash chain catches editing. A counter-signature over the ledger head catches deletion.',
+    imageKey: 'strip-hash-chain',
   },
   {
     label: 'Airgap',
     title: 'Offline enrolment kit',
     body: 'Runs on the operator’s disk. The socket guard refuses every outbound connection, including DNS.',
+    imageKey: 'strip-offline-kit',
   },
-];
+] as const;
 
 const products = [
   {
@@ -36,6 +42,7 @@ const products = [
     body: 'Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, and attestation verification.',
     href: '#pricing',
     cta: 'Start free',
+    imageKey: 'card-plan-validator',
   },
   {
     badge: '€390/mo',
@@ -44,6 +51,7 @@ const products = [
     body: 'The CRA register for one manufacturer: unlimited cases, both deadline clocks computed correctly, hash-chained ledger with verifiable export, 25 product families.',
     href: '#pricing',
     cta: 'See pricing',
+    imageKey: 'card-plan-register',
   },
   {
     badge: '€1,290/mo',
@@ -52,6 +60,7 @@ const products = [
     body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
     href: '#pricing',
     cta: 'See pricing',
+    imageKey: 'card-plan-cell',
   },
   {
     badge: 'Engine',
@@ -60,6 +69,7 @@ const products = [
     body: 'A recorded run checked against the declared safety envelope — separation, speed limit, workspace containment, stop characterisation, power-and-force — each with a worst margin, each able to answer unchecked.',
     href: `${DEPLOY_BLOB}/MACHINE.md`,
     cta: 'Read the engine guide',
+    imageKey: 'card-engine-machine-safety',
   },
   {
     badge: 'Engine',
@@ -68,6 +78,7 @@ const products = [
     body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
     href: `${DEPLOY_BLOB}/MACHINERY.md`,
     cta: 'Read the engine guide',
+    imageKey: 'card-engine-annex-iii',
   },
   {
     badge: 'Engine',
@@ -76,6 +87,7 @@ const products = [
     body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, never flattened into a boolean.',
     href: `${DEPLOY_BLOB}/FLEET.md`,
     cta: 'Read the engine guide',
+    imageKey: 'card-engine-fleet',
   },
   {
     badge: 'Engine',
@@ -84,6 +96,7 @@ const products = [
     body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
     href: `${DEPLOY_BLOB}/WATCH.md`,
     cta: 'Read the engine guide',
+    imageKey: 'card-engine-watch',
   },
   {
     badge: 'Engine',
@@ -92,6 +105,7 @@ const products = [
     body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened.',
     href: `${DEPLOY_BLOB}/ATTEST.md`,
     cta: 'Read the engine guide',
+    imageKey: 'card-engine-attest',
   },
   {
     badge: 'Engine',
@@ -100,6 +114,7 @@ const products = [
     body: 'Your ledger, your disk. No account, no API key, no upload. `kit check` lists every file a run would open and touches nothing.',
     href: `${DEPLOY_BLOB}/KIT.md`,
     cta: 'Read the kit guide',
+    imageKey: 'card-engine-kit',
   },
   {
     badge: 'API',
@@ -108,8 +123,9 @@ const products = [
     body: 'FastAPI surface for billing and entitlements. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
     href: `${SRC}/api`,
     cta: 'View source',
+    imageKey: 'card-api-assurance',
   },
-];
+] as const;
 
 const platformStatus = [
   { area: 'FastAPI backend', status: 'Supported' },
@@ -143,16 +159,38 @@ export default function IndustrialAutonomousAssuranceSite() {
             </div>
           </div>
 
-          <div className="hero-panel">
-            <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-            <div className="hero-code">{`pip install -e '.[assurance-attest]'
+          <div>
+            <div className="hero-media-desktop" style={{ marginBottom: '1rem' }}>
+              <RotatingImage
+                slot={IMAGES['hero-hash-chained-cell']}
+                aspect="16/9"
+                priority
+                sizes="(max-width: 900px) 100vw, 45vw"
+                dots
+                className="hero-media"
+              />
+            </div>
+            <div className="hero-media-mobile" style={{ marginBottom: '1rem' }}>
+              {(() => {
+                const portrait = IMAGES['hero-hash-chained-cell'].portraitA;
+                return portrait ? (
+                  <div className="media-band hero-media" style={{ aspectRatio: '4/5' }}>
+                    <RotatingImage slot={{ a: portrait }} aspect="4/5" priority sizes="100vw" />
+                  </div>
+                ) : null;
+              })()}
+            </div>
+            <div className="hero-panel">
+              <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
+              <div className="hero-code">{`pip install -e '.[assurance-attest]'
 python -m assurance kit init plant/
 python -m assurance kit check plant/kit.json
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
-            <p className="hero-panel-note">
-              Your ledger, your disk. No account, no API key, no upload. The run arms a guard over the process's
-              socket layer and refuses every outbound connection, including name resolution.
-            </p>
+              <p className="hero-panel-note">
+                Your ledger, your disk. No account, no API key, no upload. The run arms a guard over the process's
+                socket layer and refuses every outbound connection, including name resolution.
+              </p>
+            </div>
           </div>
         </div>
         <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
@@ -160,12 +198,68 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         </svg>
       </section>
 
+      {/* SECOND HERO: offline kit */}
+      <section className="hero" style={{ padding: '3rem 0' }}>
+        <div className="shell hero-grid">
+          <div>
+            <div className="hero-media-desktop">
+              <RotatingImage
+                slot={IMAGES['hero-airgap-kit']}
+                aspect="16/9"
+                sizes="(max-width: 900px) 100vw, 45vw"
+                dots
+                className="hero-media"
+              />
+            </div>
+            <div className="hero-media-mobile">
+              {(() => {
+                const portrait = IMAGES['hero-airgap-kit'].portraitA;
+                return portrait ? (
+                  <div className="media-band hero-media" style={{ aspectRatio: '4/5' }}>
+                    <RotatingImage slot={{ a: portrait }} aspect="4/5" sizes="100vw" />
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          </div>
+          <div>
+            <span className="kicker">Offline enrolment kit</span>
+            <h2 style={{ color: '#ffffff' }}>Your ledger, your disk. Nothing leaves the room.</h2>
+            <p className="hero-lead">
+              No account, no API key, no upload. <code>kit check</code> lists every file a run would open and
+              touches nothing — the run arms a guard over the process's socket layer and refuses every outbound
+              connection, including name resolution.
+            </p>
+            <div className="hero-actions">
+              <a className="btn btn-outline" href={`${DEPLOY_BLOB}/KIT.md`} target="_blank" rel="noreferrer">
+                Read the kit guide
+              </a>
+            </div>
+            <a
+              className="docs-preview-card"
+              href={`${DEPLOY_BLOB}/KIT.md`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ marginTop: '1.25rem' }}
+            >
+              <RotatingImage slot={IMAGES['docs-offline-enrolment']} aspect="4/3" className="docs-preview-media" />
+              <span>KIT.md — the full offline enrolment walkthrough</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
       {/* TRUST STRIP */}
       <section className="trust-strip">
         <div className="shell trust-grid">
-          {trustStrip.map((item) => (
-            <div className="trust-item" key={item.title}>
-              <span className="trust-icon">{item.label.slice(0, 2)}</span>
+          {trustStrip.map((item, i) => (
+            <div className="trust-item trust-item-media" key={item.title}>
+              <RotatingImage
+                slot={IMAGES[item.imageKey]}
+                aspect="4/3"
+                offsetMs={i * 1500}
+                className="trust-item-image"
+              />
               <div>
                 <strong>{item.title}</strong>
                 <span>{item.body}</span>
@@ -211,8 +305,14 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
 
           <div className="tile-grid">
-            {products.map((product) => (
+            {products.map((product, i) => (
               <article className="tile" key={product.name}>
+                <RotatingImage
+                  slot={IMAGES[product.imageKey]}
+                  aspect="4/3"
+                  offsetMs={i * 900}
+                  className="tile-media"
+                />
                 <span className={`tile-badge ${product.badgeClass}`}>{product.badge}</span>
                 <h3>{product.name}</h3>
                 <p>{product.body}</p>
@@ -267,6 +367,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               entitlements the software enforces.
             </p>
           </div>
+
+          <RotatingImage
+            slot={IMAGES['pricing-three-tiers']}
+            aspect="21/9"
+            sizes="100vw"
+            className="pricing-media"
+          />
 
           <SizingCalculator />
 
@@ -366,6 +473,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               supported adapters, and a dashboard. It is intentionally narrower than it once claimed to be.
             </p>
           </div>
+          <RotatingImage
+            slot={IMAGES['platform-integration-hub']}
+            aspect="21/9"
+            sizes="100vw"
+            className="pricing-media"
+          />
           <div className="status-table-wrap">
             <table className="status-table">
               <thead>

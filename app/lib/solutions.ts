@@ -11,6 +11,9 @@ export interface SolutionPage {
   proof: { title: string; body: string; href: string; external?: boolean }[];
   primaryCta: { label: string; href: string; external?: boolean };
   secondaryCta: { label: string; href: string; external?: boolean };
+  /** Keys into IMAGES (app/lib/images.ts). `supporting` lines up with the
+   * leading `proof` entries, positionally — not every proof item has one. */
+  images: { hero: string; supporting: string[] };
 }
 
 export const SOLUTIONS: SolutionPage[] = [
@@ -34,6 +37,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
     secondaryCta: { label: 'Talk to sales', href: SALES, external: true },
+    images: { hero: 'solution-manufacturer-hero', supporting: ['solution-manufacturer-drift', 'solution-manufacturer-fanout'] },
   },
   {
     slug: 'plant-operator',
@@ -55,6 +59,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     primaryCta: { label: 'Run the offline kit', href: QUICKSTART, external: true },
     secondaryCta: { label: 'See pricing', href: '/#pricing' },
+    images: { hero: 'solution-plant-operator-hero', supporting: ['solution-plant-operator-inspector'] },
   },
   {
     slug: 'compliance-officer',
@@ -76,6 +81,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
     secondaryCta: { label: 'See the Register plan', href: '/#pricing' },
+    images: { hero: 'solution-compliance-hero', supporting: ['solution-compliance-clocks'] },
   },
   {
     slug: 'insurer-auditor',
@@ -97,6 +103,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
     secondaryCta: { label: 'Read how attestation works', href: `${DEPLOY_BLOB}/ATTEST.md`, external: true },
+    images: { hero: 'solution-auditor-hero', supporting: ['solution-auditor-mismatch'] },
   },
   {
     slug: 'ai-ops',
@@ -118,6 +125,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },
     secondaryCta: { label: 'Read the README', href: `${REPO}#readme`, external: true },
+    images: { hero: 'solution-aiops-hero', supporting: ['solution-aiops-mcp-gateway', 'solution-aiops-dashboard-unwired'] },
   },
 ];
 
