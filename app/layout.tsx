@@ -159,10 +159,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h4>Compliance &amp; trust</h4>
                 <ul>
-                  <li><a href="#top">CRA Article 14</a></li>
-                  <li><a href="#top">Machinery Reg. Annex III 1.1.9</a></li>
-                  <li><a href={`${REPO}/tree/main/src/assurance/evidence`} target="_blank" rel="noreferrer">Hash-chained ledger</a></li>
-                  <li><a href={`${REPO}/blob/main/deploy/assurance/KIT.md`} target="_blank" rel="noreferrer">Offline enrolment kit</a></li>
+                  <li><a href="/docs">CRA Article 14</a></li>
+                  <li><a href="/docs/assurance/machinery">Machinery Reg. Annex III 1.1.9</a></li>
+                  <li><a href="/docs/assurance/attest">Hash-chained ledger</a></li>
+                  <li><a href="/docs/assurance/kit">Offline enrolment kit</a></li>
                 </ul>
               </div>
 
@@ -176,9 +176,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/connectors/mcp">Connectors</a></li>
                   <li><a href="/console">Console</a></li>
                   <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
-                  <li><a href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a></li>
+                  <li><a href="/roadmap">Roadmap</a></li>
                   <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
-                  <li><a href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a></li>
+                  <li><a href="/security">Security</a></li>
                 </ul>
               </div>
 
