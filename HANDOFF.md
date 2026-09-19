@@ -59,21 +59,25 @@ e1f61ad  Close the connection leak, bridge a supplier advisory to Art. 14     (0
 
 ### Working agreement
 
-Patches are uploaded to the **repo root** as `00NN-name.patch` and applied:
+Changes are made on a branch and shipped as a PR against `main`:
 
 ```bash
-cd /workspaces/neuralbridge && git pull --ff-only \
-  && git am --3way 00NN-name.patch && pytest tests/ -q && git push origin main
+cd /workspaces/neuralbridge && git checkout -b your-branch \
+  && git commit -m "..." && pytest tests/ -q && git push -u origin your-branch
 ```
 
-`&&` is load-bearing: a failed apply stops before the tests, a failed test stops
-before the push. Nothing red reaches `main`. On failure: `git am --abort`.
+CI must be green before merge. Nothing red reaches `main`.
 
-**Before every patch, state:** WHY / WHAT / CUSTOMER VALUE / RISK / ROLLBACK /
+The repository used to be developed as a chain of root-level `00NN-name.patch`
+files applied with `git am`; that ended once the product landed on main. The
+archived chain is under `assets/historical-patches/` for reference only —
+`./nb rebuild` and `./nb apply` are deprecated and refuse to run.
+
+**Before every change, state:** WHY / WHAT / CUSTOMER VALUE / RISK / ROLLBACK /
 TESTS / SUCCESS CONDITION.
-**After every patch:** tests, ruff, mypy. **Never claim success if tests fail.**
-Every patch reversible, testable, small, reviewable. **Never a giant migration
-patch simply because two things are related.**
+**After every change:** tests, ruff, mypy. **Never claim success if tests fail.**
+Every change reversible, testable, small, reviewable. **Never a giant migration
+change simply because two things are related.**
 
 ### Definition of done
 

@@ -4,8 +4,9 @@
 #   ./nb doctor          what state is this repo in
 #   ./nb normalise       show what stands between here and "one branch, no tags"
 #   ./nb normalise --yes actually delete it, remote included
-#   ./nb rebuild         rebuild main from the patch files, as real commits
-#   ./nb apply <patch>   apply a patch, test it, refuse to keep it if tests fail
+#   ./nb rebuild         deprecated — the patch-chain workflow ended when the
+#                        product landed on main; see assets/historical-patches/
+#   ./nb apply <patch>   deprecated — same reason; use a normal branch + PR
 #   ./nb verify          install, test, lint, type-check
 #   ./nb ship            push main
 #
@@ -185,78 +186,13 @@ _sync_self() {
 }
 
 # --------------------------------------------------------------- rebuild ----
-# The situation this exists for: the patches were applied to the working tree
-# but never committed, so every line of work shows as untracked and the
-# repository's history records none of it. Committing that as one lump would
-# throw away the only thing that makes the history worth having — the ability
-# to see, and revert, one change at a time.
-#
-# So it is rebuilt from the patch files, which are themselves in the repository.
-# 0001 and 0002 are folded into 0002-baseline-*.patch; the chain starts there.
+# This existed to replay a chain of root-level 00NN-*.patch files onto a fresh
+# main when patches had been applied to the working tree but never committed.
+# That workflow ended: the product landed on main and the patch chain was
+# archived (see assets/historical-patches/) rather than kept live at root.
+# Development now happens on a normal branch, committed and pushed as a PR.
 cmd_rebuild() {
-  local chain=() p
-  [ -f 0002-baseline-patches-001-and-002.patch ] \
-    || die "0002-baseline-patches-001-and-002.patch is not here. The chain starts with it."
-  chain+=(0002-baseline-patches-001-and-002.patch)
-  for p in $(ls 00[0-9][0-9]-*.patch 2>/dev/null | sort); do
-    case "$p" in 0001-*|0002-baseline-*) continue ;; esac
-    chain+=("$p")
-  done
-  [ "${#chain[@]}" -gt 1 ] || die "found no patches after the baseline."
-
-  head_ "the chain"
-  for p in "${chain[@]}"; do say "  $p"; done
-
-  local backup="../$(basename "$ROOT")-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-  head_ "backing the working tree up first"
-  tar czf "$backup" --exclude=node_modules --exclude=.git --exclude=.next . 2>/dev/null || true
-  ok "$(cd .. && pwd)/$(basename "$backup")  — delete it when you are happy"
-
-  # This script is tracked, so `git reset --hard` would replace the copy that is
-  # running with whatever version the remote has — silently downgrading the tool
-  # in the middle of its own job. Keep the running copy and put it back.
-  local self_copy
-  self_copy=$(mktemp)
-  cp "$0" "$self_copy"
-
-  head_ "resetting $MAIN to origin/$MAIN"
-  git fetch origin --prune
-  # -B creates the branch or moves it; -f discards local modifications, which is
-  # what rebuild is for and why the tarball above exists. The previous version
-  # tried `checkout || checkout -b` and died on "a branch named main already
-  # exists" whenever the tree was dirty — two failures wearing one message.
-  git checkout -f -B "$MAIN" "origin/$MAIN"
-  if ! cmp -s "$self_copy" "$0"; then
-    cp "$self_copy" "$0"
-    chmod +x "$0"
-    say "  kept the newer $(basename "$0") you are running, not the one on the remote"
-  fi
-  rm -f "$self_copy"
-  # Never clean away a patch file or this script. A patch you uploaded ten
-  # seconds ago is untracked by definition, and deleting the input to the very
-  # command you are running is the kind of helpfulness that loses work.
-  git clean -fd -e node_modules -e .next -e '*.patch' -e nb >/dev/null
-  ok "$(git log --oneline -1)"
-
-  head_ "ignoring generated files"
-  cmd_ignore
-
-  head_ "applying"
-  git am --abort >/dev/null 2>&1 || true
-  for p in "${chain[@]}"; do
-    if git am --3way --whitespace=nowarn "$p" >/dev/null 2>&1; then
-      say "  applied  $p"
-    else
-      git am --abort || true
-      die "$p did not apply. $MAIN is at $(git log --oneline -1). Your tree is in $backup."
-    fi
-  done
-  ok "$(git rev-list --count "origin/$MAIN..$MAIN") commit(s) on top of origin/$MAIN"
-
-  cmd_verify || die "the rebuilt tree does not verify. Nothing was pushed."
-  say ""
-  ok "rebuilt. Now: ./nb normalise --yes   then: ./nb ship"
-  return 0
+  die "deprecated: the root-level patch-chain workflow ended when the product landed on main. The archived chain is in assets/historical-patches/ for reference only — do not replay it. Make changes on a branch and open a PR instead."
 }
 
 cmd_ignore() {
@@ -292,29 +228,10 @@ evidence database into a public repository by accident."
 }
 
 # ----------------------------------------------------------------- apply ----
+# Same deprecation as cmd_rebuild: there is no live root-level patch chain to
+# apply onto. Use a normal branch, commit your change, open a PR.
 cmd_apply() {
-  local patch="${1:-}"
-  [ -n "$patch" ] || die "usage: ./nb apply 00NN-something.patch"
-  [ -f "$patch" ] || die "no such patch: $patch"
-  [ "$(git rev-parse --abbrev-ref HEAD)" = "$MAIN" ] || die "not on $MAIN. Run ./nb normalise."
-  [ -z "$(git status --porcelain --untracked-files=no)" ] \
-    || die "tracked files are modified. Commit, discard, or run ./nb rebuild."
-
-  local before; before=$(git rev-parse HEAD)
-  head_ "applying $(basename "$patch")"
-  git am --abort >/dev/null 2>&1 || true
-  if ! git am --3way --whitespace=nowarn "$patch"; then
-    git am --abort || true
-    die "patch did not apply. HEAD is untouched at ${before:0:8}."
-  fi
-  ok "applied — $(git log --oneline -1)"
-
-  if ! cmd_verify; then
-    warn "verification failed; rolling back to ${before:0:8}"
-    git reset --hard "$before"
-    die "patch reverted. Nothing was kept. Do not claim success if tests fail."
-  fi
-  ok "kept. Push with: ./nb ship"
+  die "deprecated: there is no live root-level patch chain to apply onto — that workflow ended when the product landed on main (see assets/historical-patches/ for the archive). Make changes on a branch and open a PR instead."
 }
 
 # ---------------------------------------------------------------- verify ----

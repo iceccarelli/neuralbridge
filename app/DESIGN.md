@@ -68,9 +68,9 @@ separate sweep that touches nothing else.
 
 Every photoreal illustration on the site exists as **two independently
 generated frames of the same scene** — never a fake photo standing in for a
-real one, never two crops of one file. They come from two source packs
-(`assets/illustrations/neuralbridge-illustration-*.zip`, kept for
-provenance, not read at runtime):
+real one, never two crops of one file. They came from two source packs,
+already extracted into `public/images/variants/{a,b}`; the zip archives
+were not kept in the repo:
 
 - **Variant A** (`public/images/variants/a/…`) — the richer pack; also the
   only one with 4:5 mobile portrait crops of the two landing heroes.
