@@ -1,31 +1,39 @@
-# NeuralBridge Project Roadmap
+# NeuralBridge Roadmap
 
-## Q3 2026: Foundation & Enterprise Readiness
+What is shipped versus what is planned, kept to the same honesty standard as
+the rest of this repository: nothing here is marked done unless it is gated
+in code and covered by `pytest tests/ -q`. The full detail behind this table
+is in the [README's platform section](README.md#neuralbridge--the-platform-underneath)
+and the live [Platform status page](docs/platform.md).
 
-- [x] **Core:** Universal Adapter Framework
-- [x] **Adapters:** 22+ adapters for databases, APIs, messaging, ERP/CRM, cloud
-- [x] **Security:** Zero-trust security layer (RBAC, encryption, audit)
-- [x] **Compliance:** EU CRA & GDPR compliance engine
-- [x] **API:** FastAPI management API
-- [x] **Dashboard:** React/TypeScript admin dashboard
-- [x] **Deployment:** Docker, Kubernetes, Helm
+## Shipped
 
-## Q4 2026: Agent & Developer Experience
+- [x] Industrial Autonomous Assurance: CRA Art. 14 register, hash-chained
+      ledger, offline enrolment kit, Article 14 draft validation
+- [x] Machine safety verification (ISO/TS 15066 separation check)
+- [x] Machinery Regulation Annex III manifests, passports, staleness join
+- [x] Fleet advisory fan-out and hash/version/name matching
+- [x] Counter-signed head attestation
+- [x] FastAPI backend for connection management and tool exposure
+- [x] MCP gateway for tool listing / invocation
+- [x] A small set of working adapters (PostgreSQL, REST)
+- [x] Dashboard foundation (`src/dashboard`) — not yet integrated with the
+      assurance product
 
-- [ ] **OpenClaw v2 Integration:** Deeper integration with the next version of OpenClaw.
-- [ ] **LangChain & AutoGPT Toolkits:** Official toolkits for easy integration.
-- [ ] **Serverless Deployment:** Support for AWS Lambda and Google Cloud Functions.
-- [ ] **Advanced Caching:** Semantic caching and result deduplication.
-- [ ] **Adapter Marketplace:** A community-driven marketplace for new adapters.
+## Evolving — real, but not yet the core promise
 
-## Q1 2027: AI-Powered Optimization
+- [ ] Broad adapter ecosystem beyond the current small supported set
+- [ ] Full enterprise compliance posture
+- [ ] Full zero-trust security posture
+- [ ] Supplier advisory API (skeleton shipped, gated behind an unpriced
+      sales-assigned tier — see `deploy/assurance/ADR-0001-supplier-api.md`)
 
-- [ ] **AI-Powered Cost Optimization:** Automatically suggest cheaper models or batching strategies.
-- [ ] **AI-Powered Security:** Anomaly detection in agent behavior.
-- [ ] **AI-Powered Compliance:** Automated data classification and PII detection.
+## Planned, not started
 
-## Q2 2027 and Beyond: The Autonomous Enterprise
+- [ ] Adapter marketplace
+- [ ] LangChain / AutoGPT toolkits
+- [ ] Serverless deployment targets (AWS Lambda, Google Cloud Functions)
+- [ ] Dashboard integration with the assurance product
 
-- [ ] **Federated Learning Adapters:** Connect agents to decentralized data sources.
-- [ ] **On-Premise Agent Execution:** Run agents within your own VPC.
-- [ ] **Autonomous Compliance:** Agents that can self-audit and report on their own compliance.
+Treat anything not checked off as not built, whatever older marketing copy
+elsewhere in this repository's history might have claimed.
