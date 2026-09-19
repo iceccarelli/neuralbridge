@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   authors: [{ name: 'Vincenzo Grimaldi', url: 'https://github.com/iceccarelli' }],
   creator: 'Vincenzo Grimaldi',
   publisher: 'Industrial Autonomous Assurance',
-  alternates: { canonical: '/' },
+  alternates: { canonical: '/', languages: { 'x-default': '/' } },
   openGraph: {
     title: 'Industrial Autonomous Assurance',
     description: 'A hash-chained record of what is on each machine, what was verified, and when. CRA Art. 14 and Machinery Regulation Annex III 1.1.9, satisfied from evidence instead of a spreadsheet.',
@@ -44,6 +44,19 @@ export const metadata: Metadata = {
     title: 'Industrial Autonomous Assurance',
     description: 'Evidence infrastructure for machines whose software can hurt someone. Free to verify, always.',
   },
+};
+
+const organizationData = {
+  '@context': 'https://schema.org',
+  '@type': 'Organization',
+  name: 'Industrial Autonomous Assurance',
+  url: `${SITE_URL}/`,
+  founder: {
+    '@type': 'Person',
+    name: 'Vincenzo Grimaldi',
+    url: 'https://github.com/iceccarelli',
+  },
+  sameAs: [REPO],
 };
 
 const structuredData = {
@@ -66,6 +79,36 @@ const structuredData = {
     url: 'https://github.com/iceccarelli',
   },
   sameAs: [REPO],
+};
+
+const registerProductData = {
+  '@context': 'https://schema.org',
+  '@type': 'Product',
+  name: 'Register',
+  brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
+  description:
+    'The Article 14 register: unlimited cases, both regulatory clocks, and a hash-chained ledger with verifiable export.',
+  offers: {
+    '@type': 'Offer',
+    price: '390',
+    priceCurrency: 'EUR',
+    url: `${SITE_URL}/#pricing`,
+  },
+};
+
+const cellProductData = {
+  '@context': 'https://schema.org',
+  '@type': 'Product',
+  name: 'Cell',
+  brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
+  description:
+    'Machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
+  offers: {
+    '@type': 'Offer',
+    price: '1290',
+    priceCurrency: 'EUR',
+    url: `${SITE_URL}/#pricing`,
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -156,7 +199,19 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         <script
           type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationData) }}
+        />
+        <script
+          type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(registerProductData) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(cellProductData) }}
         />
       </body>
     </html>

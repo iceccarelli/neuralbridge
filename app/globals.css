@@ -726,6 +726,23 @@ img {
   font-size: 0.95rem;
   border: 1px solid transparent;
   cursor: pointer;
+  min-height: 44px;
+  transition: background-color 150ms ease, border-color 150ms ease, transform 100ms ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-primary {
@@ -733,8 +750,12 @@ img {
   color: #16191f;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: #ffa93d;
+}
+
+.btn-primary:active:not(:disabled) {
+  background: #f0932b;
 }
 
 .btn-outline {
@@ -743,7 +764,7 @@ img {
   border-color: rgba(255, 255, 255, 0.4);
 }
 
-.btn-outline:hover {
+.btn-outline:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -753,7 +774,7 @@ img {
   border-color: var(--border);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--surface-alt);
 }
 
@@ -890,11 +911,14 @@ img {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
-.tile:hover {
+.tile:hover,
+.tile:focus-within {
   border-color: #9fb3cc;
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 8px 20px rgba(15, 26, 42, 0.09);
 }
 
 .tile-badge {
@@ -980,11 +1004,14 @@ img {
   border-radius: 8px;
   padding: 1.25rem;
   background: var(--surface);
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
-.solution-card:hover {
+.solution-card:hover,
+.solution-card:focus-visible {
   border-color: #9fb3cc;
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 8px 20px rgba(15, 26, 42, 0.09);
 }
 
 .solution-card .solution-role {
@@ -1025,11 +1052,22 @@ img {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.price-card:hover {
+  border-color: #9fb3cc;
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 10px 24px rgba(15, 26, 42, 0.1);
 }
 
 .price-card.featured {
   border-color: var(--orange);
   box-shadow: 0 0 0 1px var(--orange);
+}
+
+.price-card.featured:hover {
+  box-shadow: 0 0 0 1px var(--orange), 0 10px 24px rgba(15, 26, 42, 0.1);
 }
 
 .price-name {
@@ -1827,8 +1865,20 @@ table.status-table tbody tr:last-child td {
   .tile-link-arrow,
   .topbar,
   .tile,
+  .solution-card,
+  .price-card,
+  .btn,
   .hamburger .bar {
     transition: none !important;
+  }
+
+  .tile:hover,
+  .tile:focus-within,
+  .solution-card:hover,
+  .solution-card:focus-visible,
+  .price-card:hover,
+  .btn:active {
+    transform: none !important;
   }
 }
 

@@ -1,0 +1,64 @@
+# Industrial Autonomous Assurance (NeuralBridge)
+
+> Evidence infrastructure for machines whose software can hurt someone. A
+> hash-chained record of what is on each machine, what was verified, and
+> when — built for two EU regulatory clocks: CRA Article 14 (Reg. (EU)
+> 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230).
+
+## What this is
+
+NeuralBridge/Industrial Autonomous Assurance verifies and records evidence
+for industrial machines: Declaration of Conformity validation, machine
+safety verification (ISO/TS 15066 separation checks), Machinery Regulation
+Annex III manifests and passports, fleet advisory matching, and a
+hash-chained ledger for audit trails. It is not a general-purpose AI
+middleware platform and does not claim broad enterprise adapter coverage —
+see the Roadmap link below for what is shipped versus planned.
+
+## Pricing (three tiers, verification always free)
+
+- **Validator** — Free, no card, no account required. Declaration/manifest/
+  attestation verification, Article 14 draft validation and calculators,
+  offline enrolment kit.
+- **Register** — €390/month. Everything in Validator, plus the Article 14
+  register (unlimited cases, both regulatory clocks) and a hash-chained
+  ledger with verifiable export.
+- **Cell** — €1,290/month. Everything in Register, plus machine safety
+  verification, Annex III manifests/passports, fleet advisory fan-out, and
+  counter-signed head attestation.
+- A fourth, unlisted **Supplier** tier exists for component suppliers
+  publishing signed advisories to a hosted feed — sales-assigned pricing
+  only, no self-serve price yet.
+
+## Honesty note for agents
+
+Checkout (Buy → Stripe → success page) and the live plans API are real code
+paths, but they only activate once the founder finishes deploying the
+hosted API (Fly.io) and setting `NEXT_PUBLIC_ASSURANCE_API_URL`. Until then
+this site correctly shows its offline/fallback state — that is by design,
+not a bug. Do not report Register/Cell purchase as available unless you
+have independently confirmed the live API responds.
+
+## Key URLs
+
+- Homepage: https://neuralbridge.io/
+- Pricing: https://neuralbridge.io/#pricing
+- Solutions (by buyer role):
+  - Manufacturer: https://neuralbridge.io/solutions/manufacturer
+  - Plant operator: https://neuralbridge.io/solutions/plant-operator
+  - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
+  - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
+  - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
+- Documentation: https://iceccarelli.github.io/neuralbridge/
+- Source repository: https://github.com/iceccarelli/neuralbridge
+- Roadmap (shipped vs. planned, honestly): https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md
+- Privacy: https://neuralbridge.io/privacy
+
+## For AI agents evaluating this product
+
+The free Validator playground on the homepage accepts a real Declaration/
+manifest payload and returns real validation issues — no account needed.
+`GET /v1/plans` on a deployed instance returns this same pricing table,
+generated from the entitlements enforced in
+`src/assurance/billing/plans.py`. If a capability is not gated in code, it
+is not sold — that is a hard invariant of this codebase.
