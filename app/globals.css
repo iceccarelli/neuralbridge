@@ -911,6 +911,61 @@ img {
   line-height: 1.45;
 }
 
+.trust-item-media {
+  align-items: center;
+}
+
+.trust-item-image {
+  flex: 0 0 auto;
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: var(--radius-sm);
+}
+
+.hero-media {
+  border-radius: var(--radius-md);
+}
+
+.pricing-media {
+  border-radius: var(--radius-md);
+  margin-bottom: 1.75rem;
+}
+
+.playground-media {
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.85rem;
+  max-width: 18rem;
+}
+
+.docs-preview-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 20rem;
+  font-size: 0.82rem;
+  color: #cbd7e6;
+}
+
+.docs-preview-media {
+  flex: 0 0 auto;
+  width: 3.6rem;
+  height: 2.7rem;
+  border-radius: var(--radius-sm);
+}
+
+.hero-media-mobile {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .hero-media-desktop {
+    display: none;
+  }
+  .hero-media-mobile {
+    display: block;
+  }
+}
+
 /* ====================== SECTIONS ====================== */
 .section {
   padding: 3.2rem 0;
@@ -965,6 +1020,13 @@ img {
   flex-direction: column;
   gap: 0.5rem;
   transition: border-color var(--duration-fast) var(--ease), transform var(--duration-fast) var(--ease), box-shadow var(--duration-fast) var(--ease);
+}
+
+/* Bleeds the media band to the card's edges (card padding starts below it). */
+.tile-media {
+  margin: -1.15rem -1.15rem 0.35rem;
+  width: calc(100% + 2.3rem);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 .tile:hover,
@@ -1954,6 +2016,44 @@ table.status-table tbody tr:last-child td {
   .btn:active {
     transform: none !important;
   }
+
+  .media-band img {
+    transition: none !important;
+  }
+}
+
+/* ====================== IMAGERY / ROTATING MEDIA ====================== */
+/* The clipping frame every RotatingImage (or single next/image) sits in —
+   overflow-hidden so a parent card's hover lift/scale never reveals the
+   fill image's edges, and border-radius: inherit so it always matches
+   whatever card shape wraps it. */
+.media-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--surface-alt);
+}
+
+.media-dots {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 1.1rem;
+  display: flex;
+  gap: 0.4rem;
+  z-index: 2;
+}
+
+.media-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.4);
+  transition: background var(--duration-fast) var(--ease), transform var(--duration-fast) var(--ease);
+}
+
+.media-dot.is-active {
+  background: var(--orange);
+  transform: scale(1.25);
 }
 
 /* Grid/flex items default to min-width: auto (their max-content size), which
