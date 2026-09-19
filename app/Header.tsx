@@ -296,6 +296,10 @@ export default function Header() {
                 <strong>Documentation</strong>
                 <span>The full docs site — getting started, every engine, deploying.</span>
               </a>
+              <a className="finder-item" href="/developers" onClick={closeAll}>
+                <strong>Developers</strong>
+                <span>Auth, the real route table, and copy-paste curl/Python.</span>
+              </a>
               <a className="finder-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
                 <strong>Roadmap</strong>
                 <span>What is planned and not yet built.</span>
@@ -369,6 +373,7 @@ export default function Header() {
           {mobileView === 'resources' && (
             <>
               <a className="mobile-drill-item" href={DOCS} target="_blank" rel="noreferrer">Documentation</a>
+              <a className="mobile-drill-item" href="/developers" onClick={() => setMobileOpen(false)}>Developers</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>

@@ -49,12 +49,18 @@ have independently confirmed the live API responds.
   - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
   - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
   - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
-- Documentation: https://iceccarelli.github.io/neuralbridge/
+- Documentation: https://github.com/iceccarelli/neuralbridge/blob/main/docs/index.md
+  (interim: the built MkDocs site can't publish to GitHub Pages until a repo
+  admin does one manual Settings step — see ROADMAP.md history if you need
+  the reason; this link always resolves either way)
+- Developers / API reference: https://neuralbridge.io/developers
+- OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
+  https://neuralbridge.io/openapi.json
 - Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md
 - Privacy: https://neuralbridge.io/privacy
 
-## For AI agents evaluating this product
+## For AI agents evaluating or integrating with this product
 
 The free Validator playground on the homepage accepts a real Declaration/
 manifest payload and returns real validation issues — no account needed.
@@ -62,3 +68,9 @@ manifest payload and returns real validation issues — no account needed.
 generated from the entitlements enforced in
 `src/assurance/billing/plans.py`. If a capability is not gated in code, it
 is not sold — that is a hard invariant of this codebase.
+
+Auth is one header: `X-API-Key: <key>`. A missing key is a 401; a valid key
+on the wrong plan is a 402 (never a 403) with a structured JSON body naming
+the required plan and the exact remedy — safe to parse and act on
+automatically. Fetch /openapi.json for the full, current route/schema list
+rather than trusting a cached description of it.
