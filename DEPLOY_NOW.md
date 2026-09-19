@@ -98,29 +98,10 @@ longer shows the fabricated old content.
 
 ## 6. Smoke test — do this before telling anyone the site is live
 
-From a browser (not curl — the point is to prove the browser-side CORS and
-JS wiring actually works, which curl cannot tell you):
-
-1. Visit `https://neuralbridge.io/#pricing`. The pricing cards must show the
-   green "Live from GET /v1/plans" note, not silently sit on the static
-   fallback.
-2. Click **Buy** on Register or Cell, enter a real email, and pay with a
-   Stripe test card (`4242 4242 4242 4242`, any future expiry, any CVC) if
-   you are still using the sandbox Stripe account — or a real card if you
-   are live. You should land on `https://neuralbridge.io/checkout/success`
-   and see a one-time API key within a few seconds.
-3. On the homepage, submit the free Validator playground. It must return a
-   real response (missing-field issues), not the "not deployed yet" message.
-4. Run the CORS check from `deploy/assurance/README.md`:
-   ```bash
-   curl -i -X OPTIONS https://<your-fly-app>.fly.dev/v1/plans \
-        -H 'Origin: https://neuralbridge.io' -H 'Access-Control-Request-Method: GET' \
-        | grep -i access-control-allow-origin
-   ```
-   Must echo `https://neuralbridge.io`.
-
-If all four pass, the product takes real money. If any fails, do not
-announce it as live — go back to the matching step above.
+See `SMOKE.md` for the five browser checks (live plans, Buy appears,
+playground Validate, checkout success, CORS). If all five pass, the product
+takes real money. If any fails, do not announce it as live — go back to the
+matching step above.
 
 ## After this
 
