@@ -125,10 +125,15 @@ jobs:
   # gh-deploy only pushes a built site to the gh-pages branch — it does
   # not itself turn Pages on, so a repo where Pages was never enabled in
   # Settings stays a 404 forever even with a perfectly good gh-pages
-  # branch. configure-pages calls the Pages API with `pages: write` to
-  # create/enable the site automatically on first run, so this workflow
-  # is what makes https://iceccarelli.github.io/neuralbridge/ live with
-  # no manual Settings step required.
+  # branch. `configure-pages` defaults to NOT creating a Pages site
+  # (`enablement: false`) — it only manages one that already exists, so
+  # it fails outright on a repo where Pages was never turned on. Passing
+  # `enablement: true` makes it call the Pages API with `pages: write`
+  # to create the site automatically on first run, so this workflow is
+  # what makes https://iceccarelli.github.io/neuralbridge/ live with no
+  # manual Settings step required. (Confirmed the failure mode live:
+  # the first version of this workflow left `enablement` at its default
+  # and failed with "Get Pages site failed ... Not Found".)
   deploy-docs:
     name: Deploy Docs to GitHub Pages
     runs-on: ubuntu-latest
@@ -152,6 +157,8 @@ jobs:
       - name: Build docs
         run: mkdocs build --strict
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
