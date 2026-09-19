@@ -56,6 +56,8 @@ have independently confirmed the live API responds.
 - Developers / API reference: https://neuralbridge.io/developers
 - OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
   https://neuralbridge.io/openapi.json
+- Structured agent descriptor (JSON sibling of this file):
+  https://neuralbridge.io/.well-known/agent.json
 - Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://github.com/iceccarelli/neuralbridge/blob/main/ROADMAP.md
 - Privacy: https://neuralbridge.io/privacy
