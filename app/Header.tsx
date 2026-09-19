@@ -35,7 +35,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
       { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
       { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '/#platform' },
       { name: 'Assurance API', blurb: '42 routes; GET /v1/plans mirrors enforced entitlements.', href: `${SRC}/api`, external: true },
-      { name: 'Dashboard', blurb: 'Next.js console — not yet integrated with assurance.', href: '/#platform' },
+      { name: 'Console', blurb: 'Browser REST console for the Assurance API — key paste, real /v1 calls.', href: '/console' },
     ],
   },
 };
@@ -300,6 +300,22 @@ export default function Header() {
                 <strong>Developers</strong>
                 <span>Auth, the real route table, and copy-paste curl/Python.</span>
               </a>
+              <a className="finder-item" href="/applications" onClick={closeAll}>
+                <strong>Applications</strong>
+                <span>Cobots, packaging, fleet, OEM register, insurer evidence — mapped to real routes.</span>
+              </a>
+              <a className="finder-item" href="/cli" onClick={closeAll}>
+                <strong>CLI</strong>
+                <span>python -m assurance — the real command tree, install to deploy guide.</span>
+              </a>
+              <a className="finder-item" href="/connectors/mcp" onClick={closeAll}>
+                <strong>Connectors</strong>
+                <span>Cursor and MCP — the same routes as tools.</span>
+              </a>
+              <a className="finder-item" href="/console" onClick={closeAll}>
+                <strong>Console</strong>
+                <span>Paste an API key, call real /v1 routes from your browser.</span>
+              </a>
               <a className="finder-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
                 <strong>Roadmap</strong>
                 <span>What is planned and not yet built.</span>
@@ -374,6 +390,10 @@ export default function Header() {
             <>
               <a className="mobile-drill-item" href={DOCS} onClick={() => setMobileOpen(false)}>Documentation</a>
               <a className="mobile-drill-item" href="/developers" onClick={() => setMobileOpen(false)}>Developers</a>
+              <a className="mobile-drill-item" href="/applications" onClick={() => setMobileOpen(false)}>Applications</a>
+              <a className="mobile-drill-item" href="/cli" onClick={() => setMobileOpen(false)}>CLI</a>
+              <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>Connectors</a>
+              <a className="mobile-drill-item" href="/console" onClick={() => setMobileOpen(false)}>Console</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/ROADMAP.md`} target="_blank" rel="noreferrer">Roadmap</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">Security</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>
