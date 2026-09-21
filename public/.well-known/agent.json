@@ -10,7 +10,11 @@
     "https://neuralbridge.io/cli",
     "https://neuralbridge.io/applications",
     "https://neuralbridge.io/ai",
+    "https://neuralbridge.io/console",
     "https://neuralbridge.io/connectors/mcp",
+    "https://neuralbridge.io/connectors/cursor",
+    "https://neuralbridge.io/roadmap",
+    "https://neuralbridge.io/status",
     "https://neuralbridge.io/llms.txt"
   ],
   "api": {
