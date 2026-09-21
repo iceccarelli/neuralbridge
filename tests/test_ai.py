@@ -639,3 +639,115 @@ class TestGolden010NonPostgresAdapterGate:
         events = asyncio.run(_collect())
         assert events
         assert events[-1].actor == "mcp:agent-dana"
+
+
+class TestGolden011SafeDiscoveryAllowlistSanity:
+    """Phase 3 sanity pass: ``_SAFE_DISCOVERY_OPS`` must (a) be a real
+    subset of what each adapter's own ``supported_operations`` actually
+    lists — no drift where the allow-list names an op the adapter doesn't
+    even have — and (b) never let an operation through whose own payload
+    can mutate state despite a read-shaped operation name. Two real
+    adapters were found doing exactly that during this pass: ``mysql``/
+    ``bigquery`` execute whatever raw SQL string rides in
+    ``params["sql"]`` under their nominally-read ``query`` op once a real
+    backend is connected, and ``graphql`` dispatches ``operation="query"``
+    and ``operation="mutation"`` to the identical handler, trusting the
+    GraphQL document text over the operation name — so a free caller
+    could send ``operation: "query"`` with a mutation document and it
+    would run as a mutation. ``guard._payload_looks_safe`` closes both.
+    """
+
+    def test_allowlist_is_subset_of_adapter_supported_operations(self) -> None:
+        from neuralbridge.adapters.apis.graphql import GraphQLAdapter
+        from neuralbridge.adapters.apis.odata import ODataAdapter
+        from neuralbridge.adapters.apis.rest import RestApiAdapter
+        from neuralbridge.adapters.apis.soap import SoapAdapter
+        from neuralbridge.adapters.cloud.aws_s3 import AWSS3Adapter
+        from neuralbridge.adapters.cloud.azure_blob import AzureBlobStorageAdapter
+        from neuralbridge.adapters.cloud.gcs import GCSAdapter
+        from neuralbridge.adapters.databases.bigquery import BigQueryAdapter
+        from neuralbridge.adapters.databases.mongodb import MongodbAdapter
+        from neuralbridge.adapters.databases.mysql import MySQLAdapter
+        from neuralbridge.adapters.databases.snowflake import SnowflakeAdapter
+        from neuralbridge.adapters.erp_crm.salesforce import SalesforceAdapter
+        from neuralbridge.adapters.erp_crm.sap import SapErpAdapter
+        from neuralbridge.adapters.messaging.discord import DiscordAdapter
+        from neuralbridge.adapters.messaging.email_smtp import EmailAdapter
+        from neuralbridge.adapters.messaging.slack import SlackAdapter
+        from neuralbridge.adapters.messaging.teams import TeamsAdapter
+        from neuralbridge.adapters.messaging.telegram import TelegramAdapter
+        from neuralbridge.adapters.productivity.gmail import GmailAdapter
+        from neuralbridge.adapters.productivity.notion import NotionAdapter
+        from neuralbridge.ai.guard import _SAFE_DISCOVERY_OPS
+
+        adapter_classes = {
+            "slack": SlackAdapter, "discord": DiscordAdapter, "teams": TeamsAdapter,
+            "telegram": TelegramAdapter, "email": EmailAdapter, "gmail": GmailAdapter,
+            "notion": NotionAdapter, "aws_s3": AWSS3Adapter, "gcs": GCSAdapter,
+            "azure_blob": AzureBlobStorageAdapter, "mysql": MySQLAdapter, "snowflake": SnowflakeAdapter,
+            "mongodb": MongodbAdapter, "bigquery": BigQueryAdapter, "salesforce": SalesforceAdapter,
+            "sap_erp": SapErpAdapter, "soap": SoapAdapter, "odata": ODataAdapter,
+            "rest": RestApiAdapter, "graphql": GraphQLAdapter,
+        }
+        # Every adapter_type keyed in the allow-list (other than the
+        # custom-adapter-template placeholder, which has no importable
+        # single class) must be one this test actually checks.
+        checked = set(adapter_classes) | {"custom_adapter_template"}
+        assert set(_SAFE_DISCOVERY_OPS) <= checked, (
+            f"_SAFE_DISCOVERY_OPS has adapter type(s) this sanity test doesn't "
+            f"know how to verify: {set(_SAFE_DISCOVERY_OPS) - checked}"
+        )
+        for adapter_type, allowed_ops in _SAFE_DISCOVERY_OPS.items():
+            if adapter_type == "custom_adapter_template":
+                continue
+            real_ops = set(adapter_classes[adapter_type].supported_operations)
+            assert allowed_ops <= real_ops, (
+                f"{adapter_type}: allow-list has op(s) not in its own "
+                f"supported_operations: {allowed_ops - real_ops}"
+            )
+
+    def test_mysql_free_query_op_refuses_non_select_sql(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/mysql/execute",
+            json={"operation": "query", "params": {"sql": "DELETE FROM users WHERE 1=1"}},
+        )
+        assert r.status_code == 402, r.text
+
+    def test_mysql_free_query_op_allows_select(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/mysql/execute",
+            json={"operation": "query", "params": {"sql": "SELECT 1"}},
+        )
+        assert r.status_code != 402
+        assert r.status_code == 400  # adapter not registered in this test app, gate passed
+
+    def test_bigquery_free_query_op_refuses_dml(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/bigquery/execute",
+            json={"operation": "query", "params": {"sql": "DELETE FROM ds.tbl WHERE true"}},
+        )
+        assert r.status_code == 402, r.text
+
+    def test_graphql_free_query_op_refuses_mutation_document(self, free_client: TestClient) -> None:
+        """The op name says 'query' but the document itself is a mutation —
+        the adapter dispatches both to the same handler, so the gate must
+        look at the document, not just the op name."""
+        r = free_client.post(
+            "/api/v1/adapters/graphql/execute",
+            json={
+                "operation": "query",
+                "params": {"query": "mutation { deleteUser(id: 1) { id } }"},
+            },
+        )
+        assert r.status_code == 402, r.text
+
+    def test_graphql_free_query_op_allows_a_real_query_document(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/graphql/execute",
+            json={
+                "operation": "query",
+                "params": {"query": "query { user(id: 1) { id name } }"},
+            },
+        )
+        assert r.status_code != 402
+        assert r.status_code == 400  # adapter not registered, gate passed

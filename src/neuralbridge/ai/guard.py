@@ -37,6 +37,7 @@ scope.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -84,6 +85,48 @@ _SAFE_DISCOVERY_OPS: dict[str, frozenset[str]] = {
     "custom_adapter_template": frozenset({"example_read", "example_list"}),
 }
 
+#: For adapters whose free "query"-shaped operation accepts a raw
+#: query-language payload the adapter itself does not restrict to reads
+#: (found during the Phase 3 sanity pass: ``mysql``/``bigquery`` execute
+#: whatever SQL string is in ``params["sql"]`` verbatim once a real
+#: backend is connected, and the ``graphql`` adapter dispatches
+#: ``operation="query"`` and ``operation="mutation"`` to the exact same
+#: handler, trusting the document text over the operation name) — the
+#: operation name alone is not a trustworthy safety boundary. This maps
+#: each such adapter type to the payload key holding that text and a
+#: regex that must match for the call to stay free; anything that does
+#: not match (including an empty/missing payload) requires the
+#: ``ai_control_plane`` entitlement, same as an unrecognised operation.
+_FREE_QUERY_PAYLOAD_GUARDS: dict[str, tuple[str, re.Pattern[str]]] = {
+    "mysql": ("sql", re.compile(r"^\s*(select|show|explain|describe)\b", re.IGNORECASE)),
+    "snowflake": ("sql", re.compile(r"^\s*(select|show|explain|describe)\b", re.IGNORECASE)),
+    "bigquery": ("sql", re.compile(r"^\s*(select|with|explain)\b", re.IGNORECASE)),
+    "graphql": ("query", re.compile(r"^\s*(query|\{|#)", re.IGNORECASE)),
+}
+
+#: Operations within the map above that actually carry the risky payload —
+#: e.g. bigquery's free ``list_tables``/``list_datasets`` don't take
+#: ``sql`` at all and must not be swept into this check.
+_FREE_QUERY_PAYLOAD_OPS: dict[str, frozenset[str]] = {
+    "mysql": frozenset({"query"}),
+    "snowflake": frozenset({"query"}),
+    "bigquery": frozenset({"query"}),
+    "graphql": frozenset({"query"}),
+}
+
+
+def _payload_looks_safe(adapter_type: str, operation: str, params: dict[str, Any]) -> bool:
+    """True if ``operation`` on ``adapter_type`` has no extra payload guard,
+    or the guard's regex matches the relevant param. False means the
+    payload looks like it could mutate despite the read-shaped op name.
+    """
+    guarded_ops = _FREE_QUERY_PAYLOAD_OPS.get(adapter_type)
+    if not guarded_ops or operation not in guarded_ops:
+        return True
+    key, pattern = _FREE_QUERY_PAYLOAD_GUARDS[adapter_type]
+    payload = str(params.get(key, ""))
+    return bool(pattern.match(payload))
+
 
 async def enforce_write_gate(adapter_type: str, operation: str, params: dict[str, Any], principal: Principal) -> None:
     """Raise ``HTTPException`` (403 for a disallowed payload, 402 for an
@@ -108,7 +151,7 @@ async def enforce_write_gate(adapter_type: str, operation: str, params: dict[str
         return
 
     safe_ops = _SAFE_DISCOVERY_OPS.get(adapter_type, frozenset())
-    if operation in safe_ops:
+    if operation in safe_ops and _payload_looks_safe(adapter_type, operation, params):
         return
 
     await require_ai_control_plane(principal)
