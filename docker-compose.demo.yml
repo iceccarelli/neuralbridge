@@ -1,0 +1,99 @@
+# Sales demo pack — boots a real Postgres + both FastAPI apps (assurance
+# and the /ai control plane), then seeds a Cell-tier demo key and a sample
+# Register case through scripts/seed_demo.py (the real AccountStore path,
+# same one a Stripe webhook uses — not raw SQL).
+#
+# This is an OVERLAY on top of docker-compose.ai.yml, not a replacement:
+# it reuses that file's postgres service definition so there is one
+# source of truth for the dev Postgres container, and adds the two API
+# services plus the one-shot seed job.
+#
+# Usage:
+#   docker compose -f docker-compose.ai.yml -f docker-compose.demo.yml up -d
+#   docker compose -f docker-compose.ai.yml -f docker-compose.demo.yml logs -f seed
+#   # then run scripts/demo-walkthrough.sh against the two ports below.
+#
+# No live Stripe anywhere in this file — the seed step mints its key
+# locally through AccountStore, exactly like docs/buyer-journey.md and
+# tests/test_ai_buyer_journey.py.
+#
+# Honesty note: this compose file was authored and reviewed for
+# correctness against the same commands `docs/ai-local-setup.md` documents
+# running directly (uvicorn + pip install -e), but was not exercised
+# against a live `docker compose up` in the environment this phase was
+# written in (no Docker daemon available there) — see
+# reports/NEURALBRIDGE-FIRST-EURO.md for what *was* run directly.
+
+services:
+  postgres:
+    volumes:
+      - ./deploy/ai/seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+
+  assurance-api:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - demo_accounts:/data
+    environment:
+      ASSURANCE_LEDGER: /data/art14.db
+      ASSURANCE_ACCOUNTS: /data/accounts.db
+    ports:
+      - "8001:8001"
+    command: >
+      bash -c "pip install --quiet -e '.[dev]' &&
+               uvicorn assurance.api.service:app --host 0.0.0.0 --port 8001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/v1/plans')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ai-api:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - demo_accounts:/data
+    environment:
+      NEURALBRIDGE_AI_PG_HOST: postgres
+      NEURALBRIDGE_AI_PG_PORT: "5432"
+      NEURALBRIDGE_AI_PG_USER: neuralbridge
+      NEURALBRIDGE_AI_PG_PASSWORD: neuralbridge_dev
+      NEURALBRIDGE_AI_PG_DATABASE: neuralbridge_ai
+      ASSURANCE_ACCOUNTS: /data/accounts.db
+      NEURALBRIDGE_AI_STORE: /data/ai-store.db
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c "pip install --quiet -e '.[dev]' &&
+               uvicorn neuralbridge.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ai/connections')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  seed:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+      - demo_accounts:/data
+    environment:
+      ASSURANCE_ACCOUNTS: /data/accounts.db
+      ASSURANCE_API_URL: http://assurance-api:8001
+    depends_on:
+      assurance-api:
+        condition: service_healthy
+      ai-api:
+        condition: service_healthy
+    command: >
+      bash -c "pip install --quiet -e '.[dev]' &&
+               python3 scripts/seed_demo.py"
+
+volumes:
+  demo_accounts:
