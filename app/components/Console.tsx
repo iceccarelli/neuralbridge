@@ -77,7 +77,7 @@ export default function Console() {
 
   return (
     <div className="console-shell">
-      <div className="console-key-row">
+      <div className="key-row">
         <label htmlFor="console-api-key">API key (optional for free routes)</label>
         <input
           id="console-api-key"
@@ -87,7 +87,7 @@ export default function Console() {
           placeholder="paste your X-API-Key"
           autoComplete="off"
         />
-        <span className="console-key-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
+        <span className="key-row-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
       </div>
 
       <div className="console-grid">

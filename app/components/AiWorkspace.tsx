@@ -165,7 +165,7 @@ function ProvenanceLine({ p }: { p: Provenance }) {
       {p.mocked && (
         <>
           {' '}
-          · <strong style={{ color: 'var(--danger, #b23b1f)' }}>MOCK DATA — adapter is not actually connected</strong>
+          · <strong style={{ color: 'var(--danger)' }}>MOCK DATA — adapter is not actually connected</strong>
         </>
       )}
     </div>
@@ -362,6 +362,19 @@ export default function AiWorkspace() {
 
   return (
     <div className="ai-shell">
+      <div className="key-row">
+        <label htmlFor="ai-api-key">API key (optional — required for writes)</label>
+        <input
+          id="ai-api-key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="paste your X-API-Key — Register/Cell"
+          autoComplete="off"
+        />
+        <span className="key-row-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
+      </div>
+
       {connError && <p className="ai-banner">{connError}</p>}
 
       <div className="ai-grid">
@@ -416,20 +429,6 @@ export default function AiWorkspace() {
                 </span>
               </div>
             )}
-            <div className="ai-context-row">
-              <span>API key</span>
-              <span>
-                <input
-                  type="password"
-                  style={{ width: '10rem', fontSize: '0.8rem', textAlign: 'right', border: 'none', background: 'transparent' }}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="optional — Register/Cell"
-                  autoComplete="off"
-                  aria-label="API key"
-                />
-              </span>
-            </div>
             {!session?.ai_control_plane && (
               <p className="ai-upgrade-hint">
                 On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Paste
@@ -542,7 +541,7 @@ function TurnView({
         <div className="ai-card-title">
           <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>{card.success ? 'Read OK' : 'Read failed'}</span>
         </div>
-        {card.error && <p style={{ color: 'var(--danger, #b23b1f)', fontSize: '0.85rem' }}>{card.error}</p>}
+        {card.error && <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>{card.error}</p>}
         {card.data !== null && card.data !== undefined && <pre className="code-panel">{JSON.stringify(card.data, null, 2)}</pre>}
         <ProvenanceLine p={card.provenance} />
       </div>
@@ -564,7 +563,7 @@ function TurnView({
             <button className="btn btn-primary" disabled={busy} onClick={() => onDecide(plan.id, true)}>
               Approve &amp; execute
             </button>
-            <button className="btn" disabled={busy} onClick={() => onDecide(plan.id, false)}>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => onDecide(plan.id, false)}>
               Deny
             </button>
           </div>
@@ -608,7 +607,7 @@ function TurnView({
           <a className="btn btn-primary" href="/#pricing">
             See pricing
           </a>
-          <a className="btn" href="/#pricing">
+          <a className="btn btn-secondary" href="/#pricing">
             Talk to sales
           </a>
           {retry && (
