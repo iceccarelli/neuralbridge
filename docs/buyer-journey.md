@@ -9,7 +9,14 @@ plane. **No live Stripe/checkout is involved anywhere in this doc** — see
 
 This is the same path `tests/test_ai_buyer_journey.py` proves automatically
 (run it yourself: `pytest tests/test_ai_buyer_journey.py -v`, real Postgres
-required — see `docs/ai-local-setup.md`).
+required — see `docs/ai-local-setup.md`). `scripts/verify-buyer-path.sh` is
+a scripted version of this same walkthrough (plus a `GET /v1/plans` check
+and confirming `POST /v1/checkout` refuses honestly without a Stripe price
+configured) that you can run against your own local stack in one command
+instead of following the steps below by hand — see that script's own
+header for its env vars. `scripts/demo-walkthrough.sh` in `docker-
+compose.demo.yml`'s sales demo pack runs the same golden path against a
+seeded demo key rather than one you mint yourself.
 
 ## 0. Prerequisites
 
