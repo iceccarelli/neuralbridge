@@ -76,3 +76,6 @@ evidence.db
 *.orig
 *.rej
 site/
+
+# Claude Code agent worktrees (per-session scratch state, never committed)
+.claude/worktrees/
