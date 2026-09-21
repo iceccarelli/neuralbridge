@@ -2759,6 +2759,40 @@ table.status-table tbody tr:last-child td {
   }
 }
 
+.first-case-form {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.6rem 0.85rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+
+.first-case-form label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.first-case-form input,
+.first-case-form textarea {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+
+.first-case-form textarea {
+  resize: vertical;
+}
+
+@media (max-width: 640px) {
+  .first-case-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ====================== AI WORKSPACE ====================== */
 .ai-shell {
   display: flex;
