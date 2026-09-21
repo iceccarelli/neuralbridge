@@ -1,0 +1,33 @@
+# Local Postgres for the /ai vertical slice (src/neuralbridge/ai) and its
+# golden-task tests (tests/test_ai.py). Not part of the assurance product's
+# deployment (see deploy/assurance/) — this is dev-only, for the platform
+# side's one supported adapter.
+#
+# Usage:
+#   docker compose -f docker-compose.ai.yml up -d
+#   export NEURALBRIDGE_AI_PG_HOST=127.0.0.1
+#   export NEURALBRIDGE_AI_PG_PORT=5432
+#   export NEURALBRIDGE_AI_PG_USER=neuralbridge
+#   export NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev
+#   export NEURALBRIDGE_AI_PG_DATABASE=neuralbridge_ai
+#   uvicorn neuralbridge.main:app --factory --reload
+#
+# See docs/ai-local-setup.md for the full walkthrough, including running
+# without Docker against a locally installed PostgreSQL.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: neuralbridge
+      POSTGRES_PASSWORD: neuralbridge_dev
+      POSTGRES_DB: neuralbridge_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./deploy/ai/seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuralbridge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
