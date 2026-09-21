@@ -98,7 +98,15 @@ def create_app(**kwargs: Any) -> FastAPI:
         CORSMiddleware,
         allow_origins=list(allowed_origins()),
         allow_methods=["GET", "POST"],
-        allow_headers=["content-type", "authorization"],
+        # x-api-key is how every paid write in this API is authenticated —
+        # Console and /ai both send it as a plain header from the browser
+        # (see app/lib/apiKey.ts). Omitting it here does not show up in any
+        # curl/pytest test (a browser is the only caller that enforces CORS
+        # preflight at all), but it silently breaks every real cross-origin
+        # deployment: the browser never even sends the key, so the API sees
+        # an anonymous caller and returns 401/402 for a request that should
+        # have succeeded. Found while building the Console guided flow.
+        allow_headers=["content-type", "authorization", "x-api-key"],
         allow_credentials=False,
     )
 
