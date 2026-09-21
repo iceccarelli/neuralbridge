@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from neuralbridge import __version__
-from neuralbridge.api.routes import adapters, compliance, connections, health, logs
+from neuralbridge.api.routes import adapters, ai, compliance, connections, health, logs
 from neuralbridge.config import Settings, get_settings
 from neuralbridge.utils.logger import setup_logging
 
@@ -66,9 +66,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="NeuralBridge",
         description=(
-            "Universal Enterprise Middleware for Agentic AI Integration — "
-            "securely connect ANY AI agent to ANY system with YAML configuration, "
-            "CRA compliance, and zero-trust security."
+            "A lightweight integration hub connecting AI agents to a small set of "
+            "supported systems (PostgreSQL, REST) via a common backend, MCP gateway, "
+            "and audit trail. See /ai for the agent control-plane slice."
         ),
         version=__version__,
         docs_url="/docs",
@@ -92,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connections.router, prefix=api_prefix, tags=["Connections"])
     app.include_router(logs.router, prefix=api_prefix, tags=["Audit Logs"])
     app.include_router(compliance.router, prefix=api_prefix, tags=["Compliance"])
+    app.include_router(ai.router, prefix=api_prefix, tags=["AI"])
 
     return app
 

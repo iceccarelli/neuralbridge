@@ -36,6 +36,30 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+    # The src/neuralbridge/ai/* golden-task tests (tests/test_ai.py) run
+    # against a real PostgreSQL, not a mock — see that file's own docstring
+    # for why. This service container is what makes them run for real in CI
+    # instead of skipping; a run with no reachable Postgres skips honestly.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: neuralbridge
+          POSTGRES_PASSWORD: neuralbridge_dev
+          POSTGRES_DB: neuralbridge_ai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NEURALBRIDGE_AI_PG_HOST: 127.0.0.1
+      NEURALBRIDGE_AI_PG_PORT: 5432
+      NEURALBRIDGE_AI_PG_USER: neuralbridge
+      NEURALBRIDGE_AI_PG_PASSWORD: neuralbridge_dev
+      NEURALBRIDGE_AI_PG_TEST_DATABASE: neuralbridge_ai_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

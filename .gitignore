@@ -62,6 +62,9 @@ secrets.yaml
 node_modules/
 .next/
 next-env.d.ts
+test-results/
+playwright-report/
+blob-report/
 demo/
 out/
 .fly.dev
