@@ -14,6 +14,7 @@
   --link: #0972d3;
   --link-visited: #0972d3;
   --success: #067d68;
+  --danger: #b23b1f;
   --max-width: 1280px;
 
   /* Radius — three sizes, nothing else. Small controls, cards, panels. */
@@ -2604,7 +2605,9 @@ table.status-table tbody tr:last-child td {
   gap: 1.25rem;
 }
 
-.console-key-row {
+/* Shared by Console and AiWorkspace — the same product family gets the
+   same key-paste treatment in both places, not two different patterns. */
+.key-row {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -2614,13 +2617,13 @@ table.status-table tbody tr:last-child td {
   background: var(--surface-alt);
 }
 
-.console-key-row label {
+.key-row label {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--ink);
 }
 
-.console-key-row input {
+.key-row input {
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -2628,9 +2631,10 @@ table.status-table tbody tr:last-child td {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.88rem;
   max-width: 32rem;
+  width: 100%;
 }
 
-.console-key-note {
+.key-row-note {
   font-size: 0.76rem;
   color: var(--ink-soft);
 }
@@ -2876,10 +2880,18 @@ table.status-table tbody tr:last-child td {
 
 .ai-context-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 0.82rem;
   padding: 0.35rem 0;
   border-bottom: 1px solid var(--border-soft);
+}
+
+.ai-context-row input,
+.ai-context-row select {
+  max-width: 100%;
 }
 
 .ai-context-row:last-child {
@@ -2897,7 +2909,7 @@ table.status-table tbody tr:last-child td {
 }
 
 .ai-upgrade-card {
-  border-color: var(--brand, #d97b2e);
+  border-color: var(--orange);
 }
 
 @media (max-width: 860px) {
