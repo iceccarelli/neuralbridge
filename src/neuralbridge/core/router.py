@@ -1,17 +1,23 @@
 """
-NeuralBridge Request Router — Intelligent Adapter Dispatch.
+NeuralBridge Request Router — Adapter Dispatch.
 
-The router sits between the MCP gateway and the adapter layer.  When an
-agent issues a ``tools/call``, the router:
+The router sits between callers (the REST API, the MCP gateway, the AI
+orchestrator) and the adapter layer.  ``route()`` does exactly three things:
 
 1. Resolves the target adapter from the registry.
-2. Validates permissions (RBAC + rate-limit checks).
-3. Optionally batches or caches the request (cost optimisation).
-4. Delegates execution to the adapter's ``execute()`` method.
-5. Returns a normalised JSON response.
+2. Delegates execution to the adapter's ``execute()`` method.
+3. Returns a normalised JSON response and logs an audit event.
 
-All operations are fully traced via OpenTelemetry spans and logged to the
-immutable CRA audit trail.
+It does **not** validate permissions or apply rate limits — despite an
+earlier version of this docstring claiming otherwise, no such check ever
+ran here (see ``reports/NEURALBRIDGE-AI-CAPABILITY-MATRIX.md``). Callers
+that need authorization must decide it *before* calling ``route()`` and
+pass the resulting ``actor`` through so the audit trail records who
+actually asked, not a hardcoded placeholder — see
+``src/neuralbridge/ai/policy.py`` for the minimal gate the ``/ai`` surface
+applies this way.
+
+All operations are logged to the audit trail via ``AuditLogger``.
 """
 
 from __future__ import annotations
@@ -78,6 +84,7 @@ class RequestRouter:
         operation: str,
         params: dict[str, Any],
         request_id: str | None = None,
+        actor: str = "system",
     ) -> dict[str, Any]:
         """
         Dispatch a request to the named adapter.
@@ -92,6 +99,13 @@ class RequestRouter:
             Operation parameters forwarded to the adapter.
         request_id : str | None
             Correlation ID for tracing.
+        actor : str
+            Who is asking, recorded verbatim on the audit event. Defaults to
+            the literal string ``"system"`` for callers that have not been
+            updated to pass a real identity — that default is itself a gap,
+            not a design choice; see
+            ``reports/NEURALBRIDGE-AI-DATA-MAP.md``. Callers that know who
+            is calling (e.g. ``src/neuralbridge/ai``) must pass it.
 
         Returns
         -------
@@ -125,7 +139,7 @@ class RequestRouter:
             # Audit trail (immutable, CRA-compliant)
             await self._audit.log_event(
                 event_type="adapter_call",
-                actor="system",
+                actor=actor,
                 resource=adapter_type,
                 action=operation,
                 result="success",
@@ -153,7 +167,7 @@ class RequestRouter:
             elapsed = time.monotonic() - start
             await self._audit.log_event(
                 event_type="adapter_error",
-                actor="system",
+                actor=actor,
                 resource=adapter_type,
                 action=operation,
                 result="error",
