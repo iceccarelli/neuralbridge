@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useSharedApiKey } from '../lib/apiKey';
 
 const API_BASE = process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL || '';
 const ACTOR_STORAGE = 'nb-ai-actor';
 const SESSION_STORAGE = 'nb-ai-session';
-const API_KEY_STORAGE = 'nb-ai-api-key';
 
 type Connection = { id: string; name: string; adapter_type: string; status: string; source: string };
 type Capability = { operation: string; operation_class: 'read' | 'write' | 'destructive'; description: string };
@@ -79,31 +79,6 @@ function useSessionIdentity() {
   return { actorId, sessionId, setActorId };
 }
 
-function useApiKey() {
-  const [apiKey, setApiKeyState] = useState('');
-
-  useEffect(() => {
-    try {
-      setApiKeyState(window.sessionStorage.getItem(API_KEY_STORAGE) || '');
-    } catch {
-      // sessionStorage can throw in a locked-down browser context; the
-      // workspace still works, it just won't remember the key across a re-render.
-    }
-  }, []);
-
-  const setApiKey = (value: string) => {
-    setApiKeyState(value);
-    try {
-      if (value) window.sessionStorage.setItem(API_KEY_STORAGE, value);
-      else window.sessionStorage.removeItem(API_KEY_STORAGE);
-    } catch {
-      // Same as above — best effort only.
-    }
-  };
-
-  return { apiKey, setApiKey };
-}
-
 // A deterministic capability router, not an LLM call — this repo's own
 // product law is that the model is never the system of record, and this
 // slice ships without external LLM credentials by design. Every fact shown
@@ -174,7 +149,7 @@ function ProvenanceLine({ p }: { p: Provenance }) {
 
 export default function AiWorkspace() {
   const { actorId, sessionId, setActorId } = useSessionIdentity();
-  const { apiKey, setApiKey } = useApiKey();
+  const { key: apiKey, setKey: setApiKey } = useSharedApiKey();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
@@ -432,8 +407,11 @@ export default function AiWorkspace() {
             </div>
             {!session?.ai_control_plane && (
               <p className="ai-upgrade-hint">
-                On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Paste
-                an API key above once you have one.
+                On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Already
+                have a key? Paste it above, or open your first case in{' '}
+                <a href="/console#first-case">the Console&apos;s guided flow</a> — a key pasted there shows up here
+                too, same browser tab. See <a href="/#pricing">pricing</a> or the{' '}
+                <a href="/connectors/mcp">connectors</a> for other ways in.
               </p>
             )}
             <div className="ai-context-row">

@@ -68,6 +68,15 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8001/v1/cases/
 # 401
 ```
 
+In the browser, `http://localhost:3000/console` has a guided "First
+Register case" flow that does the same `POST /v1/cases/{case_id}/signal`
+from a form instead of curl (`app/components/FirstCase.tsx`) — paste
+`$BUYER_KEY` into the Console's API-key field and it shows the same real
+401/402 refusal or the same real `content_hash`/`ledger_seq` this section
+walks through by hand. That key is also picked up by `/ai` automatically
+(both surfaces share one sessionStorage key, see `app/lib/apiKey.ts`), so
+pasting it once in either place unlocks both.
+
 With the Cell key from step 1, the same request opens a real case in the
 hash-chained ledger:
 
