@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,6 +30,8 @@ from typing import Any
 
 import structlog
 
+from neuralbridge.ai.entitlements import get_accounts, resolve_principal
+from neuralbridge.ai.guard import enforce_write_gate
 from neuralbridge.core.router import RequestRouter
 from neuralbridge.security.audit import AuditLogger
 
@@ -111,12 +114,25 @@ class MCPGateway:
         router: RequestRouter,
         audit_logger: AuditLogger,
         transport: MCPTransport = MCPTransport.STREAMABLE_HTTP,
+        default_actor: str | None = None,
+        default_api_key: str | None = None,
     ) -> None:
         self._router = router
         self._audit = audit_logger
         self._transport = transport
         self._tools: dict[str, MCPToolDefinition] = {}
         self._running = False
+        # Never the bare literal "mcp_client" — that was the Phase 0/1 gap
+        # (see reports/NEURALBRIDGE-AI-DATA-MAP.md). A real identity for
+        # the whole session, overridable per tool call via an "actor"
+        # argument (same pattern assurance-mcp's own machine_verify tool
+        # already uses). NEURALBRIDGE_MCP_ACTOR lets an operator configure
+        # this once in their MCP client config instead of every call.
+        self._default_actor = default_actor or os.environ.get("NEURALBRIDGE_MCP_ACTOR") or f"mcp-session:{id(self):x}"
+        # Entitlement key for paid tool calls (execute_sql writes) — same
+        # env-var-per-session pattern as assurance-mcp's ASSURANCE_API_KEY,
+        # overridable per call via an "api_key" argument.
+        self._default_api_key = default_api_key or os.environ.get("NEURALBRIDGE_MCP_API_KEY")
 
     # ── Tool Registry ────────────────────────────────────────
 
@@ -194,7 +210,7 @@ class MCPGateway:
             logger.exception("mcp_request_failed", request_id=request.id)
             await self._audit.log_event(
                 event_type="mcp_error",
-                actor="mcp_client",
+                actor=f"mcp:{self._default_actor}",
                 resource=request.method,
                 action="call",
                 result="error",
@@ -208,7 +224,7 @@ class MCPGateway:
         # Audit success
         await self._audit.log_event(
             event_type="mcp_request",
-            actor="mcp_client",
+            actor=f"mcp:{self._default_actor}",
             resource=request.method,
             action="call",
             result="success",
@@ -243,11 +259,26 @@ class MCPGateway:
             raise ValueError(f"Unknown tool: {tool_name}")
 
         tool = self._tools[tool_name]
+        operation = arguments.get("operation", "execute")
+        # "actor"/"api_key" are gateway-level control arguments, not
+        # forwarded to the adapter as operation params — same treatment
+        # assurance-mcp gives "actor" on its machine_verify tool.
+        params = {k: v for k, v in arguments.items() if k not in ("actor", "api_key")}
+        actor = str(arguments.get("actor") or self._default_actor)
+        api_key = arguments.get("api_key") or self._default_api_key
+
+        try:
+            principal = resolve_principal(api_key, get_accounts(), anonymous_subject=f"mcp:{actor}")
+        except ValueError as exc:
+            raise ValueError(f"invalid_api_key: {exc}") from exc
+        await enforce_write_gate(tool.adapter_type, operation, params, principal)
+
         result = await self._router.route(
             adapter_type=tool.adapter_type,
-            operation=arguments.get("operation", "execute"),
-            params=arguments,
+            operation=operation,
+            params=params,
             request_id=request.id,
+            actor=f"mcp:{actor}",
         )
         return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
 

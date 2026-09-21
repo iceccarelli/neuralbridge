@@ -11,8 +11,11 @@ Provides shared dependencies that are injected into route handlers:
 
 from __future__ import annotations
 
+import os
+
 from fastapi import Depends
 
+from neuralbridge.ai.store import AiStore
 from neuralbridge.config import Settings
 from neuralbridge.config import get_settings as _get_settings
 from neuralbridge.core.router import AdapterRegistry, RequestRouter
@@ -23,6 +26,7 @@ from neuralbridge.security.audit import AuditLogger, InMemoryAuditStorage
 _audit_logger: AuditLogger | None = None
 _adapter_registry: AdapterRegistry | None = None
 _request_router: RequestRouter | None = None
+_ai_store: AiStore | None = None
 
 
 def get_settings() -> Settings:
@@ -55,3 +59,14 @@ def get_request_router(
     if _request_router is None:
         _request_router = RequestRouter(registry=registry, audit_logger=audit)
     return _request_router
+
+
+def get_ai_store() -> AiStore:
+    """Return the global /ai store singleton — durable connection + plan
+    state, see ``neuralbridge.ai.store``. Path from ``NEURALBRIDGE_AI_STORE``,
+    defaulting to ``neuralbridge-ai.db`` in the working directory (same
+    convention as ``ASSURANCE_LEDGER``/``ASSURANCE_ACCOUNTS``)."""
+    global _ai_store
+    if _ai_store is None:
+        _ai_store = AiStore(os.environ.get("NEURALBRIDGE_AI_STORE", "neuralbridge-ai.db"))
+    return _ai_store

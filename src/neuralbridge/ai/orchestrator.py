@@ -1,10 +1,14 @@
 """The plan → approve → execute → verify loop for /ai.
 
-State (plans) lives in an in-process dict, same honesty tradeoff as the
-existing ``connections`` store this slice reuses — not durable across a
-restart, documented rather than disguised. A production follow-up should
-back this with the same kind of persistent store the assurance product
-uses for its evidence ledger; that is explicitly out of scope here.
+Plans and connections are durable (``neuralbridge.ai.store.AiStore``,
+SQLite) — a restart keeps pending/approved/denied plans and every
+connection record. This module is deliberately principal/billing-agnostic:
+entitlement (who is allowed to call which of these functions) is decided
+one layer up, in ``api/routes/ai.py`` and the shared raw-path guards in
+``api/routes/adapters.py`` / ``core/gateway.py`` — see
+``neuralbridge.ai.entitlements``. That keeps exactly one place that knows
+about plans/pricing (``assurance.billing.plans``) and one place that knows
+about the operation loop (here), rather than tangling the two.
 """
 
 from __future__ import annotations
@@ -26,19 +30,15 @@ from neuralbridge.ai.schemas import (
     Provenance,
     QueryResultCard,
 )
-from neuralbridge.core.router import RequestRouter
-
-from . import connections as ai_connections
-
-#: Plan store — in-memory, single-process, documented (see module docstring).
-_plans: dict[str, Plan] = {}
+from neuralbridge.ai.store import AiStore, ConnectionRecord, PlanRecord, new_id
+from neuralbridge.core.router import AdapterRegistry, RequestRouter
 
 _POSTGRES_CAPABILITIES: list[tuple[str, OperationClass, str]] = [
     ("health_check", OperationClass.READ, "Check the connection is reachable and report the server version."),
     ("list_tables", OperationClass.READ, "List tables in the connected database."),
     ("describe_table", OperationClass.READ, "Show columns and types for one table."),
     ("query", OperationClass.READ, "Run a SELECT statement and return rows."),
-    ("execute_sql", OperationClass.WRITE, "Run an INSERT/UPDATE/DELETE/DDL statement — requires approval."),
+    ("execute_sql", OperationClass.WRITE, "Run an INSERT/UPDATE/DELETE/DDL statement — requires approval and Register/Cell."),
 ]
 
 
@@ -49,11 +49,45 @@ class OrchestratorError(Exception):
         super().__init__(detail)
 
 
-def list_capabilities(connection_id: str) -> list[Capability]:
-    conn = ai_connections.get_connection(connection_id)
+def _plan_to_schema(record: PlanRecord) -> Plan:
+    return Plan(
+        id=record.id,
+        connection_id=record.connection_id,
+        adapter_type=record.adapter_type,
+        operation=record.operation,
+        operation_class=OperationClass(record.operation_class),
+        params=record.params,
+        proposed_by=record.proposed_by,
+        status=PlanStatus(record.status),
+        created_at=datetime.fromisoformat(record.created_at),
+        decided_by=record.decided_by,
+        decided_at=datetime.fromisoformat(record.decided_at) if record.decided_at else None,
+        deny_reason=record.deny_reason,
+    )
+
+
+def _require_live_adapter(registry: AdapterRegistry, conn: ConnectionRecord) -> None:
+    """A connection record can outlive its adapter instance across a
+    restart when its credentials are not persisted (see
+    ``connections.create_connection`` — additional, operator-bound
+    connections never have their password stored). The seeded demo
+    connection re-registers itself from env on first use after a restart
+    (``connections.ensure_seeded_connection``); any other connection in
+    that state needs the operator to bind it again with fresh credentials
+    — an honest 409, not a confusing adapter-not-found 500."""
+    if conn.registry_key not in registry:
+        raise OrchestratorError(
+            409,
+            f"Connection '{conn.id}' has no live adapter (likely after a restart — "
+            "credentials are never persisted). Re-bind it with POST /ai/connections.",
+        )
+
+
+def list_capabilities(store: AiStore, connection_id: str) -> list[Capability]:
+    conn = store.get_connection(connection_id)
     if conn is None:
         raise OrchestratorError(404, f"Connection '{connection_id}' not found.")
-    if conn["adapter_type"] != "postgres":
+    if conn.adapter_type != "postgres":
         return []
     return [
         Capability(
@@ -67,11 +101,11 @@ def list_capabilities(connection_id: str) -> list[Capability]:
     ]
 
 
-def _build_provenance(conn: dict[str, Any], operation: str, response: AdapterResponse) -> Provenance:
+def _build_provenance(conn: ConnectionRecord, operation: str, response: AdapterResponse) -> Provenance:
     return Provenance(
-        connection_id=conn["id"],
-        connection_name=conn["name"],
-        adapter_type=conn["adapter_type"],
+        connection_id=conn.id,
+        connection_name=conn.name,
+        adapter_type=conn.adapter_type,
         tool=operation,
         request_id=response.request_id,
         timestamp=response.timestamp,
@@ -79,9 +113,11 @@ def _build_provenance(conn: dict[str, Any], operation: str, response: AdapterRes
     )
 
 
-async def _run(router: RequestRouter, actor: Actor, conn: dict[str, Any], operation: str, params: dict[str, Any]) -> tuple[AdapterResponse, Provenance]:
+async def _run(
+    router: RequestRouter, actor: Actor, conn: ConnectionRecord, operation: str, params: dict[str, Any]
+) -> tuple[AdapterResponse, Provenance]:
     result = await router.route(
-        adapter_type=conn["adapter_type"],
+        adapter_type=conn.registry_key,
         operation=operation,
         params=params,
         request_id=str(uuid.uuid4()),
@@ -92,14 +128,17 @@ async def _run(router: RequestRouter, actor: Actor, conn: dict[str, Any], operat
     return response, provenance
 
 
-async def read(router: RequestRouter, actor: Actor, connection_id: str, operation: str, params: dict[str, Any]) -> QueryResultCard:
+async def read(
+    router: RequestRouter, registry: AdapterRegistry, actor: Actor, store: AiStore,
+    connection_id: str, operation: str, params: dict[str, Any],
+) -> QueryResultCard:
     """Execute a READ immediately. Refuses anything that isn't a READ."""
-    conn = ai_connections.get_connection(connection_id)
+    conn = store.get_connection(connection_id)
     if conn is None:
         raise OrchestratorError(404, f"Connection '{connection_id}' not found.")
 
     try:
-        decision = evaluate(conn["adapter_type"], operation, params)
+        decision = evaluate(conn.adapter_type, operation, params)
     except PolicyError as exc:
         raise OrchestratorError(403, exc.reason) from exc
 
@@ -110,18 +149,20 @@ async def read(router: RequestRouter, actor: Actor, connection_id: str, operatio
             "use POST /ai/plan, not /ai/read.",
         )
 
+    _require_live_adapter(registry, conn)
     response, provenance = await _run(router, actor, conn, operation, params)
     return QueryResultCard(success=response.success, data=response.data, error=response.error, provenance=provenance)
 
 
-def create_plan(actor: Actor, connection_id: str, operation: str, params: dict[str, Any]) -> ApprovalCard:
-    """Propose a WRITE/DESTRUCTIVE operation. Never executes it."""
-    conn = ai_connections.get_connection(connection_id)
+def create_plan(store: AiStore, actor: Actor, connection_id: str, operation: str, params: dict[str, Any]) -> ApprovalCard:
+    """Propose a WRITE/DESTRUCTIVE operation. Never executes it. Paid-gated
+    by the caller (``api/routes/ai.py``) before this is reached."""
+    conn = store.get_connection(connection_id)
     if conn is None:
         raise OrchestratorError(404, f"Connection '{connection_id}' not found.")
 
     try:
-        decision = evaluate(conn["adapter_type"], operation, params)
+        decision = evaluate(conn.adapter_type, operation, params)
     except PolicyError as exc:
         raise OrchestratorError(403, exc.reason) from exc
 
@@ -131,63 +172,78 @@ def create_plan(actor: Actor, connection_id: str, operation: str, params: dict[s
             f"'{operation}' is read-only — call POST /ai/read directly instead of planning it.",
         )
 
-    plan = Plan(
+    record = PlanRecord(
+        id=new_id(),
         connection_id=connection_id,
-        adapter_type=conn["adapter_type"],
+        adapter_type=conn.adapter_type,
         operation=operation,
-        operation_class=decision.operation_class,
+        operation_class=decision.operation_class.value,
         params=params,
         proposed_by=actor.as_audit_string(),
     )
-    _plans[plan.id] = plan
-    return ApprovalCard(plan=plan, risk_note=decision.risk_note)
+    store.create_plan(record)
+    return ApprovalCard(plan=_plan_to_schema(record), risk_note=decision.risk_note)
 
 
-def get_plan(plan_id: str) -> Plan:
-    plan = _plans.get(plan_id)
-    if plan is None:
+def get_plan(store: AiStore, plan_id: str) -> Plan:
+    record = store.get_plan(plan_id)
+    if record is None:
         raise OrchestratorError(404, f"Plan '{plan_id}' not found.")
-    return plan
+    return _plan_to_schema(record)
 
 
-def deny_plan(actor: Actor, plan_id: str, reason: str) -> Plan:
-    plan = get_plan(plan_id)
-    if plan.status != PlanStatus.PENDING_APPROVAL:
-        raise OrchestratorError(409, f"Plan '{plan_id}' is '{plan.status.value}', not pending approval.")
-    plan.status = PlanStatus.DENIED
-    plan.decided_by = actor.as_audit_string()
-    plan.decided_at = datetime.now(UTC)
-    plan.deny_reason = reason
-    return plan
+def deny_plan(store: AiStore, actor: Actor, plan_id: str, reason: str) -> Plan:
+    record = store.get_plan(plan_id)
+    if record is None:
+        raise OrchestratorError(404, f"Plan '{plan_id}' not found.")
+    if record.status != PlanStatus.PENDING_APPROVAL.value:
+        raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
+    updated = store.update_plan_status(
+        plan_id, status=PlanStatus.DENIED.value, decided_by=actor.as_audit_string(),
+        decided_at=datetime.now(UTC).isoformat(), deny_reason=reason,
+    )
+    return _plan_to_schema(updated)
 
 
-async def approve_and_execute(router: RequestRouter, actor: Actor, plan_id: str) -> ExecutionReceipt:
-    """Approve a pending plan and execute it in the same call — the only path to a WRITE running."""
-    plan = get_plan(plan_id)
-    if plan.status != PlanStatus.PENDING_APPROVAL:
-        raise OrchestratorError(409, f"Plan '{plan_id}' is '{plan.status.value}', not pending approval.")
+async def approve_and_execute(
+    router: RequestRouter, registry: AdapterRegistry, store: AiStore, actor: Actor, plan_id: str
+) -> ExecutionReceipt:
+    """Approve a pending plan and execute it in the same call — the only
+    path to a WRITE running. Paid-gated by the caller before this is
+    reached."""
+    record = store.get_plan(plan_id)
+    if record is None:
+        raise OrchestratorError(404, f"Plan '{plan_id}' not found.")
+    if record.status != PlanStatus.PENDING_APPROVAL.value:
+        raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
 
-    conn = ai_connections.get_connection(plan.connection_id)
+    conn = store.get_connection(record.connection_id)
     if conn is None:
-        raise OrchestratorError(404, f"Connection '{plan.connection_id}' backing this plan no longer exists.")
+        raise OrchestratorError(404, f"Connection '{record.connection_id}' backing this plan no longer exists.")
+    _require_live_adapter(registry, conn)
 
-    plan.status = PlanStatus.APPROVED
-    plan.decided_by = actor.as_audit_string()
-    plan.decided_at = datetime.now(UTC)
+    store.update_plan_status(
+        plan_id, status=PlanStatus.APPROVED.value, decided_by=actor.as_audit_string(),
+        decided_at=datetime.now(UTC).isoformat(),
+    )
 
     try:
-        response, provenance = await _run(router, actor, conn, plan.operation, plan.params)
+        response, provenance = await _run(router, actor, conn, record.operation, record.params)
     except Exception as exc:
-        plan.status = PlanStatus.FAILED
+        store.update_plan_status(plan_id, status=PlanStatus.FAILED.value)
         raise OrchestratorError(502, f"Execution failed: {exc}") from exc
 
-    plan.status = PlanStatus.EXECUTED
+    updated = store.update_plan_status(plan_id, status=PlanStatus.EXECUTED.value)
     return ExecutionReceipt(
-        plan_id=plan.id,
+        plan_id=updated.id,
         success=response.success,
         data=response.data,
         error=response.error,
         provenance=provenance,
-        approved_by=plan.decided_by,
+        approved_by=updated.decided_by or actor.as_audit_string(),
         executed_at=datetime.now(UTC),
     )
+
+
+def list_plans(store: AiStore, *, limit: int = 50) -> list[Plan]:
+    return [_plan_to_schema(r) for r in store.list_plans(limit=limit)]

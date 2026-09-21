@@ -57,6 +57,17 @@ class Plan:
     #: this is the second payer HANDOFF.md's P1 names — a component supplier,
     #: not a manufacturer — and it has no self-serve Stripe price yet.
     supplier_publish: bool = False
+    #: May propose and approve a WRITE through the /ai control plane (and the
+    #: same-policy raw adapters/MCP paths — see reports/NEURALBRIDGE-AI-PHASE2.md),
+    #: bind additional connections, and fetch the full audit trail. The
+    #: control plane's discovery and READ path stays free — see
+    #: ai_reads_per_day — the same "verification stays free" rule the rest
+    #: of this table follows: reading is how a prospect evaluates the
+    #: product, writing is the entitlement.
+    ai_control_plane: bool = False
+    #: READ calls (list_tables / describe_table / query / health_check)
+    #: per UTC day through /ai on the free tier. None = unlimited (paid).
+    ai_reads_per_day: int | None = None
     included: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -86,6 +97,8 @@ class Plan:
                 "separations_per_day": self.separations_per_day,
                 "diffs_per_day": self.diffs_per_day,
                 "supplier_publish": self.supplier_publish,
+                "ai_control_plane": self.ai_control_plane,
+                "ai_reads_per_day": self.ai_reads_per_day,
             },
         }
 
@@ -101,7 +114,11 @@ PLANS: dict[Tier, Plan] = {
         validations_per_day=20,
         separations_per_day=20,
         diffs_per_day=10,
+        ai_reads_per_day=30,
         included=(
+            "/ai control plane: discover the demo connection and run READ "
+            "operations (list tables, describe a table, run a SELECT), up "
+            "to 30 a day — writes need Register or Cell",
             "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
             "which listed territories are not EU Member States",
             "GET /v1/spec/fields — the full field specification per track and stage",
@@ -142,6 +159,7 @@ PLANS: dict[Tier, Plan] = {
         product_families=25,
         cases_per_day=50,
         export=True,
+        ai_control_plane=True,
         included=(
             "Everything in Validator, without the daily cap",
             "Unlimited cases; awareness records with the reasoning that defends them",
@@ -149,6 +167,8 @@ PLANS: dict[Tier, Plan] = {
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
             "Up to 25 product families",
+            "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
+            "bind additional connections, full audit trail",
         ),
     ),
     "cell": Plan(
@@ -170,8 +190,11 @@ PLANS: dict[Tier, Plan] = {
         export=True,
         signed_attestation=True,
         machine_verification=True,
+        ai_control_plane=True,
         included=(
             "Everything in Register",
+            "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
+            "bind additional connections, full audit trail",
             "Machine safety verification: POST /v1/machine/verify checks a recorded "
             "run against a declared safety envelope and seals the result",
             "Separation, speed, workspace, stop characterisation, power-and-force and "
