@@ -1,5 +1,23 @@
 # NeuralBridge AI — Capability Matrix
 
+> **Phase 3 update (see `reports/NEURALBRIDGE-FIRST-EURO.md`):** the "Authz
+> (actual)" cells below that say "none"/"inherits router (none)" for the
+> non-postgres adapter rows (Adapter execute (REST), MCP `tools/call`, and
+> every "Experimental/evolving" adapter row) are now **stale** for the two
+> paths those rows actually describe (`api/routes/adapters.py`,
+> `core/gateway.py`). Both now run every call through
+> `neuralbridge.ai.guard.enforce_write_gate`, which — for any adapter type
+> other than `postgres` — allows a real, per-adapter allow-list of
+> discovery operations free and requires the `ai_control_plane` entitlement
+> (402) for everything else, including any operation name it doesn't
+> recognise. `postgres` keeps its own detailed SQL-aware gate. This closes
+> the "Experimental != free god-mode" gap Phase 2 documented as its own
+> scope boundary; it does not change whether an adapter's own
+> implementation is real or mocked (still tracked in the R/W and Status
+> columns of each adapter row) — a paid caller who clears the gate against
+> a mock adapter still gets that adapter's honest mock/stub behavior, not a
+> fabricated success invented by the gate.
+
 Every row is a first-hand code read at `main @ 42787e0`, not a description of
 docs. "Callable by" = who can reach this today, not who is meant to
 eventually. "Tests" lists the actual file(s); "none" means grepped and found
