@@ -86,11 +86,12 @@ const FALLBACK_PLANS: Plan[] = [
   },
 ];
 
-function CheckoutForm({ tier }: { tier: 'register' | 'cell' }) {
+function CheckoutForm({ tier, variant = 'primary' }: { tier: 'register' | 'cell'; variant?: 'primary' | 'secondary' }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const btnClass = variant === 'primary' ? 'btn btn-primary' : 'btn btn-secondary';
 
   const submit = async () => {
     setError(null);
@@ -120,7 +121,7 @@ function CheckoutForm({ tier }: { tier: 'register' | 'cell' }) {
 
   if (!open) {
     return (
-      <button className="btn btn-primary" onClick={() => setOpen(true)}>
+      <button className={btnClass} onClick={() => setOpen(true)}>
         Buy {tier === 'register' ? 'Register' : 'Cell'}
       </button>
     );
@@ -135,7 +136,7 @@ function CheckoutForm({ tier }: { tier: 'register' | 'cell' }) {
         onChange={(e) => setEmail(e.target.value)}
         className="checkout-input"
       />
-      <button className="btn btn-primary" onClick={submit} disabled={busy}>
+      <button className={btnClass} onClick={submit} disabled={busy}>
         {busy ? 'Starting checkout…' : 'Continue to Stripe checkout'}
       </button>
       {error && <p className="playground-error">{error}</p>}
@@ -227,7 +228,7 @@ export default function PricingPlans() {
           </ul>
           {firstTenMinutes(cell) && <p className="pricing-note" style={{ fontSize: '0.78rem' }}>{firstTenMinutes(cell)}</p>}
           {cell.purchasable ? (
-            <CheckoutForm tier="cell" />
+            <CheckoutForm tier="cell" variant="secondary" />
           ) : (
             <a className="btn btn-secondary" href={SALES}>Talk to sales</a>
           )}
