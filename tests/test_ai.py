@@ -658,55 +658,56 @@ class TestGolden011SafeDiscoveryAllowlistSanity:
     """
 
     def test_allowlist_is_subset_of_adapter_supported_operations(self) -> None:
-        from neuralbridge.adapters.apis.graphql import GraphQLAdapter
-        from neuralbridge.adapters.apis.odata import ODataAdapter
-        from neuralbridge.adapters.apis.rest import RestApiAdapter
-        from neuralbridge.adapters.apis.soap import SoapAdapter
-        from neuralbridge.adapters.cloud.aws_s3 import AWSS3Adapter
-        from neuralbridge.adapters.cloud.azure_blob import AzureBlobStorageAdapter
-        from neuralbridge.adapters.cloud.gcs import GCSAdapter
-        from neuralbridge.adapters.databases.mongodb import MongodbAdapter
-        from neuralbridge.adapters.databases.mysql import MySQLAdapter
-        from neuralbridge.adapters.databases.snowflake import SnowflakeAdapter
-        from neuralbridge.adapters.erp_crm.salesforce import SalesforceAdapter
-        from neuralbridge.adapters.erp_crm.sap import SapErpAdapter
-        from neuralbridge.adapters.messaging.discord import DiscordAdapter
-        from neuralbridge.adapters.messaging.email_smtp import EmailAdapter
-        from neuralbridge.adapters.messaging.slack import SlackAdapter
-        from neuralbridge.adapters.messaging.teams import TeamsAdapter
-        from neuralbridge.adapters.messaging.telegram import TelegramAdapter
-        from neuralbridge.adapters.productivity.gmail import GmailAdapter
-        from neuralbridge.adapters.productivity.notion import NotionAdapter
+        import importlib
+
         from neuralbridge.ai.guard import _SAFE_DISCOVERY_OPS
 
-        adapter_classes: dict[str, type] = {
-            "slack": SlackAdapter, "discord": DiscordAdapter, "teams": TeamsAdapter,
-            "telegram": TelegramAdapter, "email": EmailAdapter, "gmail": GmailAdapter,
-            "notion": NotionAdapter, "aws_s3": AWSS3Adapter, "gcs": GCSAdapter,
-            "azure_blob": AzureBlobStorageAdapter, "mysql": MySQLAdapter, "snowflake": SnowflakeAdapter,
-            "mongodb": MongodbAdapter, "salesforce": SalesforceAdapter,
-            "sap_erp": SapErpAdapter, "soap": SoapAdapter, "odata": ODataAdapter,
-            "rest": RestApiAdapter, "graphql": GraphQLAdapter,
+        # adapter_type -> (module path, class name). Imported defensively,
+        # one at a time, rather than as top-of-function imports: a few of
+        # these adapters (bigquery, mongodb, ...) pull in an optional
+        # third-party SDK at module level that this repo's own CI test job
+        # does not install (see requirements/test.txt) — that is a real,
+        # legitimate gap for an Experimental adapter, not something this
+        # sanity test should crash on. An adapter whose SDK isn't installed
+        # here is simply excluded from the loop below, not silently
+        # skipped as "known safe" — `checked` still names it explicitly so
+        # a real allow-list/adapter-type mismatch involving it would still
+        # be caught wherever the SDK is present (e.g. a dev machine with it
+        # installed, or a future CI job that adds it).
+        adapter_modules = {
+            "slack": ("neuralbridge.adapters.messaging.slack", "SlackAdapter"),
+            "discord": ("neuralbridge.adapters.messaging.discord", "DiscordAdapter"),
+            "teams": ("neuralbridge.adapters.messaging.teams", "TeamsAdapter"),
+            "telegram": ("neuralbridge.adapters.messaging.telegram", "TelegramAdapter"),
+            "email": ("neuralbridge.adapters.messaging.email_smtp", "EmailAdapter"),
+            "gmail": ("neuralbridge.adapters.productivity.gmail", "GmailAdapter"),
+            "notion": ("neuralbridge.adapters.productivity.notion", "NotionAdapter"),
+            "aws_s3": ("neuralbridge.adapters.cloud.aws_s3", "AWSS3Adapter"),
+            "gcs": ("neuralbridge.adapters.cloud.gcs", "GCSAdapter"),
+            "azure_blob": ("neuralbridge.adapters.cloud.azure_blob", "AzureBlobStorageAdapter"),
+            "mysql": ("neuralbridge.adapters.databases.mysql", "MySQLAdapter"),
+            "snowflake": ("neuralbridge.adapters.databases.snowflake", "SnowflakeAdapter"),
+            "mongodb": ("neuralbridge.adapters.databases.mongodb", "MongodbAdapter"),
+            "bigquery": ("neuralbridge.adapters.databases.bigquery", "BigQueryAdapter"),
+            "salesforce": ("neuralbridge.adapters.erp_crm.salesforce", "SalesforceAdapter"),
+            "sap_erp": ("neuralbridge.adapters.erp_crm.sap", "SapErpAdapter"),
+            "soap": ("neuralbridge.adapters.apis.soap", "SoapAdapter"),
+            "odata": ("neuralbridge.adapters.apis.odata", "ODataAdapter"),
+            "rest": ("neuralbridge.adapters.apis.rest", "RestApiAdapter"),
+            "graphql": ("neuralbridge.adapters.apis.graphql", "GraphQLAdapter"),
         }
-        # bigquery's module-level import pulls in google-api-core /
-        # google-cloud-bigquery, an optional adapter dependency this repo's
-        # own CI test job does not install (see requirements/test.txt).
-        # Skip only this one adapter's own-supported-operations check when
-        # that SDK isn't installed, rather than the whole test — it still
-        # stays in `checked` below so a real allow-list/adapter-type
-        # mismatch involving bigquery would still be caught wherever the
-        # SDK is present (e.g. a dev machine with it installed).
-        try:
-            import neuralbridge.adapters.databases.bigquery as bigquery_module
-        except ModuleNotFoundError:
-            bigquery_module = None
-        if bigquery_module is not None:
-            adapter_classes["bigquery"] = bigquery_module.BigQueryAdapter
+        adapter_classes: dict[str, type] = {}
+        for adapter_type, (module_path, class_name) in adapter_modules.items():
+            try:
+                module = importlib.import_module(module_path)
+            except ModuleNotFoundError:
+                continue  # optional adapter SDK not installed in this environment
+            adapter_classes[adapter_type] = getattr(module, class_name)
 
         # Every adapter_type keyed in the allow-list (other than the
         # custom-adapter-template placeholder, which has no importable
         # single class) must be one this test actually checks.
-        checked = set(adapter_classes) | {"custom_adapter_template", "bigquery"}
+        checked = set(adapter_modules) | {"custom_adapter_template"}
         assert set(_SAFE_DISCOVERY_OPS) <= checked, (
             f"_SAFE_DISCOVERY_OPS has adapter type(s) this sanity test doesn't "
             f"know how to verify: {set(_SAFE_DISCOVERY_OPS) - checked}"
@@ -715,7 +716,7 @@ class TestGolden011SafeDiscoveryAllowlistSanity:
             if adapter_type == "custom_adapter_template":
                 continue
             if adapter_type not in adapter_classes:
-                continue  # bigquery, SDK not installed in this environment
+                continue  # optional adapter SDK not installed in this environment
             real_ops = set(adapter_classes[adapter_type].supported_operations)
             assert allowed_ops <= real_ops, (
                 f"{adapter_type}: allow-list has op(s) not in its own "
