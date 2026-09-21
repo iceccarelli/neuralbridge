@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ROUTES, TIER_LABEL, type RouteRow } from '../lib/routes';
 import { useSharedApiKey } from '../lib/apiKey';
 import FirstCase from './FirstCase';
+import FirstCell from './FirstCell';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -71,6 +72,7 @@ export default function Console() {
       </div>
 
       <FirstCase apiBase={API_BASE} apiKey={apiKey} />
+      <FirstCell apiBase={API_BASE} apiKey={apiKey} />
 
       <div className="console-grid">
         <div className="console-routes">
