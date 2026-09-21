@@ -18,6 +18,14 @@ import httpx
 import pytest
 import uvicorn
 
+pytest.importorskip(
+    "mcp",
+    reason="neuralbridge.mcp.server wraps the mcp SDK directly — install the "
+           "optional 'neuralbridge-ai-mcp' extra to run this module. The "
+           "entitlement gating it wraps (the /ai control plane's real 402) is "
+           "also covered without this SDK in tests/test_ai.py.",
+)
+
 PG_HOST = os.environ.get("NEURALBRIDGE_AI_PG_HOST", "127.0.0.1")
 PG_PORT = int(os.environ.get("NEURALBRIDGE_AI_PG_PORT", "5432"))
 PG_USER = os.environ.get("NEURALBRIDGE_AI_PG_USER", "neuralbridge")

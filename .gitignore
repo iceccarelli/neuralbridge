@@ -76,6 +76,7 @@ evidence.db
 *.orig
 *.rej
 site/
+*.tsbuildinfo
 
 # Claude Code agent worktrees (per-session scratch state, never committed)
 .claude/worktrees/
