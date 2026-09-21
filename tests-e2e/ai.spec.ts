@@ -4,6 +4,14 @@ import { test, expect } from '@playwright/test';
 // real read, plan a write, approve it, see a receipt. Skips itself with a
 // clear reason if the API isn't reachable (see docs/ai-local-setup.md) —
 // no faked pass.
+//
+// Phase 2: writes are a paid (Register/Cell) capability, so these tests
+// authenticate as paid by seeding sessionStorage with an API key before
+// the page's first fetch — see docs/ai-local-setup.md for
+// ASSURANCE_API_KEYS. TestGolden defined in tests-e2e/ai-entitlement.spec.ts
+// covers the free (no key) path.
+
+const PAID_API_KEY = process.env.NEURALBRIDGE_E2E_PAID_KEY || 'demo-cell-key-12345';
 
 async function apiIsUp(baseURL: string): Promise<boolean> {
   try {
@@ -15,9 +23,12 @@ async function apiIsUp(baseURL: string): Promise<boolean> {
   }
 }
 
-test.beforeEach(async ({ baseURL }) => {
+test.beforeEach(async ({ baseURL, page }) => {
   const up = await apiIsUp(baseURL!);
   test.skip(!up, 'NeuralBridge API not reachable — see docs/ai-local-setup.md');
+  await page.addInitScript((key) => {
+    window.sessionStorage.setItem('nb-ai-api-key', key);
+  }, PAID_API_KEY);
 });
 
 test('discover -> real read -> plan write -> approve -> receipt', async ({ page }) => {

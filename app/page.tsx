@@ -407,6 +407,18 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
+                  <td>/ai control plane — discover + read (30/day)</td>
+                  <td className="check">✓</td>
+                  <td className="check">✓</td>
+                  <td className="check">✓</td>
+                </tr>
+                <tr>
+                  <td>/ai control plane — propose-and-approve writes, bind connections, full audit</td>
+                  <td>—</td>
+                  <td className="check">✓</td>
+                  <td className="check">✓</td>
+                </tr>
+                <tr>
                   <td>Article 14 register (unlimited cases, both clocks)</td>
                   <td>—</td>
                   <td className="check">✓</td>

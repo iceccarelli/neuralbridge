@@ -89,6 +89,12 @@ export default function CursorConnectorPage() {
               table</a> for what else ships and what's next.
             </li>
           </ol>
+          <p>
+            Want the <code>/ai</code> control plane instead of the Article 14 register — discover a connection,
+            read it, propose and approve a write? That&apos;s a separate package,{' '}
+            <code>neuralbridge-ai-mcp</code>, same <code>mcp.json</code> pattern — see{' '}
+            <a href="/connectors/mcp#install-ai">the neuralbridge-ai-mcp section</a>.
+          </p>
         </div>
       </section>
 

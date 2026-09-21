@@ -2886,6 +2886,20 @@ table.status-table tbody tr:last-child td {
   border-bottom: none;
 }
 
+.ai-upgrade-hint {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface-alt);
+  border-radius: var(--radius-sm);
+  margin: 0.4rem 0;
+}
+
+.ai-upgrade-card {
+  border-color: var(--brand, #d97b2e);
+}
+
 @media (max-width: 860px) {
   .ai-grid {
     grid-template-columns: 1fr;

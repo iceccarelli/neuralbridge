@@ -13,6 +13,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from neuralbridge.ai.entitlements import Principal, current_principal
+from neuralbridge.ai.guard import enforce_write_gate
+from neuralbridge.ai.identity import Actor, get_current_actor
 from neuralbridge.api.dependencies import (
     get_adapter_registry,
     get_audit_logger,
@@ -102,24 +105,35 @@ async def execute_adapter(
     request: AdapterExecuteRequest,
     router_dep: RequestRouter = Depends(get_request_router),
     audit: AuditLogger = Depends(get_audit_logger),
+    actor: Actor = Depends(get_current_actor),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
     """
     Execute an operation on the specified adapter.
 
-    The request is routed through the RequestRouter, which handles
-    validation, rate limiting, and audit logging.
+    The request is routed through the RequestRouter with a real actor
+    (never the "system" default — see ``RequestRouter.route``'s
+    docstring). For ``postgres``, a WRITE/DESTRUCTIVE operation goes
+    through the same policy + entitlement gate `/ai` uses
+    (``neuralbridge.ai.guard``) — this route is not a way to get a paid
+    capability for free by skipping `/ai`. Every other adapter type is
+    unaffected by that gate (see the guard module's own docstring for why).
     """
+    await enforce_write_gate(adapter_type, request.operation, request.params, principal)
     try:
         result = await router_dep.route(
             adapter_type=adapter_type,
             operation=request.operation,
             params=request.params,
+            actor=actor.as_audit_string(),
         )
         return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ConnectionError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
