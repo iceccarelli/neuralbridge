@@ -171,6 +171,17 @@ export default function PricingPlans() {
   const register = byTier('register');
   const cell = byTier('cell');
 
+  // Derived from the live plan's own `limits`, not hand-typed — so this
+  // sentence cannot drift from what the entitlement gate actually enforces
+  // (see src/assurance/billing/plans.py + neuralbridge.ai.entitlements).
+  const firstTenMinutes = (plan: Plan): string | null => {
+    const parts: string[] = [];
+    if (plan.limits.register_access) parts.push('open a real Article 14 case');
+    if (plan.limits.ai_control_plane) parts.push('unlock /ai’s write path (plan → approve → receipt)');
+    if (parts.length === 0) return null;
+    return `First 10 minutes: ${parts.join(', and ')} — with one key, no live checkout required to try it locally (see docs/buyer-journey.md).`;
+  };
+
   return (
     <>
       <div className="pricing-grid">
@@ -197,6 +208,7 @@ export default function PricingPlans() {
               <li key={item}>{item}</li>
             ))}
           </ul>
+          {firstTenMinutes(register) && <p className="pricing-note" style={{ fontSize: '0.78rem' }}>{firstTenMinutes(register)}</p>}
           {register.purchasable ? (
             <CheckoutForm tier="register" />
           ) : (
@@ -213,6 +225,7 @@ export default function PricingPlans() {
               <li key={item}>{item}</li>
             ))}
           </ul>
+          {firstTenMinutes(cell) && <p className="pricing-note" style={{ fontSize: '0.78rem' }}>{firstTenMinutes(cell)}</p>}
           {cell.purchasable ? (
             <CheckoutForm tier="cell" />
           ) : (
