@@ -13,6 +13,8 @@ interface PlanLimits {
   verifiable_export: boolean;
   signed_attestation: boolean;
   machine_verification: boolean;
+  ai_control_plane?: boolean;
+  ai_reads_per_day?: number | null;
 }
 
 interface Plan {
@@ -37,6 +39,7 @@ const FALLBACK_PLANS: Plan[] = [
     price: 'free',
     purchasable: false,
     includes: [
+      '/ai control plane: discover + read (30/day) — writes need Register or Cell',
       'Article 14 draft validation',
       'ISO/TS 15066 separation calculator',
       'Manifest diff',
@@ -46,7 +49,7 @@ const FALLBACK_PLANS: Plan[] = [
       'Attestation verification',
       'Offline enrolment kit',
     ],
-    limits: { validations_per_day: 20, product_families: null, cases_per_day: null, register_access: false, verifiable_export: false, signed_attestation: false, machine_verification: false },
+    limits: { validations_per_day: 20, product_families: null, cases_per_day: null, register_access: false, verifiable_export: false, signed_attestation: false, machine_verification: false, ai_control_plane: false, ai_reads_per_day: 30 },
   },
   {
     tier: 'register',
@@ -55,13 +58,14 @@ const FALLBACK_PLANS: Plan[] = [
     price: '€390 / month',
     purchasable: false,
     includes: [
+      '/ai control plane: unlimited reads, propose-and-approve writes, additional connections, full audit trail',
       'Unlimited Article 14 cases',
       'Both deadline clocks, computed correctly',
       'Hash-chained ledger with verifiable export',
       '25 product families',
       'Everything in Validator',
     ],
-    limits: { validations_per_day: null, product_families: 25, cases_per_day: 50, register_access: true, verifiable_export: true, signed_attestation: false, machine_verification: false },
+    limits: { validations_per_day: null, product_families: 25, cases_per_day: 50, register_access: true, verifiable_export: true, signed_attestation: false, machine_verification: false, ai_control_plane: true, ai_reads_per_day: null },
   },
   {
     tier: 'cell',
@@ -70,6 +74,7 @@ const FALLBACK_PLANS: Plan[] = [
     price: '€1,290 / month',
     purchasable: false,
     includes: [
+      '/ai control plane: unlimited reads, propose-and-approve writes, additional connections, full audit trail',
       'Machine safety verification',
       'Annex III manifests and passports',
       'Fleet advisory fan-out',
@@ -77,7 +82,7 @@ const FALLBACK_PLANS: Plan[] = [
       'Counter-signed head attestation',
       'Everything in Register',
     ],
-    limits: { validations_per_day: null, product_families: null, cases_per_day: null, register_access: true, verifiable_export: true, signed_attestation: true, machine_verification: true },
+    limits: { validations_per_day: null, product_families: null, cases_per_day: null, register_access: true, verifiable_export: true, signed_attestation: true, machine_verification: true, ai_control_plane: true, ai_reads_per_day: null },
   },
 ];
 

@@ -44,10 +44,19 @@ class AdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, BaseAdapter] = {}
 
-    def register(self, adapter: BaseAdapter) -> None:
-        """Register an adapter instance under its declared type name."""
-        self._adapters[adapter.adapter_type] = adapter
-        logger.info("adapter_registered", adapter_type=adapter.adapter_type)
+    def register(self, adapter: BaseAdapter, key: str | None = None) -> None:
+        """Register an adapter instance.
+
+        Keyed by its declared type name by default — the original,
+        one-instance-per-type behaviour every existing caller relies on.
+        Pass an explicit ``key`` (e.g. ``f"postgres:{connection_id}"``) to
+        register a second, independent instance of the same adapter type
+        for a different connection — see ``neuralbridge.ai.connections``,
+        which is the one caller that needs more than one Postgres
+        connection live at once.
+        """
+        self._adapters[key or adapter.adapter_type] = adapter
+        logger.info("adapter_registered", adapter_type=adapter.adapter_type, key=key or adapter.adapter_type)
 
     def unregister(self, adapter_type: str) -> None:
         self._adapters.pop(adapter_type, None)

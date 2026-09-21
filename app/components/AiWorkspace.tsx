@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 const API_BASE = process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL || '';
 const ACTOR_STORAGE = 'nb-ai-actor';
 const SESSION_STORAGE = 'nb-ai-session';
+const API_KEY_STORAGE = 'nb-ai-api-key';
 
 type Connection = { id: string; name: string; adapter_type: string; status: string; source: string };
 type Capability = { operation: string; operation_class: 'read' | 'write' | 'destructive'; description: string };
@@ -38,6 +39,9 @@ type ExecutionReceipt = {
   executed_at: string;
 };
 
+type Session = { actor_id: string; session_id: string; tier: string; ai_control_plane: boolean; ai_reads_per_day: number | null };
+type UpgradeDetail = { error: string; tier: string; remedy: string };
+
 type Turn =
   | { kind: 'user'; text: string }
   | { kind: 'agent-text'; text: string }
@@ -45,6 +49,7 @@ type Turn =
   | { kind: 'approval'; card: ApprovalCard }
   | { kind: 'receipt'; card: ExecutionReceipt }
   | { kind: 'denied'; plan: Plan }
+  | { kind: 'upgrade'; detail: UpgradeDetail }
   | { kind: 'error'; text: string };
 
 function useSessionIdentity() {
@@ -72,6 +77,31 @@ function useSessionIdentity() {
   }, []);
 
   return { actorId, sessionId, setActorId };
+}
+
+function useApiKey() {
+  const [apiKey, setApiKeyState] = useState('');
+
+  useEffect(() => {
+    try {
+      setApiKeyState(window.sessionStorage.getItem(API_KEY_STORAGE) || '');
+    } catch {
+      // sessionStorage can throw in a locked-down browser context; the
+      // workspace still works, it just won't remember the key across a re-render.
+    }
+  }, []);
+
+  const setApiKey = (value: string) => {
+    setApiKeyState(value);
+    try {
+      if (value) window.sessionStorage.setItem(API_KEY_STORAGE, value);
+      else window.sessionStorage.removeItem(API_KEY_STORAGE);
+    } catch {
+      // Same as above — best effort only.
+    }
+  };
+
+  return { apiKey, setApiKey };
 }
 
 // A deterministic capability router, not an LLM call — this repo's own
@@ -106,16 +136,26 @@ function parseIntent(
   return { kind: 'unrecognized' };
 }
 
-async function apiFetch(path: string, opts: RequestInit, actorId: string, sessionId: string) {
+async function apiFetch(path: string, opts: RequestInit, actorId: string, sessionId: string, apiKey?: string) {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'X-NB-Actor': actorId,
     'X-NB-Session': sessionId,
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...((opts.headers as Record<string, string>) || {}),
   };
   const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
   const body = await res.json().catch(() => null);
   return { status: res.status, body };
+}
+
+function isUpgradeDetail(detail: unknown): detail is UpgradeDetail {
+  return (
+    typeof detail === 'object' &&
+    detail !== null &&
+    'error' in detail &&
+    (detail as { error?: unknown }).error === 'plan_does_not_include_ai_control_plane'
+  );
 }
 
 function ProvenanceLine({ p }: { p: Provenance }) {
@@ -134,9 +174,11 @@ function ProvenanceLine({ p }: { p: Provenance }) {
 
 export default function AiWorkspace() {
   const { actorId, sessionId, setActorId } = useSessionIdentity();
+  const { apiKey, setApiKey } = useApiKey();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [session, setSession] = useState<Session | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -146,7 +188,14 @@ export default function AiWorkspace() {
 
   useEffect(() => {
     if (!actorId || !API_BASE) return;
-    apiFetch('/ai/connections', { method: 'GET' }, actorId, sessionId).then(({ status, body }) => {
+    apiFetch('/ai/session', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
+      if (status === 200) setSession(body as Session);
+    });
+  }, [actorId, sessionId, apiKey]);
+
+  useEffect(() => {
+    if (!actorId || !API_BASE) return;
+    apiFetch('/ai/connections', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
       if (status !== 200) {
         setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
         return;
@@ -158,23 +207,23 @@ export default function AiWorkspace() {
       setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actorId, sessionId]);
+  }, [actorId, sessionId, apiKey]);
 
   useEffect(() => {
     if (!selected || !actorId) return;
-    apiFetch(`/ai/capabilities?connection_id=${selected.id}`, { method: 'GET' }, actorId, sessionId).then(
+    apiFetch(`/ai/capabilities?connection_id=${selected.id}`, { method: 'GET' }, actorId, sessionId, apiKey).then(
       ({ status, body }) => {
         if (status === 200) setCapabilities(body as Capability[]);
       }
     );
-  }, [selected, actorId, sessionId]);
+  }, [selected, actorId, sessionId, apiKey]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [turns]);
 
   const refreshAudit = () => {
-    apiFetch('/ai/audit?limit=8', { method: 'GET' }, actorId, sessionId).then(({ status, body }) => {
+    apiFetch('/ai/audit?limit=8', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
       if (status === 200) setLastAudit(body);
     });
   };
@@ -218,18 +267,22 @@ export default function AiWorkspace() {
           '/ai/read',
           { method: 'POST', body: JSON.stringify({ connection_id: selected.id, operation: intent.operation, params: intent.params }) },
           actorId,
-          sessionId
+          sessionId,
+          apiKey
         );
         if (status === 200) push({ kind: 'result', card: body as QueryResultCard });
+        else if (status === 429) push({ kind: 'error', text: body?.detail?.remedy || 'Free daily read quota used up — try again tomorrow, or upgrade.' });
         else push({ kind: 'error', text: body?.detail || `Request failed (HTTP ${status}).` });
       } else {
         const { status, body } = await apiFetch(
           '/ai/plan',
           { method: 'POST', body: JSON.stringify({ connection_id: selected.id, operation: intent.operation, params: intent.params }) },
           actorId,
-          sessionId
+          sessionId,
+          apiKey
         );
         if (status === 200) push({ kind: 'approval', card: body as ApprovalCard });
+        else if (status === 402 && isUpgradeDetail(body?.detail)) push({ kind: 'upgrade', detail: body.detail });
         else push({ kind: 'error', text: body?.detail || `Refused (HTTP ${status}).` });
       }
       refreshAudit();
@@ -243,15 +296,17 @@ export default function AiWorkspace() {
     setBusy(true);
     try {
       if (approve) {
-        const { status, body } = await apiFetch(`/ai/plan/${planId}/approve`, { method: 'POST' }, actorId, sessionId);
+        const { status, body } = await apiFetch(`/ai/plan/${planId}/approve`, { method: 'POST' }, actorId, sessionId, apiKey);
         if (status === 200) push({ kind: 'receipt', card: body as ExecutionReceipt });
+        else if (status === 402 && isUpgradeDetail(body?.detail)) push({ kind: 'upgrade', detail: body.detail });
         else push({ kind: 'error', text: body?.detail || `Approval failed (HTTP ${status}).` });
       } else {
         const { status, body } = await apiFetch(
           `/ai/plan/${planId}/deny?reason=${encodeURIComponent('denied by operator in /ai')}`,
           { method: 'POST' },
           actorId,
-          sessionId
+          sessionId,
+          apiKey
         );
         if (status === 200) push({ kind: 'denied', plan: body as Plan });
         else push({ kind: 'error', text: body?.detail || `Deny failed (HTTP ${status}).` });
@@ -320,6 +375,37 @@ export default function AiWorkspace() {
         <div className="ai-pane">
           <h2>Context</h2>
           <div>
+            {session && (
+              <div className="ai-context-row">
+                <span>Plan</span>
+                <span>
+                  <span className={`status-pill ai-plan-pill ${session.tier}`}>{session.tier}</span>{' '}
+                  {session.ai_control_plane
+                    ? 'control plane: full'
+                    : `reads: ${session.ai_reads_per_day ?? '∞'}/day, writes need upgrade`}
+                </span>
+              </div>
+            )}
+            <div className="ai-context-row">
+              <span>API key</span>
+              <span>
+                <input
+                  type="password"
+                  style={{ width: '10rem', fontSize: '0.8rem', textAlign: 'right', border: 'none', background: 'transparent' }}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="optional — Register/Cell"
+                  autoComplete="off"
+                  aria-label="API key"
+                />
+              </span>
+            </div>
+            {!session?.ai_control_plane && (
+              <p className="ai-upgrade-hint">
+                On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Paste
+                an API key above once you have one.
+              </p>
+            )}
             <div className="ai-context-row">
               <span>Actor</span>
               <span>
@@ -464,6 +550,30 @@ function TurnView({ turn, onDecide, busy }: { turn: Turn; onDecide: (id: string,
       <div className="ai-card">
         <span className="playground-verdict blocked">Denied — nothing executed</span>
         <p style={{ fontSize: '0.82rem' }}>{turn.plan.deny_reason}</p>
+      </div>
+    );
+  }
+
+  if (turn.kind === 'upgrade') {
+    const { detail } = turn;
+    return (
+      <div className="ai-card ai-upgrade-card">
+        <div className="ai-card-title">
+          <span className="status-pill register">Register or Cell required</span>
+        </div>
+        <p style={{ fontSize: '0.85rem' }}>{detail.remedy}</p>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <a className="btn btn-primary" href="/#pricing">
+            See pricing
+          </a>
+          <a className="btn" href="/#pricing">
+            Talk to sales
+          </a>
+        </div>
+        <p style={{ fontSize: '0.74rem', color: 'var(--ink-soft)' }}>
+          Not a live checkout in this message — no charge happens here. This links to the real pricing section; the
+          write itself stays exactly as proposed until you approve it after upgrading.
+        </p>
       </div>
     );
   }

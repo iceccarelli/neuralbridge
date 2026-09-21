@@ -9,11 +9,11 @@ const MCP_TOOLS = new Set(['GET /v1/plans', 'POST /v1/spec/validate', 'POST /v1/
 
 export const metadata: Metadata = {
   title: 'MCP connector | Industrial Autonomous Assurance',
-  description: 'An installable MCP server (assurance-mcp) wrapping the real Assurance API — pip install, four tools, no fake responses.',
+  description: 'Two installable MCP servers — assurance-mcp for the Assurance API, neuralbridge-ai-mcp for the /ai control plane — pip install, no fake responses.',
   alternates: { canonical: '/connectors/mcp' },
   openGraph: {
     title: 'MCP connector | Industrial Autonomous Assurance',
-    description: 'pip install -e ".[assurance-mcp]" — a real MCP server over the real Assurance API.',
+    description: 'pip install -e ".[assurance-mcp]" or ".[neuralbridge-ai-mcp]" — real MCP servers over real APIs.',
     url: '/connectors/mcp',
     type: 'website',
   },
@@ -91,10 +91,50 @@ assurance-mcp`}</pre>
         </div>
       </section>
 
+      <section className="section" id="install-ai">
+        <div className="shell" style={{ maxWidth: '72ch' }}>
+          <div className="section-head">
+            <span className="eyebrow">A second server — for the control plane, not the register</span>
+            <h2><code>neuralbridge-ai-mcp</code>: discover, read, plan, approve</h2>
+            <p>
+              A separate package with the same honesty rules — a thin <code>httpx</code> wrapper around the real{' '}
+              <code>/ai</code> REST API (<code>src/neuralbridge/api/routes/ai.py</code>), not a second policy
+              engine. <code>ai_list_connections</code>, <code>ai_capabilities</code>, and <code>ai_read</code> are
+              free (rate-limited); <code>ai_plan_write</code>, <code>ai_approve</code>, <code>ai_deny</code>, and{' '}
+              <code>ai_audit</code> need a Register or Cell key and return the API&apos;s real 402 otherwise —
+              never a faked success.
+            </p>
+          </div>
+          <pre className="code-panel">{`pip install -e '.[neuralbridge-ai-mcp]'
+
+export NEURALBRIDGE_API_URL=http://127.0.0.1:8000/api/v1   # or a real deployment
+export NEURALBRIDGE_AI_API_KEY=...                           # optional — write tools only
+export NEURALBRIDGE_AI_ACTOR=your-agent-name                 # real identity for the audit trail
+
+neuralbridge-ai-mcp`}</pre>
+          <pre className="code-panel">{`{
+  "mcpServers": {
+    "neuralbridge-ai": {
+      "command": "neuralbridge-ai-mcp",
+      "env": {
+        "NEURALBRIDGE_API_URL": "http://127.0.0.1:8000/api/v1",
+        "NEURALBRIDGE_AI_API_KEY": "",
+        "NEURALBRIDGE_AI_ACTOR": "your-agent-name"
+      }
+    }
+  }
+}`}</pre>
+          <p>
+            See <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/ai-local-setup.md">
+            docs/ai-local-setup.md</a> for standing up a local Postgres to point this at.
+          </p>
+        </div>
+      </section>
+
       <section className="section section-alt" id="tools">
         <div className="shell">
           <div className="section-head">
-            <span className="eyebrow">Tool set</span>
+            <span className="eyebrow">Assurance MCP tool set</span>
             <h2>Four tools — two free, two paid on purpose</h2>
             <p>
               Deliberately small rather than one tool per route: <code>plans</code> and{' '}

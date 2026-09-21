@@ -1,29 +1,30 @@
-"""Connection discovery for the /ai surface — reuses the real connection store.
+"""Connection discovery — and, for paid callers, creation — for /ai.
 
-Deliberately does **not** invent a second, AI-specific connection list.
-``GET /ai/connections`` reads from the exact same in-process store that
-backs ``GET /connections`` (``neuralbridge.api.routes.connections._connections``
-— see ``reports/NEURALBRIDGE-AI-DATA-MAP.md`` for why that store is an
-in-memory dict, not a database, as of this slice). The only thing this
-module adds is: if the deployment has a Postgres DSN configured via env
-vars and no postgres connection has been registered yet, seed exactly one
-— honestly labelled ``source: "seeded_from_env"`` so the UI never implies
-a human clicked through the Connection Wizard for it.
+Backed by the durable ``AiStore`` (see ``neuralbridge.ai.store``), not an
+in-memory dict — a restart keeps every connection record (Phase 2). The
+free, always-present demo connection is still seeded from
+``NEURALBRIDGE_AI_PG_*`` env vars the first time the store is empty, same
+as Phase 1, honestly labelled ``source: "seeded_from_env"``. Register/Cell
+callers can additionally bind their own connections via
+``create_connection`` — each gets its own ``PostgresAdapter`` instance,
+registered under a unique registry key
+(``f"postgres:{connection_id}"``) so multiple Postgres connections can be
+live at once without one overwriting another in the shared
+``AdapterRegistry`` (which is otherwise one-instance-per-adapter-type).
 """
 
 from __future__ import annotations
 
 import os
-import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from neuralbridge.adapters.databases.postgres import PostgresAdapter
 from neuralbridge.ai.schemas import ConnectionSummary
-from neuralbridge.api.routes.connections import _connections
+from neuralbridge.ai.store import AiStore, ConnectionRecord, new_id
 from neuralbridge.core.router import AdapterRegistry
 
 ENV_PREFIX = "NEURALBRIDGE_AI_PG_"
+SEEDED_REGISTRY_KEY = "postgres"
 
 
 def _pg_config_from_env() -> dict[str, Any] | None:
@@ -42,61 +43,99 @@ def _pg_config_from_env() -> dict[str, Any] | None:
     }
 
 
-def ensure_seeded_connection(registry: AdapterRegistry) -> str | None:
-    """Idempotently register one postgres connection + adapter from env.
+def ensure_seeded_connection(registry: AdapterRegistry, store: AiStore) -> str | None:
+    """Idempotently persist + register one postgres connection from env.
 
-    Returns the connection id if a postgres connection exists (freshly
-    seeded or already present), or ``None`` if no DSN is configured — the
-    honest answer for a deployment that hasn't set one, matching the
-    fail-closed-not-fake pattern the rest of this repo uses rather than
-    silently falling back to mock data.
+    Returns the connection id if a seeded connection exists (freshly
+    created or already there from a prior run), or ``None`` if no DSN is
+    configured — the honest answer, matching this repo's fail-closed
+    pattern rather than falling back to mock data.
     """
-    for conn_id, conn in _connections.items():
-        if conn.get("adapter_type") == "postgres":
-            return conn_id
+    for record in store.list_connections():
+        if record.source == "seeded_from_env":
+            if SEEDED_REGISTRY_KEY not in registry:
+                config = _pg_config_from_env()
+                if config is not None:
+                    registry.register(PostgresAdapter(config=config), key=SEEDED_REGISTRY_KEY)
+            return record.id
 
     config = _pg_config_from_env()
     if config is None:
         return None
 
-    if "postgres" not in registry:
-        registry.register(PostgresAdapter(config=config))
+    if SEEDED_REGISTRY_KEY not in registry:
+        registry.register(PostgresAdapter(config=config), key=SEEDED_REGISTRY_KEY)
 
-    connection_id = str(uuid.uuid4())
-    _connections[connection_id] = {
-        "id": connection_id,
-        "name": f"{config['database']}@{config['host']}",
-        "description": "Seeded from NEURALBRIDGE_AI_PG_* environment variables for the /ai slice.",
-        "adapter_type": "postgres",
-        "config": {"host": config["host"], "port": config["port"], "database": config["database"]},
-        "auth": {"user": "***"},
-        "permissions": ["query", "list_tables", "describe_table", "health_check", "execute_sql"],
-        "rate_limit": "100/minute",
-        "enabled": True,
-        "status": "seeded",
-        "created_at": datetime.now(UTC).isoformat(),
-        "updated_at": datetime.now(UTC).isoformat(),
-    }
+    connection_id = new_id()
+    store.create_connection(
+        ConnectionRecord(
+            id=connection_id,
+            name=f"{config['database']}@{config['host']}",
+            description="Seeded from NEURALBRIDGE_AI_PG_* environment variables for the /ai slice.",
+            adapter_type="postgres",
+            registry_key=SEEDED_REGISTRY_KEY,
+            config={"host": config["host"], "port": config["port"], "database": config["database"]},
+            source="seeded_from_env",
+            status="seeded",
+        )
+    )
     return connection_id
 
 
-def list_connections(registry: AdapterRegistry) -> list[ConnectionSummary]:
-    """Real connections only — reads the shared store, seeding postgres if configured."""
-    ensure_seeded_connection(registry)
-    summaries = []
-    for conn_id, conn in _connections.items():
-        source = "seeded_from_env" if conn.get("status") == "seeded" else "connections_api"
-        summaries.append(
-            ConnectionSummary(
-                id=conn_id,
-                name=conn["name"],
-                adapter_type=conn["adapter_type"],
-                status=conn.get("status", "created"),
-                source=source,
-            )
+def create_connection(
+    registry: AdapterRegistry,
+    store: AiStore,
+    *,
+    name: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    ssl_mode: str = "prefer",
+) -> ConnectionRecord:
+    """Bind an additional Postgres connection. Paid-gated at the route
+    layer (``require_ai_control_plane``) — this function itself does not
+    check entitlement, callers must."""
+    connection_id = new_id()
+    registry_key = f"postgres:{connection_id}"
+    adapter_config = {
+        "host": host, "port": port, "user": user, "password": password,
+        "database": database, "ssl_mode": ssl_mode,
+    }
+    registry.register(PostgresAdapter(config=adapter_config), key=registry_key)
+
+    record = ConnectionRecord(
+        id=connection_id,
+        name=name,
+        description="Bound via POST /ai/connections.",
+        adapter_type="postgres",
+        registry_key=registry_key,
+        # Never store the password — same rule Phase 1's connections.py
+        # followed: a credential that isn't persisted can't leak from a
+        # stolen store. It lives only in the live PostgresAdapter's pool.
+        config={"host": host, "port": port, "database": database},
+        source="bound_by_operator",
+        status="created",
+    )
+    store.create_connection(record)
+    return record
+
+
+def list_connections(registry: AdapterRegistry, store: AiStore) -> list[ConnectionSummary]:
+    """Real connections only — reads the durable store, seeding postgres if configured."""
+    ensure_seeded_connection(registry, store)
+    return [
+        ConnectionSummary(
+            id=r.id,
+            name=r.name,
+            adapter_type=r.adapter_type,
+            status=r.status,
+            source=r.source,
         )
-    return summaries
+        for r in store.list_connections()
+    ]
 
 
-def get_connection(connection_id: str) -> dict[str, Any] | None:
-    return _connections.get(connection_id)
+def get_connection(store: AiStore, connection_id: str) -> ConnectionRecord | None:
+    return store.get_connection(connection_id)
