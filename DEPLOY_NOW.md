@@ -109,6 +109,12 @@ playground Validate, checkout success, CORS). If all five pass, the product
 takes real money. If any fails, do not announce it as live — go back to the
 matching step above.
 
+After secrets are set and the smoke test passes, verify the `/ai` control
+plane's paid path the same way a real buyer would use it — see
+`docs/buyer-journey.md` (mint a key, hit both paid surfaces with it, see
+receipts). That doc runs entirely against your own local stack — it is a
+verification aid, not a substitute for the browser checks above.
+
 ## After this
 
 - `deploy/assurance/README.md` has the fuller reference (backups, what
