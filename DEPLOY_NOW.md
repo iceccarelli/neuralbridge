@@ -109,6 +109,21 @@ playground Validate, checkout success, CORS). If all five pass, the product
 takes real money. If any fails, do not announce it as live — go back to the
 matching step above.
 
+After secrets are set and the smoke test passes, verify the `/ai` control
+plane's paid path the same way a real buyer would use it — see
+`docs/buyer-journey.md` (mint a key, hit both paid surfaces with it, see
+receipts). That doc runs entirely against your own local stack — it is a
+verification aid, not a substitute for the browser checks above.
+
+`scripts/verify-buyer-path.sh` scripts that same check: `GET /v1/plans`,
+confirms `POST /v1/checkout` refuses honestly (not a crash) until Stripe
+price IDs are actually set, then runs the register + `/ai` golden path
+with a real Cell-tier key minted through `AccountStore`. Point it at your
+running stack (`ASSURANCE_API_URL`, `NEURALBRIDGE_API_URL`,
+`ASSURANCE_ACCOUNTS`) and it fails loudly — non-zero exit, the real error
+— on the first thing that isn't actually true; it never prints a fake
+pass.
+
 ## After this
 
 - `deploy/assurance/README.md` has the fuller reference (backups, what

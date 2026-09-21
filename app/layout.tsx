@@ -173,8 +173,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/developers">API reference</a></li>
                   <li><a href="/applications">Applications</a></li>
                   <li><a href="/cli">CLI</a></li>
-                  <li><a href="/connectors/mcp">Connectors</a></li>
+                  <li><a href="/connectors/mcp">MCP connector</a></li>
+                  <li><a href="/connectors/cursor">Cursor connector</a></li>
                   <li><a href="/console">Console</a></li>
+                  <li><a href="/ai">AI control plane</a></li>
                   <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
                   <li><a href="/roadmap">Roadmap</a></li>
                   <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
