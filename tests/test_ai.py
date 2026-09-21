@@ -665,7 +665,6 @@ class TestGolden011SafeDiscoveryAllowlistSanity:
         from neuralbridge.adapters.cloud.aws_s3 import AWSS3Adapter
         from neuralbridge.adapters.cloud.azure_blob import AzureBlobStorageAdapter
         from neuralbridge.adapters.cloud.gcs import GCSAdapter
-        from neuralbridge.adapters.databases.bigquery import BigQueryAdapter
         from neuralbridge.adapters.databases.mongodb import MongodbAdapter
         from neuralbridge.adapters.databases.mysql import MySQLAdapter
         from neuralbridge.adapters.databases.snowflake import SnowflakeAdapter
@@ -680,19 +679,34 @@ class TestGolden011SafeDiscoveryAllowlistSanity:
         from neuralbridge.adapters.productivity.notion import NotionAdapter
         from neuralbridge.ai.guard import _SAFE_DISCOVERY_OPS
 
-        adapter_classes = {
+        adapter_classes: dict[str, type] = {
             "slack": SlackAdapter, "discord": DiscordAdapter, "teams": TeamsAdapter,
             "telegram": TelegramAdapter, "email": EmailAdapter, "gmail": GmailAdapter,
             "notion": NotionAdapter, "aws_s3": AWSS3Adapter, "gcs": GCSAdapter,
             "azure_blob": AzureBlobStorageAdapter, "mysql": MySQLAdapter, "snowflake": SnowflakeAdapter,
-            "mongodb": MongodbAdapter, "bigquery": BigQueryAdapter, "salesforce": SalesforceAdapter,
+            "mongodb": MongodbAdapter, "salesforce": SalesforceAdapter,
             "sap_erp": SapErpAdapter, "soap": SoapAdapter, "odata": ODataAdapter,
             "rest": RestApiAdapter, "graphql": GraphQLAdapter,
         }
+        # bigquery's module-level import pulls in google-api-core /
+        # google-cloud-bigquery, an optional adapter dependency this repo's
+        # own CI test job does not install (see requirements/test.txt).
+        # Skip only this one adapter's own-supported-operations check when
+        # that SDK isn't installed, rather than the whole test — it still
+        # stays in `checked` below so a real allow-list/adapter-type
+        # mismatch involving bigquery would still be caught wherever the
+        # SDK is present (e.g. a dev machine with it installed).
+        try:
+            import neuralbridge.adapters.databases.bigquery as bigquery_module
+        except ModuleNotFoundError:
+            bigquery_module = None
+        if bigquery_module is not None:
+            adapter_classes["bigquery"] = bigquery_module.BigQueryAdapter
+
         # Every adapter_type keyed in the allow-list (other than the
         # custom-adapter-template placeholder, which has no importable
         # single class) must be one this test actually checks.
-        checked = set(adapter_classes) | {"custom_adapter_template"}
+        checked = set(adapter_classes) | {"custom_adapter_template", "bigquery"}
         assert set(_SAFE_DISCOVERY_OPS) <= checked, (
             f"_SAFE_DISCOVERY_OPS has adapter type(s) this sanity test doesn't "
             f"know how to verify: {set(_SAFE_DISCOVERY_OPS) - checked}"
@@ -700,6 +714,8 @@ class TestGolden011SafeDiscoveryAllowlistSanity:
         for adapter_type, allowed_ops in _SAFE_DISCOVERY_OPS.items():
             if adapter_type == "custom_adapter_template":
                 continue
+            if adapter_type not in adapter_classes:
+                continue  # bigquery, SDK not installed in this environment
             real_ops = set(adapter_classes[adapter_type].supported_operations)
             assert allowed_ops <= real_ops, (
                 f"{adapter_type}: allow-list has op(s) not in its own "
