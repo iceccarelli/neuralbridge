@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { SALES } from '../../lib/links';
+import { QUICKSTART, SALES } from '../../lib/links';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -159,6 +159,34 @@ export default function CheckoutSuccessClient() {
               Use it: <code>{key.use_it.header}: {'<your key>'}</code> against{' '}
               <code>{key.use_it.start_here}</code> to confirm it works. Account ID <code>{key.account_id}</code>.
             </p>
+
+            <div className="section-head" style={{ marginTop: '2.5rem' }}>
+              <span className="eyebrow">Next</span>
+              <h3 style={{ marginBottom: '0.25rem' }}>Two concrete things to do with this key right now</h3>
+            </div>
+            <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+              <div className="ai-card">
+                <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>1. Open your first Register case</p>
+                <p style={{ fontSize: '0.85rem' }}>
+                  <code>POST /v1/cases/&#123;case_id&#125;/signal</code> with <code>{key.use_it.header}</code>{' '}
+                  opens a real case in the hash-chained ledger — the exact curl is in{' '}
+                  <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/buyer-journey.md">
+                    docs/buyer-journey.md
+                  </a>{' '}
+                  (see also <a href={QUICKSTART}>the quickstart</a> for the rest of the API). No dashboard theater —
+                  this is the real write.
+                </p>
+              </div>
+              <div className="ai-card">
+                <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>2. Open /ai and paste this key</p>
+                <p style={{ fontSize: '0.85rem' }}>
+                  <a href="/ai">/ai</a> has an &quot;API key&quot; field in the Context pane — paste the key above
+                  into it (plain <code>X-API-Key</code>, kept in this browser tab&apos;s session storage only, never
+                  sent anywhere else). That unlocks the write path: propose a write, approve it, get a real
+                  execution receipt.
+                </p>
+              </div>
+            </div>
           </div>
         )}
       </div>

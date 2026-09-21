@@ -49,7 +49,7 @@ type Turn =
   | { kind: 'approval'; card: ApprovalCard }
   | { kind: 'receipt'; card: ExecutionReceipt }
   | { kind: 'denied'; plan: Plan }
-  | { kind: 'upgrade'; detail: UpgradeDetail }
+  | { kind: 'upgrade'; detail: UpgradeDetail; retry?: { connection_id: string; operation: string; params: Record<string, unknown> } }
   | { kind: 'error'; text: string };
 
 function useSessionIdentity() {
@@ -282,9 +282,39 @@ export default function AiWorkspace() {
           apiKey
         );
         if (status === 200) push({ kind: 'approval', card: body as ApprovalCard });
-        else if (status === 402 && isUpgradeDetail(body?.detail)) push({ kind: 'upgrade', detail: body.detail });
+        else if (status === 402 && isUpgradeDetail(body?.detail))
+          push({
+            kind: 'upgrade',
+            detail: body.detail,
+            retry: { connection_id: selected.id, operation: intent.operation, params: intent.params },
+          });
         else push({ kind: 'error', text: body?.detail || `Refused (HTTP ${status}).` });
       }
+      refreshAudit();
+    } catch {
+      push({ kind: 'error', text: 'Could not reach the NeuralBridge API.' });
+    }
+    setBusy(false);
+  };
+
+  // Re-sends a write proposal that was 402'd — used by the upgrade card's
+  // "Retry now" button once the caller has pasted a paid key. Reads the
+  // current `apiKey` state (this closure is rebuilt on every render, so a
+  // key pasted after the 402 is picked up with no page reload), so the
+  // caller never has to retype the request that got blocked.
+  const retryWrite = async (payload: { connection_id: string; operation: string; params: Record<string, unknown> }) => {
+    setBusy(true);
+    try {
+      const { status, body } = await apiFetch(
+        '/ai/plan',
+        { method: 'POST', body: JSON.stringify(payload) },
+        actorId,
+        sessionId,
+        apiKey
+      );
+      if (status === 200) push({ kind: 'approval', card: body as ApprovalCard });
+      else if (status === 402 && isUpgradeDetail(body?.detail)) push({ kind: 'upgrade', detail: body.detail, retry: payload });
+      else push({ kind: 'error', text: body?.detail || `Refused (HTTP ${status}).` });
       refreshAudit();
     } catch {
       push({ kind: 'error', text: 'Could not reach the NeuralBridge API.' });
@@ -345,7 +375,7 @@ export default function AiWorkspace() {
               </p>
             )}
             {turns.map((turn, i) => (
-              <TurnView key={i} turn={turn} onDecide={decide} busy={busy} />
+              <TurnView key={i} turn={turn} onDecide={decide} onRetryWrite={retryWrite} busy={busy} hasApiKey={!!apiKey} />
             ))}
           </div>
           <div className="ai-suggestions">
@@ -483,7 +513,19 @@ export default function AiWorkspace() {
   );
 }
 
-function TurnView({ turn, onDecide, busy }: { turn: Turn; onDecide: (id: string, approve: boolean) => void; busy: boolean }) {
+function TurnView({
+  turn,
+  onDecide,
+  onRetryWrite,
+  busy,
+  hasApiKey,
+}: {
+  turn: Turn;
+  onDecide: (id: string, approve: boolean) => void;
+  onRetryWrite: (payload: { connection_id: string; operation: string; params: Record<string, unknown> }) => void;
+  busy: boolean;
+  hasApiKey: boolean;
+}) {
   if (turn.kind === 'user') return <div className="ai-turn user">{turn.text}</div>;
   if (turn.kind === 'agent-text') return <div className="ai-turn agent">{turn.text}</div>;
   if (turn.kind === 'error')
@@ -555,24 +597,36 @@ function TurnView({ turn, onDecide, busy }: { turn: Turn; onDecide: (id: string,
   }
 
   if (turn.kind === 'upgrade') {
-    const { detail } = turn;
+    const { detail, retry } = turn;
     return (
       <div className="ai-card ai-upgrade-card">
         <div className="ai-card-title">
           <span className="status-pill register">Register or Cell required</span>
         </div>
         <p style={{ fontSize: '0.85rem' }}>{detail.remedy}</p>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <a className="btn btn-primary" href="/#pricing">
             See pricing
           </a>
           <a className="btn" href="/#pricing">
             Talk to sales
           </a>
+          {retry && (
+            <button
+              className="btn"
+              disabled={busy || !hasApiKey}
+              onClick={() => onRetryWrite(retry)}
+              title={hasApiKey ? 'Re-send this exact write with the key you pasted' : 'Paste an API key above first'}
+            >
+              Retry now with your key
+            </button>
+          )}
         </div>
         <p style={{ fontSize: '0.74rem', color: 'var(--ink-soft)' }}>
-          Not a live checkout in this message — no charge happens here. This links to the real pricing section; the
-          write itself stays exactly as proposed until you approve it after upgrading.
+          Not a live checkout in this message — no charge happens here. This links to the real pricing section.
+          {retry
+            ? ' Once you have a Register/Cell key, paste it into the "API key" field above — "Retry now" re-sends this exact write with no page reload and no retyping.'
+            : ' The write itself stays exactly as proposed until you approve it after upgrading — its Approve button above is still live.'}
         </p>
       </div>
     );
