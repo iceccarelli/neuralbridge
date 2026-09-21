@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { QUICKSTART, SALES } from '../../lib/links';
+import { API_KEY_STORAGE } from '../../lib/apiKey';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -52,6 +53,16 @@ export default function CheckoutSuccessClient() {
           if (!cancelled.current) {
             setKey(data);
             setState('ready');
+            // Pre-fill the shared key so a click into /console or /ai from
+            // this page arrives with it already pasted — this tab's
+            // sessionStorage only, same store both surfaces read (see
+            // ../../lib/apiKey). Best effort: if this throws, the "Copy
+            // key" button above is still there as the honest fallback.
+            try {
+              window.sessionStorage.setItem(API_KEY_STORAGE, data.api_key);
+            } catch {
+              /* sessionStorage blocked — copy/paste still works */
+            }
           }
           return;
         }
@@ -168,13 +179,15 @@ export default function CheckoutSuccessClient() {
               <div className="ai-card">
                 <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>1. Open your first Register case</p>
                 <p style={{ fontSize: '0.85rem' }}>
-                  <code>POST /v1/cases/&#123;case_id&#125;/signal</code> with <code>{key.use_it.header}</code>{' '}
-                  opens a real case in the hash-chained ledger — the exact curl is in{' '}
+                  <a href="/console#first-case">Console&apos;s guided &ldquo;First Register case&rdquo; flow</a>{' '}
+                  already has this key pasted in (this tab&apos;s session storage only) and calls the real{' '}
+                  <code>POST /v1/cases/&#123;case_id&#125;/signal</code> from your browser — no shell needed. Prefer
+                  curl? The exact command is in{' '}
                   <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/buyer-journey.md">
                     docs/buyer-journey.md
                   </a>{' '}
-                  (see also <a href={QUICKSTART}>the quickstart</a> for the rest of the API). No dashboard theater —
-                  this is the real write.
+                  (see also <a href={QUICKSTART}>the quickstart</a> for the rest of the API). Either way it is the
+                  real write, not dashboard theater.
                 </p>
               </div>
               <div className="ai-card">
@@ -182,8 +195,8 @@ export default function CheckoutSuccessClient() {
                 <p style={{ fontSize: '0.85rem' }}>
                   <a href="/ai">/ai</a> has an &quot;API key&quot; field in the Context pane — paste the key above
                   into it (plain <code>X-API-Key</code>, kept in this browser tab&apos;s session storage only, never
-                  sent anywhere else). That unlocks the write path: propose a write, approve it, get a real
-                  execution receipt.
+                  sent anywhere else). It is shared with Console, so a key pasted into either surface works in both.
+                  That unlocks the write path: propose a write, approve it, get a real execution receipt.
                 </p>
               </div>
             </div>

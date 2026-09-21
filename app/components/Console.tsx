@@ -1,44 +1,21 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ROUTES, TIER_LABEL, type RouteRow } from '../lib/routes';
+import { useSharedApiKey } from '../lib/apiKey';
+import FirstCase from './FirstCase';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
-const API_KEY_STORAGE = 'nb-console-api-key';
 
 // A browser REST console, not a shell. It only ever does two things: read an
-// API key from this tab's sessionStorage (never sent anywhere but the
-// configured API_BASE, never persisted past the tab closing), and call the
-// real /v1 routes over fetch(). No websocket, no PTY, no server-side
-// process — there is nothing here to sandbox because nothing here executes
-// arbitrary commands.
-function useSessionApiKey() {
-  const [key, setKey] = useState('');
-
-  useEffect(() => {
-    try {
-      setKey(window.sessionStorage.getItem(API_KEY_STORAGE) || '');
-    } catch {
-      // sessionStorage can throw in a locked-down browser context; the
-      // console still works, it just won't remember the key across a re-render.
-    }
-  }, []);
-
-  const update = (value: string) => {
-    setKey(value);
-    try {
-      if (value) window.sessionStorage.setItem(API_KEY_STORAGE, value);
-      else window.sessionStorage.removeItem(API_KEY_STORAGE);
-    } catch {
-      // Same as above — best effort only.
-    }
-  };
-
-  return { key, setKey: update };
-}
+// API key from this tab's sessionStorage (shared with /ai — see
+// ../lib/apiKey — never sent anywhere but the configured API_BASE, never
+// persisted past the tab closing), and call the real /v1 routes over
+// fetch(). No websocket, no PTY, no server-side process — there is nothing
+// here to sandbox because nothing here executes arbitrary commands.
 
 export default function Console() {
-  const { key: apiKey, setKey: setApiKey } = useSessionApiKey();
+  const { key: apiKey, setKey: setApiKey } = useSharedApiKey();
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<RouteRow>(ROUTES[0]);
   const [body, setBody] = useState('{}');
@@ -77,7 +54,7 @@ export default function Console() {
 
   return (
     <div className="console-shell">
-      <div className="console-key-row">
+      <div className="key-row">
         <label htmlFor="console-api-key">API key (optional for free routes)</label>
         <input
           id="console-api-key"
@@ -87,8 +64,13 @@ export default function Console() {
           placeholder="paste your X-API-Key"
           autoComplete="off"
         />
-        <span className="console-key-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
+        <span className="key-row-note">
+          Kept in this tab&apos;s sessionStorage only — never sent anywhere but the API below, never persisted after
+          you close the tab. Shared with <a href="/ai">/ai</a>: paste it once, use it in either place.
+        </span>
       </div>
+
+      <FirstCase apiBase={API_BASE} apiKey={apiKey} />
 
       <div className="console-grid">
         <div className="console-routes">

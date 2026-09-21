@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useSharedApiKey } from '../lib/apiKey';
 
 const API_BASE = process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL || '';
 const ACTOR_STORAGE = 'nb-ai-actor';
 const SESSION_STORAGE = 'nb-ai-session';
-const API_KEY_STORAGE = 'nb-ai-api-key';
 
 type Connection = { id: string; name: string; adapter_type: string; status: string; source: string };
 type Capability = { operation: string; operation_class: 'read' | 'write' | 'destructive'; description: string };
@@ -79,31 +79,6 @@ function useSessionIdentity() {
   return { actorId, sessionId, setActorId };
 }
 
-function useApiKey() {
-  const [apiKey, setApiKeyState] = useState('');
-
-  useEffect(() => {
-    try {
-      setApiKeyState(window.sessionStorage.getItem(API_KEY_STORAGE) || '');
-    } catch {
-      // sessionStorage can throw in a locked-down browser context; the
-      // workspace still works, it just won't remember the key across a re-render.
-    }
-  }, []);
-
-  const setApiKey = (value: string) => {
-    setApiKeyState(value);
-    try {
-      if (value) window.sessionStorage.setItem(API_KEY_STORAGE, value);
-      else window.sessionStorage.removeItem(API_KEY_STORAGE);
-    } catch {
-      // Same as above — best effort only.
-    }
-  };
-
-  return { apiKey, setApiKey };
-}
-
 // A deterministic capability router, not an LLM call — this repo's own
 // product law is that the model is never the system of record, and this
 // slice ships without external LLM credentials by design. Every fact shown
@@ -165,7 +140,7 @@ function ProvenanceLine({ p }: { p: Provenance }) {
       {p.mocked && (
         <>
           {' '}
-          · <strong style={{ color: 'var(--danger, #b23b1f)' }}>MOCK DATA — adapter is not actually connected</strong>
+          · <strong style={{ color: 'var(--danger)' }}>MOCK DATA — adapter is not actually connected</strong>
         </>
       )}
     </div>
@@ -174,7 +149,7 @@ function ProvenanceLine({ p }: { p: Provenance }) {
 
 export default function AiWorkspace() {
   const { actorId, sessionId, setActorId } = useSessionIdentity();
-  const { apiKey, setApiKey } = useApiKey();
+  const { key: apiKey, setKey: setApiKey } = useSharedApiKey();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
@@ -362,6 +337,19 @@ export default function AiWorkspace() {
 
   return (
     <div className="ai-shell">
+      <div className="key-row">
+        <label htmlFor="ai-api-key">API key (optional — required for writes)</label>
+        <input
+          id="ai-api-key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="paste your X-API-Key — Register/Cell"
+          autoComplete="off"
+        />
+        <span className="key-row-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
+      </div>
+
       {connError && <p className="ai-banner">{connError}</p>}
 
       <div className="ai-grid">
@@ -416,24 +404,13 @@ export default function AiWorkspace() {
                 </span>
               </div>
             )}
-            <div className="ai-context-row">
-              <span>API key</span>
-              <span>
-                <input
-                  type="password"
-                  style={{ width: '10rem', fontSize: '0.8rem', textAlign: 'right', border: 'none', background: 'transparent' }}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="optional — Register/Cell"
-                  autoComplete="off"
-                  aria-label="API key"
-                />
-              </span>
-            </div>
             {!session?.ai_control_plane && (
               <p className="ai-upgrade-hint">
-                On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Paste
-                an API key above once you have one.
+                On the free Validator plan: reads work, writes need <a href="/#pricing">Register or Cell</a>. Already
+                have a key? Paste it above, or open your first case in{' '}
+                <a href="/console#first-case">the Console&apos;s guided flow</a> — a key pasted there shows up here
+                too, same browser tab. See <a href="/#pricing">pricing</a> or the{' '}
+                <a href="/connectors/mcp">connectors</a> for other ways in.
               </p>
             )}
             <div className="ai-context-row">
@@ -542,7 +519,7 @@ function TurnView({
         <div className="ai-card-title">
           <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>{card.success ? 'Read OK' : 'Read failed'}</span>
         </div>
-        {card.error && <p style={{ color: 'var(--danger, #b23b1f)', fontSize: '0.85rem' }}>{card.error}</p>}
+        {card.error && <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>{card.error}</p>}
         {card.data !== null && card.data !== undefined && <pre className="code-panel">{JSON.stringify(card.data, null, 2)}</pre>}
         <ProvenanceLine p={card.provenance} />
       </div>
@@ -564,7 +541,7 @@ function TurnView({
             <button className="btn btn-primary" disabled={busy} onClick={() => onDecide(plan.id, true)}>
               Approve &amp; execute
             </button>
-            <button className="btn" disabled={busy} onClick={() => onDecide(plan.id, false)}>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => onDecide(plan.id, false)}>
               Deny
             </button>
           </div>
@@ -608,7 +585,7 @@ function TurnView({
           <a className="btn btn-primary" href="/#pricing">
             See pricing
           </a>
-          <a className="btn" href="/#pricing">
+          <a className="btn btn-secondary" href="/#pricing">
             Talk to sales
           </a>
           {retry && (
