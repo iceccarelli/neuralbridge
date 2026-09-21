@@ -310,8 +310,12 @@ export default function Header() {
                 <span>python -m assurance — the real command tree, install to deploy guide.</span>
               </a>
               <a className="finder-item" href="/connectors/mcp" onClick={closeAll}>
-                <strong>Connectors</strong>
-                <span>Cursor and MCP — the same routes as tools.</span>
+                <strong>MCP connector</strong>
+                <span>Tool listing and invocation over the Model Context Protocol.</span>
+              </a>
+              <a className="finder-item" href="/connectors/cursor" onClick={closeAll}>
+                <strong>Cursor connector</strong>
+                <span>Same MCP server, wired into Cursor's own config.</span>
               </a>
               <a className="finder-item" href="/console" onClick={closeAll}>
                 <strong>Console</strong>
@@ -328,6 +332,18 @@ export default function Header() {
               <a className="finder-item" href="/security" onClick={closeAll}>
                 <strong>Security</strong>
                 <span>How to report a vulnerability.</span>
+              </a>
+              <a className="finder-item" href="/status" onClick={closeAll}>
+                <strong>Status</strong>
+                <span>The deploy checklist — what's live and what isn't, honestly.</span>
+              </a>
+              <a className="finder-item" href={SALES} onClick={closeAll}>
+                <strong>Contact</strong>
+                <span>Sales, supplier, and general inquiries — a real form, not a repo dump.</span>
+              </a>
+              <a className="finder-item" href="/privacy" onClick={closeAll}>
+                <strong>Privacy</strong>
+                <span>What we collect and why.</span>
               </a>
               <a className="finder-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
                 <strong>Contributing</strong>
@@ -397,11 +413,15 @@ export default function Header() {
               <a className="mobile-drill-item" href="/developers" onClick={() => setMobileOpen(false)}>Developers</a>
               <a className="mobile-drill-item" href="/applications" onClick={() => setMobileOpen(false)}>Applications</a>
               <a className="mobile-drill-item" href="/cli" onClick={() => setMobileOpen(false)}>CLI</a>
-              <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>Connectors</a>
+              <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>MCP connector</a>
+              <a className="mobile-drill-item" href="/connectors/cursor" onClick={() => setMobileOpen(false)}>Cursor connector</a>
               <a className="mobile-drill-item" href="/console" onClick={() => setMobileOpen(false)}>Console</a>
               <a className="mobile-drill-item" href="/ai" onClick={() => setMobileOpen(false)}>AI</a>
-              <a className="mobile-drill-item" href="/roadmap">Roadmap</a>
-              <a className="mobile-drill-item" href="/security">Security</a>
+              <a className="mobile-drill-item" href="/roadmap" onClick={() => setMobileOpen(false)}>Roadmap</a>
+              <a className="mobile-drill-item" href="/security" onClick={() => setMobileOpen(false)}>Security</a>
+              <a className="mobile-drill-item" href="/status" onClick={() => setMobileOpen(false)}>Status</a>
+              <a className="mobile-drill-item" href={SALES} onClick={() => setMobileOpen(false)}>Contact</a>
+              <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
               <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>
             </>
           )}
