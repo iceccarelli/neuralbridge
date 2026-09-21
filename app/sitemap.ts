@@ -16,10 +16,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/applications`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
     { url: `${SITE_URL}/cli`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
     { url: `${SITE_URL}/console`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
+    { url: `${SITE_URL}/ai`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/connectors/cursor`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/connectors/mcp`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/roadmap`, lastModified: now, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${SITE_URL}/security`, lastModified: now, changeFrequency: 'monthly', priority: 0.4 },
+    { url: `${SITE_URL}/status`, lastModified: now, changeFrequency: 'weekly', priority: 0.3 },
     ...SOLUTIONS.map((s) => ({
       url: `${SITE_URL}/solutions/${s.slug}`,
       lastModified: now,
