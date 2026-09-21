@@ -66,6 +66,9 @@ test-results/
 playwright-report/
 blob-report/
 demo/
+# ...except the sales demo pack's committed screenshots (scripts/screenshot_demo_pack.py).
+!reports/demo/
+!reports/demo/**
 out/
 .fly.dev
 attestations/

@@ -453,15 +453,19 @@ class TestGolden008BypassClosedViaRawAdaptersRoute:
         )
         assert r.status_code == 403
 
-    def test_other_adapter_types_are_unaffected_by_this_gate(self, free_client: TestClient) -> None:
-        """The guard is postgres-scoped by design (see guard.py) — an
-        unregistered non-postgres adapter still 400s the normal way, not
-        a 402, proving the gate did not intercept it."""
+    def test_non_postgres_write_now_requires_entitlement(self, free_client: TestClient) -> None:
+        """Phase 3 closed the remaining gap this Phase 2 test used to
+        document: a non-postgres adapter is no longer a free pass for a
+        WRITE-shaped operation — see ``guard.py``'s
+        ``_SAFE_DISCOVERY_OPS``. ``send_message`` is not on slack's
+        discovery allow-list, so a free caller is 402'd before the
+        (unregistered, in this test) adapter is ever reached."""
         r = free_client.post(
             "/api/v1/adapters/slack/execute",
             json={"operation": "send_message", "params": {"channel": "#x", "text": "hi"}},
         )
-        assert r.status_code == 400  # "not registered", same as before this phase
+        assert r.status_code == 402
+        assert r.json()["detail"]["error"] == "plan_does_not_include_ai_control_plane"
 
 
 class TestGolden009BypassClosedViaMcpGateway:
@@ -524,3 +528,243 @@ class TestGolden009BypassClosedViaMcpGateway:
         assert events
         assert events[-1].actor == "mcp:agent-carol"
         assert events[-1].actor not in ("system", "mcp_client")
+
+
+class TestGolden010NonPostgresAdapterGate:
+    """Phase 3: "Experimental != free god-mode" for every adapter, not
+    just postgres. ``guard.enforce_write_gate`` now checks a real,
+    per-adapter discovery allow-list (built from each adapter's own
+    ``supported_operations``) for anything that isn't ``postgres`` —
+    proven here on the raw adapters route and on the MCP gateway."""
+
+    def test_free_caller_blocked_writing_non_postgres_via_raw_route(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/aws_s3/execute",
+            json={"operation": "put_object", "params": {"bucket": "b", "key": "k", "body": "x"}},
+        )
+        assert r.status_code == 402
+        assert r.json()["detail"]["error"] == "plan_does_not_include_ai_control_plane"
+
+    def test_free_caller_allowed_safe_discovery_op_via_raw_route(self, free_client: TestClient) -> None:
+        """The gate passes (no 402) for a real discovery operation; the
+        adapter itself is not registered in this test app, so the request
+        still 400s — that 400 is the adapter/router being honest about not
+        having a live connection, not the entitlement gate refusing."""
+        r = free_client.post(
+            "/api/v1/adapters/aws_s3/execute",
+            json={"operation": "list_buckets", "params": {}},
+        )
+        assert r.status_code == 400
+        assert "not registered" in r.json()["detail"].lower() or "not found" in r.json()["detail"].lower()
+
+    def test_paid_caller_clears_gate_for_non_postgres_write(self, ai_client: TestClient) -> None:
+        """A Cell-tier caller clears the entitlement gate for a WRITE-shaped
+        operation on a non-postgres adapter. The adapter is not registered
+        in this test app (no real S3 backend to exercise), so the request
+        still fails — honestly, with a 400/404 "not registered" error, never
+        a fabricated 200. We assert the gate passed (not a 402), not that
+        the adapter succeeded."""
+        r = ai_client.post(
+            "/api/v1/adapters/aws_s3/execute",
+            json={"operation": "put_object", "params": {"bucket": "b", "key": "k", "body": "x"}},
+        )
+        assert r.status_code != 402
+        assert r.status_code == 400
+
+    def test_unrecognized_operation_on_non_postgres_adapter_requires_entitlement(self, free_client: TestClient) -> None:
+        """An operation name this module has never seen for that adapter is
+        refused the paid way, not assumed safe."""
+        r = free_client.post(
+            "/api/v1/adapters/slack/execute",
+            json={"operation": "delete_workspace", "params": {}},
+        )
+        assert r.status_code == 402
+
+    def _build_gateway_with_slack(self):
+        from neuralbridge.adapters.messaging.slack import SlackAdapter
+        from neuralbridge.core.gateway import MCPGateway, MCPToolDefinition
+        from neuralbridge.core.router import AdapterRegistry, RequestRouter
+        from neuralbridge.security.audit import AuditLogger, InMemoryAuditStorage
+
+        registry = AdapterRegistry()
+        registry.register(SlackAdapter(config={"bot_token": "xoxb-test"}))
+        audit = AuditLogger(storage=InMemoryAuditStorage())
+        router = RequestRouter(registry=registry, audit_logger=audit)
+        gateway = MCPGateway(router, audit)
+        gateway.register_tool(MCPToolDefinition(
+            name="slack_send", description="", input_schema={}, adapter_type="slack",
+        ))
+        return gateway, audit
+
+    def test_free_tool_call_cannot_write_non_postgres_adapter_via_gateway(self, entitlement_env) -> None:
+        os.environ.pop("NEURALBRIDGE_MCP_API_KEY", None)
+        gateway, _audit = self._build_gateway_with_slack()
+        response = asyncio.run(gateway.handle_request({
+            "id": "3", "method": "tools/call",
+            "params": {"name": "slack_send", "arguments": {
+                "operation": "send_message", "channel": "#general", "text": "hi",
+            }},
+        }))
+        body = response.to_dict()
+        assert "error" in body
+        assert "402" in body["error"]["message"]
+
+    def test_free_tool_call_allowed_safe_discovery_op_via_gateway(self, entitlement_env) -> None:
+        os.environ.pop("NEURALBRIDGE_MCP_API_KEY", None)
+        gateway, _audit = self._build_gateway_with_slack()
+        response = asyncio.run(gateway.handle_request({
+            "id": "4", "method": "tools/call",
+            "params": {"name": "slack_send", "arguments": {
+                "operation": "list_channels",
+            }},
+        }))
+        body = response.to_dict()
+        assert "result" in body, body
+
+    def test_paid_tool_call_clears_gate_via_gateway(self, entitlement_env) -> None:
+        gateway, audit = self._build_gateway_with_slack()
+        response = asyncio.run(gateway.handle_request({
+            "id": "5", "method": "tools/call",
+            "params": {"name": "slack_send", "arguments": {
+                "operation": "send_message", "channel": "#general", "text": "hi",
+                "api_key": OPERATOR_KEY, "actor": "agent-dana",
+            }},
+        }))
+        body = response.to_dict()
+        assert "result" in body, body
+
+        async def _collect() -> list:
+            return [e async for e in audit.query_events(event_type="adapter_call")]
+
+        events = asyncio.run(_collect())
+        assert events
+        assert events[-1].actor == "mcp:agent-dana"
+
+
+class TestGolden011SafeDiscoveryAllowlistSanity:
+    """Phase 3 sanity pass: ``_SAFE_DISCOVERY_OPS`` must (a) be a real
+    subset of what each adapter's own ``supported_operations`` actually
+    lists — no drift where the allow-list names an op the adapter doesn't
+    even have — and (b) never let an operation through whose own payload
+    can mutate state despite a read-shaped operation name. Two real
+    adapters were found doing exactly that during this pass: ``mysql``/
+    ``bigquery`` execute whatever raw SQL string rides in
+    ``params["sql"]`` under their nominally-read ``query`` op once a real
+    backend is connected, and ``graphql`` dispatches ``operation="query"``
+    and ``operation="mutation"`` to the identical handler, trusting the
+    GraphQL document text over the operation name — so a free caller
+    could send ``operation: "query"`` with a mutation document and it
+    would run as a mutation. ``guard._payload_looks_safe`` closes both.
+    """
+
+    def test_allowlist_is_subset_of_adapter_supported_operations(self) -> None:
+        import importlib
+
+        from neuralbridge.ai.guard import _SAFE_DISCOVERY_OPS
+
+        # adapter_type -> (module path, class name). Imported defensively,
+        # one at a time, rather than as top-of-function imports: a few of
+        # these adapters (bigquery, mongodb, ...) pull in an optional
+        # third-party SDK at module level that this repo's own CI test job
+        # does not install (see requirements/test.txt) — that is a real,
+        # legitimate gap for an Experimental adapter, not something this
+        # sanity test should crash on. An adapter whose SDK isn't installed
+        # here is simply excluded from the loop below, not silently
+        # skipped as "known safe" — `checked` still names it explicitly so
+        # a real allow-list/adapter-type mismatch involving it would still
+        # be caught wherever the SDK is present (e.g. a dev machine with it
+        # installed, or a future CI job that adds it).
+        adapter_modules = {
+            "slack": ("neuralbridge.adapters.messaging.slack", "SlackAdapter"),
+            "discord": ("neuralbridge.adapters.messaging.discord", "DiscordAdapter"),
+            "teams": ("neuralbridge.adapters.messaging.teams", "TeamsAdapter"),
+            "telegram": ("neuralbridge.adapters.messaging.telegram", "TelegramAdapter"),
+            "email": ("neuralbridge.adapters.messaging.email_smtp", "EmailAdapter"),
+            "gmail": ("neuralbridge.adapters.productivity.gmail", "GmailAdapter"),
+            "notion": ("neuralbridge.adapters.productivity.notion", "NotionAdapter"),
+            "aws_s3": ("neuralbridge.adapters.cloud.aws_s3", "AWSS3Adapter"),
+            "gcs": ("neuralbridge.adapters.cloud.gcs", "GCSAdapter"),
+            "azure_blob": ("neuralbridge.adapters.cloud.azure_blob", "AzureBlobStorageAdapter"),
+            "mysql": ("neuralbridge.adapters.databases.mysql", "MySQLAdapter"),
+            "snowflake": ("neuralbridge.adapters.databases.snowflake", "SnowflakeAdapter"),
+            "mongodb": ("neuralbridge.adapters.databases.mongodb", "MongodbAdapter"),
+            "bigquery": ("neuralbridge.adapters.databases.bigquery", "BigQueryAdapter"),
+            "salesforce": ("neuralbridge.adapters.erp_crm.salesforce", "SalesforceAdapter"),
+            "sap_erp": ("neuralbridge.adapters.erp_crm.sap", "SapErpAdapter"),
+            "soap": ("neuralbridge.adapters.apis.soap", "SoapAdapter"),
+            "odata": ("neuralbridge.adapters.apis.odata", "ODataAdapter"),
+            "rest": ("neuralbridge.adapters.apis.rest", "RestApiAdapter"),
+            "graphql": ("neuralbridge.adapters.apis.graphql", "GraphQLAdapter"),
+        }
+        adapter_classes: dict[str, type] = {}
+        for adapter_type, (module_path, class_name) in adapter_modules.items():
+            try:
+                module = importlib.import_module(module_path)
+            except ModuleNotFoundError:
+                continue  # optional adapter SDK not installed in this environment
+            adapter_classes[adapter_type] = getattr(module, class_name)
+
+        # Every adapter_type keyed in the allow-list (other than the
+        # custom-adapter-template placeholder, which has no importable
+        # single class) must be one this test actually checks.
+        checked = set(adapter_modules) | {"custom_adapter_template"}
+        assert set(_SAFE_DISCOVERY_OPS) <= checked, (
+            f"_SAFE_DISCOVERY_OPS has adapter type(s) this sanity test doesn't "
+            f"know how to verify: {set(_SAFE_DISCOVERY_OPS) - checked}"
+        )
+        for adapter_type, allowed_ops in _SAFE_DISCOVERY_OPS.items():
+            if adapter_type == "custom_adapter_template":
+                continue
+            if adapter_type not in adapter_classes:
+                continue  # optional adapter SDK not installed in this environment
+            real_ops = set(adapter_classes[adapter_type].supported_operations)
+            assert allowed_ops <= real_ops, (
+                f"{adapter_type}: allow-list has op(s) not in its own "
+                f"supported_operations: {allowed_ops - real_ops}"
+            )
+
+    def test_mysql_free_query_op_refuses_non_select_sql(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/mysql/execute",
+            json={"operation": "query", "params": {"sql": "DELETE FROM users WHERE 1=1"}},
+        )
+        assert r.status_code == 402, r.text
+
+    def test_mysql_free_query_op_allows_select(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/mysql/execute",
+            json={"operation": "query", "params": {"sql": "SELECT 1"}},
+        )
+        assert r.status_code != 402
+        assert r.status_code == 400  # adapter not registered in this test app, gate passed
+
+    def test_bigquery_free_query_op_refuses_dml(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/bigquery/execute",
+            json={"operation": "query", "params": {"sql": "DELETE FROM ds.tbl WHERE true"}},
+        )
+        assert r.status_code == 402, r.text
+
+    def test_graphql_free_query_op_refuses_mutation_document(self, free_client: TestClient) -> None:
+        """The op name says 'query' but the document itself is a mutation —
+        the adapter dispatches both to the same handler, so the gate must
+        look at the document, not just the op name."""
+        r = free_client.post(
+            "/api/v1/adapters/graphql/execute",
+            json={
+                "operation": "query",
+                "params": {"query": "mutation { deleteUser(id: 1) { id } }"},
+            },
+        )
+        assert r.status_code == 402, r.text
+
+    def test_graphql_free_query_op_allows_a_real_query_document(self, free_client: TestClient) -> None:
+        r = free_client.post(
+            "/api/v1/adapters/graphql/execute",
+            json={
+                "operation": "query",
+                "params": {"query": "query { user(id: 1) { id name } }"},
+            },
+        )
+        assert r.status_code != 402
+        assert r.status_code == 400  # adapter not registered, gate passed

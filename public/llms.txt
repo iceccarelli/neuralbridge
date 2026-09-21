@@ -62,6 +62,9 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/connectors/mcp
 - Browser REST console (paste an API key, call real /v1 routes):
   https://neuralbridge.io/console
+- AI control plane (discover a real connection, read it, plan a write,
+  approve, get a receipt — READ is free/rate-limited, WRITE requires a
+  Register or Cell key): https://neuralbridge.io/ai
 - Contact / sales: https://neuralbridge.io/contact
 - OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
   https://neuralbridge.io/openapi.json
