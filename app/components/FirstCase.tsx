@@ -160,6 +160,10 @@ export default function FirstCase({ apiBase, apiKey }: { apiBase: string; apiKey
             The same key also unlocks <a href="/ai">/ai</a>&apos;s write path — propose a write, approve it, get a
             real execution receipt.
           </p>
+          <p style={{ fontSize: '0.85rem' }}>
+            Upgrade path: the Cell plan also verifies machine-safety runs directly — see{' '}
+            <a href="#cell-verify">the Cell verification below</a>.
+          </p>
         </div>
       )}
 
