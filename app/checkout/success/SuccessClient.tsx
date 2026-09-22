@@ -199,6 +199,15 @@ export default function CheckoutSuccessClient() {
                   That unlocks the write path: propose a write, approve it, get a real execution receipt.
                 </p>
               </div>
+              {key.tier === 'cell' && (
+                <div className="ai-card">
+                  <p style={{ fontWeight: 600, marginBottom: '0.35rem' }}>3. Cell buyers: verify a machine run</p>
+                  <p style={{ fontSize: '0.85rem' }}>
+                    Your key includes Cell-tier machine verification. <a href="/console#cell-verify">Open the
+                    Console&apos;s machine-verification flow</a> with this key already pasted in.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

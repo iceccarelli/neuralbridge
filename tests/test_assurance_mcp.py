@@ -19,6 +19,14 @@ import httpx
 import pytest
 import uvicorn
 
+pytest.importorskip(
+    "mcp",
+    reason="assurance.mcp.server wraps the mcp SDK directly — install the "
+           "optional 'assurance-mcp' extra to run this module. The tier-gating "
+           "logic it wraps (POST /v1/machine/verify's Cell-only 402) is also "
+           "covered without this SDK in tests/test_assurance_machine.py.",
+)
+
 KEY = "mcp-test-key-do-not-ship"
 
 
