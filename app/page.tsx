@@ -1,6 +1,7 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
 import { IMAGES } from './lib/images';
+import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import RotatingImage from './components/RotatingImage';
@@ -153,7 +154,7 @@ export default function IndustrialAutonomousAssuranceSite() {
               intervention. Neither is satisfiable from a spreadsheet. This is built from the record instead.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-primary" href="#products">Start free — Validator</a>
+              <a className="btn btn-primary" href="#advisory-check">A change or advisory just landed — check it free</a>
               <a className="btn btn-outline" href={SALES}>Talk to sales</a>
               <a className="btn btn-outline" href="#pricing">See pricing</a>
             </div>
@@ -282,6 +283,29 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       {/* EXPLORE PRODUCTS */}
       <section className="section" id="products">
         <div className="shell">
+          <div className="section-head" id="advisory-check">
+            <span className="eyebrow">Start here — free, no account</span>
+            <h2>Machine Assurance Check: a change landed. What does it mean for this machine?</h2>
+            <p>
+              This is the question the whole system exists to answer. Paste a supplier advisory and one machine&apos;s
+              manifest below and run the real check &mdash; the same match logic that decides whether a hash is
+              byte-identical, a version label is only a label, or the two disagree and neither column gets to claim
+              this machine. An explicit verdict, never collapsed to safe-or-not: no impact found, potentially
+              affected, or needs a human to look.
+            </p>
+          </div>
+
+          <div className="hero-panel" style={{ marginBottom: '2rem' }}>
+            <div className="hero-panel-title">Machine Assurance Check &mdash; try it right here</div>
+            <AdvisoryCheckPlayground />
+            <p className="hero-panel-note">
+              This calls the real <code>POST /v1/check/machine</code> endpoint on one machine, free, no account.
+              Enrolling the machine unlocks <code>POST /v1/check/fleet-machine</code>: the same check joined to its
+              intervention history, its evidence staleness, and the fleet-wide fan-out across every other enrolled
+              machine &mdash; the Cell plan.
+            </p>
+          </div>
+
           <div className="section-head">
             <span className="eyebrow">Explore products</span>
             <h2>Plans, engines, and the API, in one place.</h2>
@@ -292,7 +316,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
 
           <div className="hero-panel" style={{ marginBottom: '2rem' }}>
-            <div className="hero-panel-title">The free validator &mdash; try it right here</div>
+            <div className="hero-panel-title">The free CRA Article 14 validator &mdash; try it right here</div>
             <ValidatorPlayground />
             <p className="hero-panel-note">
               This calls the real <code>POST /v1/spec/validate</code> endpoint. A prior run against this exact
