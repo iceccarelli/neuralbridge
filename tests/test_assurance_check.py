@@ -331,3 +331,39 @@ class TestHttp:
                         json={"machine_key": "Grimaldi/AR-7#0000"},
                         headers=keyed(store, "cell"))
         assert r.status_code == 404
+
+    def test_the_402_is_structured_for_an_agent(self, client, store):
+        r = client.post("/v1/check/fleet-machine",
+                        json={"machine_key": "Grimaldi/AR-7#0412"},
+                        headers=keyed(store, "register"))
+        d = r.json()["detail"]
+        assert d["status"] == "payment_required"
+        assert d["required_plan"] == "cell"
+        assert d["service"] == "fleet_machine_assurance"
+        assert d["next_step"] == "checkout"
+
+    def test_the_401_is_structured_for_an_agent(self, client):
+        r = client.post("/v1/check/fleet-machine",
+                        json={"machine_key": "Grimaldi/AR-7#0412"})
+        d = r.json()["detail"]
+        assert d["status"] == "authentication_required"
+        assert d["service"] == "fleet_machine_assurance"
+
+    def test_the_service_catalogue_is_free_and_real(self, client):
+        r = client.get("/v1/check/services")
+        assert r.status_code == 200
+        ids = {s["service_id"] for s in r.json()["services"]}
+        assert ids == {"machine_assurance_check", "fleet_machine_assurance"}
+        cell_service = next(s for s in r.json()["services"]
+                            if s["service_id"] == "fleet_machine_assurance")
+        assert cell_service["required_plan"] == "cell"
+        assert cell_service["free_or_paid"] == "paid"
+        assert "manifest" in cell_service["input_schema"] or \
+               "machine_key" in cell_service["input_schema"]["properties"]
+
+    def test_the_free_check_names_the_real_next_action(self, client):
+        r = client.post("/v1/check/machine", json={
+            "manifest": manifest().to_dict(), "advisory": advisory().to_dict()})
+        action = r.json()["commercial_next_action"]
+        assert action["action"] == "enroll_machine"
+        assert action["endpoint"] == "POST /v1/machinery/manifest"

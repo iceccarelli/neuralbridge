@@ -8,12 +8,12 @@ returns the same honest "not configured" error instead of pretending to
 have called anything, matching the fail-closed pattern the rest of this
 site uses (see ``/console`` and ``/developers``).
 
-Tool set is deliberately small: the two always-free routes (``plans``,
-``spec_validate``) plus two paid routes (``machine_verify``, a Cell-tier
-route; ``register_cases``, a Register-tier route) chosen specifically
-because calling them on the wrong plan or with no key surfaces the API's
-real, structured 401/402 shape — the thing an agent actually needs to see
-to route a human to checkout, not a summary of it.
+Tool set is deliberately small: the always-free routes (``plans``,
+``spec_validate``, ``services``, ``machine_assurance_check``) plus paid
+routes (``machine_verify``, ``register_cases``, ``fleet_machine_assurance``)
+chosen specifically because calling them on the wrong plan or with no key
+surfaces the API's real, structured 401/402 shape — the thing an agent
+actually needs to see to route a human to checkout, not a summary of it.
 
 Run with ``assurance-mcp`` (installed via ``pip install -e '.[assurance-mcp]'``)
 or ``python -m assurance.mcp.server``. Transport is stdio by default, which
@@ -133,6 +133,59 @@ async def register_cases() -> dict[str, Any]:
     this returns the API's real 401/402, the same as machine_verify.
     """
     return await _call("GET", "/v1/cases")
+
+
+@mcp.tool()
+async def services() -> dict[str, Any]:
+    """GET /v1/check/services — the Machine Assurance Check service catalogue.
+
+    Free, no key. Call this first: it returns each service's real input
+    schema, whether it is free or paid, the plan it needs, and what the API
+    actually does if you are not entitled — so a purchase decision can be
+    made before ``machine_assurance_check`` or ``fleet_machine_assurance``
+    is ever called.
+    """
+    return await _call("GET", "/v1/check/services")
+
+
+@mcp.tool()
+async def machine_assurance_check(manifest: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/check/machine — does this change match this machine? Free, no key.
+
+    Args:
+        manifest: the machine's current safety manifest (SafetyManifest.to_dict() shape).
+        advisory: the supplier advisory or change being checked (ComponentAdvisory.to_dict() shape).
+
+    Cannot assess whether standing safety evidence is still valid — that
+    needs the machine enrolled in the ledger. The result's
+    ``checks_skipped`` says so, and ``commercial_next_action`` names the
+    real next call, exactly as a human reading the page would see.
+    """
+    return await _call(
+        "POST", "/v1/check/machine", json_body={"manifest": manifest, "advisory": advisory},
+    )
+
+
+@mcp.tool()
+async def fleet_machine_assurance(machine_key: str, advisory: dict[str, Any] | None = None) -> dict[str, Any]:
+    """POST /v1/check/fleet-machine — an enrolled machine's own evidence, plus the fleet fan-out.
+
+    Cell-tier only. With no ASSURANCE_API_KEY, or a key below Cell, this
+    returns the API's real, structured 401/402 — a ``status`` of
+    ``authentication_required`` or ``payment_required``, the ``required_plan``,
+    and the concrete next step (``GET /v1/plans`` or ``POST /v1/checkout``) —
+    never a fake success and never a bare 500.
+
+    Args:
+        machine_key: the ledger subject, e.g. "Grimaldi/AR-7#0412" — the
+            machine must already be enrolled via POST /v1/machinery/manifest.
+        advisory: optional; when given, also fans this advisory out across
+            every other enrolled machine.
+    """
+    body: dict[str, Any] = {"machine_key": machine_key}
+    if advisory is not None:
+        body["advisory"] = advisory
+    return await _call("POST", "/v1/check/fleet-machine", json_body=body)
 
 
 def main() -> None:

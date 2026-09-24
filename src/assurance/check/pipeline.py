@@ -107,6 +107,14 @@ class MachineAssuranceCheck:
             AssuranceVerdict.NO_IMPACT_FOUND, AssuranceVerdict.VERIFIED,
         )
 
+    @property
+    def next_action(self) -> str:
+        return _next_action(self.verdict, self.enrolled)[0]
+
+    @property
+    def next_action_endpoint(self) -> str | None:
+        return _next_action(self.verdict, self.enrolled)[1]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "machine": self.machine_key,
@@ -122,6 +130,10 @@ class MachineAssuranceCheck:
                 "insufficient": self.evidence_insufficient,
                 "cannot_determine": self.evidence_cannot_determine,
             },
+            "commercial_next_action": {
+                "action": self.next_action,
+                "endpoint": self.next_action_endpoint,
+            },
             "required_actions": list(self.required_actions),
             "human_review_required": self.human_review_required,
             "interventions": list(self.interventions),
@@ -133,6 +145,38 @@ class MachineAssuranceCheck:
             "assessed_at": self.assessed_at,
             "checks_skipped": list(self.checks_skipped),
         }
+
+
+# Every action here names an endpoint (or site page) that exists and does
+# what the action says today — never a purchase or capability this codebase
+# cannot execute. "none" means the check already answered the question this
+# result can answer; there is nothing further to buy for it.
+_DEFAULT_NEXT_ACTION: dict[AssuranceVerdict, tuple[str, str | None]] = {
+    AssuranceVerdict.NO_IMPACT_FOUND: ("enroll_machine", "POST /v1/machinery/manifest"),
+    AssuranceVerdict.POTENTIALLY_AFFECTED: ("enroll_machine", "POST /v1/machinery/manifest"),
+    AssuranceVerdict.REQUIRES_REVERIFICATION: ("verify_machine", "POST /v1/machine/verify"),
+    AssuranceVerdict.INSUFFICIENT_EVIDENCE: ("verify_machine", "POST /v1/machine/verify"),
+    # No purchasable human-review service exists in this codebase yet — the
+    # honest next step is the real sales channel, not a fabricated checkout.
+    AssuranceVerdict.REQUIRES_HUMAN_REVIEW: ("contact_sales", "/contact"),
+    AssuranceVerdict.CANNOT_DETERMINE: ("provide_more_evidence", None),
+    AssuranceVerdict.VERIFIED: ("none", None),
+}
+
+# Overrides for a machine that is already enrolled: the free "go enrol it"
+# action makes no sense once the ledger already has this machine.
+_ENROLLED_OVERRIDES: dict[AssuranceVerdict, tuple[str, str | None]] = {
+    AssuranceVerdict.NO_IMPACT_FOUND: ("none", None),
+    AssuranceVerdict.POTENTIALLY_AFFECTED: (
+        "generate_report", "GET /v1/fleet/report",
+    ),
+}
+
+
+def _next_action(verdict: AssuranceVerdict, enrolled: bool) -> tuple[str, str | None]:
+    if enrolled and verdict in _ENROLLED_OVERRIDES:
+        return _ENROLLED_OVERRIDES[verdict]
+    return _DEFAULT_NEXT_ACTION[verdict]
 
 
 def _intervention_summary(intervention: Intervention) -> dict[str, Any]:

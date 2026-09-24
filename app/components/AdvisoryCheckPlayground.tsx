@@ -86,6 +86,16 @@ type CheckResponse = {
   required_actions: string[];
   human_review_required: boolean;
   checks_skipped: string[];
+  commercial_next_action: { action: string; endpoint: string | null };
+};
+
+const NEXT_ACTION_LABEL: Record<string, string> = {
+  enroll_machine: 'Enroll this machine to unlock evidence-staleness checks and the fleet fan-out.',
+  verify_machine: 'Run machine safety verification to close this gap.',
+  generate_report: 'Generate the fleet report for this finding.',
+  contact_sales: 'This needs a human to look — talk to sales.',
+  provide_more_evidence: 'Declare the missing checks or hashes and re-run the check.',
+  none: 'Nothing further to buy for this result.',
 };
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -213,17 +223,18 @@ export default function AdvisoryCheckPlayground() {
               )}
 
               <div className="ai-card" style={{ marginTop: '0.75rem' }}>
-                <span className="status-pill register">Continue the investigation — Cell plan</span>
+                <span className="status-pill register">Next: {result.commercial_next_action.action.replace(/_/g, ' ')}</span>
                 <p style={{ fontSize: '0.85rem' }}>
-                  This checked the change against the manifest you pasted. It could not read this machine&apos;s own
-                  intervention history or verification bundles, so it cannot say whether standing safety evidence is
-                  still valid — only whether enrolled machines are affected can answer that. Enrolling this machine (
-                  <code>POST /v1/machinery/manifest</code>) unlocks <code>POST /v1/check/fleet-machine</code>: the
-                  same check, joined to its intervention history, its evidence staleness, and the fleet-wide fan-out
-                  across every other enrolled machine.
+                  {NEXT_ACTION_LABEL[result.commercial_next_action.action] ?? 'See pricing for what unlocks this.'}
+                  {result.commercial_next_action.endpoint && (
+                    <>
+                      {' '}This calls <code>{result.commercial_next_action.endpoint}</code> — see the full catalogue
+                      at <code>GET /v1/check/services</code>.
+                    </>
+                  )}
                 </p>
-                <a className="btn btn-primary" href="/#pricing">
-                  See pricing
+                <a className="btn btn-primary" href={result.commercial_next_action.action === 'contact_sales' ? '/contact' : '/#pricing'}>
+                  {result.commercial_next_action.action === 'contact_sales' ? 'Contact sales' : 'See pricing'}
                 </a>
               </div>
             </div>
