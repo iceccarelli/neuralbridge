@@ -99,6 +99,20 @@ const NEXT_ACTION_LABEL: Record<string, string> = {
   none: 'Nothing further to buy for this result.',
 };
 
+const NEXT_ACTION_HREF: Record<string, string> = {
+  enroll_machine: '/investigate',
+  verify_machine: '/investigate',
+  generate_report: '/investigate',
+  contact_sales: '/contact',
+};
+
+const NEXT_ACTION_CTA: Record<string, string> = {
+  enroll_machine: 'Go to Investigate',
+  verify_machine: 'Go to Investigate',
+  generate_report: 'Go to Investigate',
+  contact_sales: 'Contact sales',
+};
+
 const VERDICT_LABEL: Record<Verdict, string> = {
   no_impact_found: 'NO IMPACT FOUND',
   potentially_affected: 'POTENTIALLY AFFECTED',
@@ -234,8 +248,8 @@ export default function AdvisoryCheckPlayground() {
                     </>
                   )}
                 </p>
-                <a className="btn btn-primary" href={result.commercial_next_action.action === 'contact_sales' ? '/contact' : '/#pricing'}>
-                  {result.commercial_next_action.action === 'contact_sales' ? 'Contact sales' : 'See pricing'}
+                <a className="btn btn-primary" href={NEXT_ACTION_HREF[result.commercial_next_action.action] ?? '/#pricing'}>
+                  {NEXT_ACTION_CTA[result.commercial_next_action.action] ?? 'See pricing'}
                 </a>
               </div>
             </div>
