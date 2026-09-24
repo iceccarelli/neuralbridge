@@ -4,12 +4,11 @@ import { useState } from 'react';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
-// A realistic single-machine advisory check — the free, no-account route this
-// whole product is built around: a supplier bulletin lands, and an integrator
-// answers "is this specific unit one of them" before finishing their coffee.
-// Field shapes mirror tests/test_assurance_fleet.py's fixtures exactly, so this
-// payload is not a prop — it is a real ComponentAdvisory and a real
-// SafetyManifest that the live service will actually parse.
+// The Machine Assurance Check, free stage: one manifest, one advisory, no
+// account. Field shapes mirror tests/test_assurance_check.py's fixtures
+// exactly, so this payload is not a prop — it is a real ComponentAdvisory and
+// a real SafetyManifest that POST /v1/check/machine actually parses and runs
+// through the same match logic the paid, ledger-backed check uses.
 const SAMPLE_PAYLOAD = `{
   "advisory": {
     "advisory_id": "CTRL-2026-11",
@@ -67,15 +66,46 @@ type Match = {
   implements: string[];
 };
 
+type Verdict =
+  | 'no_impact_found'
+  | 'potentially_affected'
+  | 'requires_reverification'
+  | 'requires_human_review'
+  | 'insufficient_evidence'
+  | 'cannot_determine'
+  | 'verified';
+
 type CheckResponse = {
-  advisory_id: string;
-  issued_by: string;
-  severity: string;
   machine: string;
+  verdict: Verdict;
+  enrolled: boolean;
+  advisory_evaluated: boolean;
   affected: boolean;
   matches: Match[];
-  remedy: string;
+  evidence: { valid: number; stale: number; insufficient: number; cannot_determine: number };
+  required_actions: string[];
+  human_review_required: boolean;
   checks_skipped: string[];
+};
+
+const VERDICT_LABEL: Record<Verdict, string> = {
+  no_impact_found: 'NO IMPACT FOUND',
+  potentially_affected: 'POTENTIALLY AFFECTED',
+  requires_reverification: 'REQUIRES RE-VERIFICATION',
+  requires_human_review: 'REQUIRES HUMAN REVIEW',
+  insufficient_evidence: 'INSUFFICIENT EVIDENCE',
+  cannot_determine: 'CANNOT DETERMINE',
+  verified: 'VERIFIED',
+};
+
+const VERDICT_CLASS: Record<Verdict, string> = {
+  no_impact_found: 'ok',
+  verified: 'ok',
+  potentially_affected: 'blocked',
+  requires_reverification: 'blocked',
+  requires_human_review: 'blocked',
+  insufficient_evidence: 'blocked',
+  cannot_determine: 'blocked',
 };
 
 export default function AdvisoryCheckPlayground() {
@@ -97,13 +127,13 @@ export default function AdvisoryCheckPlayground() {
     if (!API_BASE) {
       setError(
         'Not deployed publicly yet — this button has nowhere to send the request. Run it yourself: ' +
-          "pip install -e '.[assurance-api]' && uvicorn assurance.api.service:app, then POST this JSON to /v1/fleet/advisory/check.",
+          "pip install -e '.[assurance-api]' && uvicorn assurance.api.service:app, then POST this JSON to /v1/check/machine.",
       );
       return;
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/v1/fleet/advisory/check`, {
+      const res = await fetch(`${API_BASE}/v1/check/machine`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(parsed),
@@ -128,7 +158,7 @@ export default function AdvisoryCheckPlayground() {
       <div className="playground-grid">
         <div className="playground-input">
           <label htmlFor="advisory-json" className="playground-label">
-            POST /v1/fleet/advisory/check — edit the advisory or the manifest
+            POST /v1/check/machine — edit the advisory or the manifest
           </label>
           <textarea
             id="advisory-json"
@@ -139,25 +169,26 @@ export default function AdvisoryCheckPlayground() {
             rows={16}
           />
           <button className="btn btn-primary" onClick={run} disabled={loading}>
-            {loading ? 'Checking…' : 'Run the check'}
+            {loading ? 'Checking…' : 'Run the Machine Assurance Check'}
           </button>
         </div>
 
         <div className="playground-output">
-          <span className="playground-label">Response</span>
+          <span className="playground-label">Result</span>
           {!result && !error && (
             <p className="playground-placeholder">
               {API_BASE
-                ? 'This is one supplier advisory against one machine’s manifest — free, no account. Edit either and click Run.'
+                ? 'One advisory against one machine’s manifest — free, no account. Edit either and click Run.'
                 : 'This endpoint is not hosted publicly yet — click Run to see exactly what that means and how to run it yourself.'}
             </p>
           )}
           {error && <p className="playground-error">{error}</p>}
           {result && (
             <div className="playground-result">
-              <span className={`playground-verdict ${result.affected ? 'blocked' : 'ok'}`}>
-                {result.affected ? `AFFECTED — ${result.machine}` : `CLEAR — ${result.machine}`}
+              <span className={`playground-verdict ${VERDICT_CLASS[result.verdict]}`}>
+                {VERDICT_LABEL[result.verdict]} — {result.machine}
               </span>
+
               {result.matches.length > 0 && (
                 <ul className="playground-issues">
                   {result.matches.map((m) => (
@@ -174,21 +205,27 @@ export default function AdvisoryCheckPlayground() {
                   ))}
                 </ul>
               )}
-              {result.remedy && (
-                <p style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
-                  <strong>Remedy:</strong> {result.remedy}
-                </p>
-              )}
+
               {result.checks_skipped.length > 0 && (
                 <p style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '0.5rem' }}>
                   {result.checks_skipped[0]}
                 </p>
               )}
-              <p style={{ fontSize: '0.85rem', marginTop: '0.75rem' }}>
-                This checked one machine. The Cell plan fans one advisory out across your whole enrolled fleet, all
-                the way to which safety functions&apos; standing evidence it puts in question — see{' '}
-                <a href="/#pricing">pricing</a>.
-              </p>
+
+              <div className="ai-card" style={{ marginTop: '0.75rem' }}>
+                <span className="status-pill register">Continue the investigation — Cell plan</span>
+                <p style={{ fontSize: '0.85rem' }}>
+                  This checked the change against the manifest you pasted. It could not read this machine&apos;s own
+                  intervention history or verification bundles, so it cannot say whether standing safety evidence is
+                  still valid — only whether enrolled machines are affected can answer that. Enrolling this machine (
+                  <code>POST /v1/machinery/manifest</code>) unlocks <code>POST /v1/check/fleet-machine</code>: the
+                  same check, joined to its intervention history, its evidence staleness, and the fleet-wide fan-out
+                  across every other enrolled machine.
+                </p>
+                <a className="btn btn-primary" href="/#pricing">
+                  See pricing
+                </a>
+              </div>
             </div>
           )}
         </div>
