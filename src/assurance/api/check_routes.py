@@ -117,6 +117,7 @@ def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
 _CHECK_OUTPUT_SCHEMA: dict[str, Any] = {
     "machine": "string", "verdict": "string (see AssuranceVerdict)",
     "enrolled": "boolean", "advisory_evaluated": "boolean", "affected": "boolean",
+    "configuration": {"status": "matched | changed | unknown", "changes": "array"},
     "matches": "array", "functions": "array",
     "evidence": {"valid": "integer", "stale": "integer",
                  "insufficient": "integer", "cannot_determine": "integer"},

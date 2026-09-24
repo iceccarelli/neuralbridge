@@ -249,6 +249,36 @@ class TestFleetFanOut:
 
 
 # =====================================================================
+# Configuration status: is the machine still the declared baseline?
+# =====================================================================
+
+class TestConfigurationStatus:
+    def test_no_declared_baseline_is_unknown_not_a_guess(self, ledger):
+        enrol(ledger, "0412")  # AS_FOUND only, never declared
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "unknown"
+        assert any("no as-declared baseline" in c for c in result.checks_skipped)
+
+    def test_an_unchanged_configuration_matches(self, ledger):
+        baseline = manifest("0412", fw(), zones(), source=ManifestSource.AS_DECLARED,
+                            manifest_id="MAN-0412-DECLARED")
+        record_manifest(ledger, baseline)
+        enrol(ledger, "0412")  # a later, identical AS_FOUND manifest
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "matched"
+        assert result.configuration_changes == ()
+
+    def test_a_changed_firmware_is_reported_as_changed(self, ledger):
+        baseline = manifest("0412", fw(), zones(), source=ManifestSource.AS_DECLARED,
+                            manifest_id="MAN-0412-DECLARED")
+        record_manifest(ledger, baseline)
+        record_manifest(ledger, manifest("0412", fw("9" * 64, "9.9.9"), zones()))
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "changed"
+        assert any(c["item_id"] == "ITM-FW" for c in result.configuration_changes)
+
+
+# =====================================================================
 # HTTP — free vs paid entitlement (Cases G, H, I)
 # =====================================================================
 

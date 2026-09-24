@@ -81,6 +81,7 @@ type CheckResponse = {
   enrolled: boolean;
   advisory_evaluated: boolean;
   affected: boolean;
+  configuration: { status: 'matched' | 'changed' | 'unknown'; changes: unknown[] };
   matches: Match[];
   evidence: { valid: number; stale: number; insufficient: number; cannot_determine: number };
   required_actions: string[];

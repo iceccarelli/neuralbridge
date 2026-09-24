@@ -38,8 +38,10 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory, match_item
 from assurance.fleet.impact import ImpactReport, assess_impact
 from assurance.fleet.registry import Fleet
+from assurance.machinery.divergence import compare as compare_manifests
 from assurance.machinery.intervention import Intervention
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import ManifestSource, SafetyManifest
+from assurance.machinery.record import manifests_from_ledger
 from assurance.machinery.staleness import Coverage, CoverageReport
 
 __all__ = [
@@ -100,6 +102,11 @@ class MachineAssuranceCheck:
     fleet_machines_affected: int | None
     assessed_at: str
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
+    #: "matched" | "changed" | "unknown" — unknown when no as-declared
+    #: baseline manifest has ever been sealed for this machine to compare
+    #: against, which is a real, common state, not a bug.
+    configuration_status: str = "unknown"
+    configuration_changes: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     @property
     def affected(self) -> bool:
@@ -122,6 +129,10 @@ class MachineAssuranceCheck:
             "enrolled": self.enrolled,
             "advisory_evaluated": self.advisory_evaluated,
             "affected": self.affected,
+            "configuration": {
+                "status": self.configuration_status,
+                "changes": list(self.configuration_changes),
+            },
             "matches": list(self.matches),
             "functions": list(self.functions),
             "evidence": {
@@ -215,6 +226,37 @@ def _match_manifest(manifest: SafetyManifest, advisory: ComponentAdvisory) -> tu
             "implements": list(item.implements),
         })
     return matches, needs_a_human
+
+
+def _configuration_status(
+    ledger: EvidenceLedger, machine_key: str, observed: SafetyManifest,
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Is the machine still the configuration it was declared as?
+
+    Reuses :func:`assurance.machinery.divergence.compare` — this recomputes
+    nothing about *what* differs, it only decides which sealed manifest plays
+    the baseline. The earliest AS_DECLARED manifest is the CE-marking
+    baseline; comparing it against the latest sealed manifest answers
+    "matched" or "changed" the same way ``POST /v1/machinery/diff`` would if
+    you handed it both by hand.
+    """
+    history = manifests_from_ledger(ledger, machine_key)
+    baseline = next((m for m in history if m.source is ManifestSource.AS_DECLARED), None)
+    if baseline is None:
+        return "unknown", [], [
+            "no as-declared baseline manifest has been sealed for this "
+            "machine, so this cannot say whether its configuration still "
+            "matches what it was CE-marked with — only whether its safety "
+            "evidence is current for whatever configuration is on record."
+        ]
+    if baseline.manifest_id == observed.manifest_id:
+        return "matched", [], []
+    try:
+        divergence = compare_manifests(baseline, observed)
+    except ValueError as exc:
+        return "unknown", [], [str(exc)]
+    status = "matched" if divergence.identical else "changed"
+    return status, [c.to_dict() for c in divergence.changes], list(divergence.checks_skipped)
 
 
 def _tally(coverage: CoverageReport | None) -> tuple[
@@ -347,6 +389,11 @@ def run_enrolled_check(
             c for c in fleet_report.checks_skipped if c not in checks_skipped
         )
 
+    configuration_status, configuration_changes, config_caveats = _configuration_status(
+        ledger, machine_key, record.manifest,
+    )
+    checks_skipped.extend(c for c in config_caveats if c not in checks_skipped)
+
     functions, valid, stale, insufficient, cannot_determine, required = _tally(
         record.coverage
     )
@@ -375,4 +422,6 @@ def run_enrolled_check(
                                   if fleet_report is not None else None),
         assessed_at=format_utc(utc_now()),
         checks_skipped=tuple(dict.fromkeys(checks_skipped)),
+        configuration_status=configuration_status,
+        configuration_changes=tuple(configuration_changes),
     )
