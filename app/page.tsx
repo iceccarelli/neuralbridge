@@ -285,22 +285,24 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head" id="advisory-check">
             <span className="eyebrow">Start here — free, no account</span>
-            <h2>A machine changed, or a supplier sent an advisory. Is this one affected?</h2>
+            <h2>Machine Assurance Check: a change landed. What does it mean for this machine?</h2>
             <p>
               This is the question the whole system exists to answer. Paste a supplier advisory and one machine&apos;s
               manifest below and run the real check &mdash; the same match logic that decides whether a hash is
               byte-identical, a version label is only a label, or the two disagree and neither column gets to claim
-              this machine.
+              this machine. An explicit verdict, never collapsed to safe-or-not: no impact found, potentially
+              affected, or needs a human to look.
             </p>
           </div>
 
           <div className="hero-panel" style={{ marginBottom: '2rem' }}>
-            <div className="hero-panel-title">Machine advisory check &mdash; try it right here</div>
+            <div className="hero-panel-title">Machine Assurance Check &mdash; try it right here</div>
             <AdvisoryCheckPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/fleet/advisory/check</code> endpoint on one machine, free, no
-              account. Enrolling machines and running this fan-out across your whole fleet &mdash; down to which
-              safety functions&apos; standing evidence it puts in question &mdash; is the Cell plan.
+              This calls the real <code>POST /v1/check/machine</code> endpoint on one machine, free, no account.
+              Enrolling the machine unlocks <code>POST /v1/check/fleet-machine</code>: the same check joined to its
+              intervention history, its evidence staleness, and the fleet-wide fan-out across every other enrolled
+              machine &mdash; the Cell plan.
             </p>
           </div>
 
