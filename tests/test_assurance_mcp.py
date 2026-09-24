@@ -86,7 +86,10 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases"}
+    assert tool_names == {
+        "plans", "spec_validate", "machine_verify", "register_cases",
+        "services", "machine_assurance_check", "fleet_machine_assurance",
+    }
 
 
 @pytest.mark.asyncio
@@ -123,6 +126,60 @@ async def test_machine_verify_surfaces_a_real_402_not_a_fake_success(mcp_env: st
     result = await machine_verify(envelope={}, trace={}, actor="a.tester")
     assert result["status"] in (401, 402, 422)
     assert "status" in result and "body" in result
+
+
+@pytest.mark.asyncio
+async def test_services_calls_the_real_api(mcp_env: str) -> None:
+    from assurance.mcp.server import services
+
+    result = await services()
+    assert result["status"] == 200
+    ids = {s["service_id"] for s in result["body"]["services"]}
+    assert ids == {"machine_assurance_check", "fleet_machine_assurance"}
+
+
+@pytest.mark.asyncio
+async def test_machine_assurance_check_calls_the_real_api(mcp_env: str) -> None:
+    from assurance.mcp.server import machine_assurance_check
+
+    advisory = {
+        "advisory_id": "CTRL-2026-11", "issued_by": "ControlCo",
+        "issued_at": "2026-09-12T08:00:00Z", "title": "t", "summary": "s",
+        "severity": "safety_relevant",
+        "affected": [{"supplier": "ControlCo", "name": "Safety controller firmware",
+                     "versions": ["3.8.2"]}],
+        "reference": "https://controlco.example/advisories/CTRL-2026-11",
+    }
+    manifest = {
+        "manifest_id": "MAN-0412",
+        "machine": {"manufacturer": "Grimaldi", "model": "AR-7", "serial": "0412"},
+        "source": "as_found", "taken_at": "2026-09-01T00:00:00Z",
+        "taken_by": {"identifier": "a.integrator", "role": "safety engineer"},
+        "items": [{"item_id": "ITM-FW", "kind": "firmware",
+                  "name": "Safety controller firmware", "version": "3.8.2",
+                  "content_hash": "", "hash_source": "declared",
+                  "supplier": "ControlCo"}],
+    }
+    result = await machine_assurance_check(manifest=manifest, advisory=advisory)
+    assert result["status"] == 200
+    assert result["body"]["verdict"] in {"potentially_affected", "requires_human_review"}
+    assert result["body"]["enrolled"] is False
+
+
+@pytest.mark.asyncio
+async def test_fleet_machine_assurance_surfaces_a_structured_401(
+    running_api: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no key at all, this must be the API's real structured 401."""
+    monkeypatch.setenv("ASSURANCE_API_URL", running_api)
+    monkeypatch.delenv("ASSURANCE_API_KEY", raising=False)
+    from assurance.mcp.server import fleet_machine_assurance
+
+    result = await fleet_machine_assurance(machine_key="Grimaldi/AR-7#0412")
+    assert result["status"] == 401
+    detail = result["body"]["detail"]
+    assert detail["status"] == "authentication_required"
+    assert detail["service"] == "fleet_machine_assurance"
 
 
 @pytest.mark.asyncio
