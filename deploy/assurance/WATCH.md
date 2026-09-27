@@ -215,9 +215,14 @@ Carried in `checks_skipped` on every run:
   noticed a vulnerability publishes nothing, and no amount of signing detects
   silence.
 * **That the feed on disk is current.** This watch learns of an advisory when
-  the subscribed file changes. Whatever puts the supplier's feed there is
-  outside this system, and a sync that silently stopped looks exactly like a
-  supplier with nothing to report. Make the thing that fetches it fail loudly.
+  the subscribed file changes. Whatever puts the supplier's feed there must
+  fail loudly, never silently stop and look like a supplier with nothing to
+  report. For a feed hosted at `GET /v1/supplier/feed/{account_id}`,
+  `assurance supplier fetch <url> --out <path> --public-key <key>` is that
+  thing: it refuses to write a feed that does not verify (leaving the
+  previous good copy in place), and a network failure or a bad HTTP status
+  exits non-zero rather than being read as an empty feed. Run it on a cron
+  ahead of `watch run`, or wire it into whatever schedules this watch.
 
 
 ---

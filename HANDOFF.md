@@ -225,10 +225,17 @@ Ordered by proximity to cash, not by interest.
    supplier cannot pay us today even if they want to. Needs: `POST /v1/supplier/advisory`
    (gated), `GET /v1/supplier/feed/{id}` (free), a `supplier` tier, and a
    directory an integrator can subscribe from.
-5. **Feed sync.** The advisory watch reads a *local file*. Whatever fetches the
-   supplier's feed is outside the system, and `checks_skipped` says so. A
-   `assurance supplier fetch` with loud failure closes the last gap in the
-   recurring-revenue story.
+5. ~~**Feed sync.**~~ **Closed 2026-09-27.** `assurance supplier fetch <url>
+   --out <path> [--public-key <key>]` downloads a hosted feed
+   (`GET /v1/supplier/feed/{id}`) and writes it to the local path a `watch`
+   config's `feed:` field names. Loud failure: a network error or bad HTTP
+   status raises rather than reading as an empty feed, and a feed that fails
+   `verify_feed` is refused rather than overwriting the last good copy. The
+   watch itself still only reads a local file — that stays true on purpose,
+   see `checks_skipped` in `deploy/assurance/WATCH.md`. What is still open:
+   nobody has wired this into a scheduler (cron, systemd timer) ahead of
+   `watch run`, and there is still no supplier-tier price for anyone to pay
+   for the hosted feed this downloads from.
 
 ### P2 — Deepening the product
 
