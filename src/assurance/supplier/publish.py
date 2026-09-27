@@ -64,6 +64,7 @@ __all__ = [
     "PublishError",
     "SignedAdvisory",
     "SupplierIdentity",
+    "fetch_feed",
     "publish",
     "verify_feed",
     "withdraw",
@@ -207,6 +208,26 @@ class SignedAdvisory:
         )
 
 
+def _parse_feed_text(text: str, *, source: str) -> list[SignedAdvisory]:
+    """One JSON record per line, shared by a local file and a downloaded body.
+
+    A parse failure here must name the source and the line: whichever of
+    "the file on disk" or "what the server sent back" turns out to be
+    damaged, the reader needs to know which one without guessing.
+    """
+    out: list[SignedAdvisory] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise PublishError(f"{source} line {number} is not JSON ({exc}).") from exc
+        out.append(SignedAdvisory.from_dict(data))
+    return out
+
+
 class AdvisoryFeed:
     """A supplier's append-only feed, one JSON record per line.
 
@@ -222,19 +243,7 @@ class AdvisoryFeed:
     def read(self) -> list[SignedAdvisory]:
         if not self.path.exists():
             return []
-        out: list[SignedAdvisory] = []
-        for number, line in enumerate(self.path.read_text("utf-8").splitlines(), 1):
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise PublishError(
-                    f"{self.path} line {number} is not JSON ({exc})."
-                ) from exc
-            out.append(SignedAdvisory.from_dict(data))
-        return out
+        return _parse_feed_text(self.path.read_text("utf-8"), source=str(self.path))
 
     def last(self) -> SignedAdvisory | None:
         records = self.read()
@@ -382,6 +391,46 @@ def withdraw(
         record,
         signature=base64.b64encode(key.sign(record.signed_payload())).decode("ascii"),
     ))
+
+
+def fetch_feed(url: str, *, timeout: float = 10.0) -> str:
+    """Download a hosted feed's raw body. Writes nothing, trusts nothing.
+
+    The feed watch (``assurance.watch``) reads a local file; this is the one
+    piece that was still outside the system for a feed hosted at
+    ``GET /v1/supplier/feed/{id}`` rather than copied by hand. A network
+    failure must read as *could not check*, never as *the supplier published
+    nothing* — those two are not the same fact, and collapsing them is exactly
+    the failure mode ``verify_feed`` already refuses for an empty file. So this
+    raises loudly instead of returning an empty string, and the caller decides
+    whether to persist what came back — typically only once it also verifies.
+    """
+    if not url.startswith(("http://", "https://")):
+        raise PublishError(
+            f"{url!r} is not an http(s) URL. `fetch` downloads a hosted feed; "
+            "a feed already on disk needs no downloading."
+        )
+    try:
+        import httpx
+    except ImportError as exc:
+        raise PublishError(
+            "fetching a hosted feed needs httpx (`pip install httpx`). A feed "
+            "copied by hand onto disk needs no dependency at all."
+        ) from exc
+    try:
+        response = httpx.get(url, timeout=timeout, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise PublishError(
+            f"{url} returned HTTP {exc.response.status_code}. Treat this as "
+            "could-not-check, not as an empty feed."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise PublishError(
+            f"could not reach {url} ({exc}). Treat this as could-not-check, "
+            "not as an empty feed."
+        ) from exc
+    return response.text
 
 
 @dataclass(frozen=True)
