@@ -135,6 +135,35 @@ async def register_cases() -> dict[str, Any]:
     return await _call("GET", "/v1/cases")
 
 
+@mcp.tool()
+async def change_cases(status: str = "") -> dict[str, Any]:
+    """GET /v1/change/cases — the Active Assurance Cases queue: which machine
+    changes are open, what evidence they invalidated, and what each one still
+    needs before a human can close it.
+
+    Cell-tier only. Answers "which machine changes require review" and
+    "which cases are still open" directly from the response's ``cases`` rows
+    and ``summary`` counts — this tool never summarises on its own.
+
+    Args:
+        status: optional filter — one of open, in_review, awaiting_action,
+            awaiting_reverification, ready_to_close, closed, rejected, deferred.
+    """
+    path = "/v1/change/cases" + (f"?status={status}" if status else "")
+    return await _call("GET", path)
+
+
+@mcp.tool()
+async def change_case(case_id: str) -> dict[str, Any]:
+    """GET /v1/change/cases/{case_id} — one case in full: what changed, which
+    safety functions it affects, why evidence went stale, what is required
+    before it is ready to close, and its full decision timeline.
+
+    Cell-tier only.
+    """
+    return await _call("GET", f"/v1/change/cases/{case_id}")
+
+
 def main() -> None:
     mcp.run()
 

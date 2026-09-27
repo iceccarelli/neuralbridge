@@ -13,6 +13,10 @@ and the live [Platform status page](docs/platform.md).
 - [x] Machine safety verification (ISO/TS 15066 separation check)
 - [x] Machinery Regulation Annex III manifests, passports, staleness join
 - [x] Fleet advisory fan-out and hash/version/name matching
+- [x] Continuous Machine Change Assurance: `ChangeAssuranceCase` opened from
+      drift, a supplier advisory or an intervention, moved through
+      re-verification to a human-decided closure — see
+      `deploy/assurance/CHANGE.md`
 - [x] Counter-signed head attestation
 - [x] FastAPI backend for connection management and tool exposure
 - [x] MCP gateway for tool listing / invocation
@@ -27,6 +31,9 @@ and the live [Platform status page](docs/platform.md).
 - [ ] Full zero-trust security posture
 - [ ] Supplier advisory API (skeleton shipped, gated behind an unpriced
       sales-assigned tier — see `deploy/assurance/ADR-0001-supplier-api.md`)
+- [ ] `assurance.watch.runner` opening change-assurance cases itself, rather
+      than a caller running `assess-drift`/`assess-advisory` against its
+      output — see `deploy/assurance/ADR-0002-change-assurance.md`
 
 ## Planned, not started
 
