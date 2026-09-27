@@ -113,7 +113,8 @@ the same files in an afternoon."** Each row names that statement.
 | `watch` (015) | `assurance watch run` | **Both machines unchanged, and the world moved underneath them.** A stop-use advisory matched against a still fleet. A broken feed sync is DEGRADED, never quiet. A withdrawal is announced once: *"you were told about this one."* |
 | `watch` (016) | `assurance watch run` | The Art. 14 intake, drafted from the fleet — and **awareness never decided**. What it reports instead: *"this has been outstanding 39 hours and nobody has made the determination."* |
 | `bridge` | `assurance bridge` | Field 5 (Member States) assembled from serial numbers. `srp_prefill()` deliberately omits `notification_type` and `awareness_datetime`. |
-| `api` | `uvicorn assurance.api.service:app` | 42 endpoints. Entitlements read on **every** request; 402 (not 403) when authenticated but unentitled, because the obstacle is payment. |
+| `change` | `assurance change list` / `assurance change show` | **The queue nothing else in this codebase produces.** A `ChangeAssuranceCase` opened from a drift, an advisory or an intervention, carrying which safety function is affected and why, moved through re-verification, and closable only by a named human once the underlying evidence — not a status field — says it may be. See `deploy/assurance/CHANGE.md`. |
+| `api` | `uvicorn assurance.api.service:app` | 54 endpoints. Entitlements read on **every** request; 402 (not 403) when authenticated but unentitled, because the obstacle is payment. |
 
 ---
 
@@ -225,10 +226,17 @@ Ordered by proximity to cash, not by interest.
    supplier cannot pay us today even if they want to. Needs: `POST /v1/supplier/advisory`
    (gated), `GET /v1/supplier/feed/{id}` (free), a `supplier` tier, and a
    directory an integrator can subscribe from.
-5. **Feed sync.** The advisory watch reads a *local file*. Whatever fetches the
-   supplier's feed is outside the system, and `checks_skipped` says so. A
-   `assurance supplier fetch` with loud failure closes the last gap in the
-   recurring-revenue story.
+5. ~~**Feed sync.**~~ **Closed 2026-09-27.** `assurance supplier fetch <url>
+   --out <path> [--public-key <key>]` downloads a hosted feed
+   (`GET /v1/supplier/feed/{id}`) and writes it to the local path a `watch`
+   config's `feed:` field names. Loud failure: a network error or bad HTTP
+   status raises rather than reading as an empty feed, and a feed that fails
+   `verify_feed` is refused rather than overwriting the last good copy. The
+   watch itself still only reads a local file — that stays true on purpose,
+   see `checks_skipped` in `deploy/assurance/WATCH.md`. What is still open:
+   nobody has wired this into a scheduler (cron, systemd timer) ahead of
+   `watch run`, and there is still no supplier-tier price for anyone to pay
+   for the hosted feed this downloads from.
 
 ### P2 — Deepening the product
 
@@ -240,7 +248,18 @@ Ordered by proximity to cash, not by interest.
    untested.
 8. **Dashboard integration.** `src/dashboard/` knows nothing about assurance. The
    fleet table, the coverage view and the advisory inbox are the three screens
-   that would make this sellable to a non-engineer.
+   that would make this sellable to a non-engineer — now joined by a fourth:
+   the Active Assurance Cases queue (`GET /v1/change/cases`,
+   `assurance change list`), which today only renders as a CLI table and
+   JSON, not a page.
+8a. **Watch -> case wiring.** `assess_drift`/`assess_advisory`
+    (`src/assurance/change/service.py`) take exactly the objects
+    `assurance.watch.runner.run_watch` already produces, but the watch does
+    not call them itself. Today a case is opened by running
+    `assurance change assess-drift`/`assess-advisory` against the watch's own
+    output by hand; closing that gap turns "a case exists" into "a case opens
+    itself the day the change happens," which is the whole point. See
+    `deploy/assurance/ADR-0002-change-assurance.md`.
 9. **Palletizer extraction.** A 3,165-line authorization attack suite exists in
    another repository and has never been extracted. It is the strongest available
    evidence for the security claims and is currently invisible.

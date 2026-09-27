@@ -86,7 +86,8 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases"}
+    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
+                         "change_cases", "change_case"}
 
 
 @pytest.mark.asyncio
@@ -123,6 +124,27 @@ async def test_machine_verify_surfaces_a_real_402_not_a_fake_success(mcp_env: st
     result = await machine_verify(envelope={}, trace={}, actor="a.tester")
     assert result["status"] in (401, 402, 422)
     assert "status" in result and "body" in result
+
+
+@pytest.mark.asyncio
+async def test_change_cases_calls_the_real_api(mcp_env: str) -> None:
+    """``ASSURANCE_API_KEYS`` above is an operator key (full access), so this
+    is a real 200 over an empty queue — proving the tool calls the live
+    route rather than faking a shape."""
+    from assurance.mcp.server import change_cases
+
+    result = await change_cases()
+    assert result["status"] == 200
+    assert result["body"]["cases"] == []
+    assert result["body"]["summary"]["open"] == 0
+
+
+@pytest.mark.asyncio
+async def test_change_case_surfaces_a_real_404_not_a_fake_success(mcp_env: str) -> None:
+    from assurance.mcp.server import change_case
+
+    result = await change_case("case-doesnotexist")
+    assert result["status"] == 404
 
 
 @pytest.mark.asyncio

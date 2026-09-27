@@ -5,6 +5,8 @@
     withdraw   sign a withdrawal of an earlier advisory. It is never deleted
     verify     check a feed before anything acts on it
     list       what stands in a feed, and what was withdrawn
+    fetch      download a hosted feed (GET /v1/supplier/feed/{id}) to a local
+               file — the path a ``watch`` config's ``feed:`` field names
 
 Exit codes: 0 fine, 1 a finding — a bad signature, a gap, a feed that must not
 be acted on — and 2 the command could not run.
@@ -30,6 +32,8 @@ from assurance.supplier.publish import (
     AdvisoryFeed,
     PublishError,
     SupplierIdentity,
+    _parse_feed_text,
+    fetch_feed,
     publish,
     verify_feed,
     withdraw,
@@ -98,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     ls = verbs.add_parser("list", help="what stands in a feed")
     ls.add_argument("--feed", required=True, type=Path)
     ls.add_argument("--json", action="store_true")
+
+    ft = verbs.add_parser(
+        "fetch", help="download a hosted feed (GET /v1/supplier/feed/{id}) to disk")
+    ft.add_argument("url", help="e.g. https://host/v1/supplier/feed/<account_id>")
+    ft.add_argument("--out", required=True, type=Path,
+                     help="local file the watch config's feed: path should name")
+    ft.add_argument("--public-key", type=Path, default=None,
+                     help="refuse to write the feed unless it verifies against "
+                          "this key")
+    ft.add_argument("--expect-supplier", default="")
+    ft.add_argument("--timeout", type=float, default=10.0)
 
     return p
 
@@ -223,10 +238,40 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch(args: argparse.Namespace) -> int:
+    text = fetch_feed(args.url, timeout=args.timeout)
+    records = _parse_feed_text(text, source=args.url)
+
+    if args.public_key:
+        key = VerifyingKey.from_file(args.public_key)
+        verdict = verify_feed(records, key, expect_supplier=args.expect_supplier)
+        if not verdict.ok:
+            print(f"finding: {verdict.summary()}", file=sys.stderr)
+            for problem in verdict.problems:
+                print(f"  ! {problem}", file=sys.stderr)
+            print(f"\n  Refusing to write {args.out}: a feed that does not "
+                  "verify must not overwrite one that does, and must not "
+                  "start driving a watch either.", file=sys.stderr)
+            return 1
+        print(f"fetched and verified {verdict.summary()}")
+    else:
+        print(f"fetched {len(records)} record(s) from {args.url} — UNVERIFIED "
+              "(pass --public-key to check the signature before this feed "
+              "drives anything)")
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = args.out.with_suffix(args.out.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(args.out)
+    print(f"  wrote {args.out}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {"keygen": _cmd_keygen, "publish": _cmd_publish,
-                "withdraw": _cmd_withdraw, "verify": _cmd_verify, "list": _cmd_list}
+                "withdraw": _cmd_withdraw, "verify": _cmd_verify, "list": _cmd_list,
+                "fetch": _cmd_fetch}
     try:
         return handlers[args.command](args)
     except PublishError as exc:
