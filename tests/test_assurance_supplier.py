@@ -10,6 +10,8 @@ bypassed by accident.
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -25,6 +27,7 @@ from assurance.supplier import (
     AdvisoryFeed,
     PublishError,
     SupplierIdentity,
+    fetch_feed,
     publish,
     verify_feed,
     withdraw,
@@ -316,3 +319,146 @@ class TestCli:
         capsys.readouterr()
         assert self._sup("list", "--feed", str(tmp_path / "feed.jsonl")) == 0
         assert "Nothing here was verified" in capsys.readouterr().out
+
+
+# =====================================================================
+class _FakeResponse:
+    def __init__(self, text: str, status_code: int = 200) -> None:
+        self.text = text
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = types.SimpleNamespace()
+            raise self._httpx.HTTPStatusError(
+                f"{self.status_code}", request=request, response=self)
+
+
+def _install_fake_httpx(monkeypatch, *, text: str = "", status_code: int = 200,
+                         connect_error: bool = False) -> None:
+    """A stand-in for the real ``httpx`` module, present or not in this env.
+
+    ``supplier fetch`` must be exercisable without the real dependency
+    installed, the same way this repo tests optional adapters — real network
+    I/O in a unit test would make the test flaky about something the code
+    under test does not control.
+    """
+    fake = types.ModuleType("httpx")
+
+    class HTTPError(Exception):
+        pass
+
+    class HTTPStatusError(HTTPError):
+        def __init__(self, msg, *, request, response) -> None:
+            super().__init__(msg)
+            self.request = request
+            self.response = response
+
+    fake.HTTPError = HTTPError
+    fake.HTTPStatusError = HTTPStatusError
+
+    def _get(url, *, timeout=None, follow_redirects=None):
+        if connect_error:
+            raise fake.HTTPError("connection refused")
+        response = _FakeResponse(text, status_code)
+        response._httpx = fake
+        return response
+
+    fake.get = _get
+    monkeypatch.setitem(sys.modules, "httpx", fake)
+
+
+class TestFetchFeed:
+    """``supplier.fetch_feed`` — the piece that closes HANDOFF §5 P1 item 5:
+
+    a hosted feed reachable only by download, not just a file copied by hand.
+    """
+
+    def test_rejects_a_url_that_is_not_http(self):
+        with pytest.raises(PublishError, match="not an http"):
+            fetch_feed("plant/feed.jsonl")
+
+    def test_says_so_when_httpx_is_not_installed(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "httpx", None)
+        with pytest.raises(PublishError, match="needs httpx"):
+            fetch_feed("https://example.test/v1/supplier/feed/acct")
+
+    def test_a_network_failure_is_not_an_empty_feed(self, monkeypatch):
+        _install_fake_httpx(monkeypatch, connect_error=True)
+        with pytest.raises(PublishError, match="could-not-check"):
+            fetch_feed("https://example.test/v1/supplier/feed/acct")
+
+    def test_a_bad_status_is_not_an_empty_feed(self, monkeypatch):
+        _install_fake_httpx(monkeypatch, status_code=404)
+        with pytest.raises(PublishError, match="could-not-check"):
+            fetch_feed("https://example.test/v1/supplier/feed/acct")
+
+    def test_a_good_response_returns_the_raw_body(self, monkeypatch):
+        _install_fake_httpx(monkeypatch, text='{"format": "x"}\n')
+        assert fetch_feed("https://example.test/v1/supplier/feed/acct") == \
+            '{"format": "x"}\n'
+
+
+class TestFetchCli:
+    def _sup(self, *argv) -> int:
+        from assurance.supplier.cli import main
+
+        return main(list(argv))
+
+    def _published_body(self, tmp_path) -> str:
+        from assurance.supplier.cli import main as sup_main
+
+        sup_main(["keygen", "--out", str(tmp_path / "k.pem")])
+        (tmp_path / "identity.json").write_text(json.dumps(IDENTITY.to_dict()))
+        (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
+        sup_main(["publish", str(tmp_path / "adv.json"),
+                  "--feed", str(tmp_path / "feed.jsonl"),
+                  "--key", str(tmp_path / "k.pem"),
+                  "--identity", str(tmp_path / "identity.json")])
+        return (tmp_path / "feed.jsonl").read_text(encoding="utf-8")
+
+    def test_fetch_writes_the_downloaded_feed_to_disk(self, tmp_path, monkeypatch,
+                                                        capsys):
+        body = self._published_body(tmp_path)
+        _install_fake_httpx(monkeypatch, text=body)
+        capsys.readouterr()
+        out = tmp_path / "fetched-feed.jsonl"
+        assert self._sup("fetch", "https://example.test/v1/supplier/feed/acct",
+                         "--out", str(out),
+                         "--public-key", str(tmp_path / "k.pem.pub")) == 0
+        assert out.read_text(encoding="utf-8") == body
+        assert "verified" in capsys.readouterr().out
+
+    def test_fetch_refuses_to_write_a_feed_that_does_not_verify(
+            self, tmp_path, monkeypatch, capsys):
+        body = self._published_body(tmp_path)
+        forged = json.loads(body.splitlines()[0])
+        forged["advisory"]["title"] = "URGENT: reflash all controllers"
+        _install_fake_httpx(monkeypatch, text=json.dumps(forged) + "\n")
+        capsys.readouterr()
+        out = tmp_path / "fetched-feed.jsonl"
+        assert self._sup("fetch", "https://example.test/v1/supplier/feed/acct",
+                         "--out", str(out),
+                         "--public-key", str(tmp_path / "k.pem.pub")) == 1
+        assert not out.exists()
+        assert "Refusing to write" in capsys.readouterr().err
+
+    def test_fetch_without_a_key_still_writes_but_says_unverified(
+            self, tmp_path, monkeypatch, capsys):
+        body = self._published_body(tmp_path)
+        _install_fake_httpx(monkeypatch, text=body)
+        capsys.readouterr()
+        out = tmp_path / "fetched-feed.jsonl"
+        assert self._sup("fetch", "https://example.test/v1/supplier/feed/acct",
+                         "--out", str(out)) == 0
+        assert out.read_text(encoding="utf-8") == body
+        assert "UNVERIFIED" in capsys.readouterr().out
+
+    def test_fetch_exits_one_on_a_network_failure(self, tmp_path, monkeypatch,
+                                                     capsys):
+        _install_fake_httpx(monkeypatch, connect_error=True)
+        capsys.readouterr()
+        out = tmp_path / "fetched-feed.jsonl"
+        assert self._sup("fetch", "https://example.test/v1/supplier/feed/acct",
+                         "--out", str(out)) == 1
+        assert not out.exists()

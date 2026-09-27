@@ -57,9 +57,15 @@ dependencies = [
 # The assurance package has one runtime dependency and it is confined to
 # assurance.attest: signing needs a vetted Ed25519 implementation, and writing
 # one here would be the single worst decision in this repository. Everything
-# else works from the CLI and the library with nothing installed.
+# else works from the CLI and the library with nothing installed — the one
+# further exception is `assurance supplier fetch`, which needs an HTTP client
+# only for that one command and imports it lazily, with a clear error if it
+# is missing.
 assurance-attest = [
     "cryptography>=42.0.0",
+]
+assurance-supplier-fetch = [
+    "httpx>=0.27.0",
 ]
 assurance-api = [
     "fastapi>=0.110.0",
