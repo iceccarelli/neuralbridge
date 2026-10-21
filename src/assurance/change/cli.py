@@ -2,14 +2,24 @@
 
     assess-drift      turn a manifest divergence into a case (or update one)
     assess-advisory    turn a fleet impact report into a case (or update one)
+    assess-intervention  did a recorded intervention invalidate evidence? open a case
     list               the queue: every open case, what it needs, who owns it
     show               one case, in full — the detail page
     claim              take ownership; OPEN -> IN_REVIEW
     advance            move to the next stop the case's own required work names
     reverify           supply fresh verification evidence; may reach READY_TO_CLOSE
+    resolve-decision   a named person answers one of a case's open questions
     decide             the human decision: close, reject, or defer
+    resume             a named person takes a deferred case back up
+    replay             rebuild a case from the ledger alone and check every step
 
-Exit codes: 0 fine, 1 a case needs attention (list/show only), 2 the command
+A person is someone named with ``--actor``; a command with no ``--actor`` runs
+as automation, and automation can claim, advance and reverify but cannot
+decide, resume or resolve. ``assurance watch run`` already opens and updates
+cases itself; these commands are for the people who work them.
+
+Exit codes: 0 fine, 1 a case needs attention (list/show only) or a transition
+was refused, 2 the command
 could not run — the same convention every other domain in this CLI uses.
 
 Nothing here invents a fact. ``assess-drift`` and ``assess-advisory`` read the
@@ -27,13 +37,17 @@ import sys
 from pathlib import Path
 
 from assurance.change.model import CaseStatus
+from assurance.change.replay import reconstruct_case
 from assurance.change.service import (
     CaseTransitionError,
     advance,
     assess_advisory,
     assess_drift,
+    assess_intervention,
     claim,
     decide,
+    resolve_decision,
+    resume,
     reverify,
 )
 from assurance.change.store import CaseStore
@@ -78,6 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
     aa.add_argument("--advisory", required=True, type=Path)
     aa.add_argument("--actor", default="")
 
+    ai = verbs.add_parser("assess-intervention",
+                          help="did a recorded intervention invalidate evidence?")
+    ledger_arg(ai)
+    ai.add_argument("--manifest", required=True, type=Path,
+                    help="the machine's current manifest, JSON")
+    ai.add_argument("--intervention-id", required=True,
+                    help="an intervention already sealed in the ledger")
+    ai.add_argument("--actor", default="")
+
     ls = verbs.add_parser("list", help="the Active Assurance Cases queue")
     ledger_arg(ls)
     ls.add_argument("--status", default="")
@@ -115,6 +138,27 @@ def build_parser() -> argparse.ArgumentParser:
     dc.add_argument("--disposition", required=True, choices=("closed", "rejected", "deferred"))
     dc.add_argument("--reason", required=True)
     dc.add_argument("--actor", default="")
+
+    rd = verbs.add_parser("resolve-decision",
+                          help="answer one of a case's open human decisions")
+    ledger_arg(rd)
+    rd.add_argument("case_id")
+    rd.add_argument("--number", required=True, type=int,
+                    help="which open decision, counting from 1 as `show` lists them")
+    rd.add_argument("--resolution", required=True)
+    rd.add_argument("--actor", default="")
+
+    rs = verbs.add_parser("resume", help="DEFERRED -> IN_REVIEW; a person, with a reason")
+    ledger_arg(rs)
+    rs.add_argument("case_id")
+    rs.add_argument("--reason", required=True)
+    rs.add_argument("--actor", default="")
+
+    rp = verbs.add_parser("replay",
+                          help="rebuild a case from the ledger alone and check each step")
+    ledger_arg(rp)
+    rp.add_argument("case_id")
+    rp.add_argument("--json", action="store_true")
 
     return p
 
@@ -162,6 +206,29 @@ def _cmd_assess_advisory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_assess_intervention(args: argparse.Namespace) -> int:
+    manifest = _manifest(args.manifest)
+    ledger = EvidenceLedger(args.ledger)
+    key = manifest.machine.key
+    interventions = interventions_from_ledger(ledger, key)
+    chosen = next((i for i in interventions
+                   if i.intervention_id == args.intervention_id), None)
+    if chosen is None:
+        raise AssuranceError(
+            f"no intervention {args.intervention_id!r} is sealed for {key}. "
+            "Record it first with `assurance machinery record-change`.")
+    verifications = VerificationRecord.from_ledger(ledger, subject=key)
+    case = assess_intervention(_store(args.ledger), chosen, manifest, verifications,
+                               interventions, actor=_actor(args.actor, "watch"))
+    if case is None:
+        print(f"{chosen.intervention_id} invalidated no verified function: "
+              "no case opened.")
+        return 0
+    print(f"case {case.case_id}  [{case.status.value.upper()}]  "
+          f"{len(case.affected_functions)} function(s) affected")
+    return 0
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     status = CaseStatus(args.status) if args.status else None
     cases = _store(args.ledger).list(status=status)
@@ -174,9 +241,11 @@ def _cmd_list(args: argparse.Namespace) -> int:
     awaiting_reverif = [c for c in open_cases if c.status is CaseStatus.AWAITING_REVERIFICATION]
     degraded = [c for c in open_cases if not c.machines]
     ready = [c for c in open_cases if c.status is CaseStatus.READY_TO_CLOSE]
+    deferred = [c for c in cases if c.status is CaseStatus.DEFERRED]
     print(f"{len(open_cases)} open  {len(safety)} safety-relevant  "
           f"{len(awaiting_reverif)} awaiting re-verification  "
-          f"{len(degraded)} degraded  {len(ready)} ready for human closure")
+          f"{len(degraded)} degraded  {len(ready)} ready for human closure  "
+          f"{len(deferred)} deferred (not closed)")
     print()
     header = (f"{'CASE':<20} {'MACHINE':<22} {'STATUS':<24} {'OWNER':<16} "
              f"{'AGE':<5} NEXT ACTION")
@@ -229,6 +298,38 @@ def _cmd_reverify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_resolve_decision(args: argparse.Namespace) -> int:
+    store = _store(args.ledger)
+    case = store.get(args.case_id)
+    if case is None:
+        raise CaseTransitionError(f"no case {args.case_id!r}.")
+    if not 1 <= args.number <= len(case.human_decisions_required):
+        raise CaseTransitionError(
+            f"{args.case_id} has {len(case.human_decisions_required)} open human "
+            f"decision(s); --number {args.number} is not one of them.")
+    updated = resolve_decision(
+        store, args.case_id, decision=case.human_decisions_required[args.number - 1],
+        resolution=args.resolution, actor=_actor(args.actor, "reviewer"))
+    print(f"{updated.case_id}: {len(updated.human_decisions_required)} decision(s) still open")
+    return 0
+
+
+def _cmd_resume(args: argparse.Namespace) -> int:
+    case = resume(_store(args.ledger), args.case_id, reason=args.reason,
+                  actor=_actor(args.actor, "reviewer"))
+    print(f"{case.case_id}: {case.status.value}, owner {case.owner}")
+    return 0
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    replay = reconstruct_case(EvidenceLedger(args.ledger), args.case_id)
+    if args.json:
+        print(json.dumps(replay.to_dict(), indent=2))
+    else:
+        print(replay.summary())
+    return 0 if replay.ok else 1
+
+
 def _cmd_decide(args: argparse.Namespace) -> int:
     case = decide(_store(args.ledger), args.case_id, disposition=args.disposition,
                  reason=args.reason, actor=_actor(args.actor, "reviewer"))
@@ -240,8 +341,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {
         "assess-drift": _cmd_assess_drift, "assess-advisory": _cmd_assess_advisory,
+        "assess-intervention": _cmd_assess_intervention,
         "list": _cmd_list, "show": _cmd_show, "claim": _cmd_claim,
         "advance": _cmd_advance, "reverify": _cmd_reverify, "decide": _cmd_decide,
+        "resolve-decision": _cmd_resolve_decision, "resume": _cmd_resume,
+        "replay": _cmd_replay,
     }
     try:
         return handlers[args.command](args)
