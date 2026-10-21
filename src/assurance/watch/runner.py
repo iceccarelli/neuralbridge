@@ -38,6 +38,7 @@ from typing import Any
 
 from assurance.change.model import ChangeAssuranceCase, TriggerType
 from assurance.change.service import (
+    INCOMPLETE_COLLECTION_MARK,
     assess_advisory,
     assess_drift,
     assess_intervention,
@@ -110,6 +111,11 @@ class MachineOutcome:
     affected_functions: tuple[str, ...] = ()
     detail: str = ""
     warnings: tuple[str, ...] = ()
+    #: False when the plan named items the collection did not find or read. An
+    #: incomplete look can open a case (the drift it shows is real) but it is
+    #: never a configuration the machine was in: it cannot reopen, advance or
+    #: close anything.
+    collection_complete: bool = True
     #: The change-assurance case this run opened or updated for the drift, or
     #: ``""`` when there was none (no drift, a drift that is not safety-relevant,
     #: or a dry run, which writes nothing).
@@ -141,6 +147,7 @@ class MachineOutcome:
             "affected_functions": list(self.affected_functions),
             "detail": self.detail,
             "warnings": list(self.warnings),
+            "collection_complete": self.collection_complete,
             "case_id": self.case_id,
             "case_status": self.case_status,
             "intervention_case_ids": list(self.intervention_case_ids),
@@ -254,6 +261,7 @@ def _seal_observation(
     ledger: EvidenceLedger, target: WatchTarget, machine_key: str,
     configuration_hash: str, status: str, actor: Actor, detail: str,
     observed_at: datetime,
+    complete: bool = True, missing: tuple[str, ...] = (),
 ) -> Evidence:
     """Record that this machine was looked at, whatever the look found.
 
@@ -272,6 +280,8 @@ def _seal_observation(
             "plan": target.plan,
             "root": target.root,
             "detail": detail,
+            "complete": complete and status != "uncollectable",
+            "missing": list(missing),
         },
         actor=actor,
         origin=Origin(system="assurance.watch", reference=machine_key,
@@ -453,6 +463,15 @@ def run_watch(
             continue
 
         manifest = result.manifest
+        missing_items = tuple(o.item_id for o in (*result.missing, *result.unreadable))
+        if not result.complete:
+            # Persisted on the manifest record itself, because a case judging
+            # "did this machine leave that configuration" reads manifests and
+            # must be able to tell a partial look from a configuration.
+            manifest = replace(
+                manifest,
+                notes=(manifest.notes + " " if manifest.notes else "")
+                + f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]")
         observed = manifest.configuration_hash()
         history = manifests_from_ledger(ledger, machine_key)
         baseline = history[-1] if history else None
@@ -544,6 +563,7 @@ def run_watch(
             newly_uncovered=newly, still_uncovered=still, recovered=recovered,
             drift_severity=drift_severity, drift_items=drift_items,
             affected_functions=affected, detail=detail, warnings=tuple(warnings),
+            collection_complete=result.complete,
             case_id=case.case_id if case else "",
             case_status=case.status.value if case else "",
             intervention_case_ids=intervention_cases,
@@ -551,7 +571,8 @@ def run_watch(
 
         if seal:
             _seal_observation(ledger, target, machine_key, observed, status,
-                              actor, detail, started)
+                              actor, detail, started, complete=result.complete,
+                              missing=missing_items)
 
     # A machine whose last look is older than the declared cadence.
     cutoff = started - timedelta(hours=config.max_age_hours)
