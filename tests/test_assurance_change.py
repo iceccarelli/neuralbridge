@@ -1144,11 +1144,16 @@ class TestHttpDecisionsNeedAPerson:
                         headers=headers)
         case_id = r.json()["case"]["case_id"]
 
-        r = client.post(f"/v1/change/cases/{case_id}/decision",
-                        json={"disposition": "rejected", "reason": "not real"},
-                        headers=headers)
-        assert r.status_code == 409
-        assert "named person" in r.json()["detail"]
+        # No actor, or a blank one, never reaches the domain: the API refuses it
+        # at the door (422). The domain's own refusal of a non-person actor is
+        # tested at service level (TestGuards), so CLI and MCP inherit it too.
+        for actor in ({}, {"actor": ""}, {"actor": "   "}):
+            r = client.post(f"/v1/change/cases/{case_id}/decision",
+                            json={"disposition": "rejected", "reason": "not real", **actor},
+                            headers=headers)
+            assert r.status_code == 422, actor
+        still_open = client.get(f"/v1/change/cases/{case_id}", headers=headers).json()
+        assert still_open["status"] == "open"
 
         r = client.post(f"/v1/change/cases/{case_id}/decision",
                         json={"disposition": "rejected", "reason": "not real",
