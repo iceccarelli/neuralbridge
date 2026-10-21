@@ -17,6 +17,7 @@ const apiBase = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || 'http://127.0.0.1:8
 type Seed = {
   key_a: string;
   key_b: string;
+  key_new: string;
   key_register: string;
   key_d: string;
   key_e: string;
@@ -219,6 +220,15 @@ test.describe('Assurance workspace', () => {
       headers: h, data: { owner: 'attacker', actor: 'attacker' },
     });
     expect([404, 409]).toContain(claim.status());
+  });
+
+  test('a brand-new account with no ledger yet loads cleanly (its first requests create the ledger)', async ({ page }) => {
+    await enter(page, seed.key_new);
+    await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/No cases\./)).toBeVisible();
+    // No refusal or server-error banner of this page's own (Next.js injects an
+    // unrelated role=alert route announcer, so match the page's banner class).
+    await expect(page.locator('p.playground-error')).toHaveCount(0);
   });
 
   test('a Register-plan key gets the plan\'s real refusal, not a view', async ({ page }) => {

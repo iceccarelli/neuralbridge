@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from assurance.core.sqlite import enable_wal, retry_locked
+
 #: v2 (tenant isolation): ``owner`` added to ``connections`` and ``plans``.
 #: A v1 file is migrated additively in place — existing rows get owner ``''``
 #: (legacy: operator-visible only; see ``neuralbridge.ai.tenancy``).
@@ -168,9 +170,9 @@ class AiStore:
                         f"{self.path} was written by ai-store schema {row[0]}; this build speaks "
                         f"{SCHEMA_VERSION}. Refusing rather than guessing."
                     )
-            db.executescript(_SCHEMA)
-            self._migrate(db)
-            db.executescript(_OWNER_INDEXES)
+            retry_locked(lambda: db.executescript(_SCHEMA), db=db)
+            retry_locked(lambda: self._migrate(db), db=db)
+            retry_locked(lambda: db.executescript(_OWNER_INDEXES), db=db)
         finally:
             db.close()
 
@@ -178,7 +180,14 @@ class AiStore:
     def _migrate(db: sqlite3.Connection) -> None:
         """Additive v1 -> v2: add ``owner`` (default ``''`` = legacy) to
         connections and plans, then stamp the version. Idempotent and safe
-        to race (``BEGIN IMMEDIATE``)."""
+        to race (``BEGIN IMMEDIATE``). An up-to-date file takes no write lock."""
+        current = db.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        if current is not None and int(current[0]) == SCHEMA_VERSION and all(
+            "owner" in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+            for table in ("connections", "plans")
+        ):
+            return
         db.execute("BEGIN IMMEDIATE")
         try:
             for table in ("connections", "plans"):
@@ -199,7 +208,7 @@ class AiStore:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         if str(self.path) != ":memory:":
-            db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(db)
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
