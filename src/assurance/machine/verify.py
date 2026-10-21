@@ -25,6 +25,7 @@ shipping.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -46,7 +47,13 @@ __all__ = [
 
 #: Bumped when the meaning of a check changes. Recorded in every result so an
 #: old bundle is never silently reinterpreted under new rules.
-ENGINE_VERSION = "1"
+#:
+#: 2: a recording gap beside a separation-controlled sample makes
+#:    ``ssm_separation`` unchecked, a contact force recorded where contact is not
+#:    permitted makes ``pfl_contact`` unchecked, ``pfl_contact`` is unchecked
+#:    while any contact sample went unevaluated (no area, or a region the table
+#:    lacks), and inputs must be finite numbers (earlier engines passed NaN).
+ENGINE_VERSION = "2"
 
 
 class CheckOutcome(StrEnum):
@@ -204,8 +211,14 @@ class VerificationResult:
         for c in self.checks:
             mark = {"verified": "ok  ", "violated": "FAIL", "not_applicable": "n/a ",
                     "unchecked": "??  "}[c.outcome.value]
-            margin = (f"  worst margin {c.worst_margin:.1f} {c.unit}"
-                      if c.worst_margin is not None else "")
+            if c.violations:
+                # The margin of the samples that passed says nothing about how
+                # badly the others failed; the figure that matters is the shortfall.
+                margin = (f"  worst shortfall "
+                          f"{max(v.exceedance for v in c.violations):.1f} {c.unit}")
+            else:
+                margin = (f"  worst margin {c.worst_margin:.1f} {c.unit}"
+                          if c.worst_margin is not None else "")
             lines.append(f"  [{mark}] {c.name} ({c.samples_examined} samples)"
                          f"{margin}")
             if c.reason:
@@ -308,6 +321,7 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
     examined = 0
     no_separation_reported = 0
     extrapolated = 0
+    declared_speed_used = 0
 
     relevant = [(i, s) for i, s in enumerate(trace.samples)
                 if s.mode.separation_is_the_control]
@@ -331,6 +345,8 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
         )
         if breakdown.rests_on_extrapolation:
             extrapolated += 1
+        if breakdown.human_speed_source == "declared":
+            declared_speed_used += 1
         required = breakdown.total_mm
         if s.separation < required:
             violations.append(Violation(
@@ -358,6 +374,15 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             "measurement."
         )
 
+    if declared_speed_used:
+        caveats.append(
+            f"{declared_speed_used} of {examined} compared samples used the envelope's "
+            f"declared approach speed ({envelope.human_approach_speed_mm_s:.0f} mm/s) "
+            "as the person's closing speed, because the trace recorded none. That is "
+            "an assumption, not a measurement, and the envelope carries no evidence "
+            "basis for it."
+        )
+
     if examined == 0:
         return CheckResult(
             name="ssm_separation", outcome=CheckOutcome.UNCHECKED,
@@ -366,6 +391,21 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             samples_examined=0, unit="mm",
             reason="every sample in a separation-controlled mode reported no "
                    "detected person, so no separation was ever compared.",
+        ), caveats
+
+    gap_beside_ssm = trace.gap_touches(lambda s: s.mode.separation_is_the_control)
+    if gap_beside_ssm and not violations:
+        first = next((a, b) for a, b in trace.gaps)
+        return CheckResult(
+            name="ssm_separation", outcome=CheckOutcome.UNCHECKED,
+            statement="Measured separation met the ISO/TS 15066 protective "
+                      "separation distance at every instant.",
+            samples_examined=examined, violations=(), worst_margin=worst, unit="mm",
+            reason=f"the recording has a gap (t={first[0]:.3f}s to t={first[1]:.3f}s, "
+                   "the first of several if more) beside a separation-controlled "
+                   "sample. 'Every instant' cannot be established across an interval "
+                   "nobody recorded, so the samples that were compared are not "
+                   "enough for a verified result.",
         ), caveats
 
     return CheckResult(
@@ -418,6 +458,36 @@ def _stop_characterisation(envelope: SafetyEnvelope, trace: Trace) -> CheckResul
 
 
 def _pfl_contact(
+    envelope: SafetyEnvelope, trace: Trace, limits: LimitsTable | None,
+) -> tuple[CheckResult, list[str]]:
+    """Contact within limits where permitted — and contact where it is not.
+
+    A nonzero force recorded in a mode that does not permit contact is not
+    evaluated against any limit (the table is about permitted contact), and it is
+    not nothing: the check cannot read as verified or not applicable beside it.
+    """
+    result, caveats = _pfl_contact_permitted(envelope, trace, limits)
+    stray = [(i, s) for i, s in enumerate(trace.samples)
+             if not s.mode.contact_is_permitted
+             and s.contact_force is not None and s.contact_force > 0]
+    if not stray:
+        return result, caveats
+    i0, s0 = stray[0]
+    note = (f"{len(stray)} sample(s) recorded a nonzero contact force in a mode that "
+            f"does not permit contact (first: t={s0.t:.3f}s, {s0.contact_force:.1f} N, "
+            f"{s0.mode.value}). Those samples were not evaluated against any limit.")
+    caveats.append(note)
+    if result.outcome in (CheckOutcome.VERIFIED, CheckOutcome.NOT_APPLICABLE):
+        result = CheckResult(
+            name=result.name, outcome=CheckOutcome.UNCHECKED,
+            statement=result.statement, samples_examined=result.samples_examined,
+            violations=result.violations, worst_margin=result.worst_margin,
+            unit=result.unit, reason=note,
+        )
+    return result, caveats
+
+
+def _pfl_contact_permitted(
     envelope: SafetyEnvelope, trace: Trace, limits: LimitsTable | None,
 ) -> tuple[CheckResult, list[str]]:
     caveats: list[str] = []
@@ -514,6 +584,26 @@ def _pfl_contact(
             reason="no contact sample could be matched to a region in the limits table.",
         ), caveats
 
+    # A violation stands whatever else went unevaluated. Without one, a pass needs
+    # every contact sample evaluated against both force and pressure: a sample with
+    # no area, or in a region the table lacks, was not checked, and "verified"
+    # beside a caveat saying so is a pass from missing data.
+    if not violations and (unknown_regions or without_area):
+        gaps = []
+        if without_area:
+            gaps.append(f"{without_area} contact sample(s) recorded a force with no "
+                        "contact area, so their pressure was not checked")
+        if unknown_regions:
+            gaps.append("contact credited to body region(s) "
+                        + ", ".join(sorted(unknown_regions))
+                        + " was not checked: the limits table does not cover them")
+        return CheckResult(
+            name="pfl_contact", outcome=CheckOutcome.UNCHECKED,
+            statement=statement, samples_examined=examined, worst_margin=worst,
+            unit="N", reason="; ".join(gaps) + ". Every contact sample must be "
+                             "evaluated for this check to be verified.",
+        ), caveats
+
     return CheckResult(
         name="pfl_contact",
         outcome=CheckOutcome.VIOLATED if violations else CheckOutcome.VERIFIED,
@@ -546,6 +636,23 @@ def _mode_consistency(envelope: SafetyEnvelope, trace: Trace) -> CheckResult:
                   "automatic mode.",
         samples_examined=len(trace.samples), violations=tuple(violations), unit="mm",
     )
+
+
+def _age_of(figure_date: str, trace: Trace) -> str:
+    """How old a figure was on the day the trace began, in words. Deterministic."""
+    if not figure_date:
+        return "is undated"
+    try:
+        if "T" in figure_date or " " in figure_date:
+            d = datetime.fromisoformat(figure_date.replace("Z", "+00:00")).date()
+        else:
+            d = date.fromisoformat(figure_date)
+    except ValueError:
+        return f"has an unreadable date {figure_date!r}"
+    days = (trace.started_at.date() - d).days
+    if days < 0:
+        return (f"is dated {figure_date}, {-days} day(s) AFTER the trace began")
+    return f"is dated {figure_date}, {days} day(s) before the trace began"
 
 
 # -- the entry point ------------------------------------------------------
@@ -590,10 +697,27 @@ def verify(
         f"{envelope.stop.stop_time_s:.3f} s were taken from the envelope and not "
         "re-measured from this trace."
     )
+    caveats.append(
+        "age of the figures this verdict rests on, against the day the trace began: "
+        f"stopping {_age_of(stop_basis.date, trace)}; sensing "
+        f"{_age_of(envelope.uncertainty.basis.date, trace)}. No maximum age is applied: "
+        "a stopping distance measured years ago on a machine since modified passes "
+        "exactly as a fresh one does, and whether it still describes the machine is "
+        "the manufacturer's call."
+    )
     if trace.provenance.value == "simulation":
         caveats.append(
             "the trace is simulated. Nothing here is evidence about the physical "
             "machine, only about the model that produced these samples."
+        )
+    if trace.rate_disagrees_with_data:
+        observed = trace.observed_period_s or 0.0
+        caveats.append(
+            f"the trace declares a sample rate of {trace.sample_rate_hz:g} Hz but its "
+            f"samples are a median {observed:.4g} s apart "
+            f"(about {1.0 / observed if observed else float('inf'):.4g} Hz). The "
+            "declared rate decides what counts as a gap, so gaps were measured against "
+            "the shorter of the two periods; correct the declaration."
         )
     if trace.gaps:
         caveats.append(

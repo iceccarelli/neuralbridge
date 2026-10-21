@@ -29,6 +29,7 @@ from typing import Any
 from assurance.core.identity import format_utc, utc_now
 from assurance.fleet.advisory import AdvisorySeverity, ComponentAdvisory, MatchBasis, match_item
 from assurance.fleet.registry import Fleet
+from assurance.machinery.manifest import ManifestSource
 from assurance.machinery.staleness import Coverage
 
 __all__ = ["Exposure", "FunctionExposure", "ImpactReport", "assess_impact"]
@@ -112,6 +113,9 @@ class ImpactReport:
     machines_in_fleet: int
     exposures: tuple[Exposure, ...]
     checks_skipped: tuple[str, ...]
+    #: Whether the ledger the fleet was read from verified end to end. A fleet
+    #: read from a chain that does not verify cannot support "nothing matched".
+    chain_verified: bool = True
 
     @property
     def machines_affected(self) -> tuple[str, ...]:
@@ -140,9 +144,15 @@ class ImpactReport:
 
     @property
     def verdict(self) -> str:
-        """``clear`` | ``exposed`` | ``needs_review``."""
+        """``clear`` | ``exposed`` | ``needs_review``.
+
+        ``clear`` means the fleet was read from a ledger that verifies and no
+        enrolled machine matches. If the chain does not verify, an empty list of
+        matches is not evidence of anything — records may have been dropped — so
+        the answer is ``needs_review``.
+        """
         if not self.exposures:
-            return "clear"
+            return "clear" if self.chain_verified else "needs_review"
         if any(e.newly_in_question for e in self.exposures):
             return "exposed"
         return "needs_review"
@@ -158,6 +168,7 @@ class ImpactReport:
             "assessed_at": self.assessed_at,
             "verdict": self.verdict,
             "machines_in_fleet": self.machines_in_fleet,
+            "chain_verified": self.chain_verified,
             "machines_affected": list(self.machines_affected),
             "functions_newly_in_question": self.functions_newly_in_question,
             "exposures": [e.to_dict() for e in self.exposures],
@@ -170,6 +181,9 @@ class ImpactReport:
             "exposed": "EXPOSED — standing safety evidence is now in question",
             "needs_review": "NEEDS REVIEW — matches found, none with standing evidence",
         }[self.verdict]
+        if self.verdict == "needs_review" and not self.exposures:
+            head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
+                    "verify, so the absence of a match is not evidence")
         lines = [
             f"{self.advisory_id} ({self.issued_by}, {self.severity.value}) — {head}",
             f"  {self.title}",
@@ -277,6 +291,19 @@ def assess_impact(advisory: ComponentAdvisory, fleet: Fleet) -> ImpactReport:
     if not fleet.chain_verified:
         caveats.insert(0, "THE LEDGER CHAIN DOES NOT VERIFY. Every statement here is "
                           "drawn from a store whose integrity is in question.")
+    declared_only = [r.machine_key for r in fleet.records
+                     if r.manifest.source is not ManifestSource.AS_FOUND]
+    if declared_only:
+        caveats.append(
+            f"{len(declared_only)} machine(s) are known only from a declared baseline "
+            "(" + ", ".join(declared_only[:5]) + ("…" if len(declared_only) > 5 else "")
+            + "): what is installed on them was never observed, so a match or a clear "
+            "here is about the paperwork."
+        )
+    if len(fleet) == 0:
+        caveats.insert(0, (
+            "no machine is enrolled in this ledger, so no machine was assessed. A "
+            "clear result here is about an empty fleet, not about any machine."))
     caveats.append(
         "this matches the advisory against the latest sealed manifest for each "
         "machine. A machine changed since its last manifest, or never enrolled, is "
@@ -294,4 +321,5 @@ def assess_impact(advisory: ComponentAdvisory, fleet: Fleet) -> ImpactReport:
         machines_in_fleet=len(fleet),
         exposures=tuple(exposures),
         checks_skipped=tuple(dict.fromkeys(caveats)),
+        chain_verified=fleet.chain_verified,
     )

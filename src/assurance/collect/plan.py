@@ -82,16 +82,22 @@ class VersionSource:
             return ""
         if self.kind == "regex":
             m = re.search(self.value, text)
-            return m.group(1).strip() if m else ""
+            found = m.group(1) if m else None
+            return found.strip() if found else ""
         try:
             doc: Any = json.loads(text)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             return ""
         for part in self.value.split("."):
             if not isinstance(doc, dict) or part not in doc:
                 return ""
             doc = doc[part]
-        return str(doc) if not isinstance(doc, dict | list) else ""
+        # Only a string or a whole number is a version label. null would read as
+        # the label "None", true as "True", and the number 3.10 as "3.1" — a
+        # different version. Those are unknown, not guessed.
+        if isinstance(doc, bool) or not isinstance(doc, str | int):
+            return ""
+        return str(doc).strip()
 
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "value": self.value, "encoding": self.encoding}

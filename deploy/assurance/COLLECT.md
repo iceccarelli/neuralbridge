@@ -1,7 +1,7 @@
 # Collection: getting a real machine into the system
 
-Everything else here assumes a manifest exists. Before this, that meant
-hand-writing JSON, which meant nobody did it.
+Everything else here assumes a manifest exists. Without this, that means
+hand-writing JSON.
 
 ```bash
 assurance collect check-plan plan.json
@@ -22,12 +22,9 @@ none of them are byte-stable. They carry the time of export, the name of the
 engineer who pressed the button, a sequence number, a checksum of themselves.
 
 Export the same unchanged machine twice and the bytes differ. Hash the file as
-it is and **every weekly collection reports drift on every machine**, the
-customer stops reading the report inside a fortnight, and the one week the
-firmware really did change is the week nobody looks.
-
-This is why configuration-drift tools fail in this industry. It is not a hard
-problem to describe and it is the whole game.
+it is and **every weekly collection reports drift on every machine**. A report
+that always cries wolf gets ignored, and the one week the firmware really did
+change is then the week nobody looks.
 
 ## The probe
 
@@ -71,6 +68,41 @@ Three constraints keep them honest:
   fingerprint that produced its hash, so a digest taken under a changed rule is
   visibly a different measurement rather than an invisible change of machine.
   The `note` does not affect the fingerprint — wording is not measurement.
+
+## Hostile and broken exports
+
+A folder of exports is data from a laptop that has been through a vendor tool and
+a USB stick. The collector may report a digest or report that it could not; it
+never reports a digest of part of a file. An item that could not be read is
+`unreadable`, the collection is **INCOMPLETE**, the exit status is 1, and nothing
+reads as unchanged.
+
+- a rule that drops bytes needs a non-blank `note`; a `raw` rule takes no
+  patterns, keys or members; an unknown encoding or an archive member name that is
+  absolute or contains `..` is refused when the plan is read
+- archives are never extracted. A declared member listed twice, a symbolic link, a
+  directory, an encrypted or corrupt member, an archive over the entry cap, or a
+  member whose declared size is over the cap (a zip bomb) is refused before it is
+  inflated. A declared member that is absent makes the item unreadable
+- text and JSON are read only up to 64 MiB; raw files are streamed up to 4 GiB; a
+  single text line over 1 MiB, JSON nested too deep, a JSON repeated key, a NaN or
+  Infinity constant, or a file that hashes to nothing (empty, or every line
+  dropped) is refused
+- text lines end at CR, LF or CRLF only; other separators stay inside the line
+- a link that leaves the collection root is not followed; more than 10,000 files
+  or 4 GiB for one item, or running past the time budget (`max_seconds`, default
+  30 minutes), makes the item unreadable
+- a version is read only from a file under 8 MiB, and a JSON `null`, boolean or
+  non-integer number is not a version label
+- `collect run --ledger` does **not** seal an incomplete collection unless
+  `--seal-incomplete` is given: a sealed manifest becomes the machine's current one
+  with the missing items absent from every later comparison
+- `probe` is `stable` only if every rule ran on both exports and held; a rule whose
+  files were in neither export, or which could not be read, makes it `incomplete`
+
+These limits are sanity limits, not figures from a standard, and Python's `re` has
+no timeout: a pathological pattern in a plan can still run for a long time on a
+long line.
 
 ## What collection refuses to do
 

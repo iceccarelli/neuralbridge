@@ -9,10 +9,9 @@ hook for at once.
     impact       that advisory fanned out to serial numbers and safety functions
     declaration  the Declaration of Conformity, bound to a configuration hash
 
-The advisory fan-out is the part that gets more valuable with every machine
-enrolled, and the part nobody else can build: it needs the manifest fleet, the
-item→function→check map, and a coverage position, and those only exist together
-here.
+The advisory fan-out is the part that gets more useful with every machine
+enrolled: it needs the manifest fleet, the item→function→check map, and a
+coverage position, and those exist together here.
 """
 
 from assurance.fleet.advisory import (
