@@ -115,6 +115,15 @@ _FREE_QUERY_PAYLOAD_OPS: dict[str, frozenset[str]] = {
 }
 
 
+def is_connection_key(adapter_type: str) -> bool:
+    """True for a per-connection registry key (``postgres:<connection_id>``,
+    see ``connections.create_connection``) as opposed to a plain adapter-type
+    key. Those instances are tenants' bound connections: the raw adapters
+    route must not expose or execute them (it has no owner check — only
+    ``/ai`` does), except to the operator."""
+    return ":" in adapter_type
+
+
 def _payload_looks_safe(adapter_type: str, operation: str, params: dict[str, Any]) -> bool:
     """True if ``operation`` on ``adapter_type`` has no extra payload guard,
     or the guard's regex matches the relevant param. False means the

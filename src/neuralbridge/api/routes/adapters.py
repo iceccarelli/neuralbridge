@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from neuralbridge.ai.entitlements import Principal, current_principal
-from neuralbridge.ai.guard import enforce_write_gate
+from neuralbridge.ai.entitlements import Principal, current_principal, scope_for
+from neuralbridge.ai.guard import enforce_write_gate, is_connection_key
 from neuralbridge.ai.identity import Actor, get_current_actor
 from neuralbridge.api.dependencies import (
     get_adapter_registry,
@@ -50,14 +50,31 @@ class AdapterResponse(BaseModel):
     error: str | None = None
 
 
+def _hide_connection_key(adapter_type: str, principal: Principal) -> None:
+    """Per-connection registry keys (``postgres:<connection_id>``) belong to
+    the tenant that bound them and are reachable only through ``/ai``, which
+    enforces ownership. Here they read as nonexistent to everyone except the
+    operator — otherwise a paid caller who learned (or guessed) another
+    account's connection id could run SQL on it through this route."""
+    if is_connection_key(adapter_type) and not scope_for(principal).is_operator:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Adapter '{adapter_type}' not found.",
+        )
+
+
 # ── Endpoints ────────────────────────────────────────────────
 
 @router.get("", summary="List registered adapters")
 async def list_adapters(
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
-    """Return all registered adapter types and their metadata."""
-    adapter_types = registry.list_all()
+    """Return all registered adapter types and their metadata. Tenants'
+    bound connections (``postgres:<id>`` keys) are listed for the operator
+    only."""
+    is_operator = scope_for(principal).is_operator
+    adapter_types = [at for at in registry.list_all() if is_operator or not is_connection_key(at)]
     adapters_info = []
     for at in adapter_types:
         adapter = registry.get(at)
@@ -77,8 +94,10 @@ async def list_adapters(
 async def get_adapter(
     adapter_type: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
     """Return detailed information about a specific adapter."""
+    _hide_connection_key(adapter_type, principal)
     adapter = registry.get(adapter_type)
     if not adapter:
         raise HTTPException(
@@ -119,6 +138,7 @@ async def execute_adapter(
     capability for free by skipping `/ai`. Every other adapter type is
     unaffected by that gate (see the guard module's own docstring for why).
     """
+    _hide_connection_key(adapter_type, principal)
     await enforce_write_gate(adapter_type, request.operation, request.params, principal)
     try:
         result = await router_dep.route(
@@ -126,6 +146,7 @@ async def execute_adapter(
             operation=request.operation,
             params=request.params,
             actor=actor.as_audit_string(),
+            owner=scope_for(principal).owner,
         )
         return result
     except ValueError as exc:
@@ -142,8 +163,10 @@ async def execute_adapter(
 async def validate_credentials(
     adapter_type: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
     """Test whether the configured credentials for an adapter are valid."""
+    _hide_connection_key(adapter_type, principal)
     adapter = registry.get(adapter_type)
     if not adapter:
         raise HTTPException(
@@ -158,8 +181,10 @@ async def validate_credentials(
 async def get_config_schema(
     adapter_type: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
     """Return the JSON Schema for the adapter's YAML configuration."""
+    _hide_connection_key(adapter_type, principal)
     adapter = registry.get(adapter_type)
     if not adapter:
         raise HTTPException(

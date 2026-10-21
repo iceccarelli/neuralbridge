@@ -26,6 +26,7 @@ from fastapi import HTTPException, status
 
 from assurance.api.deps import _operator_keys, auth_mode, current_principal, get_accounts, spend
 from assurance.billing.accounts import Account, AccountStore, Principal
+from neuralbridge.ai.tenancy import OPERATOR_OWNER, Scope
 
 __all__ = [
     "Principal",
@@ -33,10 +34,33 @@ __all__ = [
     "get_accounts",
     "require_ai_control_plane",
     "resolve_principal",
+    "scope_for",
     "spend_ai_read",
 ]
 
 _OPERATOR = Account(id="operator", email="", company="operator", tier="cell", status="active")
+
+
+def scope_for(principal: Principal) -> Scope:
+    """The tenancy scope of a *validated* principal — the only place an
+    ``owner`` is ever derived. Nothing the caller sends other than the API
+    key (which ``current_principal`` has already resolved or 401'd) reaches
+    this function.
+
+    * operator key, or open mode (where ``require_ai_control_plane`` also
+      treats the anonymous caller as the operator) -> operator, full access;
+    * a customer account -> its server-issued account id;
+    * anonymous -> its address subject; it owns nothing, so it can only ever
+      match the shared seeded demo.
+    """
+    account = principal.account
+    if account is None:
+        if auth_mode() == "open":
+            return Scope(owner=OPERATOR_OWNER, is_operator=True)
+        return Scope(owner=principal.anonymous_subject or "anonymous:unknown")
+    if account.id == _OPERATOR.id:
+        return Scope(owner=OPERATOR_OWNER, is_operator=True)
+    return Scope(owner=account.id)
 
 
 async def require_ai_control_plane(principal: Principal) -> Principal:
