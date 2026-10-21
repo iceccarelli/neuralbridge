@@ -129,6 +129,12 @@ class TestTheHostedApiRefusesATamperedLedger:
              {"owner": "v.grimaldi", "actor": "v.grimaldi"}),
             ("POST", f"/v1/change/cases/{cid}/decision",
              {"disposition": "rejected", "reason": "r", "actor": "v.grimaldi"}),
+            # opening a case never goes through a lookup, so only the store's own
+            # guard stops it
+            ("POST", "/v1/change/assess/drift",
+             {"baseline": _change.manifest(manifest_id="BASE").to_dict(),
+              "observed": _change.manifest(_change.item(content_hash="e" * 64),
+                                           manifest_id="NOW2").to_dict()}),
         ):
             r = client.request(method, url, json=body, headers=headers)
             assert r.status_code == 500, (url, r.status_code, r.text)
@@ -287,6 +293,23 @@ class TestAnEmptyBundleVerifiesNothing:
         path = tmp_path / "ok.json"
         path.write_text(json.dumps(ledger.export(subject=case.case_id)), encoding="utf-8")
         assert run_cli("evidence", "verify", path).returncode == 0
+
+
+def test_opening_a_case_on_a_broken_chain_is_refused_by_the_store_itself(tmp_path):
+    from assurance.change import assess_drift
+    from assurance.change.store import ChainBrokenError
+    from assurance.machinery.divergence import compare
+
+    ledger = EvidenceLedger(tmp_path / "l.db")
+    store = CaseStore(ledger)
+    case, _ = _change.drive(ledger, store, _change.CaseStatus.OPEN)
+    tamper(ledger.path, case.case_id)
+    before = len(ledger)
+    observed = _change.manifest(_change.item(content_hash="e" * 64), manifest_id="N2")
+    with pytest.raises(ChainBrokenError):
+        assess_drift(store, compare(_change.manifest(manifest_id="BASE"), observed),
+                     observed, [], [], actor=_change.ENG)
+    assert len(ledger) == before
 
 
 def test_case_store_requires_an_intact_chain(tmp_path):
