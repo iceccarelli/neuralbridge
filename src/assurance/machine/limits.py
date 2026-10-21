@@ -23,18 +23,30 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 from assurance.core.tiers import AssuranceTier
+from assurance.machine.quantities import FORCE_MAX_N, PRESSURE_MAX_N_CM2, number
 
 __all__ = ["BodyRegionLimit", "LimitsError", "LimitsTable", "SCHEMA"]
 
 
 class LimitsError(AssuranceError):
     """A limits table is malformed, or a region was asked for that it lacks."""
+
+
+def _num(value: Any, name: str, **kw: Any) -> float:
+    return number(value, name, exc=LimitsError, **kw)
+
+
+#: A plausibility rail on the declared multiplier, like those in
+#: :mod:`assurance.machine.quantities`: it is not taken from any standard. It only
+#: keeps a typo or a unit slip from reading as a limit.
+TRANSIENT_MULTIPLIER_MAX = 1000.0
 
 
 SCHEMA = """\
@@ -66,8 +78,10 @@ class BodyRegionLimit:
     max_force_n: float
 
     def __post_init__(self) -> None:
-        if self.max_pressure_n_cm2 <= 0 or self.max_force_n <= 0:
-            raise LimitsError(f"region {self.key!r} has a non-positive limit.")
+        _num(self.max_pressure_n_cm2, f"region {self.key!r} max_pressure_n_cm2",
+             maximum=PRESSURE_MAX_N_CM2, positive=True)
+        _num(self.max_force_n, f"region {self.key!r} max_force_n",
+             maximum=FORCE_MAX_N, positive=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,8 +110,21 @@ class LimitsTable:
                 "a limits table must name the edition it came from. 'ISO/TS 15066' "
                 "without a year is not an edition."
             )
-        if self.transient_multiplier <= 0:
-            raise LimitsError("transient_multiplier must be positive.")
+        _num(self.transient_multiplier, "transient_multiplier",
+             maximum=TRANSIENT_MULTIPLIER_MAX, positive=True)
+        if self.verified_on:
+            try:
+                when = date.fromisoformat(self.verified_on)
+            except ValueError as exc:
+                raise LimitsError(
+                    f"verified_on {self.verified_on!r} is not an ISO date (YYYY-MM-DD). "
+                    "A verification that cannot be dated cannot be told from none."
+                ) from exc
+            if when > datetime.now(UTC).date() + timedelta(days=1):
+                raise LimitsError(
+                    f"verified_on {self.verified_on} is in the future. A transcription "
+                    "cannot already have been checked on a day that has not happened."
+                )
 
     @property
     def is_verified(self) -> bool:
@@ -166,21 +193,33 @@ class LimitsTable:
         raw = d.get("regions")
         if not isinstance(raw, dict):
             raise LimitsError(f"limits file has no 'regions' object. Schema:\n{SCHEMA}")
-        regions = {
-            str(k): BodyRegionLimit(
+        regions: dict[str, BodyRegionLimit] = {}
+        for k, v in raw.items():
+            if not isinstance(v, dict):
+                raise LimitsError(
+                    f"region {k!r} must be an object with max_pressure_n_cm2 and "
+                    f"max_force_n, got {type(v).__name__}."
+                )
+            for needed in ("max_pressure_n_cm2", "max_force_n"):
+                if needed not in v:
+                    raise LimitsError(f"region {k!r} is missing {needed}.")
+            regions[str(k)] = BodyRegionLimit(
                 key=str(k),
                 label=str(v.get("label", k)),
-                max_pressure_n_cm2=float(v["max_pressure_n_cm2"]),
-                max_force_n=float(v["max_force_n"]),
+                max_pressure_n_cm2=_num(v["max_pressure_n_cm2"],
+                                        f"region {k!r} max_pressure_n_cm2",
+                                        maximum=PRESSURE_MAX_N_CM2, positive=True),
+                max_force_n=_num(v["max_force_n"], f"region {k!r} max_force_n",
+                                 maximum=FORCE_MAX_N, positive=True),
             )
-            for k, v in raw.items()
-        }
         return cls(
             edition=str(d.get("edition", "")),
             transcribed_by=str(d.get("transcribed_by", "")),
             verified_by=str(d.get("verified_by", "")),
             verified_on=str(d.get("verified_on", "")),
-            transient_multiplier=float(d.get("transient_multiplier", 2.0)),
+            transient_multiplier=_num(d.get("transient_multiplier", 2.0),
+                                      "transient_multiplier",
+                                      maximum=TRANSIENT_MULTIPLIER_MAX, positive=True),
             regions=regions,
         )
 
@@ -193,4 +232,10 @@ class LimitsTable:
                 "values belong to the standards body and the edition that applies is "
                 f"a project decision. Write one in this schema:\n{SCHEMA}"
             )
-        return cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise LimitsError(f"{p} is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise LimitsError(f"{p} must contain a JSON object.")
+        return cls.from_dict(raw)

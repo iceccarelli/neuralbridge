@@ -46,7 +46,12 @@ __all__ = [
 
 #: Bumped when the meaning of a check changes. Recorded in every result so an
 #: old bundle is never silently reinterpreted under new rules.
-ENGINE_VERSION = "1"
+#:
+#: 2: a recording gap beside a separation-controlled sample makes
+#:    ``ssm_separation`` unchecked, a contact force recorded where contact is not
+#:    permitted makes ``pfl_contact`` unchecked, and inputs must be finite
+#:    numbers (earlier engines passed NaN).
+ENGINE_VERSION = "2"
 
 
 class CheckOutcome(StrEnum):
@@ -308,6 +313,7 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
     examined = 0
     no_separation_reported = 0
     extrapolated = 0
+    declared_speed_used = 0
 
     relevant = [(i, s) for i, s in enumerate(trace.samples)
                 if s.mode.separation_is_the_control]
@@ -331,6 +337,8 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
         )
         if breakdown.rests_on_extrapolation:
             extrapolated += 1
+        if breakdown.human_speed_source == "declared":
+            declared_speed_used += 1
         required = breakdown.total_mm
         if s.separation < required:
             violations.append(Violation(
@@ -358,6 +366,15 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             "measurement."
         )
 
+    if declared_speed_used:
+        caveats.append(
+            f"{declared_speed_used} of {examined} compared samples used the envelope's "
+            f"declared approach speed ({envelope.human_approach_speed_mm_s:.0f} mm/s) "
+            "as the person's closing speed, because the trace recorded none. That is "
+            "an assumption, not a measurement, and the envelope carries no evidence "
+            "basis for it."
+        )
+
     if examined == 0:
         return CheckResult(
             name="ssm_separation", outcome=CheckOutcome.UNCHECKED,
@@ -366,6 +383,21 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             samples_examined=0, unit="mm",
             reason="every sample in a separation-controlled mode reported no "
                    "detected person, so no separation was ever compared.",
+        ), caveats
+
+    gap_beside_ssm = trace.gap_touches(lambda s: s.mode.separation_is_the_control)
+    if gap_beside_ssm and not violations:
+        first = next((a, b) for a, b in trace.gaps)
+        return CheckResult(
+            name="ssm_separation", outcome=CheckOutcome.UNCHECKED,
+            statement="Measured separation met the ISO/TS 15066 protective "
+                      "separation distance at every instant.",
+            samples_examined=examined, violations=(), worst_margin=worst, unit="mm",
+            reason=f"the recording has a gap (t={first[0]:.3f}s to t={first[1]:.3f}s, "
+                   "the first of several if more) beside a separation-controlled "
+                   "sample. 'Every instant' cannot be established across an interval "
+                   "nobody recorded, so the samples that were compared are not "
+                   "enough for a verified result.",
         ), caveats
 
     return CheckResult(
@@ -418,6 +450,36 @@ def _stop_characterisation(envelope: SafetyEnvelope, trace: Trace) -> CheckResul
 
 
 def _pfl_contact(
+    envelope: SafetyEnvelope, trace: Trace, limits: LimitsTable | None,
+) -> tuple[CheckResult, list[str]]:
+    """Contact within limits where permitted — and contact where it is not.
+
+    A nonzero force recorded in a mode that does not permit contact is not
+    evaluated against any limit (the table is about permitted contact), and it is
+    not nothing: the check cannot read as verified or not applicable beside it.
+    """
+    result, caveats = _pfl_contact_permitted(envelope, trace, limits)
+    stray = [(i, s) for i, s in enumerate(trace.samples)
+             if not s.mode.contact_is_permitted
+             and s.contact_force is not None and s.contact_force > 0]
+    if not stray:
+        return result, caveats
+    i0, s0 = stray[0]
+    note = (f"{len(stray)} sample(s) recorded a nonzero contact force in a mode that "
+            f"does not permit contact (first: t={s0.t:.3f}s, {s0.contact_force:.1f} N, "
+            f"{s0.mode.value}). Those samples were not evaluated against any limit.")
+    caveats.append(note)
+    if result.outcome in (CheckOutcome.VERIFIED, CheckOutcome.NOT_APPLICABLE):
+        result = CheckResult(
+            name=result.name, outcome=CheckOutcome.UNCHECKED,
+            statement=result.statement, samples_examined=result.samples_examined,
+            violations=result.violations, worst_margin=result.worst_margin,
+            unit=result.unit, reason=note,
+        )
+    return result, caveats
+
+
+def _pfl_contact_permitted(
     envelope: SafetyEnvelope, trace: Trace, limits: LimitsTable | None,
 ) -> tuple[CheckResult, list[str]]:
     caveats: list[str] = []
@@ -594,6 +656,15 @@ def verify(
         caveats.append(
             "the trace is simulated. Nothing here is evidence about the physical "
             "machine, only about the model that produced these samples."
+        )
+    if trace.rate_disagrees_with_data:
+        observed = trace.observed_period_s or 0.0
+        caveats.append(
+            f"the trace declares a sample rate of {trace.sample_rate_hz:g} Hz but its "
+            f"samples are a median {observed:.4g} s apart "
+            f"(about {1.0 / observed if observed else float('inf'):.4g} Hz). The "
+            "declared rate decides what counts as a gap, so gaps were measured against "
+            "the shorter of the two periods; correct the declaration."
         )
     if trace.gaps:
         caveats.append(

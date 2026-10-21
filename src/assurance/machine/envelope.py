@@ -10,12 +10,22 @@ Every figure carries its source. A stopping distance copied off a datasheet and
 a stopping distance measured at commissioning are both usable, and they are not
 worth the same, so the envelope records which it is and the verification result
 inherits that. This is the difference between an assurance case and a form.
+
+Every figure is a finite number in the package's fixed units (millimetres,
+millimetres per second, seconds). Nothing is converted and nothing is repaired:
+a string, a boolean, NaN, an infinity, a negative magnitude, or a value past
+the plausibility rails in :mod:`assurance.machine.quantities` is refused with
+an :class:`EnvelopeError` naming the field. An envelope field the schema does
+not define is refused too, because the alternative — ignoring
+``human_approach_speed_m_s`` and quietly using the 1600 mm/s default — is a
+unit error that nobody sees.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +33,12 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of
 from assurance.core.tiers import AssuranceTier
+from assurance.machine.quantities import (
+    DISTANCE_MAX_MM,
+    DURATION_MAX_S,
+    SPEED_MAX_MM_S,
+    number,
+)
 from assurance.machine.trace import OperatingMode
 
 __all__ = [
@@ -40,12 +56,47 @@ class EnvelopeError(AssuranceError):
     """An envelope is incomplete, inconsistent, or claims more than it evidences."""
 
 
+def _num(value: Any, name: str, **kw: Any) -> float:
+    """A physical figure, or an :class:`EnvelopeError` naming it."""
+    return number(value, name, exc=EnvelopeError, **kw)
+
+
+def _object(value: Any, name: str, allowed: set[str]) -> dict[str, Any]:
+    """A JSON object whose every key is one this schema defines.
+
+    An unknown key is refused rather than ignored. The failure it prevents is
+    quiet: ``human_approach_speed_m_s`` ignored means the 1600 mm/s default is
+    used, and a misspelt ``pfl_limit_hash`` means the product makes no force
+    claim at all.
+    """
+    if not isinstance(value, dict):
+        raise EnvelopeError(f"{name} must be an object, got {type(value).__name__}.")
+    unknown = sorted(str(k) for k in set(value) - allowed)
+    if unknown:
+        raise EnvelopeError(
+            f"{name} has unrecognised field(s) {', '.join(unknown)}. Units are part of "
+            "the field name (…_mm, …_mm_s, …_s) and nothing here converts them, so a "
+            "field in other units is refused rather than ignored. Expected: "
+            + ", ".join(sorted(allowed)) + "."
+        )
+    return value
+
+
+def _require(d: dict[str, Any], key: str, where: str) -> Any:
+    if key not in d:
+        raise EnvelopeError(f"{where} is missing required field {key!r}.")
+    return d[key]
+
+
 #: ISO 13855 walking speed, used where the sensing system does not report a
 #: closing speed. 1600 mm/s is the figure for a person approaching the detection
 #: zone; 2000 mm/s is used for a directed approach at short range. Declaring the
 #: slower figure where the faster applies shortens every computed distance, so
 #: the envelope records which was declared and the verifier says so in the
 #: bundle rather than silently adopting a default.
+#:
+#: UNVERIFIED: both figures, and which applies at what separation, are quoted
+#: from memory of the standards, not from a licensed copy in this repository.
 DEFAULT_HUMAN_APPROACH_SPEED_MM_S = 1600.0
 
 
@@ -71,11 +122,22 @@ class FigureBasis:
             raise EnvelopeError(
                 f"figure basis {self.kind!r} is not one of measured, datasheet, estimated."
             )
-        if not self.reference:
+        if not isinstance(self.reference, str) or not self.reference.strip():
             raise EnvelopeError(
                 f"a {self.kind} figure with no reference cannot be checked by anyone. "
                 "Give the report number, datasheet revision, or calculation note."
             )
+        if self.date:
+            try:
+                if "T" in self.date or " " in self.date:
+                    datetime.fromisoformat(self.date.replace("Z", "+00:00"))
+                else:
+                    date.fromisoformat(self.date)
+            except (ValueError, TypeError) as exc:
+                raise EnvelopeError(
+                    f"figure date {self.date!r} is not an ISO date (YYYY-MM-DD). A date "
+                    "nobody can parse cannot show how old the figure is."
+                ) from exc
 
     @property
     def tier_ceiling(self) -> AssuranceTier:
@@ -86,8 +148,9 @@ class FigureBasis:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FigureBasis:
-        return cls(kind=str(d["kind"]), reference=str(d.get("reference", "")),
-                   date=str(d.get("date", "")))
+        d = _object(d, "basis", {"kind", "reference", "date"})
+        return cls(kind=str(_require(d, "kind", "basis")),
+                   reference=str(d.get("reference", "")), date=str(d.get("date", "")))
 
 
 @dataclass(frozen=True)
@@ -109,11 +172,13 @@ class StopPerformance:
     basis: FigureBasis
 
     def __post_init__(self) -> None:
-        for name in ("reaction_time_s", "stop_time_s", "stop_distance_mm",
-                     "measured_at_speed_mm_s"):
-            if getattr(self, name) < 0:
-                raise EnvelopeError(f"StopPerformance.{name} is negative.")
-        if self.measured_at_speed_mm_s <= 0:
+        _num(self.reaction_time_s, "StopPerformance.reaction_time_s",
+             maximum=DURATION_MAX_S)
+        _num(self.stop_time_s, "StopPerformance.stop_time_s", maximum=DURATION_MAX_S)
+        _num(self.stop_distance_mm, "StopPerformance.stop_distance_mm",
+             maximum=DISTANCE_MAX_MM)
+        if _num(self.measured_at_speed_mm_s, "StopPerformance.measured_at_speed_mm_s",
+                maximum=SPEED_MAX_MM_S) <= 0:
             raise EnvelopeError(
                 "StopPerformance.measured_at_speed_mm_s must be positive: a stopping "
                 "distance with no speed attached cannot be used for anything."
@@ -155,12 +220,19 @@ class StopPerformance:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> StopPerformance:
+        d = _object(d, "stop", {"reaction_time_s", "stop_time_s", "stop_distance_mm",
+                                "measured_at_speed_mm_s", "basis"})
         return cls(
-            reaction_time_s=float(d["reaction_time_s"]),
-            stop_time_s=float(d["stop_time_s"]),
-            stop_distance_mm=float(d["stop_distance_mm"]),
-            measured_at_speed_mm_s=float(d["measured_at_speed_mm_s"]),
-            basis=FigureBasis.from_dict(d["basis"]),
+            reaction_time_s=_num(_require(d, "reaction_time_s", "stop"),
+                                 "reaction_time_s", maximum=DURATION_MAX_S),
+            stop_time_s=_num(_require(d, "stop_time_s", "stop"), "stop_time_s",
+                             maximum=DURATION_MAX_S),
+            stop_distance_mm=_num(_require(d, "stop_distance_mm", "stop"),
+                                  "stop_distance_mm", maximum=DISTANCE_MAX_MM),
+            measured_at_speed_mm_s=_num(
+                _require(d, "measured_at_speed_mm_s", "stop"),
+                "measured_at_speed_mm_s", maximum=SPEED_MAX_MM_S),
+            basis=FigureBasis.from_dict(_require(d, "basis", "stop")),
         )
 
 
@@ -178,8 +250,10 @@ class SensingUncertainty:
     basis: FigureBasis
 
     def __post_init__(self) -> None:
-        if self.human_position_mm < 0 or self.robot_position_mm < 0:
-            raise EnvelopeError("SensingUncertainty values are negative.")
+        _num(self.human_position_mm, "SensingUncertainty.human_position_mm",
+             maximum=DISTANCE_MAX_MM)
+        _num(self.robot_position_mm, "SensingUncertainty.robot_position_mm",
+             maximum=DISTANCE_MAX_MM)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,10 +264,14 @@ class SensingUncertainty:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SensingUncertainty:
+        d = _object(d, "uncertainty",
+                    {"human_position_mm", "robot_position_mm", "basis"})
         return cls(
-            human_position_mm=float(d["human_position_mm"]),
-            robot_position_mm=float(d["robot_position_mm"]),
-            basis=FigureBasis.from_dict(d["basis"]),
+            human_position_mm=_num(_require(d, "human_position_mm", "uncertainty"),
+                                   "human_position_mm", maximum=DISTANCE_MAX_MM),
+            robot_position_mm=_num(_require(d, "robot_position_mm", "uncertainty"),
+                                   "robot_position_mm", maximum=DISTANCE_MAX_MM),
+            basis=FigureBasis.from_dict(_require(d, "basis", "uncertainty")),
         )
 
 
@@ -206,6 +284,13 @@ class Workspace:
     frame: str = "cell"
 
     def __post_init__(self) -> None:
+        for label, corner in (("minimum", self.minimum), ("maximum", self.maximum)):
+            if not isinstance(corner, (tuple, list)) or len(corner) != 3:
+                raise EnvelopeError(
+                    f"workspace {label} needs three coordinates (x, y, z), got {corner!r}."
+                )
+            for axis, v in zip("xyz", corner, strict=True):
+                _num(v, f"workspace {label} {axis}", maximum=DISTANCE_MAX_MM, signed=True)
         if any(b <= a for a, b in zip(self.minimum, self.maximum, strict=True)):
             raise EnvelopeError(
                 f"workspace maximum {self.maximum} is not strictly greater than "
@@ -229,11 +314,22 @@ class Workspace:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Workspace:
-        return cls(
-            minimum=tuple(float(v) for v in d["minimum"]),  # type: ignore[arg-type]
-            maximum=tuple(float(v) for v in d["maximum"]),  # type: ignore[arg-type]
-            frame=str(d.get("frame", "cell")),
-        )
+        d = _object(d, "workspace", {"minimum", "maximum", "frame"})
+        corners: dict[str, tuple[float, float, float]] = {}
+        for label in ("minimum", "maximum"):
+            raw = _require(d, label, "workspace")
+            if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+                raise EnvelopeError(
+                    f"workspace {label} needs three coordinates (x, y, z), got {raw!r}."
+                )
+            x, y, z = (
+                _num(v, f"workspace {label} {axis}", maximum=DISTANCE_MAX_MM,
+                     signed=True)
+                for axis, v in zip("xyz", raw, strict=True)
+            )
+            corners[label] = (x, y, z)
+        return cls(minimum=corners["minimum"], maximum=corners["maximum"],
+                   frame=str(d.get("frame", "cell")))
 
 
 @dataclass(frozen=True)
@@ -254,6 +350,11 @@ class SafetyEnvelope:
     #: the sensing system can resolve. 850 mm is the usual figure where a hand
     #: or arm can reach through undetected; it is not a default here because
     #: getting it wrong is worth about a metre of separation.
+    #:
+    #: UNVERIFIED: 850 mm and the reach it stands for are quoted from memory of
+    #: ISO 13855, not from a licensed copy in this repository. The package does
+    #: not compute C; it takes the figure the manufacturer declares, and it
+    #: carries no ``FigureBasis`` for it, so a weak C does not lower the tier.
     intrusion_distance_mm: float
     #: vh where the sensing system does not report a closing speed.
     human_approach_speed_mm_s: float = DEFAULT_HUMAN_APPROACH_SPEED_MM_S
@@ -270,13 +371,12 @@ class SafetyEnvelope:
                 "evidence that is not tied to a specific version proves nothing "
                 "about the unit in front of the auditor."
             )
-        if self.intrusion_distance_mm < 0:
-            raise EnvelopeError("intrusion_distance_mm is negative.")
-        if self.human_approach_speed_mm_s <= 0:
-            raise EnvelopeError("human_approach_speed_mm_s must be positive.")
+        _num(self.intrusion_distance_mm, "intrusion_distance_mm",
+             maximum=DISTANCE_MAX_MM)
+        _num(self.human_approach_speed_mm_s, "human_approach_speed_mm_s",
+             maximum=SPEED_MAX_MM_S, positive=True)
         for mode, speed in self.max_tcp_speed_mm_s.items():
-            if speed < 0:
-                raise EnvelopeError(f"max_tcp_speed_mm_s[{mode}] is negative.")
+            _num(speed, f"max_tcp_speed_mm_s[{mode}]", maximum=SPEED_MAX_MM_S)
 
     @property
     def claims_pfl(self) -> bool:
@@ -320,24 +420,53 @@ class SafetyEnvelope:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SafetyEnvelope:
+        d = _object(d, "envelope", {
+            "envelope_id", "product", "product_version", "workspace",
+            "max_tcp_speed_mm_s", "stop", "uncertainty", "intrusion_distance_mm",
+            "human_approach_speed_mm_s", "pfl_limits_hash", "declared_by", "notes",
+        })
+        limits_raw = d.get("max_tcp_speed_mm_s") or {}
+        if not isinstance(limits_raw, dict):
+            raise EnvelopeError("max_tcp_speed_mm_s must be an object keyed by mode.")
+        limits: dict[OperatingMode, float] = {}
+        for k, v in limits_raw.items():
+            try:
+                mode = OperatingMode(str(k))
+            except ValueError as exc:
+                raise EnvelopeError(
+                    f"max_tcp_speed_mm_s names operating mode {k!r}, which is not one "
+                    f"of {', '.join(m.value for m in OperatingMode)}."
+                ) from exc
+            limits[mode] = _num(v, f"max_tcp_speed_mm_s[{k}]", maximum=SPEED_MAX_MM_S)
+        try:
+            declared = (Actor.from_dict(d["declared_by"]) if d.get("declared_by")
+                        else Actor(identifier="", role=""))
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise EnvelopeError(f"declared_by is not a valid actor: {exc!r}.") from exc
         return cls(
-            envelope_id=str(d["envelope_id"]),
-            product=str(d["product"]),
-            product_version=str(d["product_version"]),
-            workspace=Workspace.from_dict(d["workspace"]),
-            max_tcp_speed_mm_s={OperatingMode(k): float(v)
-                                for k, v in (d.get("max_tcp_speed_mm_s") or {}).items()},
-            stop=StopPerformance.from_dict(d["stop"]),
-            uncertainty=SensingUncertainty.from_dict(d["uncertainty"]),
-            intrusion_distance_mm=float(d["intrusion_distance_mm"]),
-            human_approach_speed_mm_s=float(
-                d.get("human_approach_speed_mm_s", DEFAULT_HUMAN_APPROACH_SPEED_MM_S)),
+            envelope_id=str(_require(d, "envelope_id", "envelope")),
+            product=str(_require(d, "product", "envelope")),
+            product_version=str(_require(d, "product_version", "envelope")),
+            workspace=Workspace.from_dict(_require(d, "workspace", "envelope")),
+            max_tcp_speed_mm_s=limits,
+            stop=StopPerformance.from_dict(_require(d, "stop", "envelope")),
+            uncertainty=SensingUncertainty.from_dict(
+                _require(d, "uncertainty", "envelope")),
+            intrusion_distance_mm=_num(
+                _require(d, "intrusion_distance_mm", "envelope"),
+                "intrusion_distance_mm", maximum=DISTANCE_MAX_MM),
+            human_approach_speed_mm_s=_num(
+                d.get("human_approach_speed_mm_s", DEFAULT_HUMAN_APPROACH_SPEED_MM_S),
+                "human_approach_speed_mm_s", maximum=SPEED_MAX_MM_S, positive=True),
             pfl_limits_hash=str(d.get("pfl_limits_hash", "")),
-            declared_by=Actor.from_dict(d["declared_by"]) if d.get("declared_by")
-            else Actor(identifier="", role=""),
+            declared_by=declared,
             notes=str(d.get("notes", "")),
         )
 
     @classmethod
     def from_json(cls, path: str | Path) -> SafetyEnvelope:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise EnvelopeError(f"{path} is not valid JSON: {exc}") from exc
+        return cls.from_dict(raw)
