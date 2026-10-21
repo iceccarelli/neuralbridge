@@ -65,7 +65,7 @@ def scope_for(principal: Principal) -> Scope:
 
 async def require_ai_control_plane(principal: Principal) -> Principal:
     """The door into WRITE (plan/approve), additional connections, and the
-    full audit trail — everywhere this is imported, not just `/ai`'s own
+    the account's audit log — everywhere this is imported, not just `/ai`'s own
     routes, so a free caller cannot buy the same capability more cheaply by
     going around `/ai` through the raw adapters REST route or the MCP
     gateway (see `reports/NEURALBRIDGE-AI-PHASE2.md`, "closing the bypass").
@@ -91,7 +91,7 @@ async def require_ai_control_plane(principal: Principal) -> Principal:
                 "tier": principal.tier,
                 "remedy": (
                     "The /ai control plane's write path (propose-and-approve, "
-                    "additional connections, full audit trail) is included from "
+                    "additional connections, the account's audit log) is included from "
                     "the Register plan upward. Reads stay free, rate-limited. "
                     "GET /v1/plans, then POST /v1/checkout."
                 ),

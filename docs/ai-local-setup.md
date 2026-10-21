@@ -61,7 +61,7 @@ npm run dev
 ## Phase 2: entitlement (Register/Cell for writes)
 
 The write path (`/ai/plan`, approve/deny, binding an additional
-connection, the full audit trail) is gated the same way the assurance
+connection, the account's audit log) is gated the same way the assurance
 product's own paid routes are — see `src/neuralbridge/ai/entitlements.py`,
 which reuses `assurance.api.deps`/`assurance.billing.accounts` directly
 rather than a second entitlement engine. To try the paid path locally:

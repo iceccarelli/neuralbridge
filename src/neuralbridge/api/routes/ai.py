@@ -4,7 +4,7 @@ Implements the plan → approve → execute → verify loop from
 ``neuralbridge.ai.orchestrator`` over HTTP. Every route requires a real
 actor (see ``neuralbridge.ai.identity``) for the audit trail. Discovery and
 READ are free (READ rate-limited on the free tier); WRITE (plan/approve),
-binding an additional connection, and the full audit trail require the
+binding an additional connection, and the account's audit log require the
 Register/Cell entitlement (``neuralbridge.ai.entitlements`` — reusing the
 assurance product's own API-key/account mechanism) and return **402**, not
 403, when the caller is authenticated but under-tiered — same shape as

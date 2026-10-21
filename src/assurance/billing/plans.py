@@ -66,7 +66,7 @@ class Plan:
     supplier_publish: bool = False
     #: May propose and approve a WRITE through the /ai control plane (and the
     #: same-policy raw adapters/MCP paths — see reports/NEURALBRIDGE-AI-PHASE2.md),
-    #: bind additional connections, and fetch the full audit trail. The
+    #: bind additional connections, and fetch the account's own audit log. The
     #: control plane's discovery and READ path stays free — see
     #: ai_reads_per_day — the same "verification stays free" rule the rest
     #: of this table follows: reading is how a prospect evaluates the
@@ -171,7 +171,7 @@ PLANS: dict[Tier, Plan] = {
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
             "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, full audit trail",
+            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
         ),
     ),
     "cell": Plan(
@@ -195,7 +195,7 @@ PLANS: dict[Tier, Plan] = {
         included=(
             "Everything in Register",
             "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, full audit trail",
+            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
             "Machine safety verification: POST /v1/machine/verify checks a recorded "
             "run against a declared safety envelope and seals the result",
             "Separation, speed, workspace, stop characterisation, power-and-force and "
