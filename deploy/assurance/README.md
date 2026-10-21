@@ -243,12 +243,22 @@ lets the reconciliation compare our totals with the meter's own.
    the usage report shows `unreported_units` and the reconciliation flags
    `stale_unreported` after 24 hours.
 
+   A rotated or restricted key (401/403), a wrong meter path (404) or a wrong
+   meter event name (400) aborts the run with exit 2 and leaves every row
+   `pending`: fix the configuration and the next run bills them. Only a refusal
+   of the event itself (an unknown customer, say) marks that one event
+   `rejected`, and nothing retries a rejected event by itself; once a person has
+   resolved the cause, `python -m assurance.billing.payg requeue --all-rejected`
+   (or `--event-id ID`, `--dry-run` to list) puts them back to `pending`.
+
 **How a unit is counted.** At one moment only: when the route has computed its
 whole answer, immediately before it returns. A 422, a refusal by the domain, or
 a crash before that records nothing, and so does a request refused for quota.
 The count and the quota check are one SQLite transaction
 (`AccountStore.record_usage`). Send an `Idempotency-Key` header and a retry is
-never counted or billed twice; without one every call is its own unit. At the
+never counted or billed twice (the key is bound to the request: the same key
+with a different body is a 409 `idempotency_key_reused` and is not served);
+without one every call is its own unit. At the
 limit, or when the allowance is gone and billing is not on for the account, the
 API answers 429 with `Retry-After`, `resets_at` and a remedy, and records nothing.
 

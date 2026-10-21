@@ -274,11 +274,32 @@ class TestMeterEventRequest:
         assert int(form["start_time"]) <= 1_790_000_017 < 1_790_000_061 <= int(form["end_time"])
 
     @pytest.mark.parametrize("status,definitive", [
-        (400, True), (401, True), (404, True), (422, True),
+        (400, True), (422, True),
+        # A rotated/revoked key (401/403) or a wrong meter path (404) is OUR
+        # configuration, not a verdict on the event: the same event is fine
+        # once the operator fixes it, so it must never be treated as final.
+        (401, False), (403, False), (404, False),
         (408, False), (409, False), (429, False), (500, False), (503, False)])
     def test_which_refusals_are_final(self, status, definitive):
         assert stripe_gateway.is_definitive_rejection(StripeError("x", status=status)) is definitive
         assert stripe_gateway.is_definitive_rejection(StripeError("no answer")) is False
+
+    @pytest.mark.parametrize("status,message,code,config", [
+        (401, "Invalid API Key provided", "api_key_invalid", True),
+        (403, "forbidden", "", True),
+        (404, "Unrecognized request URL", "", True),
+        (400, "No meter found with event_name nb_wrong", "resource_missing", True),
+        (400, "Invalid event_name", "", True),
+        (400, "No such customer: 'cus_x'", "resource_missing", False),
+        (422, "x", "", False), (500, "x", "", False)])
+    def test_run_level_configuration_errors_are_told_apart(self, status, message, code, config):
+        exc = StripeError(message, status=status, code=code)
+        assert stripe_gateway.is_configuration_error(exc) is config
+        if config:
+            assert stripe_gateway.is_definitive_rejection(exc) is False
+
+    def test_no_answer_is_not_a_configuration_error(self):
+        assert stripe_gateway.is_configuration_error(StripeError("no answer")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +407,130 @@ class TestReporterIsOffUnlessConfigured:
         assert payg.main(["report", "--json"], gateway=meters.gateway()) == 0
         out = json.loads(capsys.readouterr().out)
         assert out["billed"] == 2 and "fake Stripe transport" in out["notice"]
+
+
+# ---------------------------------------------------------------------------
+# 2b. our configuration failing must not cost revenue
+# ---------------------------------------------------------------------------
+class TestConfigurationErrorsDoNotRejectUsage:
+    """A rotated key (401/403) or a wrong meter/event name (404, 400) used to move
+    the whole batch from pending to rejected, permanently: nothing requeued it.
+    Those are run-level errors: abort, leave the rows pending, say so."""
+
+    @pytest.mark.parametrize("status,error", [
+        (401, "api_key_invalid"), (403, "forbidden"), (404, "resource_missing")])
+    def test_a_bad_key_or_path_aborts_the_run_and_leaves_every_row_pending(
+            self, store, payg_on, meters, status, error):
+        ids = bill(store, account(store), 3)
+        meters.script = [("status", status, error)]
+        result = report_usage(store, meters.gateway(), now=NOW)
+        assert result.rejected == 0
+        assert result.aborted and str(status) in result.aborted
+        assert len(meters.posts()) == 1                    # stopped, not hammered 3 times
+        assert {states(store)[i] for i in ids} == {"pending"}
+        assert result.to_dict()["aborted"] == result.aborted
+        # the operator fixes the configuration; the same rows are billed, once each
+        again = report_usage(store, meters.gateway(), now=NOW + timedelta(minutes=1))
+        assert again.billed == 3 and again.aborted == ""
+        assert {states(store)[i] for i in ids} == {"billed"} and meters.total() == 3
+
+    def test_a_wrong_meter_event_name_is_a_configuration_error_too(self, store, payg_on, meters):
+        ids = bill(store, account(store), 2)
+
+        def transport(method, path, form, headers):
+            return 400, {"error": {"code": "resource_missing", "param": "event_name",
+                                   "message": "No meter found with event_name 'nb_wrong'"}}
+        result = report_usage(store, StripeMeterGateway(transport=transport), now=NOW)
+        assert result.rejected == 0 and result.aborted
+        assert {states(store)[i] for i in ids} == {"pending"}
+
+    def test_released_rows_do_not_burn_their_dedupe_window_or_attempts(
+            self, store, payg_on, meters):
+        [event_id] = bill(store, account(store), 1)
+        meters.script = [("status", 401, "api_key_invalid")]
+        report_usage(store, meters.gateway(), now=NOW)
+        r = row(store, event_id)
+        assert (r["billed_state"], r["attempts"], r["first_attempt_at"]) == ("pending", 0, "")
+
+    def test_the_aborted_message_never_carries_a_key(self, store, payg_on, monkeypatch, capsys):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_SUPERSECRETVALUE123")
+        bill(store, account(store), 1)
+
+        def transport(method, path, form, headers):
+            return 401, {"error": {"code": "api_key_invalid", "message":
+                         "Invalid API Key provided: sk_test_SUPERSECRETVALUE123"}}
+        result = report_usage(store, StripeMeterGateway(transport=transport), now=NOW)
+        assert "SUPERSECRET" not in json.dumps(result.to_dict())
+        assert payg.main(["report", "--json"],
+                         gateway=StripeMeterGateway(transport=transport), now=NOW) == 2
+        out = capsys.readouterr().out
+        assert "SUPERSECRET" not in out and "aborted" in out
+
+    def test_an_event_specific_refusal_still_rejects_only_that_event(self, store, payg_on):
+        good, bad = account(store, "cus_a"), account(store, "cus_unknown")
+        [g] = bill(store, good, 1)
+        [b] = bill(store, bad, 1)
+        meters = FakeMeters(customers=("cus_a",))
+        result = report_usage(store, meters.gateway(), now=NOW)
+        assert (result.billed, result.rejected, result.aborted) == (1, 1, "")
+        assert (states(store)[g], states(store)[b]) == ("billed", "rejected")
+
+
+class TestRequeueRejected:
+    """Rows rejected before this fix (or by a real per-event refusal an operator has
+    since resolved) go back to pending only when someone explicitly asks."""
+
+    def _rejected(self, store, meters_none=None):
+        acct = account(store, customer="cus_unknown")
+        [event_id] = bill(store, acct, 1)
+        report_usage(store, FakeMeters(customers=()).gateway(), now=NOW)
+        assert states(store)[event_id] == "rejected"
+        return acct, event_id
+
+    def test_nothing_requeues_by_itself(self, store, payg_on, meters):
+        _, event_id = self._rejected(store)
+        report_usage(store, meters.gateway(), now=NOW + timedelta(hours=1))
+        assert states(store)[event_id] == "rejected" and meters.posts() == []
+
+    def test_requeue_moves_only_rejected_rows_and_they_are_then_sent_once(
+            self, store, payg_on):
+        acct, event_id = self._rejected(store)
+        [other] = bill(store, account(store, "cus_a"), 1)
+        report_usage(store, FakeMeters().gateway(), now=NOW)
+        assert states(store)[other] == "billed"
+        db = sqlite3.connect(store.path)
+        db.execute("UPDATE accounts SET stripe_customer_id='cus_a' WHERE id=?", (acct.id,))
+        db.commit()
+        db.close()
+        moved = store.requeue_rejected_usage()
+        assert moved == [event_id]
+        assert states(store)[event_id] == "pending" and states(store)[other] == "billed"
+        r = row(store, event_id)
+        assert (r["attempts"], r["first_attempt_at"]) == (0, "") and "requeued" in r["last_error"]
+        meters = FakeMeters()
+        assert report_usage(store, meters.gateway(), now=NOW + timedelta(minutes=1)).billed == 1
+        assert store.requeue_rejected_usage() == []        # nothing left to move
+
+    def test_requeue_can_be_limited_to_named_events(self, store, payg_on):
+        a1, e1 = self._rejected(store)
+        a2 = account(store, customer="cus_unknown2")
+        [e2] = bill(store, a2, 1)
+        report_usage(store, FakeMeters(customers=()).gateway(), now=NOW)
+        assert store.requeue_rejected_usage(event_ids=[e2]) == [e2]
+        assert states(store)[e1] == "rejected" and states(store)[e2] == "pending"
+
+    def test_the_cli_requeues_only_when_asked_and_never_needs_stripe(
+            self, store, payg_on, capsys):
+        _, event_id = self._rejected(store)
+        assert payg.main(["requeue", "--json"]) == 2          # no selector: refuses, changes nothing
+        assert "error" in json.loads(capsys.readouterr().out)
+        assert states(store)[event_id] == "rejected"
+        assert payg.main(["requeue", "--all-rejected", "--dry-run", "--json"]) == 0
+        dry = json.loads(capsys.readouterr().out)
+        assert (dry["requeued"], dry["matched"]) == (0, [event_id])
+        assert states(store)[event_id] == "rejected"
+        assert payg.main(["requeue", "--all-rejected", "--json"]) == 0
+        assert states(store)[event_id] == "pending"
 
 
 # ---------------------------------------------------------------------------

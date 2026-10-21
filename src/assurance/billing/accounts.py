@@ -28,7 +28,7 @@ import hashlib
 import secrets
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -415,12 +415,15 @@ class AccountStore:
 
         # Nothing to add (the normal case): no write lock, so opening an
         # up-to-date database never queues behind a writer.
-        if all(name in present(table) for table, name, _ in additions):
+        # A table that does not exist yet is created, whole, by the schema script.
+        if all(name in present(table) or not present(table)
+               for table, name, _ in additions):
             return
         db.execute("BEGIN IMMEDIATE")
         try:
             for table, name, definition in additions:
-                if name in present(table):
+                columns = present(table)
+                if not columns or name in columns:
                     continue
                 try:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
@@ -1512,6 +1515,61 @@ class AccountStore:
                 "WHERE event_id=? AND billed_state='sending'",
                 (error[:300], event_id),
             ).rowcount > 0
+
+    def release_usage_events(self, event_ids: Sequence[str], error: str) -> int:
+        """Give claimed events back after a run-level failure (bad key, wrong meter).
+
+        ``sending`` -> ``pending`` with the claim undone (one attempt fewer; the
+        first-attempt stamp cleared if this claim was the only attempt), so the
+        dedupe window of a row that really was sent earlier is not extended and
+        a row never sent does not start its clock. Returns how many moved.
+        """
+        moved = 0
+        with self._txn() as db:
+            for event_id in event_ids:
+                moved += db.execute(
+                    "UPDATE usage_events SET billed_state='pending', "
+                    "attempts=MAX(attempts-1, 0), "
+                    "first_attempt_at=CASE WHEN attempts<=1 THEN '' ELSE first_attempt_at END, "
+                    "last_attempt_at=CASE WHEN attempts<=1 THEN '' ELSE last_attempt_at END, "
+                    "last_error=? WHERE event_id=? AND billed_state='sending'",
+                    (error[:300], event_id),
+                ).rowcount
+        return moved
+
+    def requeue_rejected_usage(self, event_ids: Sequence[str] | None = None) -> list[str]:
+        """Operator action: put ``rejected`` events back to ``pending``. Returns their ids.
+
+        Nothing calls this automatically. A rejection was Stripe refusing the
+        event itself, or (before configuration errors were told apart) a rotated
+        key or wrong meter name; either way a person decides it is worth another
+        try. The attempt history is cleared so the dedupe window starts afresh -
+        safe because a refused event was never accepted - and the usual age limit
+        still applies when the row is next claimed. ``event_ids=None`` means
+        every rejected event.
+        """
+        wanted = None if event_ids is None else set(event_ids)
+        moved: list[str] = []
+        with self._txn() as db:
+            for row in db.execute(
+                "SELECT event_id, last_error FROM usage_events "
+                "WHERE billed_state='rejected' ORDER BY rowid"
+            ).fetchall():
+                if wanted is not None and row["event_id"] not in wanted:
+                    continue
+                db.execute(
+                    "UPDATE usage_events SET billed_state='pending', attempts=0, "
+                    "first_attempt_at='', last_attempt_at='', last_error=? "
+                    "WHERE event_id=? AND billed_state='rejected'",
+                    (("requeued by operator; was: " + row["last_error"])[:300], row["event_id"]),
+                )
+                moved.append(row["event_id"])
+        return moved
+
+    def rejected_usage_event_ids(self) -> list[str]:
+        """The ids ``requeue_rejected_usage()`` would move. Read-only."""
+        return [r["event_id"] for r in self._read_events(
+            "SELECT event_id FROM usage_events WHERE billed_state='rejected' ORDER BY rowid", ())]
 
     def note_usage_error(self, event_id: str, error: str) -> None:
         """A send failed without a verdict (timeout, 5xx). The row stays ``sending``."""
