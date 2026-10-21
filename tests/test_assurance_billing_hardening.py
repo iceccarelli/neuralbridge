@@ -934,3 +934,42 @@ class TestReviewFixes:
         store.consume("ip:new", "validate", 20, "free")
         assert rows(store, "SELECT COUNT(*) FROM usage WHERE subject='ip:old'")[0][0] == 0
         assert rows(store, "SELECT COUNT(*) FROM usage WHERE subject='ip:new'")[0][0] == 1
+
+
+class TestSecondReviewFixes:
+    def test_ipv4_mapped_clients_keep_their_own_bucket(self):
+        assert deps._bucket("::ffff:1.2.3.4") == "1.2.3.4"
+        assert deps._bucket("::ffff:1.2.3.4") != deps._bucket("::ffff:5.6.7.8")
+        assert deps._bucket("::1") == "::/64"          # a real IPv6 loopback keeps /64 logic
+
+    def test_a_free_accounts_key_does_not_get_the_trace_allowance(
+            self, client, store, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "2000")
+        free = store.upsert_account(email="f@b.de", tier="free", stripe_customer_id="cus_f")
+        key = store.issue_key(free.id)
+        resp = client.post("/v1/machine/verify", headers={"X-API-Key": key},
+                           json={"envelope": {"pad": "x" * 5000}, "trace": {}})
+        assert resp.status_code == 413
+
+    def test_the_body_guard_never_takes_the_write_lock(self, client, store, monkeypatch):
+        import threading
+        monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "2000")
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with store._txn():
+                held.set()
+                release.wait(10)
+
+        t = threading.Thread(target=hold)
+        t.start()
+        held.wait(5)
+        try:
+            # With the write lock held elsewhere, a junk key on a big body must
+            # still be answered (413) at once rather than queue behind it.
+            resp = client.post("/v1/machine/verify", headers={"X-API-Key": "asr_junk"},
+                               json={"envelope": {"pad": "x" * 5000}, "trace": {}})
+            assert resp.status_code == 413
+        finally:
+            release.set()
+            t.join()
