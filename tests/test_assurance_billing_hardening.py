@@ -30,6 +30,7 @@ from assurance.billing.accounts import (
     ACCOUNTS_SCHEMA_VERSION,
     PENDING_KEY_TTL,
     AccountStore,
+    hash_key,
 )
 from assurance.billing.plans import PLANS
 from assurance.core.identity import format_utc, utc_now
@@ -768,11 +769,38 @@ class TestBodyCap:
         assert deps.max_body_bytes("/v1/spec/validate") == 1024 * 1024
         assert client.post("/v1/spec/validate", json=self._big(2 * 1024 * 1024)).status_code == 413
 
-    def test_the_stripe_webhook_is_not_capped(self, client, monkeypatch):
+    def test_the_stripe_webhook_has_its_own_small_fixed_cap(self, client, monkeypatch):
+        # Unsigned bytes are read before the signature is checked, so an
+        # unlimited webhook was an anonymous memory-pressure lever. It is not
+        # governed by ASSURANCE_MAX_BODY_BYTES either: a mis-set value must never
+        # be why a payment event is lost.
         monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "100")
-        resp = client.post("/v1/billing/webhook", content=b"x" * 5000)
-        assert resp.status_code == 400                 # unsigned, not "too large"
-        assert resp.json()["detail"]["error"] == "signature_rejected"
+        small = client.post("/v1/billing/webhook", content=b"x" * 5000)
+        assert small.status_code == 400
+        assert small.json()["detail"]["error"] == "signature_rejected"
+        assert deps.max_body_bytes("/v1/billing/webhook") == 1024 * 1024
+        big = client.post("/v1/billing/webhook", content=b"x" * (2 * 1024 * 1024))
+        assert big.status_code == 413
+
+    def test_an_anonymous_or_unknown_key_cannot_use_the_trace_allowance(
+            self, client, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "2000")
+        pad = {"envelope": {"pad": "x" * 5000}, "trace": {}}
+        assert client.post("/v1/machine/verify", json=pad).status_code == 413
+        resp = client.post("/v1/machine/verify", json=pad, headers={"X-API-Key": "asr_nope"})
+        assert resp.status_code == 413
+        assert deps.max_body_bytes("/v1/machine/verify") == 2000
+
+    def test_a_revoked_key_loses_the_trace_allowance(self, client, store, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "2000")
+        account = store.upsert_account(email="r@b.de", tier="cell", stripe_customer_id="cus_r")
+        key = store.issue_key(account.id)
+        pad = {"envelope": {"pad": "x" * 5000}, "trace": {}}
+        assert client.post("/v1/machine/verify", headers={"X-API-Key": key},
+                           json=pad).status_code != 413
+        assert store.revoke_key(hash_key(key))
+        assert client.post("/v1/machine/verify", headers={"X-API-Key": key},
+                           json=pad).status_code == 413
 
     def test_reads_and_non_v1_paths_are_not_capped(self, client, monkeypatch):
         monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "10")
@@ -782,7 +810,7 @@ class TestBodyCap:
 
     def test_recorded_machine_traces_get_a_larger_allowance(self, client, store, monkeypatch):
         monkeypatch.setenv("ASSURANCE_MAX_BODY_BYTES", "2000")
-        assert deps.max_body_bytes("/v1/machine/verify") == 32 * 1024 * 1024
+        assert deps.max_body_bytes("/v1/machine/verify", authenticated=True) == 32 * 1024 * 1024
         account = store.upsert_account(email="c@b.de", tier="cell", stripe_customer_id="cus_c")
         headers = {"X-API-Key": store.issue_key(account.id)}
         resp = client.post("/v1/machine/verify", headers=headers,
@@ -795,3 +823,21 @@ class TestBodyCap:
                            headers={"Origin": "https://neuralbridge.io"})
         assert resp.status_code == 413
         assert resp.headers["access-control-allow-origin"] == "https://neuralbridge.io"
+
+
+# ---------------------------------------------------------------------------
+# a header anyone can send must never produce a 500
+# ---------------------------------------------------------------------------
+class TestNonAsciiHeaders:
+    @pytest.mark.parametrize("value", ["é", "ключ", "kéy-中"])
+    def test_a_non_ascii_api_key_is_a_401_not_a_500(self, client, monkeypatch, value):
+        monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-1")
+        resp = client.get("/v1/me", headers={"X-API-Key": value.encode("utf-8")})
+        assert resp.status_code == 401
+
+    def test_a_non_ascii_stripe_signature_is_a_400_not_a_500(self, client):
+        import time
+        header = f"t={int(time.time())},v1=é"
+        resp = client.post("/v1/billing/webhook", content=b"{}",
+                           headers={"stripe-signature": header.encode("utf-8")})
+        assert resp.status_code == 400

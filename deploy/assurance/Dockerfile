@@ -30,7 +30,9 @@ ENV PYTHONPATH=/app \
     ASSURANCE_PORT=8080 \
     ASSURANCE_LEDGER=/data/art14-register.db \
     ASSURANCE_ACCOUNTS=/data/accounts.db \
-    ASSURANCE_TENANT_LEDGERS=/data/tenants
+    ASSURANCE_TENANT_LEDGERS=/data/tenants \
+    ASSURANCE_ATTEST_LOGS=/data/attestations \
+    ASSURANCE_SUPPLIER_FEEDS=/data/supplier-feeds
 
 EXPOSE 8080
 

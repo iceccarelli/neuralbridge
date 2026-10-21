@@ -91,7 +91,7 @@ def resolve_principal(api_key: str | None, accounts: AccountStore, *, anonymous_
     if not presented:
         return Principal(account=None, key_prefix="", anonymous_subject=anonymous_subject)
     for key in _operator_keys():
-        if hmac.compare_digest(presented, key):
+        if hmac.compare_digest(presented.encode(), key.encode()):
             return Principal(account=_OPERATOR, key_prefix="operator")
     principal = accounts.resolve_key(presented)
     if principal is None:

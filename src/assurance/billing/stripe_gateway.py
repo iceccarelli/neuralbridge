@@ -163,7 +163,7 @@ def verify_webhook(payload: bytes, signature_header: str, *, secret: str | None 
 
     signed = f"{timestamp}.".encode() + payload
     expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-    if not any(hmac.compare_digest(expected, c) for c in candidates):
+    if not any(hmac.compare_digest(expected.encode(), c.encode()) for c in candidates):
         raise SignatureError("signature does not match")
 
     return json.loads(payload.decode("utf-8"))

@@ -287,7 +287,9 @@ async def current_principal(
         return Principal(account=None, key_prefix="", anonymous_subject=f"ip:{client}")
 
     for key in _operator_keys():
-        if hmac.compare_digest(presented, key):
+        # Compare bytes: str comparison raises TypeError on non-ASCII input, and
+        # an unhandled 500 from a header anyone can send is not a failure mode.
+        if hmac.compare_digest(presented.encode(), key.encode()):
             return Principal(account=_OPERATOR, key_prefix="operator")
 
     principal = accounts.resolve_key(presented)
@@ -532,9 +534,12 @@ _TRACE_BODY_ENV = "ASSURANCE_MAX_TRACE_BODY_BYTES"
 _DEFAULT_BODY = 1024 * 1024
 _DEFAULT_TRACE_BODY = 32 * 1024 * 1024
 _TRACE_PATHS = frozenset({"/v1/machine/verify"})
-# Small and signed already; exempt so a payload-size setting can never be the
-# reason a payment event is lost.
-_UNCAPPED_PATHS = frozenset({"/v1/billing/webhook"})
+# Stripe events are a few KB. The webhook is read in full before its signature
+# is checked, so it gets a fixed small cap of its own: not the configurable one
+# (a mis-set value must never be why a payment event is lost) and not none (an
+# unsigned 256 MiB POST would otherwise be buffered before being refused).
+_WEBHOOK_PATH = "/v1/billing/webhook"
+_WEBHOOK_BODY = 1024 * 1024
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
@@ -546,13 +551,33 @@ def _env_bytes(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
-def max_body_bytes(path: str) -> int | None:
-    """The largest request body accepted at ``path``; ``None`` = not capped here."""
-    if path in _UNCAPPED_PATHS or not path.startswith("/v1/"):
+def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
+    """The largest request body accepted at ``path``; ``None`` = not capped here.
+
+    The large allowance for recorded traces is only for a caller whose key
+    resolves: the body is parsed before the route's own auth runs, so granting
+    32 MiB to anyone would let an anonymous POST make the server hold it.
+    """
+    if not path.startswith("/v1/"):
         return None
-    if path in _TRACE_PATHS:
+    if path == _WEBHOOK_PATH:
+        return _WEBHOOK_BODY
+    if path in _TRACE_PATHS and authenticated:
         return _env_bytes(_TRACE_BODY_ENV, _DEFAULT_TRACE_BODY)
     return _env_bytes(_BODY_ENV, _DEFAULT_BODY)
+
+
+def _key_resolves(presented: str) -> bool:
+    """Whether ``presented`` is a live operator or account key. Never raises."""
+    if not presented:
+        return False
+    try:
+        raw = presented.encode()
+        if any(hmac.compare_digest(raw, k.encode()) for k in _operator_keys()):
+            return True
+        return get_accounts().resolve_key(presented) is not None
+    except Exception:  # noqa: BLE001 - an unresolvable key just gets the small cap
+        return False
 
 
 async def _send_413(
@@ -590,7 +615,11 @@ class BodySizeLimitMiddleware:
         if scope["type"] != "http" or scope.get("method") not in _WRITE_METHODS:
             await self.app(scope, receive, send)
             return
-        limit = max_body_bytes(scope.get("path", ""))
+        headers = dict(scope.get("headers") or [])
+        limit = max_body_bytes(
+            scope.get("path", ""),
+            authenticated=_key_resolves(headers.get(b"x-api-key", b"").decode("latin-1").strip()),
+        )
         if limit is None:
             await self.app(scope, receive, send)
             return
@@ -600,7 +629,7 @@ class BodySizeLimitMiddleware:
             "limit_bytes": limit,
             "detail": f"Request bodies on this endpoint are limited to {limit} bytes.",
         }
-        declared = dict(scope.get("headers") or []).get(b"content-length")
+        declared = headers.get(b"content-length")
         if declared is not None:
             try:
                 too_big = int(declared) > limit
