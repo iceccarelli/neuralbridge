@@ -134,6 +134,7 @@ class ChangeAssuranceCase:
     #: :func:`assurance.machinery.staleness.assess_coverage`.
     evidence_before: dict[str, str] = field(default_factory=dict)
     evidence_current: dict[str, str] = field(default_factory=dict)
+    #: RESERVED, like ``reviewer``: never populated, so never emitted while empty.
     last_valid_verification: str = ""
     invalidation_reason: str = ""
 
@@ -150,6 +151,11 @@ class ChangeAssuranceCase:
     resolved_decisions: tuple[dict[str, str], ...] = ()
 
     owner: str = ""
+    #: RESERVED. Nothing sets it: no step of the lifecycle makes one person *the*
+    #: reviewer (the owner claims; several people may advance, resolve or waive,
+    #: each recorded in ``history`` and ``resolved_decisions``). Not emitted by
+    #: :meth:`to_dict` or shown by :meth:`summary` while empty, so that no
+    #: interface presents an always-empty field as data.
     reviewer: str = ""
 
     opened_at: str = ""
@@ -300,8 +306,8 @@ class ChangeAssuranceCase:
                          f"({pc.get('closure_hash', '')[:12]}); "
                          f"{pc.get('reopened_because', '')}")
         lines.append("")
-        lines.append(f"  owner: {self.owner or '(unassigned)'}   "
-                     f"reviewer: {self.reviewer or '—'}")
+        lines.append(f"  owner: {self.owner or '(unassigned)'}"
+                     + (f"   reviewer: {self.reviewer}" if self.reviewer else ""))
         lines.append(f"  next action: {self.next_action()}")
         if self.checks_skipped:
             lines.append("")
@@ -321,6 +327,14 @@ class ChangeAssuranceCase:
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
+        out = self._to_dict()
+        # Reserved fields (see their declarations): present only if something set them.
+        for name in ("reviewer", "last_valid_verification"):
+            if not out[name]:
+                del out[name]
+        return out
+
+    def _to_dict(self) -> dict[str, Any]:
         return {
             "case_id": self.case_id,
             "trigger_type": self.trigger_type.value,

@@ -142,6 +142,27 @@ class TestTheHostedApiRefusesATamperedLedger:
             assert "does not verify" in r.json()["detail"]["detail"]
         assert len(EvidenceLedger(path)) == before
 
+    def test_a_watch_report_is_refused_the_same_way_and_writes_nothing(
+            self, client, account_store, tmp_path):
+        from datetime import timedelta
+
+        from assurance.api import deps
+
+        from .test_assurance_watch_report import good, make_manifest, now, report
+
+        headers, cid = self._case(client, account_store)
+        (account_id,) = _ids(account_store)
+        path = deps.tenant_ledger_path(account_id)
+        at = now() - timedelta(minutes=5)
+        body = report(good(make_manifest(tmp_path, "0412", when=at), at=at), started=at)
+        tamper(path, cid)
+        before = len(EvidenceLedger(path))
+        r = client.post("/v1/watch/report", json=body, headers=headers)
+        assert r.status_code == 500, r.text
+        assert r.json()["detail"]["error"] == "ledger_integrity"
+        assert "does not verify" in r.json()["detail"]["detail"]
+        assert len(EvidenceLedger(path)) == before
+
     def test_the_fleet_json_and_report_say_so_too(self, client, account_store):
         from assurance.api import deps
 

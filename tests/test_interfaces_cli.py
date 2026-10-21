@@ -162,3 +162,29 @@ class TestExport:
         out = tmp_path / "x.json"
         assert run("export", "--ledger", ledger_path, MACHINE.key, "--out", out) == 2
         assert not out.exists()
+
+
+class TestArt14ExportOfAnUnknownCase:
+    """`art14 export <unknown>` wrote a well-formed bundle with no entries."""
+
+    def test_unknown_is_exit_two_and_writes_nothing(self, ledger_path, tmp_path, capsys):
+        from assurance.security.art14.cli import main as art14_main
+
+        EvidenceLedger(ledger_path)
+        out = tmp_path / "x.json"
+        capsys.readouterr()
+        rc = art14_main(["--ledger", str(ledger_path), "export", "--case", "C-nope",
+                         "-o", str(out)])
+        assert rc == 2
+        assert "no case 'C-nope'" in capsys.readouterr().err
+        assert not out.exists()
+
+    def test_a_known_case_still_exports(self, ledger_path, tmp_path):
+        from assurance.security.art14.cli import main as art14_main
+
+        ledger = EvidenceLedger(ledger_path)
+        case, _ = drive(ledger, CaseStore(ledger), CaseStatus.OPEN)
+        out = tmp_path / "x.json"
+        assert art14_main(["--ledger", str(ledger_path), "export", "--case", case.case_id,
+                           "-o", str(out)]) == 0
+        assert json.loads(out.read_text())["subject"] == case.case_id
