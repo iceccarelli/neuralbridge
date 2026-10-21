@@ -25,6 +25,7 @@ shipping.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -49,8 +50,9 @@ __all__ = [
 #:
 #: 2: a recording gap beside a separation-controlled sample makes
 #:    ``ssm_separation`` unchecked, a contact force recorded where contact is not
-#:    permitted makes ``pfl_contact`` unchecked, and inputs must be finite
-#:    numbers (earlier engines passed NaN).
+#:    permitted makes ``pfl_contact`` unchecked, ``pfl_contact`` is unchecked
+#:    while any contact sample went unevaluated (no area, or a region the table
+#:    lacks), and inputs must be finite numbers (earlier engines passed NaN).
 ENGINE_VERSION = "2"
 
 
@@ -209,8 +211,14 @@ class VerificationResult:
         for c in self.checks:
             mark = {"verified": "ok  ", "violated": "FAIL", "not_applicable": "n/a ",
                     "unchecked": "??  "}[c.outcome.value]
-            margin = (f"  worst margin {c.worst_margin:.1f} {c.unit}"
-                      if c.worst_margin is not None else "")
+            if c.violations:
+                # The margin of the samples that passed says nothing about how
+                # badly the others failed; the figure that matters is the shortfall.
+                margin = (f"  worst shortfall "
+                          f"{max(v.exceedance for v in c.violations):.1f} {c.unit}")
+            else:
+                margin = (f"  worst margin {c.worst_margin:.1f} {c.unit}"
+                          if c.worst_margin is not None else "")
             lines.append(f"  [{mark}] {c.name} ({c.samples_examined} samples)"
                          f"{margin}")
             if c.reason:
@@ -576,6 +584,26 @@ def _pfl_contact_permitted(
             reason="no contact sample could be matched to a region in the limits table.",
         ), caveats
 
+    # A violation stands whatever else went unevaluated. Without one, a pass needs
+    # every contact sample evaluated against both force and pressure: a sample with
+    # no area, or in a region the table lacks, was not checked, and "verified"
+    # beside a caveat saying so is a pass from missing data.
+    if not violations and (unknown_regions or without_area):
+        gaps = []
+        if without_area:
+            gaps.append(f"{without_area} contact sample(s) recorded a force with no "
+                        "contact area, so their pressure was not checked")
+        if unknown_regions:
+            gaps.append("contact credited to body region(s) "
+                        + ", ".join(sorted(unknown_regions))
+                        + " was not checked: the limits table does not cover them")
+        return CheckResult(
+            name="pfl_contact", outcome=CheckOutcome.UNCHECKED,
+            statement=statement, samples_examined=examined, worst_margin=worst,
+            unit="N", reason="; ".join(gaps) + ". Every contact sample must be "
+                             "evaluated for this check to be verified.",
+        ), caveats
+
     return CheckResult(
         name="pfl_contact",
         outcome=CheckOutcome.VIOLATED if violations else CheckOutcome.VERIFIED,
@@ -608,6 +636,23 @@ def _mode_consistency(envelope: SafetyEnvelope, trace: Trace) -> CheckResult:
                   "automatic mode.",
         samples_examined=len(trace.samples), violations=tuple(violations), unit="mm",
     )
+
+
+def _age_of(figure_date: str, trace: Trace) -> str:
+    """How old a figure was on the day the trace began, in words. Deterministic."""
+    if not figure_date:
+        return "is undated"
+    try:
+        if "T" in figure_date or " " in figure_date:
+            d = datetime.fromisoformat(figure_date.replace("Z", "+00:00")).date()
+        else:
+            d = date.fromisoformat(figure_date)
+    except ValueError:
+        return f"has an unreadable date {figure_date!r}"
+    days = (trace.started_at.date() - d).days
+    if days < 0:
+        return (f"is dated {figure_date}, {-days} day(s) AFTER the trace began")
+    return f"is dated {figure_date}, {days} day(s) before the trace began"
 
 
 # -- the entry point ------------------------------------------------------
@@ -651,6 +696,14 @@ def verify(
         f"{envelope.stop.reaction_time_s:.3f} s and stop time "
         f"{envelope.stop.stop_time_s:.3f} s were taken from the envelope and not "
         "re-measured from this trace."
+    )
+    caveats.append(
+        "age of the figures this verdict rests on, against the day the trace began: "
+        f"stopping {_age_of(stop_basis.date, trace)}; sensing "
+        f"{_age_of(envelope.uncertainty.basis.date, trace)}. No maximum age is applied: "
+        "a stopping distance measured years ago on a machine since modified passes "
+        "exactly as a fresh one does, and whether it still describes the machine is "
+        "the manufacturer's call."
     )
     if trace.provenance.value == "simulation":
         caveats.append(

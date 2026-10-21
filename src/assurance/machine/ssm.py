@@ -1,8 +1,8 @@
 """Protective separation distance, ISO/TS 15066 speed and separation monitoring.
 
-The formula is public and short. What it costs to get right is the inputs, and
-what nobody sells today is the arithmetic done against a machine's own recorded
-run rather than against a number somebody typed into a risk assessment.
+The formula is short. What it costs to get right is the inputs. What this
+package adds is the arithmetic done against a machine's own recorded run rather
+than against a number typed into a risk assessment.
 
     S(t0) = Sh + Sr + Ss + C + Zd + Zr
 

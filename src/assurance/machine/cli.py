@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except AssuranceError as exc:
+    except (AssuranceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

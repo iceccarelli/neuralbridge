@@ -198,9 +198,10 @@ class TestResealedLies:
     def test_a_certified_tier_is_caught_because_no_file_can_reach_it(self, tmp_path):
         _, raw, _, _ = make(tmp_path)
         raw["evidence"]["body"]["tier"] = "certified"
+        del raw["result"]          # isolate: the printed result would also disagree
         ok, problems = verify_bundle(write(tmp_path, reseal(raw)))
         assert not ok
-        assert any("certified" in p for p in problems)
+        assert any("certified" in p and "not reachable" in p for p in problems)
 
     def test_an_unknown_tier_is_caught(self, tmp_path):
         _, raw, _, _ = make(tmp_path)
@@ -269,16 +270,18 @@ class TestResealedLies:
             self, tmp_path):
         _, raw, env, tr = make(tmp_path)
         raw["evidence"]["checks_skipped"] = []
+        del raw["result"]          # isolate the replay from the printed-result check
         ok, problems = verify_bundle(write(tmp_path, reseal(raw)), envelope=env, trace=tr)
         assert not ok
-        assert any("limitation" in p for p in problems)
+        assert any("limitations differ" in p for p in problems)
 
     def test_a_replay_under_another_engine_version_is_not_called_a_match(self, tmp_path):
         _, raw, env, tr = make(tmp_path)
         raw["evidence"]["body"]["engine_version"] = "1"
+        del raw["result"]          # isolate: the printed result also names the engine
         ok, problems = verify_bundle(write(tmp_path, reseal(raw)), envelope=env, trace=tr)
         assert not ok
-        assert any("engine" in p for p in problems)
+        assert any("engine" in p and "not a reproduction" in p for p in problems)
 
 
 # -- limits ----------------------------------------------------------------

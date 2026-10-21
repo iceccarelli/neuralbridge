@@ -455,3 +455,23 @@ class TestPassIsEarned:
         assert r.verdict is Verdict.PASS
         assert all(c.outcome in (CheckOutcome.VERIFIED, CheckOutcome.NOT_APPLICABLE)
                    for c in r.checks)
+
+
+class TestSummaryDoesNotMislabelAFailure:
+    def test_a_failing_check_reports_its_shortfall_not_the_margin_of_the_passes(self):
+        e = env()
+        required = separation_required(e, robot_speed_mm_s=300.0).total_mm
+        samples = (
+            Sample(t=0.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
+                   mode=OperatingMode.SSM, separation=required + 700.0),
+            Sample(t=0.02, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
+                   mode=OperatingMode.SSM, separation=required - 7.0),
+        )
+        run = Trace(trace_id="R", provenance=Provenance.FIELD, source_system="s",
+                    started_at=datetime(2026, 9, 12, tzinfo=UTC), sample_rate_hz=50.0,
+                    samples=samples)
+        r = verify(e, run)
+        line = next(ln for ln in r.summary().splitlines() if "ssm_separation" in ln)
+        assert "FAIL" in line
+        assert "worst shortfall 7.0 mm" in line
+        assert "worst margin" not in line

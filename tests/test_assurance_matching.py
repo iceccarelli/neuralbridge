@@ -443,6 +443,16 @@ class TestAFunctionIsCoveredOnlyByItsWholeSetOfChecks:
         assert cov(assess_coverage(man(), [good, bad, good2], []),
                    "SF-01").coverage is Coverage.CURRENT
 
+    def test_a_function_is_only_as_current_as_the_oldest_run_it_rests_on(self):
+        """ssm_separation verified in February, stop_characterisation in April, a
+        change in March: the February evidence predates the change, so the function
+        is not covered even though the newest run is after it."""
+        a = vrec(1, FEB, verified=("ssm_separation",))
+        b = vrec(2, APR, verified=("stop_characterisation",))
+        r = assess_coverage(man(), [a, b], [interv(MAR)])
+        assert cov(r, "SF-01").coverage is Coverage.STALE
+        assert cov(r, "SF-01").last_verified_hash == a.content_hash
+
     def test_two_separate_runs_can_together_cover_a_function(self):
         a = vrec(1, FEB, verified=("ssm_separation",), not_verified=("speed_limit",))
         b = vrec(2, MAR, verified=("stop_characterisation",))

@@ -22,7 +22,7 @@ flattened:
     **not** hash to what the supplier published for that version. Either the
     supplier's figure is wrong or the machine is not running what it says. Both
     are serious and neither is "affected" or "not affected" — this is its own
-    finding, and no other system on the market can produce it.
+    finding.
 
 ``version``
     The supplier, name and version label match. The supplier published no hash,

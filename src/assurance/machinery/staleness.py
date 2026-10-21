@@ -6,8 +6,8 @@ exist in one package.
 :mod:`assurance.machine` produces a verification: *on this run, the cell met its
 declared separation, speed and workspace limits.* :mod:`assurance.machinery`
 produces an intervention record: *on 14 March a technician replaced the safety
-controller firmware.* Separately, each is a file. Together they produce the
-sentence a plant manager has never been shown:
+controller firmware.* Separately, each is a file. Together they produce a
+sentence neither record can produce alone:
 
     SF-02 protective stop — STALE. Last verified 9 February by bundle a41c…;
     invalidated by INT-0007 on 14 March, which changed safety-controller
@@ -440,7 +440,8 @@ def assess_coverage(
                 f"which changed {breaker.item_id}"
                 + (f" and re-ran {breaker.revalidation.description!r} — but that "
                    f"revalidation is not in this ledger, so it was not counted."
-                   if revalidated else " and re-ran nothing with sealed evidence.")
+                   if revalidated and breaker.revalidation is not None
+                   else " and re-ran nothing with sealed evidence.")
             ),
         ))
 
