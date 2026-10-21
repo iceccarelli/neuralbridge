@@ -62,6 +62,10 @@ def main(out: str, workdir: str) -> int:
         return acct.id, store.issue_key(acct.id, label="e2e")
 
     id_a, key_a = account("alpha", "cell")
+    # A Cell account whose ledger file does not exist yet: its first page load
+    # creates the tenant ledger from the workspace's parallel requests.
+    id_new, key_new = account("foxtrot", "cell")
+    assert not tenant_ledger_path(id_new).exists()
     _, key_b = account("bravo", "cell")
     _, key_c = account("charlie", "register")
     id_d, key_d = account("delta", "cell")
@@ -102,7 +106,7 @@ def main(out: str, workdir: str) -> int:
     record_manifest(EvidenceLedger(tenant_ledger_path(id_d)), hand.manifest)
 
     Path(out).write_text(json.dumps({
-        "key_a": key_a, "key_b": key_b, "key_register": key_c, "key_d": key_d, "key_e": key_e,
+        "key_a": key_a, "key_b": key_b, "key_new": key_new, "key_register": key_c, "key_d": key_d, "key_e": key_e,
         "case_id": case_ids[0], "machines": ["Grimaldi/AR-7#0412", "Grimaldi/AR-7#0501"],
         "d_machine": "Grimaldi/AR-7#0900",
     }))
