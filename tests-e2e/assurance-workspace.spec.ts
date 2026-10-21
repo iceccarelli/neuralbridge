@@ -14,7 +14,19 @@ import { join } from 'node:path';
 const seedPath = process.env.ASSURANCE_E2E_SEED;
 const apiBase = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || 'http://127.0.0.1:8001';
 
-type Seed = { key_a: string; key_b: string; key_register: string; case_id: string; machines: string[] };
+type Seed = {
+  key_a: string;
+  key_b: string;
+  key_register: string;
+  key_d: string;
+  key_e: string;
+  case_id: string;
+  machines: string[];
+  d_machine: string;
+  // Account E: its fleet exists only because the real `assurance watch push` reported it.
+  machines_e: { ok: string; blind_stale: string; blind_fresh: string };
+  case_e: string;
+};
 
 test.describe.configure({ mode: 'serial' });
 
@@ -43,8 +55,98 @@ test.describe('Assurance workspace', () => {
     await expect(cases).toContainText(seed.case_id);
     await expect(cases).toContainText('SF-01');
     await expect(page.getByTestId('case-summary')).toContainText('1 open');
-    // The honest limitation is on the page, not buried in docs.
+    // The honest limitation is on the page, not buried in docs — and says what is true now:
+    // Watch still runs in the customer's kit, the columns show what the customer reports.
     await expect(page.getByText(/does not run Watch/i)).toBeVisible();
+    await expect(page.getByText(/what you chose to report with/i)).toBeVisible();
+    await expect(fleet).toContainText('Last successful observation');
+    await expect(fleet).toContainText('Last attempt');
+    await expect(fleet).toContainText('Stale?');
+    await expect(fleet).toContainText('Last sealed manifest');
+  });
+
+  function row(page: Page, machine: string) {
+    return page.getByTestId('fleet-row').filter({ has: page.getByText(machine, { exact: true }) });
+  }
+
+  test('a fleet reported through the real watch push shows last success, last attempt and stale per machine', async ({
+    page,
+  }) => {
+    await enter(page, seed.key_e);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('fleet-summary')).toContainText('3 machine(s)');
+    await expect(page.getByTestId('obs-none')).toHaveCount(0);
+
+    // 7001 was observed in the latest run: a success, within its cadence.
+    const ok = row(page, seed.machines_e.ok);
+    await expect(ok.getByTestId('obs-last-success')).toContainText(/ago|today/);
+    await expect(ok.getByTestId('obs-last-success')).not.toContainText('No Watch report');
+    await expect(ok.getByTestId('obs-last-attempt')).not.toContainText('FAILED');
+    await expect(ok.getByTestId('obs-stale')).toContainText('No');
+    await expect(ok.getByTestId('obs-stale')).not.toContainText('Stale');
+
+    // 7002 could not be collected and was last seen ten days ago: failed, and stale. Never current.
+    const blind = row(page, seed.machines_e.blind_stale);
+    await expect(blind.getByTestId('obs-last-attempt')).toContainText('FAILED');
+    await expect(blind.getByTestId('obs-last-attempt')).toContainText('uncollectable');
+    await expect(blind.getByTestId('obs-last-attempt')).toContainText('not shown as current');
+    await expect(blind.getByTestId('obs-last-success')).toContainText('10 days ago');
+    await expect(blind.getByTestId('obs-stale')).toContainText('Stale');
+    await expect(blind.getByTestId('obs-stale')).toContainText('older than the declared cadence');
+    await expect(blind).not.toContainText(/unchanged/i);
+
+    // 7003 failed its latest look but was seen two days ago: shown as failed, not yet stale.
+    const fresh = row(page, seed.machines_e.blind_fresh);
+    await expect(fresh.getByTestId('obs-last-attempt')).toContainText('FAILED');
+    await expect(fresh.getByTestId('obs-last-success')).toContainText('2 days ago');
+    await expect(fresh.getByTestId('obs-stale')).toContainText('No');
+
+    await expect(page.getByTestId('obs-summary')).toContainText('1 stale');
+    await expect(page.getByTestId('obs-summary')).toContainText('2 whose latest attempt failed');
+
+    // The drift the push carried opened exactly one case, through the same assess_drift.
+    await expect(page.getByTestId('case-table')).toContainText(seed.case_e);
+    await expect(page.getByTestId('case-summary')).toContainText('1 open');
+    await expect(page.getByTestId('case-table')).toContainText(seed.machines_e.ok);
+  });
+
+  test('an account that never reported sees "No Watch report received", not a quiet fleet', async ({ page }) => {
+    await enter(page, seed.key_d);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    const only = row(page, seed.d_machine);
+    await expect(only.getByTestId('obs-last-success')).toContainText('No Watch report received');
+    await expect(only.getByTestId('obs-last-success')).toContainText('assurance watch push');
+    await expect(only.getByTestId('obs-last-attempt')).toContainText('—');
+    await expect(only.getByTestId('obs-stale')).toContainText('Stale');
+    await expect(only.getByTestId('obs-stale')).toContainText('never reported');
+    await expect(page.getByTestId('obs-none')).toContainText('No Watch report received');
+  });
+
+  test('observations are tenant-scoped and gated: 401 with no key, 402 on Register, nothing for B', async ({
+    request,
+  }) => {
+    expect((await request.get(`${apiBase}/v1/fleet/observations`)).status()).toBe(401);
+    expect(
+      (await request.get(`${apiBase}/v1/fleet/observations`, { headers: { 'X-API-Key': seed.key_register } })).status(),
+    ).toBe(402);
+    const b = await request.get(`${apiBase}/v1/fleet/observations`, { headers: { 'X-API-Key': seed.key_b } });
+    expect(b.status()).toBe(200);
+    expect((await b.json()).machines).toHaveLength(0);
+    const e = await (
+      await request.get(`${apiBase}/v1/fleet/observations`, { headers: { 'X-API-Key': seed.key_e } })
+    ).json();
+    expect(e.machines.map((m: { machine: string }) => m.machine).sort()).toEqual(
+      [seed.machines_e.ok, seed.machines_e.blind_stale, seed.machines_e.blind_fresh].sort(),
+    );
+    const failed = e.machines.find((m: { machine: string }) => m.machine === seed.machines_e.blind_stale);
+    expect(failed.last_attempt_status).toBe('uncollectable');
+    expect(failed.last_attempt_succeeded).toBe(false);
+    expect(failed.stale).toBe(true);
+    // A cannot see E's machines in its own observations, and E's report is not in A's fleet.
+    const a = await (
+      await request.get(`${apiBase}/v1/fleet/observations`, { headers: { 'X-API-Key': seed.key_a } })
+    ).json();
+    expect(JSON.stringify(a)).not.toContain('#7001');
   });
 
   test('case detail shows source evidence, limits and history; the server refuses an early close', async ({ page }) => {

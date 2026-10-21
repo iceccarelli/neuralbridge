@@ -372,3 +372,136 @@ item the plan names, the manifest it seals is marked `[collection incomplete: �
 and the observation records `complete: false` with the missing item ids. The
 drift it shows can still open a case, with the existing warning, but it can never
 make a closed case look as if the machine "left" its configuration and came back.
+
+
+---
+
+# Reporting to your hosted workspace (`watch push`)
+
+Watch runs where the exports are — your kit, your cron, your ledger. The hosted
+API cannot collect from a machine and never sees a run, a failed run or a machine
+nobody has looked at lately, so the `/assurance` workspace of a paying customer
+would show nothing unless somebody posted manifests by hand. `watch push` is the
+explicit, opt-in way to change that:
+
+```bash
+export NB_ASSURANCE_KEY=...        # your Cell-plan key; never a command-line argument
+assurance watch run  watch.json --ledger register.db      # offline, as always
+assurance watch push watch.json --ledger register.db \
+    --api-url https://<your-api-host> --key-env NB_ASSURANCE_KEY
+assurance watch push watch.json --ledger register.db \
+    --api-url https://<your-api-host> --key-env NB_ASSURANCE_KEY --dry-run
+```
+
+Exit codes: `0` reported, `1` the server refused part of it (or something could
+not be put in a report), `2` it could not run — no run in the ledger, no key, the
+network or a 5xx. **A 2 is safe to answer by running the same command again**:
+the server records each observation once (below).
+
+## It is separate on purpose
+
+`watch push` is `src/assurance/watch/push.py`. The offline kit, `assurance watch
+run`, `watch status` and `collect` never import it or any HTTP client; a test
+walks their import graph (and runs `watch run` in a fresh interpreter) and fails
+if that changes. The airgap guard tests are untouched. Nothing leaves the plant
+unless an operator types `watch push` with an explicit `--api-url` **and** the
+*name* of an environment variable that holds the key. The key is never an
+argument (a mistyped `--key …` is refused without echoing it), never printed,
+never written. `--api-url` must be https; plain http is accepted only for
+localhost. Redirects are never followed, so the key goes to the host you named
+and no other.
+
+## What is sent
+
+From the latest sealed run in your local ledger:
+
+* the watch id, the run's start time and verdict, and the `max_age_hours`
+  cadence from your configuration;
+* per machine: serial, machine key, status — `unchanged`, `changed`,
+  `uncollectable` or `incomplete` — when it was observed, whether the collection
+  was complete, a one-line detail, and the ids of plan items an incomplete look
+  did not find;
+* for a machine that was collected, its **SafetyManifest**: item ids, names,
+  versions, content hashes, supplier names, safety-function ids, site, country,
+  and the collection provenance (`method`, `notes`, who or what took it);
+* for a machine that is `uncollectable` or `incomplete`, **also the last
+  observation that did succeed** (with its manifest), so the workspace can say
+  how long the machine has been unobserved instead of "never".
+
+## What is not sent
+
+Any export file, program, firmware image or configuration. The collection plan.
+Local file system paths (the collection root and the plan path are blanked in
+the hosted record). The *reason* a collection failed — it can contain a path —
+which stays in your local ledger; the hosted record says only that the look
+failed. The ledger itself. Supplier advisory findings and Article 14 drafts from
+your run: use `POST /v1/change/assess/advisory` for an advisory, and awareness
+and the Art. 14 track remain human decisions.
+
+`--dry-run` prints exactly the request bodies (formatted for reading; compact on
+the wire, same content) and opens no socket. It does not need the key.
+
+A large fleet is split: each request stays under `--max-body-bytes` (default
+900,000, below the server's 1 MiB cap) and at most 200 machines; `push` says how
+many requests it made and why. A single machine report too large for any request
+is named and not sent.
+
+## What the hosted side does with it
+
+`POST /v1/watch/report` (Cell plan, the same `Machine` gate as `/v1/change`: 401
+with no or an invalid key, 402 when authenticated but not entitled) writes to
+**your own per-account ledger and nowhere else**.
+
+* It **records the manifest** with `record_manifest` and calls the same
+  `assess_drift` that `/v1/change/assess/drift` and `watch run` use, over the
+  divergence `compare()` computes against the manifest *this ledger* holds. It
+  derives no safety finding of its own, and it does not trust the `changed` /
+  `unchanged` you send: it compares, and records what it computed beside what
+  you claimed. A machine with no earlier manifest there gets a baseline, not a
+  finding.
+* The case is opened before the manifest is sealed — the order `run_watch` uses —
+  so a crash between the two leaves a retry landing on the same case.
+* Each observation is sealed as the same `watch.observation` record the runner
+  seals, so `_last_observation_at` and the stale logic read the hosted ledger
+  unchanged. `plan` and `root` are empty there.
+* **A failed look is recorded as a failed look.** `uncollectable` and
+  `incomplete` are never a successful observation, never advance or close a case
+  (the open ones are named in the response and left exactly where they were), and
+  never make a machine current. A failed look may not carry a manifest. A
+  positive look must carry one, and it is refused if the manifest says its
+  collection was incomplete. Cases are only ever opened by this route, as an
+  `automation` actor; nothing a report does can close one.
+* **Idempotent.** Every machine entry has a digest; one already held writes
+  nothing (`already_recorded`), so a retry after a timeout opens no second case
+  and no second record. An entry **older** than what is recorded for that machine
+  is ignored (`superseded_by_newer_observation`), so a delayed report cannot
+  rewind the record; a *different* observation at an instant already recorded is
+  refused. An `observed_at` more than five minutes ahead of the server's clock is
+  refused.
+
+The response says, per machine, `recorded` / `already_recorded` / `refused` and
+why, which case a drift opened or found, and a `limitations` list.
+
+## What the workspace shows
+
+`GET /v1/fleet/observations` (Cell): per machine, the last **successful**
+observation, the last attempt and its status, how old the last success is,
+`consecutive_failed_attempts`, open case ids, and `stale`. A machine is stale
+when its last *successful* observation is older than the cadence your latest
+report declared (`max_age_hours`; 168 if none), or when it has never been
+reported — an enrolled machine nobody reported is stale, not current. An account
+that has never pushed sees "No Watch report received", not a green list.
+
+One behaviour change in the local watch, made so both sides agree: an
+`incomplete` look (the plan named items it did not find) no longer counts as a
+look for `stale_observations`. It never was an observation of the whole machine.
+
+## What this does not establish
+
+* The hosted service **cannot tell a true report from a false one**. These are
+  observations reported by the holder of your key; it did not watch any machine.
+* It is as good as the export and the plan, exactly as the local watch is.
+* A machine omitted from a report is not reported as anything; its silence shows
+  as staleness once the cadence has passed.
+* Hosted Watch — scheduled collection run for you — does not exist. Watch still
+  runs in your kit or cron; the workspace shows what you choose to report.
