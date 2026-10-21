@@ -36,7 +36,7 @@ Supported Operations
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 from typing import Any
 
 from neuralbridge.adapters.base import AdapterResponse, BaseAdapter
@@ -161,11 +161,11 @@ class AWSS3Adapter(BaseAdapter):
         mock_buckets = [
             {
                 "Name": "neuralbridge-assets",
-                "CreationDate": datetime.datetime.now(datetime.UTC).isoformat(),
+                "CreationDate": dt.datetime.now(dt.UTC).isoformat(),
             },
             {
                 "Name": "neuralbridge-logs",
-                "CreationDate": datetime.datetime.now(datetime.UTC).isoformat(),
+                "CreationDate": dt.datetime.now(dt.UTC).isoformat(),
             },
         ]
         return AdapterResponse(success=True, data=mock_buckets)
@@ -190,14 +190,14 @@ class AWSS3Adapter(BaseAdapter):
             "Contents": [
                 {
                     "Key": "documents/report.pdf",
-                    "LastModified": datetime.datetime.now(datetime.UTC).isoformat(),
+                    "LastModified": dt.datetime.now(dt.UTC).isoformat(),
                     "ETag": '''"mock-etag-1"''',
                     "Size": 1024,
                     "StorageClass": "STANDARD",
                 },
                 {
                     "Key": "images/logo.png",
-                    "LastModified": datetime.datetime.now(datetime.UTC).isoformat(),
+                    "LastModified": dt.datetime.now(dt.UTC).isoformat(),
                     "ETag": '''"mock-etag-2"''',
                     "Size": 512,
                     "StorageClass": "STANDARD",
