@@ -20,24 +20,24 @@ is what makes the sealed bundle worth buying.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from assurance.api.deps import (
     Anyone,
     Machine,
+    Metered,
+    MeterTicket,
     get_accounts,
     get_register,
-    spend,
 )
 from assurance.billing.accounts import AccountStore, Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
-from assurance.machine.bundle import build_bundle
-from assurance.machine.bundle import verify_bundle as _verify_bundle_file
+from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.ssm import separation_required
@@ -84,6 +84,13 @@ class VerifyIn(BaseModel):
     role: str = Field(default="verification engineer", max_length=200)
     seal: bool = Field(default=True,
                        description="append the sealed bundle to the evidence ledger")
+    subject: str = Field(
+        default="", max_length=400,
+        description="file the sealed bundle under this ledger subject. Give the "
+                    "machine's key (manufacturer/model#serial) for the verification "
+                    "to count as evidence for that unit in coverage, re-verification "
+                    "and the passport; omitted, it is filed under product@version, "
+                    "a product line")
 
 
 class BundleCheckIn(BaseModel):
@@ -92,6 +99,11 @@ class BundleCheckIn(BaseModel):
     bundle: dict[str, Any]
     envelope: dict[str, Any] | None = None
     trace: dict[str, Any] | None = None
+    limits: dict[str, Any] | None = Field(
+        default=None,
+        description="the body-region limits table the bundle was verified against, "
+                    "if its envelope names one; without it a power-and-force bundle "
+                    "cannot be replayed and is reported as integrity-only")
 
 
 def _bad(exc: Exception, what: str) -> HTTPException:
@@ -108,18 +120,15 @@ def _bad(exc: Exception, what: str) -> HTTPException:
 async def separation(
     body: SeparationIn,
     response: Response,
-    principal: Annotated[Principal, Anyone],
-    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    meter: Annotated[MeterTicket, Metered("separation")],
 ) -> dict[str, Any]:
     """S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.
 
     Two things this returns that a spreadsheet usually gets wrong: Sh runs over
     the reaction time as well as the stop time, and Ss is flagged when the
     requested speed is above the speed the stopping distance was measured at.
+    Counted once the answer is complete (``billing/metering.py``).
     """
-    limit = principal.plan.separations_per_day
-    spend(principal, "separation", limit, accounts)
-
     from assurance.machine.envelope import (
         FigureBasis,
         SensingUncertainty,
@@ -159,12 +168,6 @@ async def separation(
     except (AssuranceError, ValueError) as exc:
         raise _bad(exc, "separation_inputs") from exc
 
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("separation", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
-
     notes = [
         "Sh runs over the reaction time and the stop time together. A person "
         "keeps moving while the cell is still noticing them.",
@@ -185,7 +188,7 @@ async def separation(
             "at short range is normally taken as 2000 mm/s."
         )
 
-    return {
+    result = {
         "required_separation_mm": breakdown.total_mm,
         "breakdown": breakdown.to_dict(),
         "explain": breakdown.explain(),
@@ -195,6 +198,8 @@ async def separation(
             "they describe your machine, and it is not a risk assessment.",
         ],
     }
+    meter.commit(response)
+    return result
 
 
 @machine_router.post(
@@ -242,14 +247,50 @@ async def verify_run(
         actor=Actor(identifier=body.actor, role=body.role, kind="person"),
         limits=limits,
         ledger=register.ledger if (body.seal and register is not None) else None,
+        subject=body.subject,
     )
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
+    # The hash a re-verification cites (``verification_content_hash`` on
+    # POST /v1/change/cases/{id}/reverification); also at evidence.content_hash.
+    payload["content_hash"] = bundle.content_hash
     payload["verdict"] = bundle.verdict.value
     payload["tier"] = bundle.tier.value
     payload["may_claim_physical_behaviour"] = \
         bundle.result.may_claim_physical_behaviour
     return payload
+
+
+def _check_bundle_sync(body: BundleCheckIn) -> BundleCheck:
+    """Parse the optional originals and run the checker. CPU-bound: runs in a worker thread."""
+    envelope = trace = limits = None
+    try:
+        if body.envelope is not None:
+            envelope = SafetyEnvelope.from_dict(body.envelope)
+    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+        raise _bad(exc, "inputs") from exc
+    if body.trace is not None:
+        samples = body.trace.get("samples")
+        if isinstance(samples, list) and len(samples) > MAX_SAMPLES:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error": "trace_too_large",
+                    "detail": f"{len(samples)} samples exceeds the {MAX_SAMPLES} this "
+                              "endpoint accepts. Use `assurance machine check` "
+                              "locally; it applies the same rules.",
+                },
+            )
+        try:
+            trace = Trace.from_dict(body.trace)
+        except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+            raise _bad(exc, "inputs") from exc
+    if body.limits is not None:
+        try:
+            limits = LimitsTable.from_dict(body.limits)
+        except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+            raise _bad(exc, "limits") from exc
+    return check_bundle_data(body.bundle, envelope=envelope, trace=trace, limits=limits)
 
 
 @machine_router.post(
@@ -266,35 +307,41 @@ async def check_bundle(
     Deliberately outside every paywall. If a bundle can only be checked by
     someone with a subscription, it is a vendor certificate rather than
     evidence, and the customer's auditor is right to ignore it.
+
+    ``ok`` means no inconsistency was found. ``level`` says how far the check got:
+    ``integrity_only`` (seal and coherence, the engine was not re-run on the
+    originals, so nothing shows the machine behaved as recorded), ``reproduced``
+    (the original envelope, trace and, if needed, limits table were supplied and
+    re-running the engine reproduced every sealed field) or ``rejected``. Each flag
+    under ``checked`` is true only if that check ran and passed. A seal is not a
+    signature.
+
+    The checking is CPU work, so it runs in a worker thread and cannot stall the
+    event loop; the request size cap is unchanged.
     """
     del principal, accounts  # free and unmetered, on purpose
 
-    import tempfile
-    from pathlib import Path
+    result = await run_in_threadpool(_check_bundle_sync, body)
 
-    envelope = trace = None
-    try:
-        if body.envelope is not None:
-            envelope = SafetyEnvelope.from_dict(body.envelope)
-        if body.trace is not None:
-            trace = Trace.from_dict(body.trace)
-    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
-        raise _bad(exc, "inputs") from exc
-
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "bundle.json"
-        p.write_text(json.dumps(body.bundle), encoding="utf-8")
-        ok, problems = _verify_bundle_file(p, envelope=envelope, trace=trace)
-
-    recorded = (body.bundle.get("evidence") or {}).get("body") or {}
+    evidence = body.bundle.get("evidence")
+    recorded = evidence.get("body") if isinstance(evidence, dict) else None
+    if not isinstance(recorded, dict):
+        recorded = {}
     return {
-        "ok": ok,
-        "problems": problems,
+        "ok": result.ok,
+        "level": result.level,
+        "reproduced": result.reproduced,
+        # Problems first, then the "NOT CHECKED: ..." notes (the contract before
+        # `limitations` existed); `limitations` repeats only the second kind.
+        "problems": result.notes,
+        "limitations": list(result.limitations),
         "checked": {
-            "seal": True,
-            "internal_consistency": True,
-            "against_original_envelope": envelope is not None,
-            "against_original_trace": trace is not None,
+            "seal": result.seal_intact,
+            "internal_consistency": result.internally_consistent,
+            "against_original_envelope": result.reproduced,
+            "against_original_trace": result.reproduced,
+            "against_limits": result.reproduced and bool(recorded.get("limits_hash")),
+            "reproduced": result.reproduced,
         },
         "recorded_verdict": recorded.get("verdict"),
         "recorded_tier": recorded.get("tier"),

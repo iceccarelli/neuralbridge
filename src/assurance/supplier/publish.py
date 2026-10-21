@@ -46,7 +46,9 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Iterable
+import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +58,11 @@ from ..attest.keys import SigningKey, VerifyingKey
 from ..core.errors import AssuranceError
 from ..core.identity import canonical_json, content_hash_of, format_utc, utc_now
 from ..fleet.advisory import ComponentAdvisory
+
+try:  # POSIX only; where it is missing the process-level lock still holds
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 __all__ = [
     "FEED_FORMAT",
@@ -228,6 +235,25 @@ def _parse_feed_text(text: str, *, source: str) -> list[SignedAdvisory]:
     return out
 
 
+class _FeedLock:
+    """One re-entrant lock per feed path, plus the file lock held while it is owned."""
+
+    def __init__(self) -> None:
+        self.rlock = threading.RLock()
+        self.depth = 0
+        self.handle: Any = None
+
+
+_FEED_LOCKS: dict[str, _FeedLock] = {}
+_FEED_LOCKS_GUARD = threading.Lock()
+
+
+def _feed_lock_for(path: Path) -> _FeedLock:
+    key = str(path.resolve())
+    with _FEED_LOCKS_GUARD:
+        return _FEED_LOCKS.setdefault(key, _FeedLock())
+
+
 class AdvisoryFeed:
     """A supplier's append-only feed, one JSON record per line.
 
@@ -235,10 +261,43 @@ class AdvisoryFeed:
     server, an integrator must be able to copy it onto a USB stick and carry it
     into a plant with no network, and both must be able to read it without this
     software installed.
+
+    A feed is a hash chain and is never rewritten, so a fork cannot be repaired:
+    whoever reads the head and then appends must do both under :meth:`locked`.
+    The lock is a re-entrant in-process lock keyed by the file's real path, plus
+    ``flock`` on a ``<feed>.lock`` sidecar so a second process (a CLI publish
+    beside the API) is held off as well where ``fcntl`` exists.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold the feed's write lock; nested use by the same thread is fine."""
+        lock = _feed_lock_for(self.path)
+        with lock.rlock:
+            if lock.depth == 0 and fcntl is not None:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                lock.handle = open(  # noqa: SIM115 - closed in the finally below
+                    self.path.with_name(self.path.name + ".lock"), "a", encoding="utf-8")
+                try:
+                    fcntl.flock(lock.handle, fcntl.LOCK_EX)
+                except BaseException:
+                    lock.handle.close()
+                    lock.handle = None
+                    raise
+            lock.depth += 1
+            try:
+                yield
+            finally:
+                lock.depth -= 1
+                if lock.depth == 0 and lock.handle is not None:
+                    try:
+                        fcntl.flock(lock.handle, fcntl.LOCK_UN)
+                    finally:
+                        lock.handle.close()
+                        lock.handle = None
 
     def read(self) -> list[SignedAdvisory]:
         if not self.path.exists():
@@ -250,10 +309,11 @@ class AdvisoryFeed:
         return records[-1] if records else None
 
     def append(self, record: SignedAdvisory) -> SignedAdvisory:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.to_dict(), sort_keys=True,
-                                    separators=(",", ":")) + "\n")
+        with self.locked():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record.to_dict(), sort_keys=True,
+                                        separators=(",", ":")) + "\n")
         return record
 
     def __len__(self) -> int:
@@ -308,6 +368,18 @@ def publish(
     withdrawal of it — because an integrator who already acted on the first one
     needs both records to exist.
     """
+    with feed.locked():
+        return _publish_locked(advisory, identity, key, feed, rotating, now)
+
+
+def _publish_locked(
+    advisory: ComponentAdvisory,
+    identity: SupplierIdentity,
+    key: SigningKey,
+    feed: AdvisoryFeed,
+    rotating: bool,
+    now: datetime | None,
+) -> SignedAdvisory:
     sequence, previous, history = _next(feed, identity, key, rotating)
 
     for earlier in history:
@@ -365,6 +437,19 @@ def withdraw(
             "because of the original; 'withdrawn' without a reason tells them "
             "nothing about whether to change it back."
         )
+    with feed.locked():
+        return _withdraw_locked(advisory_id, reason, identity, key, feed, rotating, now)
+
+
+def _withdraw_locked(
+    advisory_id: str,
+    reason: str,
+    identity: SupplierIdentity,
+    key: SigningKey,
+    feed: AdvisoryFeed,
+    rotating: bool,
+    now: datetime | None,
+) -> SignedAdvisory:
     sequence, previous, history = _next(feed, identity, key, rotating)
 
     target = next((r for r in history

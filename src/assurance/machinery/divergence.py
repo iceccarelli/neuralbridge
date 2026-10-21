@@ -101,6 +101,12 @@ class Divergence:
     changes: tuple[Change, ...]
     checks_skipped: tuple[str, ...]
     tier: AssuranceTier
+    #: Items whose equality could not be established: no hash on one side, or an
+    #: observed hash that was not read off the machine. Nothing was compared, so
+    #: nothing is reported unchanged.
+    uncompared: tuple[str, ...] = ()
+    #: Whether the observed manifest is a record of looking at a machine.
+    observed_as_found: bool = True
 
     @property
     def identical(self) -> bool:
@@ -127,8 +133,18 @@ class Divergence:
 
     @property
     def verdict(self) -> str:
-        """``matches`` | ``drifted`` | ``safety_relevant_drift``."""
+        """``matches`` | ``unverifiable`` | ``drifted`` | ``safety_relevant_drift``.
+
+        ``matches`` is a claim that every item was compared and none moved. It is
+        made only when every item carries a hash on both sides, every observed
+        hash was read off the machine, and the observed manifest is an
+        ``as_found`` one. Otherwise an unchanged-looking result is
+        ``unverifiable``: nothing was seen, which is not the same as nothing
+        changed.
+        """
         if self.identical and not self.changes:
+            if self.uncompared or not self.observed_as_found:
+                return "unverifiable"
             return "matches"
         if self.safety_relevant:
             return "safety_relevant_drift"
@@ -145,6 +161,7 @@ class Divergence:
                          "configuration": self.observed_configuration},
             "changes": [c.to_dict() for c in self.changes],
             "affected_functions": list(self.affected_functions),
+            "uncompared": list(self.uncompared),
             "tier": self.tier.value,
             "checks_skipped": list(self.checks_skipped),
         }
@@ -152,6 +169,8 @@ class Divergence:
     def summary(self) -> str:
         head = {
             "matches": "MATCHES — the configuration is the one that was signed off",
+            "unverifiable": "UNVERIFIABLE — nothing moved that could be seen, and "
+                            "some of it could not be seen",
             "drifted": "DRIFTED — changes found, none on a safety-bearing item",
             "safety_relevant_drift":
                 "SAFETY-RELEVANT DRIFT — a safety-bearing item has changed",
@@ -187,6 +206,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
 
     b_ids = {i.item_id for i in baseline.items}
     o_ids = {i.item_id for i in observed.items}
+    uncompared: list[str] = []
 
     for item_id in sorted(o_ids - b_ids):
         item = observed.item(item_id)
@@ -222,6 +242,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         functions = tuple(sorted(set(b.implements) | set(o.implements)))
 
         if not (b.is_comparable and o.is_comparable):
+            uncompared.append(item_id)
             caveats.append(
                 f"{item_id} carries no hash in one or both manifests "
                 f"({b.hash_source.value} / {o.hash_source.value}), so a change to it "
@@ -236,6 +257,14 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
                     before=_summary(b), after=_summary(o), functions=functions,
                 ))
             continue
+
+        if not o.hash_source.describes_this_unit:
+            uncompared.append(item_id)
+            caveats.append(
+                f"{item_id}: the observed hash is {o.hash_source.value}, not read from "
+                "the machine, so an equal hash says what the file is, not what the "
+                "machine holds. It is NOT reported as unchanged."
+            )
 
         if b.content_hash != o.content_hash:
             changes.append(Change(
@@ -307,4 +336,6 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         changes=tuple(changes),
         checks_skipped=tuple(dict.fromkeys(caveats)),
         tier=tier,
+        uncompared=tuple(dict.fromkeys(uncompared)),
+        observed_as_found=observed.source.value == "as_found",
     )

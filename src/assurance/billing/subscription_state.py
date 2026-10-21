@@ -38,8 +38,11 @@ __all__ = [
 ]
 
 #: Tiers a Stripe checkout may grant. Never ``free``, never ``supplier``
-#: (sales-assigned), never anything a payload merely claims.
-PURCHASABLE_TIERS = ("register", "cell")
+#: (sales-assigned), never anything a payload merely claims. ``payg`` is a
+#: usage-based subscription: holding it grants nothing by itself (it has no
+#: register, no machine verification) and bills only while the deployment has
+#: pay-as-you-go configured (``plans.payg_available``).
+PURCHASABLE_TIERS = ("register", "cell", "payg")
 
 #: Stripe subscription statuses, and what each does to the entitlement.
 ENTITLED = {"active", "trialing"}

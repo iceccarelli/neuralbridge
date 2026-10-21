@@ -208,11 +208,21 @@ def _decide_verdict(
     *, advisory_evaluated: bool, matches: list[dict[str, Any]],
     human_review_required: bool, coverage: CoverageReport | None,
     required_actions: list[str], valid: int, insufficient: int,
-    cannot_determine: int,
+    cannot_determine: int, chain_verified: bool = True,
 ) -> AssuranceVerdict:
+    """The customer's one answer.
+
+    Two things may never be said without having been seen. ``no_impact_found`` and
+    ``verified`` both rest on the ledger being whole, so when its chain does not
+    verify the answer is ``cannot_determine`` — unless something was found, in
+    which case what was found stands (a broken chain can hide a record, never
+    invent a match). And ``verified`` needs at least one declared function that is
+    current: a machine with no declared safety functions has nothing verified.
+    """
     if advisory_evaluated:
         if not matches:
-            return AssuranceVerdict.NO_IMPACT_FOUND
+            return (AssuranceVerdict.NO_IMPACT_FOUND if chain_verified
+                    else AssuranceVerdict.CANNOT_DETERMINE)
         if required_actions:
             return AssuranceVerdict.REQUIRES_REVERIFICATION
         if human_review_required:
@@ -224,6 +234,8 @@ def _decide_verdict(
         return AssuranceVerdict.CANNOT_DETERMINE
     if required_actions:
         return AssuranceVerdict.REQUIRES_REVERIFICATION
+    if not chain_verified or not coverage.functions:
+        return AssuranceVerdict.CANNOT_DETERMINE
     if cannot_determine and not valid and not insufficient:
         # every declared function is NOT_DEMONSTRABLE: there is no check that
         # could ever cover it, which is a structural gap, not a missing
@@ -310,7 +322,7 @@ def run_enrolled_check(
         advisory_evaluated=advisory is not None, matches=matches,
         human_review_required=human_review_required, coverage=record.coverage,
         required_actions=required, valid=valid, insufficient=insufficient,
-        cannot_determine=cannot_determine,
+        cannot_determine=cannot_determine, chain_verified=fleet.chain_verified,
     )
     interventions = sorted(record.interventions, key=lambda i: i.occurred_at)
     latest = _intervention_summary(interventions[-1]) if interventions else None

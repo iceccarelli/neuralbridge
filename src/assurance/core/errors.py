@@ -24,6 +24,15 @@ class LedgerIntegrityError(AssuranceError):
     """
 
 
+class LedgerConflictError(AssuranceError):
+    """An append was refused because the ledger moved since the caller read it.
+
+    Deliberately **not** a :class:`LedgerIntegrityError`: the chain is fine. It is
+    the compare-and-swap of a read-modify-append that lost its race. Nothing was
+    written; the caller re-reads and decides again.
+    """
+
+
 class EvidenceIncompleteError(AssuranceError):
     """A required field is absent and no defensible default exists.
 

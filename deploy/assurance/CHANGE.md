@@ -99,7 +99,7 @@ decided by the case's state, in `assurance.change.service._open_or_update`:
 | Existing case | A repeat observation of the same trigger | Ledger |
 |---|---|---|
 | none | open it | 1 `opened` entry |
-| `open`, or `in_review` with nothing re-verified | replace the facts and work list with the fresh reading (no progress to protect) | an `updated` entry **only if something differs** |
+| `open`, or `in_review` with nothing re-verified | replace the **facts** with the fresh reading; the **work** (re-verifications, actions, questions) can only grow, a repeat look never drops what is outstanding | an `updated` entry **only if something differs** |
 | `awaiting_action` and later (`awaiting_reverification`, `ready_to_close`) | **additive only**: new machines, new functions, new questions are added; a function already tracked is never re-inflated; if the addition makes `ready_to_close` untrue the case steps back | an `updated` entry only if something was added |
 | `closed` | nothing — **unless** it genuinely recurred (below) | nothing, or 1 `reopened` entry |
 | `rejected` | nothing for an identical trigger. A different trigger id (a different configuration, a different advisory) is a different case and opens normally. An **advisory** that now exposes a machine the rejection did not name reopens it, exactly as for `closed` | nothing, or 1 `reopened` entry |
@@ -184,11 +184,17 @@ caller:
   or — for an advisory, which has no observation time — **the case's own
   opening time**, stamped by the case and never supplied by a caller. A bundle
   that already existed when the change was found cannot be evidence about it;
-- that bundle passed **every** check the function declares; and
+- **that one bundle** passed **every** check the function declares (a newer
+  bundle for one check plus an older one for another does not clear it);
+- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). A
+  simulation trace is `community` and a datasheet figure `profile`: they are
+  about a model or a number, not the machine, so they never clear an entry. It
+  stays required, reads `below_validated:<tier>` in `evidence_current`, the case
+  records why in `checks_skipped`, and only a person's waiver closes it; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,
-`no_new_evidence`, …) in `evidence_current`. A function the manifest no longer
+`no_new_evidence`, `below_validated:<tier>`, …) in `evidence_current`. A function the manifest no longer
 declares stays required.
 
 **Every function an advisory reaches needs evidence** — not only those that were
@@ -225,8 +231,8 @@ any entry that: does not verify; makes a move its kind of entry cannot make
 (e.g. `open -> closed`); records `ready_to_close`/`closed` with work outstanding;
 rewrote the case's history rather than appending; altered a prior closure;
 removed required work on an entry that cannot remove it (only a
-`reverification`, a person's recorded resolution or waiver, a fresh reading
-before any work started, or a reopening can); is a `reverification` that cites
+`reverification`, a person's recorded resolution or waiver, or a reopening can;
+a repeat observation never can); is a `reverification` that cites
 no `supports` evidence, or evidence that is not a sealed verification, was
 sealed before the case's current cycle, or is for a machine the case does not
 concern; is sealed as a different kind than the ledger files it under;
@@ -235,38 +241,134 @@ person. It reports; it does not repair. `replay.case` equals `CaseStore.get`
 whenever every entry verifies. This is what "reconstructable from the
 authoritative record" means here, as a function that can fail.
 
+**A ledger that does not verify shows no case and takes no write.** The store
+skips an entry whose sealed evidence no longer verifies, which is right for a
+replay that reports it and wrong for a screen: a case whose newest entry was
+edited would read as the state before the edit. So `CaseStore.require_intact()`
+runs before every write and before every read an interface presents as the case:
+HTTP answers `500 {"error": "ledger_integrity"}` (also from `POST
+/v1/watch/report`, which records nothing onto a broken chain) and the CLI prints
+`THE LEDGER CHAIN DOES NOT VERIFY` to stderr first, prints nothing to stdout and
+exits 2. `replay` and `export` keep their own behaviour (a report of the
+violations; a refusal), and both always walk the whole chain.
+
+**The check is incremental, and what that costs in detection.** A full walk is
+~55 microseconds per record (1 s at 20 000), too much for every request, so
+`EvidenceLedger.verify_cached()` (`assurance/evidence/chain_cache.py`) remembers
+per ledger file (resolved path + inode + device, so replacing the file
+invalidates it) the head a full walk verified, and on each call (a) re-reads that
+head record and confirms it is unchanged and still hashes, which catches
+truncation, a rewind and a replacement at the head, and (b) verifies completely
+every record appended since, which catches garbage appended after the head.
+Measured on a 20 000-record ledger on a loaded machine: a full walk 1.9-2.5 s;
+the incremental check 1.0 ms unchanged and 2.4 ms after 5 appends. The
+trade-off, plainly: **an in-place edit of an *old* record by someone with write
+access to the database file is seen at the next full pass, not on every read.**
+A full pass happens at the first check in each process, whenever the last one is
+older than `ASSURANCE_CHAIN_RECHECK_SECONDS` (default 60; `0` = every check is a
+full walk), and on every `verify_chain` (export, replay, `GET /v1/ledger/verify`,
+fleet reads). An incremental pass never extends the age of the full pass it rests
+on, a failure is never remembered as a pass, and a failing full walk forgets the
+cache. The cache is per process. A chain rebuilt to be self-consistent is caught
+by neither kind of pass; that is what a signed head attestation
+(`assurance attest`) is for.
+
+Two guards sit on top of that. **Human decisions never use the cached check:**
+`decide` (close / reject / defer), `resume`, `resolve-decision` and
+`waive-reverification` walk the whole chain before they seal, so an in-place edit
+inside the window is refused at the moment a person is about to rely on the case.
+And **a case write is a compare-and-swap**: `CaseStore.get` remembers the
+ledger position of the newest entry of the case, and the append is refused
+(`CaseConflictError`, HTTP 409 `case_conflict`, CLI `finding:`, nothing written)
+inside the ledger's own write transaction if another writer has appended to that
+case since, so a close can never land on top of a move made after the person
+read the case. Machine-driven writers (assess, watch ingest, advisory
+withdrawal) re-read and recompute instead; people are told and decide again.
+
 ## Surfaces
 
 ```
 assurance change assess-drift | assess-advisory | assess-intervention
                  list | show | claim | advance | reverify
-                 resolve-decision | waive-reverification | decide | resume | replay
+                 resolve-decision | waive-reverification | decide | resume
+                 replay | export
 
-POST /v1/change/assess/drift
-POST /v1/change/assess/advisory
-GET  /v1/change/cases
+POST /v1/change/assess/drift                       {baseline, observed, actor?}
+        # the baseline is the newest manifest the account's ledger holds for the
+        # machine in another configuration; the body's is used only if none is
+        # sealed. The response says which (baseline_source: ledger | request).
+POST /v1/change/assess/advisory                    {advisory, actor?}
+POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
+GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}
-POST /v1/change/cases/{case_id}/claim
-POST /v1/change/cases/{case_id}/advance
-POST /v1/change/cases/{case_id}/reverification
-POST /v1/change/cases/{case_id}/decision
+GET  /v1/change/cases/{case_id}/export             a bundle `assurance evidence verify` checks
+GET  /v1/change/cases/{case_id}/replay             the case rebuilt from the ledger alone
+POST /v1/change/cases/{case_id}/claim              {owner, actor}
+POST /v1/change/cases/{case_id}/advance            {actor}
+POST /v1/change/cases/{case_id}/reverification     {manifest, verification_content_hash, actor}
+POST /v1/change/cases/{case_id}/resolve-decision   {decision, resolution, actor}
+POST /v1/change/cases/{case_id}/waive-reverification {entry, reason, actor}
+POST /v1/change/cases/{case_id}/decision           {disposition, reason, actor}
+POST /v1/change/cases/{case_id}/resume             {reason, actor}
 ```
 
 Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
-no new plan was added.
+no new plan was added. 401 with no or an invalid key, 402 when authenticated but
+not entitled, always from the account's own ledger.
 
-MCP: `change_cases`, `change_case` (read), and `change_claim`, `change_advance`,
-`change_reverify` (thin relays to the routes above, no local logic). There is
-**deliberately no MCP tool for `decide`, `resume` or `resolve-decision`**: the
-MCP server is the surface an agent drives, and those are the decisions an agent
-must not make.
+MCP tools (exactly these): plans, spec_validate, machine_verify, register_cases, change_cases, change_case, change_export, change_claim, change_advance, change_reverify
 
-CLI, API and MCP call the same `assurance.change.service` functions. Known
-divergences, not fixed here: an unknown case id is `404` on `GET
-/v1/change/cases/{id}` but `409` on every `POST` (the service raises
-`CaseTransitionError`, which the routes map to 409); and the API has no route
-yet for `resume`, `resolve-decision` or `assess-intervention` — those are CLI
-and watch only.
+The change tools are thin relays to the routes above, with no local logic:
+`change_cases`, `change_case` and `change_export` read; `change_claim`,
+`change_advance` and `change_reverify` write. There is **deliberately no MCP
+tool for `decide`, `resume`, `resolve-decision` or `waive-reverification`** (nor
+for closing, rejecting or deferring): the MCP server is the surface an agent
+drives, and those are the decisions an agent must not make.
+`tests/test_interfaces_mcp.py` fails if a tool is added without this line being
+updated, and shows from the outside that no tool, whatever it is passed, reaches
+those routes (case ids are percent-encoded as one path segment).
+
+CLI, API and MCP call the same `assurance.change.service` functions, and the
+parity tests (`tests/test_interfaces_*.py`) run one sequence through the
+library, the command line, the HTTP API and the MCP read tools and compare.
+What is the same on every interface:
+
+| | |
+|---|---|
+| unknown case id | HTTP `404` `{"detail": {"error": "case_not_found", "case_id"}}` on every verb; CLI exit `2` on every verb (`show`, `claim`, ..., `replay`, `export`). The Article 14 register's `GET /v1/cases/{id}/export` and `art14 export` answer the same way (they used to export an empty bundle) |
+| a refused transition (wrong state, non-person actor on a decision, nothing outstanding) | HTTP `409` with the domain sentence; CLI exit `1`, `finding: ...` on stderr |
+| invalid input | HTTP `422`; CLI exit `2` |
+| the actor rules (`_require_human`), the waiver and resolution rules | one implementation, in the service; no interface re-implements them |
+| the queue | `GET /v1/change/cases` and `assurance change list --json` print the same document: `cases` (rows) and `summary` (`open`, `safety_relevant`, `awaiting_reverification`, `ready_to_close`, `degraded`, `deferred`, from `queue_summary`) |
+
+What is **intentionally different**, so nobody mistakes it for a bug:
+
+- `assurance change list` (the table) prints the work queue: open cases only,
+  plus a count of deferred ones, and exits `1` while any case is open (a cron
+  job can alert on it). The API and `list --json` return every case, or those
+  with `status`; `open` in the summary never includes deferred cases.
+- A command line with no `--actor` runs as automation: it may claim, advance and
+  reverify, and is refused (`exit 1`) on `decide`, `resume`, `resolve-decision`
+  and `waive-reverification`. The HTTP API requires a non-blank `actor` on every
+  write that moves a case (`422` otherwise), because the hosted record names
+  both the person and the account that vouched for them. `assess/*` may omit it
+  (recorded as automation).
+- `resolve-decision`: the CLI takes `--number` (position as `show` lists it);
+  the API takes `decision`, the question's exact text, so a position that moved
+  because someone else answered a question cannot answer the wrong one.
+- The API records `role` as "reviewer via account <id>"; the CLI records the
+  role only.
+- A verification only counts as evidence for a unit when it is filed under the
+  machine's key. `assurance machine verify --subject <manufacturer/model#serial>`
+  and `POST /v1/machine/verify {"subject": ...}` do that (without it a bundle is
+  filed under `product@version`, a product line, and `reverify` will not find
+  it). The API response carries the hash to cite as `content_hash`.
+
+**Reserved case fields.** `reviewer` and `last_valid_verification` exist on the
+model but nothing sets them (the owner claims; several people may advance,
+resolve or waive, each recorded in `history` and `resolved_decisions`), so they
+are not emitted by the API, `show --json` or the text view while empty. They are
+not data; do not build on them.
 
 ## What is not solved here
 
@@ -276,8 +378,9 @@ and watch only.
   it never collects from a machine. A customer may opt in to *report* a run to
   their own hosted ledger with `assurance watch push` (see `WATCH.md`); the
   hosted side then opens cases through the same `assess_drift`.
-- **No dashboard.** The customer-facing surface today is the CLI queue
-  (`assurance change list`) and the API's `GET /v1/change/cases`.
+- **The workspace is a client of the API.** `/assurance` (the Next.js app)
+  calls the routes above with the caller's own key; the CLI queue
+  (`assurance change list`) is the offline equivalent.
 - **No "action completed" tracking.** See above.
 - **Re-verification needs a newer bundle, and that is a choice.** A bundle that
   genuinely describes the machine after the change, but was sealed before the

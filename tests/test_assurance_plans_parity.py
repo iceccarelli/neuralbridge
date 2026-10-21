@@ -9,6 +9,7 @@ fails if a retired claim reappears in the plan data or the public copy.
 
 from __future__ import annotations
 
+import importlib
 import re
 from pathlib import Path
 
@@ -167,3 +168,104 @@ class TestNoRetiredClaims:
             text = _enforced_section(text)
         match = _RETIRED.search(text)
         assert match is None, f"{relative} says {match.group(0)!r}"
+
+
+# ---------------------------------------------------------------------------
+# pay as you go: on sale only when the deployment really has it
+# ---------------------------------------------------------------------------
+PRICING_TSX = ROOT / "app" / "components" / "PricingPlans.tsx"
+SIZING_TSX = ROOT / "app" / "components" / "SizingCalculator.tsx"
+
+
+class TestPayAsYouGoIsOffUnlessConfigured:
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        for name in ("ASSURANCE_PRICE_PAYG", "ASSURANCE_PAYG_METER_EVENT",
+                     "STRIPE_SECRET_KEY", "ASSURANCE_PAYG_ALLOW_LIVE",
+                     "ASSURANCE_PRICE_REGISTER", "ASSURANCE_PRICE_CELL"):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_the_default_catalogue_is_the_three_plans_the_page_falls_back_to(self):
+        assert [p["tier"] for p in public_catalogue()] == ["free", "register", "cell"]
+        assert [p["tier"] for p in _fallback_plans()] == ["free", "register", "cell"]
+
+    @pytest.mark.parametrize("env", [
+        {"ASSURANCE_PRICE_PAYG": "price_x"},                   # price, no meter
+        {"ASSURANCE_PAYG_METER_EVENT": "ops"},                 # meter, no price
+        {"ASSURANCE_PRICE_PAYG": "price_x", "ASSURANCE_PAYG_METER_EVENT": "ops",
+         "STRIPE_SECRET_KEY": "sk_live_abc"},                  # live mode, untested
+        {"ASSURANCE_PRICE_PAYG": "price_x", "ASSURANCE_PAYG_METER_EVENT": "ops",
+         "STRIPE_SECRET_KEY": "rk_live_abc"},
+    ])
+    def test_half_configured_or_live_is_not_advertised(self, monkeypatch, env):
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        assert "payg" not in [p["tier"] for p in public_catalogue()]
+
+    def test_fully_configured_in_test_mode_it_is_listed_and_purchasable(self, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_PRICE_PAYG", "price_x")
+        monkeypatch.setenv("ASSURANCE_PAYG_METER_EVENT", "ops")
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc")
+        listed = {p["tier"]: p for p in public_catalogue()}
+        assert listed["payg"]["purchasable"] is True
+        assert listed["payg"]["limits"]["metered_overage"] is True
+        assert set(listed["payg"]["limits"]) == set(listed["free"]["limits"])
+        assert [t for t in listed if t != "payg"] == ["free", "register", "cell"]
+
+    def test_the_live_opt_in_exists_and_is_explicit(self, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_PRICE_PAYG", "price_x")
+        monkeypatch.setenv("ASSURANCE_PAYG_METER_EVENT", "ops")
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc")
+        monkeypatch.setenv("ASSURANCE_PAYG_ALLOW_LIVE", "1")
+        assert "payg" in [p["tier"] for p in public_catalogue()]
+
+    def test_the_frontend_renders_it_only_from_the_live_catalogue(self):
+        text = PRICING_TSX.read_text(encoding="utf-8")
+        assert "p.tier === 'payg'" in text and "live ?" in text
+        assert "byTier('payg')" not in text
+        assert "payg" not in [p["tier"] for p in _fallback_plans()]
+
+    def test_no_price_or_plan_name_is_typed_into_the_pricing_component(self):
+        text = PRICING_TSX.read_text(encoding="utf-8")
+        body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+        assert not re.search(r"&euro;|€\s*\d|\b390\b|1,290", body), "a price is hard-coded"
+        for name in ("Validator", "Register", "Cell"):
+            assert f">{name}<" not in body, f"plan name {name!r} is hard-coded"
+
+
+class TestSizingCalculatorIsDerivedFromTheGates:
+    _NEED = re.compile(r"\{\s*key:\s*'(\w+)',\s*gate:\s*'(\w+)'")
+
+    def _needs(self):
+        found = dict(self._NEED.findall(SIZING_TSX.read_text(encoding="utf-8")))
+        assert found, "SizingCalculator no longer names the gate of each need"
+        return found
+
+    def test_each_need_names_the_flag_that_really_gates_its_routes(self):
+        from .test_assurance_entitlements import _gates, _v1
+
+        app = importlib.import_module("assurance.api.service").create_app()
+        routes = _v1(app)
+        carrier = {
+            "machine": ("POST", "/v1/machine/verify"),
+            "annex3": ("POST", "/v1/machinery/manifest"),
+            "fleet": ("GET", "/v1/fleet/machines"),
+            "change": ("GET", "/v1/change/cases"),
+            "attest": ("POST", "/v1/ledger/attest"),
+        }
+        assert set(self._needs()) == set(carrier), "a need was added or removed: map its route"
+        for need, gate in self._needs().items():
+            assert _gates(routes[carrier[need]]) == {gate}, (need, gate)
+
+    def test_the_gates_are_granted_by_exactly_the_plans_the_calculator_will_name(self):
+        by_tier = {p["tier"]: p["limits"] for p in _fallback_plans()}
+        for gate in set(self._needs().values()):
+            granted = [t for t, limits in by_tier.items() if limits[gate]]
+            assert granted == ["cell"], (gate, granted)
+        assert [t for t, limits in by_tier.items() if limits["register_access"]] == [
+            "register", "cell"]
+
+    def test_no_cap_or_case_sentence_is_typed_into_the_calculator(self):
+        text = SIZING_TSX.read_text(encoding="utf-8")
+        assert not re.search(r"\b20/day\b|\b50\b|per-case cap", text)
+        assert "CASES_NOT_METERED" in text and "FALLBACK_PLANS" in text

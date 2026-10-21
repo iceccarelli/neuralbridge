@@ -64,7 +64,8 @@ evidence and the basis is always reported, never flattened to a boolean:
 | `version` | probable | the label matches; the supplier published no hash |
 | `name_only` | possible | same component, version unknown or unlisted |
 
-`hash_mismatch` is the finding no other system on the market can produce:
+`hash_mismatch` is the finding that a label and an artefact disagree with the
+supplier's own figures:
 
 ```
   Grimaldi/AR-7#0418   Plant 2, Line 6   [contradictory] ITM-FW 3.8.2
@@ -76,6 +77,38 @@ evidence and the basis is always reported, never flattened to a boolean:
 ```
 
 It is counted in **neither** column. Not affected, not clear.
+
+Names and version labels are compared as the same string in different dress:
+Unicode compatibility-normalised, case-folded, whitespace collapsed — so a composed
+and a decomposed `ü`, `ß` and `SS`, or a trailing tab from a spreadsheet, match.
+That is identity, not similarity: `ControlCo` and `Control Co GmbH` do not match.
+Hashes are compared as whole values, case-insensitively, never by prefix. Only a
+hash **read from the machine** counts: one from a vendor file or typed in says what
+should be there, so the label decides. When an advisory lists several entries for a
+component, the strongest basis any of them supports wins (hash, then
+hash_mismatch, then version, then name_only), so the order the supplier listed
+them in cannot change the answer. An item that records no supplier but carries the
+advisory's component name is `name_only`: neither affected nor clear.
+
+A fleet read from a ledger whose chain does not verify is never `clear`: records
+may have been dropped, so the report is `needs_review`. A report over an empty
+fleet says no machine was assessed.
+
+Names and version labels are compared as the same string in different dress:
+Unicode compatibility-normalised, case-folded, whitespace collapsed — so a composed
+and a decomposed `ü`, `ß` and `SS`, or a trailing tab from a spreadsheet, match.
+That is identity, not similarity: `ControlCo` and `Control Co GmbH` do not match.
+Hashes are compared as whole values, case-insensitively, never by prefix. Only a
+hash **read from the machine** counts: one from a vendor file or typed in says what
+should be there, so the label decides. When an advisory lists several entries for a
+component, the strongest basis any of them supports wins (hash, then
+hash_mismatch, then version, then name_only), so the order the supplier listed
+them in cannot change the answer. An item that records no supplier but carries the
+advisory's component name is `name_only`: neither affected nor clear.
+
+A fleet read from a ledger whose chain does not verify is never `clear`: records
+may have been dropped, so the report is `needs_review`. A report over an empty
+fleet says no machine was assessed.
 
 **No version-range arithmetic.** Vendor version schemes are not semver, parsing
 them as if they were is how a cell gets cleared that should have been stopped,

@@ -27,8 +27,9 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import format_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.trace import MAX_FILE_BYTES
 from assurance.machinery.divergence import Divergence
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
@@ -169,10 +170,13 @@ def record_divergence(
             method=f"baseline {divergence.baseline_id} compared against observed "
                    f"{divergence.observed_id}",
         ),
-        validation_state=(
-            ValidationState.VERIFIED if divergence.verdict == "matches"
-            else ValidationState.REFUTED
-        ),
+        # "unverifiable" is neither: nothing that could be seen moved, and some of
+        # it could not be seen. Sealing that as refuted would be as wrong as
+        # sealing it as verified.
+        validation_state={
+            "matches": ValidationState.VERIFIED,
+            "unverifiable": ValidationState.INDETERMINATE,
+        }.get(divergence.verdict, ValidationState.REFUTED),
         confidence=Confidence.HIGH if divergence.tier.may_claim_physical_behaviour
         else Confidence.MEDIUM,
         checks_skipped=divergence.checks_skipped,
@@ -342,17 +346,140 @@ def build_passport(
     )
 
 
+_COVERAGE_STATES = ("current", "stale", "failing", "never_verified", "not_demonstrable")
+
+
+def _passport_coherence(
+    evidence: Evidence, raw: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Whether the passport hangs together without the ledger, and whether the
+    blocks printed beside the seal are the ones the seal covers.
+
+    As with a verification bundle, the seal is a content hash and covers the
+    evidence object only; the manifest, coverage and intervention list printed in
+    the same file are what a reader looks at, and each must repeat the sealed body.
+    Returns ``(problems, limitations)``.
+    """
+    problems: list[str] = []
+    limits: list[str] = []
+    body = evidence.body
+
+    if evidence.kind != PASSPORT_KIND:
+        problems.append(f"the sealed evidence is of kind {evidence.kind!r}, not "
+                        f"{PASSPORT_KIND!r}; this is not a machine passport.")
+
+    functions = body.get("functions")
+    if not isinstance(functions, list) or not all(isinstance(f, dict) for f in functions):
+        problems.append("the sealed function list is not a list of objects.")
+        functions = []
+    uncovered = 0
+    for f in functions:
+        state = f.get("coverage")
+        if state not in _COVERAGE_STATES:
+            problems.append(f"function {f.get('function_id')!r} has coverage {state!r}, "
+                            f"which is not one of {', '.join(_COVERAGE_STATES)}.")
+            uncovered += 1
+            continue
+        if state != "current":
+            uncovered += 1
+        elif not f.get("last_verified_hash"):
+            problems.append(f"function {f.get('function_id')!r} is recorded as current "
+                            "but names no verification that made it so.")
+        if state == "stale" and not f.get("invalidated_by"):
+            problems.append(f"function {f.get('function_id')!r} is recorded as stale "
+                            "but names no intervention that made it so.")
+    implied = ("no_functions_declared" if not functions
+               else "covered" if not uncovered else "gaps")
+    if body.get("verdict") != implied:
+        problems.append(
+            f"the passport records verdict {body.get('verdict')!r} but its own "
+            f"function list implies {implied!r} ({uncovered} not current).")
+
+    want_state = ("verified" if body.get("verdict") == "covered" else "indeterminate")
+    if evidence.validation_state.value != want_state:
+        problems.append(
+            f"the sealed validation state is {evidence.validation_state.value!r} but "
+            f"the verdict {body.get('verdict')!r} requires {want_state!r}.")
+    if evidence.confidence.value in ("high", "established") and not (
+            body.get("verdict") == "covered" and body.get("ledger_chain_verified") is True):
+        problems.append(
+            f"the sealed confidence is {evidence.confidence.value!r}, which a passport "
+            "earns only when it is covered and the ledger chain verified.")
+
+    # -- the half of the file the seal does not cover -------------------------
+    printed_cov = raw.get("coverage")
+    if printed_cov is None:
+        limits.append("NOT CHECKED: the file carries no coverage block beside the seal.")
+    elif not isinstance(printed_cov, dict):
+        problems.append("the printed coverage block is not an object.")
+    else:
+        if printed_cov.get("verdict") != body.get("verdict"):
+            problems.append(
+                f"the printed coverage says {printed_cov.get('verdict')!r}; the sealed "
+                f"evidence says {body.get('verdict')!r}. The coverage block was edited.")
+        if content_hash_of(printed_cov.get("functions")) != content_hash_of(functions):
+            problems.append("the printed coverage's functions differ from the sealed "
+                            "evidence's. The coverage block was edited.")
+
+    printed_man = raw.get("manifest")
+    if printed_man is None:
+        limits.append("NOT CHECKED: the file carries no manifest beside the seal.")
+    else:
+        try:
+            m = SafetyManifest.from_dict(printed_man)
+        except (AssuranceError, KeyError, TypeError, ValueError, AttributeError) as exc:
+            problems.append(f"the printed manifest cannot be read: {exc}")
+        else:
+            if m.content_hash() != body.get("manifest_hash") \
+                    or m.configuration_hash() != body.get("configuration_hash"):
+                problems.append(
+                    "the printed manifest is not the one the sealed evidence names "
+                    f"(printed {m.content_hash()[:12]}, sealed "
+                    f"{str(body.get('manifest_hash'))[:12]}). It was edited.")
+
+    printed_ivs = raw.get("interventions")
+    if printed_ivs is None:
+        limits.append("NOT CHECKED: the file carries no intervention list beside the "
+                      "seal.")
+    elif not isinstance(printed_ivs, list) or not all(
+            isinstance(i, dict) for i in printed_ivs):
+        problems.append("the printed intervention list is not a list of objects.")
+    else:
+        printed_ids = [i.get("intervention_id") for i in printed_ivs]
+        if printed_ids != list(body.get("intervention_ids") or []):
+            problems.append(
+                "the printed intervention list is not the one the sealed evidence "
+                f"names (printed {printed_ids}, sealed "
+                f"{list(body.get('intervention_ids') or [])}). An intervention was "
+                "added or removed.")
+    return problems, limits
+
+
 def verify_passport(
     passport_path: str | Path, *, ledger: EvidenceLedger | None = None,
 ) -> tuple[bool, list[str]]:
     """Re-check a passport without trusting whoever produced it.
 
-    Returns ``(ok, problems)``. As with a verification bundle, supplying nothing
-    to check against yields ``ok`` *with* a stated limitation rather than a clean
-    pass: the seal proves the file was not edited, not that the machine is safe.
+    Returns ``(ok, problems)``. As with a verification bundle, the seal proves the
+    file was not edited and a seal anyone can recompute proves nothing about
+    whether the claim hangs together, so the sealed claim is checked for coherence
+    and the manifest, coverage and intervention list printed beside it are checked
+    against the sealed body. Supplying nothing to check against yields ``ok``
+    *with* a stated limitation rather than a clean pass. A file that cannot be
+    read is a problem, not an exception.
     """
     problems: list[str] = []
-    raw = json.loads(Path(passport_path).read_text(encoding="utf-8"))
+    limitations: list[str] = []
+    path = Path(passport_path)
+    if path.stat().st_size > MAX_FILE_BYTES:
+        return False, [f"{path.name} is larger than the {MAX_FILE_BYTES} bytes this "
+                       "checker will read."]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        return False, [f"the file is not readable JSON: {exc}"]
+    if not isinstance(raw, dict):
+        return False, [f"the file holds a JSON {type(raw).__name__}, not a passport."]
 
     if raw.get("schema") != PASSPORT_SCHEMA:
         return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r}."]
@@ -360,7 +487,9 @@ def verify_passport(
     try:
         evidence = Evidence.from_dict(raw["evidence"])
     except Exception as exc:  # noqa: BLE001 - a verifier reports, it does not raise
-        return False, [f"the sealed evidence could not be read: {exc}"]
+        return False, [f"the sealed evidence could not be read: {exc!r}"]
+    if not isinstance(evidence.body, dict):
+        return False, ["the sealed evidence body is not an object."]
 
     if not evidence.verify():
         problems.append(
@@ -368,14 +497,9 @@ def verify_passport(
             f"({evidence.content_hash[:16]}). The passport was edited after sealing.")
 
     body = evidence.body
-    functions = body.get("functions") or []
-    uncovered = [f for f in functions if f.get("coverage") != "current"]
-    implied = "covered" if functions and not uncovered else (
-        "no_functions_declared" if not functions else "gaps")
-    if body.get("verdict") != implied:
-        problems.append(
-            f"the passport records verdict {body.get('verdict')!r} but its own "
-            f"function list implies {implied!r} ({len(uncovered)} not current).")
+    coherence, coherence_limits = _passport_coherence(evidence, raw)
+    problems.extend(coherence)
+    limitations.extend(coherence_limits)
 
     if body.get("ledger_chain_verified") is False:
         problems.append(
@@ -395,12 +519,11 @@ def verify_passport(
         for h in body.get("verification_hashes") or []:
             if ledger.get(h) is None:
                 problems.append(
-                    f"verification {h[:12]} is named by this passport and is not in "
-                    "the supplied ledger.")
-    elif not problems:
-        problems.append(
+                    f"verification {str(h)[:12]} is named by this passport and is not "
+                    "in the supplied ledger.")
+    else:
+        limitations.insert(0, (
             "NOT CHECKED: no ledger was supplied, so only the passport's internal "
-            "integrity was confirmed. Nothing here shows the records it names exist.")
-        return True, problems
+            "integrity was confirmed. Nothing here shows the records it names exist."))
 
-    return not problems, problems
+    return not problems, problems + limitations

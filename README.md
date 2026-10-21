@@ -22,9 +22,11 @@ Two regulations turned that from a quality problem into a legal one:
 | **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning naming the Member States where the product is available. Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
 | **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
 
-Neither is satisfiable from a spreadsheet. Both are satisfiable from a
-hash-chained record of what is on each machine, what was verified against it,
-and when.
+Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
+process. Software of ours satisfies neither for you. What a hash-chained record
+of what is on each machine, which checks were run against it, and when can do is let
+a manufacturer evidence its own process, and show a reviewer which records
+stopped describing the machine.
 
 That record is what this builds.
 
@@ -79,7 +81,7 @@ software does not do.
   day it happened.
 - **A Declaration of Conformity that stopped describing the machine.** Bound to
   a configuration hash, so the moment it stops matching is a date, not an
-  argument. Free to check, forever, because the person who most needs it is the
+  argument. Free to check (the route never calls the meter), because the person who most needs it is the
   buyer, not the seller.
 - **A ledger that was quietly shortened.** Caught by joining a counter-signature
   back to the chain.
@@ -104,10 +106,12 @@ software does not do.
 | **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
 | **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
-Verification is free at every tier and always will be: the audience for a piece
-of evidence is a regulator, an insurer or a customer's customer, none of whom
-will ever hold an API key here. Evidence only a paying customer can check is
-worth nothing.
+Re-checking someone else's evidence needs no account and no key: 20 a day per
+address, and no daily cap on Register and Cell (`POST /v1/evidence/verify`
+spends a unit of the same daily allowance as the Article 14 validator; the cap is
+an anti-abuse limit, not a price). The audience for a piece of evidence is a
+regulator, an insurer or a customer's customer, and evidence only a paying
+customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
@@ -146,7 +150,7 @@ src/dashboard/        Vite/React admin UI (not wired to the assurance API)
 ```
 
 ```bash
-pytest tests/ -q        # 671 tests
+python -m pytest tests/ -q --no-cov   # a green run has 0 skipped (see CLAUDE.md)
 ruff check src/
 ```
 

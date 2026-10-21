@@ -699,6 +699,46 @@ class TestAnIncompleteCollectionIsNotAConfiguration:
         assert again.prior_closures == ()
         assert reconstruct_case(ledger, case_b.case_id).ok
 
+    def test_an_incomplete_first_look_is_not_sealed_as_the_baseline(
+            self, work, config, ledger, store):
+        (work / "0501" / "robot-params.json").unlink()
+        run = run_watch(config, ledger, now=T0)
+        partial = next(o for o in run.outcomes if o.serial == "0501")
+        assert partial.collection_complete is False
+        assert partial.status != "observed"
+        # Nothing was agreed as the configuration: the record holds no baseline.
+        assert manifests_from_ledger(ledger, KEY_0501) == []
+        assert "baseline" in partial.detail and "incomplete" in partial.detail
+        # The attempt is recorded, as an incomplete one.
+        body = [e.evidence().body for e in ledger.entries(kind="watch.observation")
+                if e.evidence().body["serial"] == "0501"][-1]
+        assert body["complete"] is False and body["missing"] == ["ITM-PARAMS"]
+
+        # The fault clears: the first complete look is the baseline and is not a drift.
+        reexport(work, "0501", stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181")
+        again = run_watch(config, ledger, now=T0 + WEEK)
+        second = next(o for o in again.outcomes if o.serial == "0501")
+        assert second.status == "first_seen" and second.collection_complete is True
+        assert len(manifests_from_ledger(ledger, KEY_0501)) == 1
+        assert store.list() == []
+        assert case_kind_entries(ledger) == []
+
+    def test_an_incomplete_look_is_never_the_baseline_the_next_look_is_judged_against(
+            self, work, config, ledger, store):
+        run_watch(config, ledger, now=T0)
+        good = manifests_from_ledger(ledger, KEY_0501)[-1]
+        (work / "0501" / "robot-params.json").unlink()
+        run_watch(config, ledger, now=T0 + WEEK)       # may open a case: the gap is real
+        after_gap = case_kind_entries(ledger)
+        reexport(work, "0501", stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181")
+        run = run_watch(config, ledger, now=T0 + 2 * WEEK)
+        back = next(o for o in run.outcomes if o.serial == "0501")
+        # Compared with the last complete configuration, not with the partial one:
+        # the machine is as it was, and that is not a second drift.
+        assert back.status == "observed", back.detail
+        assert back.previous_configuration == good.configuration_hash()
+        assert case_kind_entries(ledger) == after_gap
+
     def test_a_complete_look_has_no_incomplete_mark(self, work, config, ledger):
         run_watch(config, ledger, now=T0)
         assert "collection incomplete" not in manifests_from_ledger(ledger, KEY_0501)[-1].notes

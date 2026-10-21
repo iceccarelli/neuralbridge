@@ -62,7 +62,7 @@ export default function OpengraphImage() {
               maxWidth: '920px',
             }}
           >
-            A hash-chained record of what is on each machine, what was verified, and when.
+            A hash-chained record of what is on each machine, which checks were run against it, and when.
           </div>
         </div>
 

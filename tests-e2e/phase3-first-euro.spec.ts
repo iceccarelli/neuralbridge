@@ -45,7 +45,7 @@ test.describe('checkout-success next-step panel', () => {
 
     // The two concrete next-step cards this phase added.
     await expect(page.getByText(/open your first register case/i)).toBeVisible();
-    await expect(page.getByText(/open \/ai and paste this key/i)).toBeVisible();
+    await expect(page.getByText(/use \/ai with this key/i)).toBeVisible();
     await expect(page.getByRole('link', { name: '/ai' })).toHaveAttribute('href', '/ai');
   });
 

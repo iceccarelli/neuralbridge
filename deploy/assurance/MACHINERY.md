@@ -4,9 +4,9 @@ Machinery Regulation (EU) 2023/1230 applies from **20 January 2027**. Annex III
 1.1.9 requires a machine to identify its safety-relevant software and to record
 evidence of intervention in it.
 
-Almost nobody can do either today. The safety PLC program is on a laptop, the
-scanner zones are in a vendor tool, the robot's safety parameters are in the
-controller, and the only record that a technician changed any of them is that
+Doing either by hand is hard. The safety PLC program may be on a laptop, the
+scanner zones in a vendor tool, the robot's safety parameters in the controller,
+and the only record that a technician changed any of them may be that
 technician's memory.
 
 ## The three verbs
@@ -37,6 +37,28 @@ configuration as a whole.
 
 An item with no hash is reported as **uncomparable**, never as unchanged.
 
+A comparison answers `matches` only when every item has a hash on both sides, every
+observed hash was read from the machine, and the observed manifest is `as_found`.
+Otherwise a comparison with no visible change is `unverifiable` (exit status 1,
+sealed as indeterminate): nothing that could be seen moved, and some of it could
+not be seen.
+
+The fleet treats the latest `as_found` manifest of a machine as the machine; a
+baseline (`as_declared`) filed later does not replace it, a plan (`as_intended`)
+is never current, and a `taken_at` later than the moment the manifest was filed is
+not believed.
+
+A comparison answers `matches` only when every item has a hash on both sides, every
+observed hash was read from the machine, and the observed manifest is `as_found`.
+Otherwise a comparison with no visible change is `unverifiable` (exit status 1,
+sealed as indeterminate): nothing that could be seen moved, and some of it could
+not be seen.
+
+The fleet treats the latest `as_found` manifest of a machine as the machine; a
+baseline (`as_declared`) filed later does not replace it, a plan (`as_intended`)
+is never current, and a `taken_at` later than the moment the manifest was filed is
+not believed.
+
 ## Drift
 
 ```bash
@@ -60,7 +82,7 @@ version string, as above, is the one nobody catches by hand.
 
 Free and unmetered-by-account at `POST /v1/machinery/diff`, 10 per day.
 
-## The join — the part nobody else has
+## The join — the part that needs both halves
 
 `assurance.machine` says: *on this run the cell met its declared separation,
 speed and workspace limits.* `assurance.machinery` says: *on 14 March a
@@ -82,8 +104,20 @@ customer so a reviewer can point at the one they disagree with:
 1. an intervention names the **item** it touched
 2. the manifest says which **safety functions** that item implements
 3. each function declares the **verification checks** that exercise it
-4. a verification recorded before that intervention, whose verified checks
-   intersect that set, no longer describes the machine
+4. a verification whose run started before that intervention (or at the same
+   instant) no longer describes the machine
+
+A function is **covered** only when *every* check it declares has been verified,
+each judged by the newest run that exercised it. Verifying one check of two is not
+cover; a newer failing run ends the cover an older passing run gave; a run in
+which a check was `not_applicable` says nothing for or against it. Cover that
+rests on a verification below the `validated` tier (a simulated trace, a datasheet
+figure) is labelled as such in the report.
+
+A verification is dated by the start of its trace. If that start is unreadable, or
+is later than the moment the bundle was filed, the date cannot be trusted and the
+verification is treated as the earliest possible time, so every recorded change
+counts as after it.
 
 A verification is dated by **when the run happened**, not when the bundle was
 filed. A run captured in February and filed in June is evidence about February.
@@ -94,8 +128,8 @@ filed. A run captured in February and filed in June is evidence about February.
 |---|---|
 | `current` | a passing verification exists and nothing since has disturbed it |
 | `stale` | it was verified, and a later intervention invalidated that verification |
-| `failing` | the checks for this function ran and did not pass |
-| `never_verified` | no verification has ever exercised this function |
+| `failing` | the newest run of one of its checks did not pass it |
+| `never_verified` | at least one check it declares has never been verified |
 | `not_demonstrable` | the function declares no checks, so nothing could cover it |
 
 Only `current` counts as covered. `not_demonstrable` is not a pass — it is the
@@ -143,6 +177,15 @@ not evidence.
 Checking a passport with no ledger returns `ok` **with** a stated limitation, not
 a clean pass. The seal proves the file was not edited. It does not prove the
 machine is safe.
+
+The seal covers the evidence object only; the manifest, coverage and intervention
+list printed beside it are what a reader looks at, so the checker compares each
+with the sealed body (an edited coverage block, a removed intervention, or a
+manifest that is not the one the seal names is rejected), and checks the sealed
+claim is coherent without the ledger: a function recorded `current` must name the
+verification that made it so, a `stale` one the intervention that did, and the
+validation state and confidence must agree with the verdict. A file that cannot be
+read is reported, never raised.
 
 ## What it will not tell you
 

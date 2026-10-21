@@ -95,6 +95,8 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(json.dumps(fleet.to_dict(), indent=2))
     else:
         print(fleet.table())
+    if not fleet.chain_verified:
+        return 2          # could not vouch for the ledger; not 'quiet', not 'gaps'
     return 0 if not fleet.with_gaps() else 1
 
 

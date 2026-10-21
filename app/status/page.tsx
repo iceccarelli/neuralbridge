@@ -36,7 +36,7 @@ const items: ChecklistItem[] = [
     label: 'Stripe webhook registered',
     done: false,
     detail: 'Cannot be checked from a static build.',
-    action: 'Create the endpoint at https://<your-fly-app>.fly.dev/v1/billing/webhook, subscribed to checkout.session.completed, customer.subscription.updated, customer.subscription.deleted. See DEPLOY_NOW.md §3.',
+    action: 'Create the endpoint at https://<your-fly-app>.fly.dev/v1/billing/webhook, subscribed to the events the handler reads: checkout.session.completed, checkout.session.async_payment_succeeded, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted (src/assurance/api/billing_routes.py:post_webhook). See DEPLOY_NOW.md §3.',
   },
   {
     label: 'GitHub Pages enabled (docs mirror)',

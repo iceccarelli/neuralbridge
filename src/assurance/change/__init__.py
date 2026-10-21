@@ -25,11 +25,14 @@ work from, with a status that never claims more than the evidence does.
 from assurance.change.model import CaseStatus, ChangeAssuranceCase, TriggerType
 from assurance.change.replay import CaseReplay, reconstruct_case
 from assurance.change.service import (
+    CaseNotFoundError,
     CaseTransitionError,
+    UnknownInterventionError,
     advance,
     assess_advisory,
     assess_drift,
     assess_intervention,
+    assess_recorded_intervention,
     case_id_for,
     claim,
     decide,
@@ -39,20 +42,24 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CaseStore, CaseStoreError
+from assurance.change.store import CaseConflictError, CaseStore, CaseStoreError
 
 __all__ = [
     "CaseReplay",
     "CaseStatus",
     "CaseStore",
+    "CaseConflictError",
+    "CaseNotFoundError",
     "CaseStoreError",
     "CaseTransitionError",
     "ChangeAssuranceCase",
     "TriggerType",
+    "UnknownInterventionError",
     "advance",
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
+    "assess_recorded_intervention",
     "case_id_for",
     "claim",
     "decide",

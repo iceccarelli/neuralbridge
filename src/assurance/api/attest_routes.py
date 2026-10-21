@@ -149,7 +149,7 @@ class VerifyIn(BaseModel):
 
 @attest_router.get(
     "/key",
-    summary="The public key this service counter-signs with. Free, forever.",
+    summary="The public key this service counter-signs with. No account needed.",
 )
 async def service_key() -> dict[str, Any]:
     """Fetch the verifying key and its fingerprint.

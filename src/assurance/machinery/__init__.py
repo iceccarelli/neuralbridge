@@ -10,8 +10,8 @@ evidence of intervention in it.
     staleness     which safety functions are still covered by valid evidence
     record        sealing all of it into the ledger, and the machine passport
 
-The join in :mod:`~assurance.machinery.staleness` is the part nobody else has:
-a firmware change recorded here invalidates, by name and by date, the
+The join in :mod:`~assurance.machinery.staleness` needs both halves: a firmware
+change recorded here invalidates, by name and by date, the
 :mod:`assurance.machine` verification that preceded it.
 """
 

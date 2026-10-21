@@ -38,6 +38,10 @@ Configuration, all by environment variable:
                         whose recorded traces are legitimately large
                         (default 32 MiB)
 ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+``ASSURANCE_PAYG_METER_EVENT`` / ``ASSURANCE_PAYG_METER_ID`` / ``ASSURANCE_PAYG_ALLOW_LIVE``
+                        pay-as-you-go, off unless ``ASSURANCE_PRICE_PAYG`` and
+                        ``ASSURANCE_PAYG_METER_EVENT`` are both set (see
+                        ``billing/plans.py:payg_available`` and the deploy README)
 
 **Tenancy.** Every ``/v1`` route reaches the ledger through
 :func:`get_register`, so tenant isolation is decided in exactly one place. A
@@ -50,19 +54,33 @@ that can forget a ``WHERE account_id = ?``.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
 import json
 import os
 import re
+import uuid
 from collections.abc import Awaitable, Callable, MutableMapping
+from dataclasses import dataclass
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 
-from ..billing.accounts import Account, AccountStore, Principal, QuotaExceededError
+from ..billing.accounts import (
+    Account,
+    AccountStore,
+    IdempotencyConflictError,
+    Principal,
+    QuotaExceededError,
+    SpendLimitError,
+)
+from ..billing.metering import allowance_for, payg_available, valid_idempotency_key
+from ..billing.plans import METERED_SCOPES
+from ..core.identity import format_utc, utc_now
 from ..evidence.ledger import EvidenceLedger
 from ..security.art14.engine import Art14Register
 
@@ -75,10 +93,17 @@ __all__ = [
     "max_body_bytes",
     "get_accounts",
     "current_principal",
+    "ENTITLEMENT_GATES",
+    "EvidenceReadout",
+    "MeterTicket",
+    "Metered",
+    "quota_refusal",
     "require_attestation",
+    "require_evidence_readout",
     "require_machine",
     "require_register",
     "require_supplier",
+    "seconds_until_reset",
     "spend",
     "auth_mode",
     "ledger_path",
@@ -357,26 +382,294 @@ def get_register(
     return _tenant_register_for(str(path))
 
 
+def seconds_until_reset() -> tuple[int, str]:
+    """Seconds until the UTC day rolls over, and that instant as an ISO time.
+
+    The daily allowance resets at UTC midnight for everyone (see
+    ``AccountStore.consume``), so a refused caller can be told exactly when to
+    come back instead of guessing.
+    """
+    now = utc_now()
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((midnight - now).total_seconds())), format_utc(midnight)
+
+
+def quota_refusal(
+    *, error: str, scope: str, limit: int, used: int, tier: str, remedy: str,
+    extra: dict[str, Any] | None = None,
+) -> HTTPException:
+    """A 429 that says what ran out, when it opens again and what to do about it."""
+    retry, resets_at = seconds_until_reset()
+    detail: dict[str, Any] = {
+        "error": error, "scope": scope, "limit": limit, "used": used, "tier": tier,
+        "remedy": remedy, "resets_at": resets_at, "retry_after_seconds": retry,
+    }
+    detail.update(extra or {})
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail,
+        headers={"Retry-After": str(retry)},
+    )
+
+
+def _quota_remedy(limit: int, *, tier: str = "free", scope: str = "validate") -> str:
+    """What to do about a spent daily allowance, true for this plan and this route.
+
+    Pay-as-you-go bills only the scopes in ``METERED_SCOPES``; a daily guard such
+    as ``evidence_verify`` is never billed, so it is not offered as a way past one,
+    and an account already on the ``payg`` plan is never told to choose it.
+    """
+    plans = "GET /v1/plans, then POST /v1/checkout"
+    if scope not in METERED_SCOPES:
+        text = (
+            f"This route is not billed per call, so pay-as-you-go does not extend it: "
+            f"its daily guard is {limit} calls per day, per caller, and it renews at "
+            f"resets_at. A Register or Cell plan has no daily cap on it ({plans})."
+        )
+        if tier == "payg":
+            text = ("Your account is on pay-as-you-go, and " + text[0].lower() + text[1:])
+        return text
+    if tier == "payg":
+        return (
+            f"Your account is on the pay-as-you-go plan, but billing is not active for it "
+            f"right now (it needs an active subscription bound to a Stripe customer, on a "
+            f"deployment where pay-as-you-go is configured), so the {limit} calls per day "
+            "are a hard cap. See GET /v1/usage; the allowance renews at resets_at."
+        )
+    text = (
+        f"The free allowance is {limit} calls per day, per caller. A paid plan removes "
+        f"the cap: see {plans}."
+    )
+    if payg_available():
+        text += (
+            " Pay-as-you-go (GET /v1/plans, tier payg) bills operations beyond the "
+            "allowance, up to a spend limit you set."
+        )
+    return text
+
+
 def spend(principal: Principal, scope: str, limit: int | None, accounts: AccountStore) -> None:
-    """Consume one unit of allowance, or refuse with a 429 that says what to do."""
+    """Consume one unit of allowance, or refuse with a 429 that says what to do.
+
+    For ``/ai`` reads, which are a daily guard and never billed: the unit is
+    taken before the read, so a read that then fails still counts. The billable
+    scopes use :func:`Metered`/``MeterTicket.commit``, which count only work
+    that succeeded.
+    """
     try:
         accounts.consume(principal.subject, scope, limit, principal.tier)
     except QuotaExceededError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "error": "quota_exceeded",
-                "scope": exc.scope,
-                "limit": exc.limit,
-                "used": exc.used,
-                "tier": exc.tier,
-                "remedy": (
-                    "The free validator allows "
-                    f"{exc.limit} calls per day. A paid plan removes the cap: see "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise quota_refusal(
+            error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# metered work: counted once, after it succeeded
+# ---------------------------------------------------------------------------
+def _metering_refusal(exc: Exception, principal: Principal) -> HTTPException:
+    """Map a store refusal onto the HTTP answer. Nothing was recorded."""
+    if isinstance(exc, SpendLimitError):
+        account = principal.account
+        zero = exc.limit_units == 0
+        return quota_refusal(
+            error="spend_limit_reached", scope=exc.scope, limit=exc.limit_units,
+            used=exc.used_units, tier=principal.tier,
+            remedy=(
+                "Pay-as-you-go is on for your account, but your monthly spend limit is 0, "
+                "so nothing past the free daily allowance is billed. "
+                if zero else
+                f"Your monthly spend limit of {exc.limit_units} billable units is reached "
+                f"({exc.used_units} used this UTC month), so this call was not run for "
+                "billing. "
+            ) + (
+                'Set a limit with POST /v1/usage/limits {"spend_limit_units": N}; see '
+                "GET /v1/usage. The free daily allowance renews at resets_at."
+            ),
+            extra={"spend_limit_units": exc.limit_units, "billable_units": exc.used_units,
+                   "account_id": account.id if account else ""},
+        )
+    if isinstance(exc, QuotaExceededError):
+        return quota_refusal(
+            error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
+        )
+    assert isinstance(exc, IdempotencyConflictError)
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "idempotency_key_reused",
+            "detail": str(exc),
+            "remedy": "Use a new Idempotency-Key for different work; reuse one only to "
+                      "retry the identical call.",
+        },
+    )
+
+
+@dataclass
+class MeterTicket:
+    """A promise to count one unit of ``scope`` if, and only if, the work succeeds.
+
+    ``begin`` (the :func:`Metered` dependency) refuses an obviously over-limit
+    caller before any work is done. The route then computes its whole answer.
+    :meth:`commit`, called immediately before the route returns, counts the
+    unit in the same transaction as the authoritative quota check. A route that
+    raises (a 422 from the domain, a bug) never reaches ``commit``, so a failed
+    operation records and costs nothing. See ``billing/metering.py``.
+    """
+
+    principal: Principal
+    scope: str
+    accounts: AccountStore
+    key: str
+    #: True when the client supplied the key (so a retry can be deduplicated).
+    client_key: bool
+    #: Hash of the request this ticket was issued for. A client key is bound to
+    #: it: the same key on a different request is a 409, never a free replay.
+    fingerprint: str = ""
+
+    @property
+    def limit(self) -> int | None:
+        return allowance_for(self.principal.plan, self.scope)
+
+    def _account(self) -> Account | None:
+        account = self.principal.account
+        return account if account is not None and account.id != _OPERATOR.id else None
+
+    def precheck(self) -> None:
+        limit = self.limit
+        if limit is None:
+            return
+        try:
+            account = self._account()
+            if account is not None:
+                self.accounts.check_usage(
+                    account.id, self.scope, 1, self.key if self.client_key else None,
+                    fingerprint=self.fingerprint)
+            else:
+                self.accounts.check_quota(
+                    self.principal.subject, self.scope, limit, self.principal.tier)
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
+            raise _metering_refusal(exc, self.principal) from exc
+
+    def commit(self, response: Response | None = None) -> None:
+        """Count the unit. Raises the 429/409 if the authoritative check refuses."""
+        limit = self.limit
+        event_id = ""
+        billable = 0
+        try:
+            account = self._account()
+            if limit is None:
+                pass
+            elif account is not None:
+                record = self.accounts.record_usage(
+                    account.id, self.scope, 1, self.key, fingerprint=self.fingerprint)
+                event_id, billable = record.event_id, record.billable_quantity
+            else:
+                self.accounts.consume(
+                    self.principal.subject, self.scope, limit, self.principal.tier)
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
+            raise _metering_refusal(exc, self.principal) from exc
+        if response is None:
+            return
+        response.headers["X-Assurance-Tier"] = self.principal.tier
+        if limit is not None:
+            used = self.accounts.usage_today(self.principal.subject).get(self.scope, 0)
+            response.headers["X-Assurance-Quota-Limit"] = str(limit)
+            response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
+        if event_id:
+            response.headers["X-Assurance-Usage-Event"] = event_id
+        if billable:
+            response.headers["X-Assurance-Billable-Units"] = str(billable)
+
+
+async def request_fingerprint(request: Request, scope: str) -> str:
+    """A hash of what a metered request asks for: scope, route, query, body.
+
+    The JSON body is canonicalised (sorted keys, no insignificant whitespace),
+    so a client that re-serialises the same document still replays; a body that
+    is not JSON is hashed as the bytes it is. The body is cached by Starlette,
+    so reading it here does not consume it for the route.
+    """
+    raw = await request.body()
+    try:
+        canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True).encode() if raw else b""
+    except ValueError:
+        canonical = raw
+    digest = hashlib.sha256()
+    for part in (scope, request.method, request.url.path,
+                 "&".join(sorted(f"{k}={v}" for k, v in request.query_params.multi_items()))):
+        digest.update(part.encode())
+        digest.update(b"\x00")
+    digest.update(canonical)
+    return digest.hexdigest()
+
+
+def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
+    """Dependency for a route that does metered work: ``Annotated[MeterTicket, Metered("x")]``.
+
+    Resolves the caller, validates the optional ``Idempotency-Key`` header
+    (a malformed one is a 400 that costs nothing), refuses a caller who is
+    certainly over their limit, and hands the route a :class:`MeterTicket`.
+    The route must call ``ticket.commit(response)`` once its answer is complete.
+    """
+    if scope not in METERED_SCOPES:
+        raise ValueError(f"{scope!r} is not a metered scope")
+
+    async def dependency(
+        principal: Annotated[Principal, Depends(current_principal)],
+        accounts: Annotated[AccountStore, Depends(get_accounts)],
+        request: Request,
+        idempotency_key: Annotated[str | None, Header()] = None,
+    ) -> MeterTicket:
+        if idempotency_key is not None and not valid_idempotency_key(idempotency_key):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_idempotency_key",
+                    "detail": "Idempotency-Key must be 1-255 characters of "
+                              "A-Z a-z 0-9 . _ : - (a UUID is ideal).",
+                },
+            )
+        ticket = MeterTicket(
+            principal=principal, scope=scope, accounts=accounts,
+            key=idempotency_key if idempotency_key is not None else f"auto:{uuid.uuid4().hex}",
+            client_key=idempotency_key is not None,
+            fingerprint=(await request_fingerprint(request, scope)
+                         if idempotency_key is not None else ""),
+        )
+        ticket.precheck()
+        return ticket
+
+    return Depends(dependency)
+
+
+_LAPSED_NOTE = (
+    " Your subscription has ended: new records and operational views are closed, "
+    "but your evidence is still yours - read, verify and export it with "
+    "GET /v1/cases, GET /v1/cases/{case_id}/export and GET /v1/ledger/verify."
+)
+
+
+def _payment_required(principal: Principal, error: str, remedy: str) -> HTTPException:
+    """The 402 for an authenticated caller whose plan lacks an entitlement.
+
+    A customer whose subscription ended is told what they can still do, so the
+    refusal never reads as "your records are gone".
+    """
+    account = principal.account
+    assert account is not None
+    note = _LAPSED_NOTE if account.ever_paid else ""
+    return HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={
+            "error": error,
+            "tier": principal.tier,
+            "account_status": account.status,
+            "remedy": remedy + note,
+        },
+    )
 
 
 async def require_register(
@@ -407,19 +700,37 @@ async def require_register(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.register:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_register",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "The register is included from the Register plan upward. "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_register",
+            "The register is included from the Register plan upward. "
+            "GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
+
+
+async def require_evidence_readout(
+    response: Response,
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The door for reading, verifying and exporting your own evidence.
+
+    Open to everyone :func:`require_register` admits, **and** to a customer whose
+    subscription has ended: records a manufacturer produced while paying are
+    theirs, and a payment lapse must not stand between them and an auditor.
+    A lapsed customer gets exactly the routes in
+    ``plans.EVIDENCE_READOUT_AFTER_LAPSE``, from their own ledger only
+    (:func:`get_register` still decides which file), and the response says so
+    in ``X-Assurance-Access``. Anyone who never paid still gets the 402.
+    """
+    try:
+        return await require_register(principal)
+    except HTTPException as exc:
+        account = principal.account
+        if exc.status_code != status.HTTP_402_PAYMENT_REQUIRED or account is None \
+                or not account.ever_paid:
+            raise
+        response.headers["X-Assurance-Access"] = "evidence-readout-only"
+        return principal
 
 
 async def require_machine(
@@ -439,20 +750,13 @@ async def require_machine(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.machine_verification:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_machine_verification",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Machine safety verification is included from the Cell plan "
-                    "upward. The separation calculator "
-                    "(POST /v1/machine/separation) and the bundle re-checker "
-                    "(POST /v1/machine/bundle/check) stay free. "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_machine_verification",
+            "Machine safety verification is included from the Cell plan "
+            "upward. The separation calculator "
+            "(POST /v1/machine/separation) and the bundle re-checker "
+            "(POST /v1/machine/bundle/check) stay free. "
+            "GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
 
@@ -477,21 +781,14 @@ async def require_attestation(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.signed_attestation:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_signed_attestation",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Counter-signed head attestation is included from the Cell "
-                    "plan upward. Verifying an attestation "
-                    "(POST /v1/ledger/attest/verify) and fetching the public key "
-                    "(GET /v1/ledger/attest/key) are free and always will be: an "
-                    "attestation only a paying customer can check is worth "
-                    "nothing. GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_signed_attestation",
+            "Counter-signed head attestation is included from the Cell "
+            "plan upward. Verifying an attestation "
+            "(POST /v1/ledger/attest/verify) and fetching the public key "
+            "(GET /v1/ledger/attest/key) need no plan: an "
+            "attestation only a paying customer can check is worth "
+            "nothing. GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
 
@@ -505,7 +802,7 @@ async def require_supplier(
     manufacturer. There is no self-serve Stripe price for this tier yet — see
     ADR-0001 — so today the only way in is a sales-assigned account tier.
     Reading a feed (GET /v1/supplier/feed/{id}) is deliberately outside this
-    gate and needs no account, same reasoning as every other free-forever
+    gate and needs no account, same reasoning as every other no-account
     verification route: the audience for a supplier's advisory is every
     integrator who might be affected, not a paying subscriber.
     """
@@ -522,19 +819,12 @@ async def require_supplier(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.supplier_publish:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_supplier_publish",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Publishing a signed advisory needs the Supplier tier, "
-                    "which is sales-assigned today (no self-serve price yet). "
-                    "Reading any supplier's feed stays free at "
-                    "GET /v1/supplier/feed/{supplier_id}. Contact sales."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_supplier_publish",
+            "Publishing a signed advisory needs the Supplier tier, "
+            "which is sales-assigned today (no self-serve price yet). "
+            "Reading any supplier's feed stays free at "
+            "GET /v1/supplier/feed/{supplier_id}. Contact sales.",
         )
     return principal
 
@@ -544,6 +834,19 @@ Machine = Depends(require_machine)
 Attesting = Depends(require_attestation)
 Supplying = Depends(require_supplier)
 Anyone = Depends(current_principal)
+EvidenceReadout = Depends(require_evidence_readout)
+
+#: Every entitlement gate, and what it consults. ``tests/test_assurance_entitlements.py``
+#: reads the live app and fails if a ``/v1`` route that touches tenant data
+#: carries none of these, or if a gating Plan flag (``plans.GATE_FLAGS``) is
+#: carried by no route.
+ENTITLEMENT_GATES: dict[Callable[..., Any], str] = {
+    require_register: "register",
+    require_machine: "machine_verification",
+    require_attestation: "signed_attestation",
+    require_supplier: "supplier_publish",
+    require_evidence_readout: "evidence_readout",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +857,16 @@ _TRACE_BODY_ENV = "ASSURANCE_MAX_TRACE_BODY_BYTES"
 _DEFAULT_BODY = 1024 * 1024
 _DEFAULT_TRACE_BODY = 32 * 1024 * 1024
 _TRACE_PATHS = frozenset({"/v1/machine/verify"})
+# The anonymous evidence verifier takes whole ledger exports. A 1 MiB cap would
+# refuse an export of a few thousand entries, and the point of the route is that
+# its caller has no account, so its cap cannot depend on a key: 4 MiB for
+# everyone, and only on this one path. An anonymous caller can therefore make the
+# server hold at most this much per request (the body is counted as it arrives,
+# not trusted from Content-Length), and each call costs a unit of the per-address
+# daily allowance before the body is read.
+_EVIDENCE_BODY_ENV = "ASSURANCE_MAX_EVIDENCE_BODY_BYTES"
+_DEFAULT_EVIDENCE_BODY = 4 * 1024 * 1024
+_EVIDENCE_PATHS = frozenset({"/v1/evidence/verify"})
 # Stripe events are a few KB. The webhook is read in full before its signature
 # is checked, so it gets a fixed small cap of its own: not the configurable one
 # (a mis-set value must never be why a payment event is lost) and not none (an
@@ -584,6 +897,8 @@ def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
         return _WEBHOOK_BODY
     if path in _TRACE_PATHS and authenticated:
         return _env_bytes(_TRACE_BODY_ENV, _DEFAULT_TRACE_BODY)
+    if path in _EVIDENCE_PATHS:
+        return _env_bytes(_EVIDENCE_BODY_ENV, _DEFAULT_EVIDENCE_BODY)
     return _env_bytes(_BODY_ENV, _DEFAULT_BODY)
 
 

@@ -15,6 +15,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/developers`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
     { url: `${SITE_URL}/applications`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
     { url: `${SITE_URL}/cli`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
+    { url: `${SITE_URL}/verify`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
     { url: `${SITE_URL}/console`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/ai`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/connectors/cursor`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },

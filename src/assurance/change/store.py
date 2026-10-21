@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from assurance.core.errors import AssuranceError
+from assurance.core.errors import AssuranceError, LedgerConflictError, LedgerIntegrityError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
@@ -35,8 +35,10 @@ __all__ = [
     "REVERIFICATION_KIND",
     "TRANSITION_KIND",
     "UPDATED_KIND",
+    "CaseConflictError",
     "CaseStore",
     "CaseStoreError",
+    "ChainBrokenError",
 ]
 
 OPENED_KIND = "assurance.change.opened"
@@ -53,15 +55,82 @@ CASE_KINDS = (OPENED_KIND, UPDATED_KIND, TRANSITION_KIND, REVERIFICATION_KIND,
               DECISION_KIND, REOPENED_KIND)
 
 
+class ChainBrokenError(LedgerIntegrityError):
+    """The ledger's hash chain does not verify; nothing in it is shown or extended."""
+
+
 class CaseStoreError(AssuranceError):
     """A case transition was asked for that the ledger's own history refuses."""
 
 
+class CaseConflictError(CaseStoreError):
+    """The case changed between this caller's read and its write; nothing was written.
+
+    Another writer (a person at another desk, a watch report, a second process)
+    appended to the case after it was read, so the step in hand was prepared from
+    state that is no longer the case. The caller re-reads and decides again —
+    :func:`~assurance.change.service.decide` of a case someone has just moved back
+    to re-verification must be refused, not recorded on top.
+    """
+
+    def __init__(self, case_id: str, detail: str = "") -> None:
+        super().__init__(
+            f"{case_id} changed while this step was being prepared: another writer "
+            "recorded something on it after it was read, so nothing was recorded. "
+            "Re-read the case and decide again." + (f" ({detail})" if detail else ""))
+        self.case_id = case_id
+
+
 class CaseStore:
-    """Read and write ``ChangeAssuranceCase`` state through one ledger."""
+    """Read and write ``ChangeAssuranceCase`` state through one ledger.
+
+    **No lost update.** Reading a case and appending its next snapshot are two
+    steps, and the newest snapshot *is* the case, so an unguarded append silently
+    overwrites whatever another writer recorded in between. :meth:`get` therefore
+    remembers, per case, the ledger position of the newest case entry it saw, and
+    every write is a compare-and-swap against it, checked by the ledger inside
+    its own ``BEGIN IMMEDIATE`` write transaction (so it holds across threads and
+    processes alike). A write whose case has moved raises
+    :class:`CaseConflictError`. A store is meant to be short-lived (one request,
+    one command): the position is whatever *this* store last read, and a write to
+    a case this store never read is not guarded (only opening one is: it must not
+    exist yet).
+    """
 
     def __init__(self, ledger: EvidenceLedger) -> None:
         self.ledger = ledger
+        self._heads: dict[str, int] = {}
+
+    def require_intact(self, *, full: bool = False) -> None:
+        """Refuse (``LedgerIntegrityError``) unless the ledger's whole chain verifies.
+
+        ``full=True`` is a complete walk of the chain (:meth:`EvidenceLedger.verify_chain`),
+        never the cached check. A human decision that settles or reshapes a case
+        (close, reject, defer, resume, resolve, waive) is rare and carries weight, so
+        it pays for the walk and never relies on the up-to-60 s window below.
+
+        :meth:`get` skips an entry whose sealed evidence no longer verifies, which
+        is right for a reconstruction that reports it, and wrong for anything that
+        would present the result as the case: a case whose newest entry was edited
+        would read as the state *before* the edit, with nothing to say so. Every
+        write is guarded by this, and every interface that shows a case calls it
+        first.
+
+        Incremental (:meth:`EvidenceLedger.verify_cached`): the head last verified
+        and everything appended since are checked on every call, so the cost is
+        O(new records), not a walk of the account's whole ledger per request. The
+        honest trade-off: an in-place edit of an *old* record by someone with write
+        access to the database file is seen at the next full pass (within
+        ``ASSURANCE_CHAIN_RECHECK_SECONDS``, default 60 s, and on any export,
+        replay or ``verify_chain``), not on every read. A rebuilt, self-consistent
+        chain is caught by neither; that is what a signed head attestation is for.
+        """
+        ok, problems = self.ledger.verify_chain() if full else self.ledger.verify_cached()
+        if not ok:
+            raise ChainBrokenError(
+                "the ledger's chain does not verify, so no case in it can be shown or "
+                "extended as fact:\n  " + "\n  ".join(problems[:5])
+                + (f"\n  ... and {len(problems) - 5} more" if len(problems) > 5 else ""))
 
     # -- reading ------------------------------------------------------
     def get(self, case_id: str) -> ChangeAssuranceCase | None:
@@ -72,13 +141,16 @@ class CaseStore:
         needed, and none trusted from inside a payload that could be forged.
         """
         latest: ChangeAssuranceCase | None = None
+        head = 0
         for entry in self.ledger.entries(subject=case_id):
             if entry.kind not in CASE_KINDS:
                 continue
+            head = entry.seq        # even an entry that does not verify is the head
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
             latest = ChangeAssuranceCase.from_dict(evidence.body["case"])
+        self._heads[case_id] = head
         return latest
 
     def list(self, *, status: CaseStatus | None = None) -> list[ChangeAssuranceCase]:
@@ -129,7 +201,9 @@ class CaseStore:
         # The last line of defence, below every service function: whatever
         # called this, a case is never recorded as ready to close or closed
         # while it still names work that has not been done or a question
-        # nobody has answered.
+        # nobody has answered, and nothing is appended to a chain that no
+        # longer verifies.
+        self.require_intact(full=kind == DECISION_KIND)
         if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):
             outstanding = [*(f"re-verification of {f}" for f in case.required_reverifications),
                            *(f"decision: {d}" for d in case.human_decisions_required)]
@@ -159,7 +233,16 @@ class CaseStore:
             else Confidence.LOW if stamped.confidence == "low" else Confidence.NONE,
             checks_skipped=stamped.checks_skipped,
         ).seal()
-        self.ledger.append(evidence, subject=stamped.case_id)
+        # Compare-and-swap against the case entry this store last read. An unread
+        # case is only guarded when it is being opened (it must not exist yet).
+        expected = self._heads.get(stamped.case_id, 0 if kind == OPENED_KIND else None)
+        try:
+            entry = self.ledger.append(
+                evidence, subject=stamped.case_id,
+                expect_subject_head=expected, expect_kinds=CASE_KINDS)
+        except LedgerConflictError as exc:
+            raise CaseConflictError(stamped.case_id, str(exc)) from exc
+        self._heads[stamped.case_id] = entry.seq
         return stamped
 
     def open(self, case: ChangeAssuranceCase, *, actor: Actor, detail: str) -> ChangeAssuranceCase:

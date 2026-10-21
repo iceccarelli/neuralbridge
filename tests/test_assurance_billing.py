@@ -359,8 +359,18 @@ class TestWebhook:
         )
         client.post("/v1/billing/webhook", content=cancel_raw, headers=cancel_headers)
 
-        # Paying stopped, so access stopped.
-        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 402
+        # Paying stopped, so the register stopped: no writes, no operational
+        # views. (Changed deliberately: this used to assert 402 on GET /v1/cases.
+        # Reading, verifying and exporting your own evidence stays open after a
+        # lapse - evidence is not held hostage to a payment; see
+        # plans.EVIDENCE_READOUT_AFTER_LAPSE and tests/test_assurance_entitlements.py.)
+        assert client.get("/v1/register", headers={"X-API-Key": key}).status_code == 402
+        write = client.post(
+            "/v1/cases/C-1/signal", headers={"X-API-Key": key},
+            json={"received_at": "2026-09-18T21:40:00Z", "channel": "customer_or_integrator",
+                  "description": "x", "actor": {"identifier": "a", "role": "b"}})
+        assert write.status_code == 402
+        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
 
     def test_past_due_keeps_access_and_warns(self, client):
         # Changed deliberately (it used to assert 402): a single failed card must

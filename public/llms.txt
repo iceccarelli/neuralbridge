@@ -1,7 +1,7 @@
 # Industrial Autonomous Assurance (NeuralBridge)
 
 > Evidence infrastructure for machines whose software can hurt someone. A
-> hash-chained record of what is on each machine, what was verified, and
+> hash-chained record of what is on each machine, which checks were run against it, and
 > when — built for two EU regulatory clocks: CRA Article 14 (Reg. (EU)
 > 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230).
 
@@ -15,7 +15,7 @@ hash-chained ledger for audit trails. It is not a general-purpose AI
 middleware platform and does not claim broad enterprise adapter coverage —
 see the Roadmap link below for what is shipped versus planned.
 
-## Pricing (three tiers, verification always free)
+## Pricing (three tiers; re-checking someone else's evidence needs no account: 20 a day per address)
 
 - **Validator** — Free, no card, no account required. Declaration/manifest/
   attestation verification, Article 14 draft validation and calculators,
