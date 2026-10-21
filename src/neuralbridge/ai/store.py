@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from assurance.core.sqlite import enable_wal
+
 #: v2 (tenant isolation): ``owner`` added to ``connections`` and ``plans``.
 #: A v1 file is migrated additively in place — existing rows get owner ``''``
 #: (legacy: operator-visible only; see ``neuralbridge.ai.tenancy``).
@@ -199,7 +201,7 @@ class AiStore:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         if str(self.path) != ":memory:":
-            db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(db)
         db.execute("PRAGMA foreign_keys=ON")
         return db
 

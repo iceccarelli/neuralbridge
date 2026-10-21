@@ -41,6 +41,7 @@ from typing import Any
 from ..core.errors import LedgerIntegrityError
 from ..core.evidence import Evidence
 from ..core.identity import content_hash_of, format_utc, utc_now
+from ..core.sqlite import enable_wal, retry_locked
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "EvidenceLedger", "LedgerEntry"]
 
@@ -120,15 +121,18 @@ class EvidenceLedger:
         # exhausts the file table under load.
         db = self._connect()
         try:
-            db.executescript(_SCHEMA)
+            # Several first opens can race (a new tenant's first parallel
+            # requests). The schema script is idempotent, and the version row is
+            # written with INSERT OR IGNORE, so whoever loses simply reads the
+            # winner's row. Busy errors wait; they are not failures.
+            retry_locked(lambda: db.executescript(_SCHEMA))
+            retry_locked(lambda: db.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(LEDGER_SCHEMA_VERSION),),
+            ))
             row = db.execute(
                 "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-            if row is None:
-                db.execute(
-                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (str(LEDGER_SCHEMA_VERSION),),
-                )
-            elif int(row[0]) != LEDGER_SCHEMA_VERSION:
+            if int(row[0]) != LEDGER_SCHEMA_VERSION:
                 raise LedgerIntegrityError(
                     f"{self.path} was written by ledger schema {row[0]}, this build speaks "
                     f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing."
@@ -140,7 +144,7 @@ class EvidenceLedger:
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(db)
         db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA foreign_keys=ON")
         return db

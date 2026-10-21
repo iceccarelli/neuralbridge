@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.identity import format_utc, utc_now
+from ..core.sqlite import enable_wal, retry_locked
 from .plans import Plan, plan_for
 
 __all__ = [
@@ -246,19 +247,18 @@ class AccountStore:
         # sqlite3's context manager commits; it does not close.
         db = self._connect()
         try:
-            db.executescript(_SCHEMA)
+            retry_locked(lambda: db.executescript(_SCHEMA))
+            retry_locked(lambda: db.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(ACCOUNTS_SCHEMA_VERSION),),
+            ))
             row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None:
-                db.execute(
-                    "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (str(ACCOUNTS_SCHEMA_VERSION),),
-                )
-            elif int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
+            if int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
                 raise RuntimeError(
                     f"{self.path} was written by accounts schema {row[0]}; this build "
                     f"speaks {ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
                 )
-            self._migrate(db)
+            retry_locked(lambda: self._migrate(db))
         finally:
             db.close()
 
@@ -330,7 +330,7 @@ class AccountStore:
             return db
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(db)
         db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA foreign_keys=ON")
         return db
