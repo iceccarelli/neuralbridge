@@ -22,7 +22,11 @@ export default function CasesPanel({
           <p data-testid="case-summary">
             {data.summary.open} open · {data.summary.safety_relevant} safety-relevant ·{' '}
             {data.summary.awaiting_reverification} awaiting re-verification · {data.summary.ready_to_close} ready for a
-            human decision
+            human decision · {data.summary.deferred ?? 0} deferred · {data.summary.degraded ?? 0} without a machine named
+          </p>
+          <p className="aw-note">
+            &ldquo;Open&rdquo; excludes deferred cases: a deferral is a person deciding not to act yet, not a settled
+            case. &ldquo;Without a machine named&rdquo; counts open cases raised from an incomplete picture.
           </p>
           {data.cases.length === 0 ? (
             <p className="console-empty-note">

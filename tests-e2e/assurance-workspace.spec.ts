@@ -159,7 +159,7 @@ test.describe('Assurance workspace', () => {
     const detail = page.getByTestId('case-detail');
     await expect(detail).toContainText('Safety functions and evidence', { timeout: 15_000 });
     await expect(detail).toContainText('What this does not establish');
-    await expect(page.getByTestId('case-history').locator('li').first()).toBeVisible();
+    await expect(page.getByTestId('case-history').getByTestId('history-row').first()).toBeVisible();
 
     await detail.getByLabel('Your name').fill('v.grimaldi');
     await detail.getByLabel('Decision reason').fill('Looks fine to me');
@@ -230,7 +230,7 @@ test.describe('Assurance workspace', () => {
     await expect(page.getByText(/No cases\./)).toBeVisible();
     // No refusal or server-error banner of this page's own (Next.js injects an
     // unrelated role=alert route announcer, so match the page's banner class).
-    await expect(page.locator('p.playground-error')).toHaveCount(0);
+    await expect(page.locator('.aw-alert')).toHaveCount(0);
   });
 
   test('a Register-plan key gets the plan\'s real refusal, not a view', async ({ page }) => {
@@ -285,7 +285,9 @@ test.describe('Assurance workspace', () => {
     await page.getByRole('button', { name: 'Refresh' }).click();
     await expect(page.locator('section#aw-cases').getByRole('alert')).toContainText('API unreachable', { timeout: 15_000 });
     await expect(page.getByTestId('fleet-table')).toBeVisible();
-    await expect(page.getByTestId('case-table')).toHaveCount(0);
+    // After a transport failure the cases panel keeps what it last received and says so; it never
+    // turns into "No cases."
+    await expect(page.locator('section#aw-cases')).toContainText(/last data received/i);
     await expect(page.locator('section#aw-cases')).not.toContainText('No cases.');
   });
 
@@ -322,22 +324,30 @@ test.describe('Assurance workspace', () => {
     await expect(fleet.getByTestId('panel-asof')).toHaveAttribute('data-stale', 'false', { timeout: 15_000 });
   });
 
-  test('a stale panel keeps its last data only after a transport failure, and labels it', async ({ page }) => {
-    await enter(page, seed.key_a);
-    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
-    await page.route('**/v1/fleet/machines', (route) => route.abort('connectionrefused'));
-    await page.locator('section#aw-fleet').getByRole('button', { name: 'Reload' }).click();
+  test('a stale panel keeps its last data only after a transport failure, and labels it', async ({ page, request }) => {
+    // A second key of account G, issued and later revoked through the real key routes.
+    const issued = await request.post(`${apiBase}/v1/keys`, { headers: { 'X-API-Key': seed.key_g }, data: { label: 'e2e stale' } });
+    expect(issued.status()).toBe(201);
+    const second = (await issued.json()).api_key as string;
+    await enter(page, second);
     const fleet = page.locator('section#aw-fleet');
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+
+    await page.route('**/v1/fleet/machines', (route) => route.abort('connectionrefused'));
+    await fleet.getByRole('button', { name: 'Reload' }).click();
     await expect(fleet.getByRole('alert')).toContainText('API unreachable', { timeout: 10_000 });
     await expect(fleet.getByTestId('fleet-table')).toBeVisible();
     await expect(fleet).toContainText(/last data received/i);
-
-    // An authorisation failure must NOT leave the previous data on screen.
     await page.unroute('**/v1/fleet/machines');
-    await page.getByLabel('API key').fill('asr_not_a_real_key');
-    await page.getByRole('button', { name: 'Refresh' }).click();
+
+    // The same key, revoked while the page is open: the next reload is a 401, and the previous
+    // data must NOT stay on screen as if it were still yours to read.
+    const revoked = await request.post(`${apiBase}/v1/keys/revoke`, { headers: { 'X-API-Key': second }, data: {} });
+    expect(revoked.status()).toBe(200);
+    await fleet.getByRole('button', { name: 'Reload' }).click();
     await expect(fleet.getByRole('alert')).toContainText('(401)', { timeout: 10_000 });
     await expect(fleet.getByTestId('fleet-table')).toHaveCount(0);
+    await expect(fleet).not.toContainText(/last data received/i);
   });
 
   test('a case id that is not in your ledger is a 404, and offers no export', async ({ page }) => {
@@ -400,6 +410,8 @@ test.describe('Assurance workspace', () => {
     await expect(detail.getByTestId('required-reverifications')).toBeVisible({ timeout: 15_000 });
     const rows = detail.getByTestId('history-row');
     await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+    // "Who" arrives with the evidence export: wait for it rather than checking a placeholder.
+    await expect(detail.getByTestId('case-history')).toHaveAttribute('data-who', 'ready', { timeout: 15_000 });
     const n = await rows.count();
     expect(n).toBeGreaterThan(1);
     for (let i = 0; i < n; i++) {

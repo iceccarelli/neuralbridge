@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { call, type ApiOutcome, type CaseDetail, type ExportBundle, type HistoryItem } from '../../lib/assuranceApi';
+import { call, type ApiOutcome, type CaseDetail, type ExportBundle, type HistoryItem, type Replay } from '../../lib/assuranceApi';
 import { Notice, PanelFrame, Refusal } from './PanelFrame';
 import { API_BASE, usePanel } from './usePanel';
 
@@ -26,6 +26,15 @@ export function attributeHistory(history: HistoryItem[], bundle: ExportBundle | 
   });
 }
 
+// The words the server sealed for a waiver: "re-verification of <entry> waived by <name>: <reason>".
+function waiverText(history: HistoryItem[], entry: string): string {
+  const prefix = `re-verification of ${entry} `;
+  const h = [...history]
+    .reverse()
+    .find((x) => x.detail.startsWith(prefix) && x.detail.slice(prefix.length).startsWith('waived by'));
+  return h ? h.detail.slice(prefix.length) : '';
+}
+
 export default function CaseDetailPanel({
   apiKey,
   caseId,
@@ -42,7 +51,7 @@ export default function CaseDetailPanel({
   const enc = encodeURIComponent(caseId);
   const detail = usePanel<CaseDetail>(apiKey, `/v1/change/cases/${enc}`);
   // Who did each step comes from the case's evidence export. Its failure costs the "who" column and nothing else.
-  const bundle = usePanel<ExportBundle>(apiKey, detail.outcome?.kind === 'ok' ? `/v1/cases/${enc}/export` : null);
+  const bundle = usePanel<ExportBundle>(apiKey, detail.outcome?.kind === 'ok' ? `/v1/change/cases/${enc}/export` : null);
 
   const [owner, setOwner] = useState('');
   const [reason, setReason] = useState('');
@@ -52,6 +61,20 @@ export default function CaseDetailPanel({
   const [notice, setNotice] = useState('');
   const [exported, setExported] = useState<{ file: string; entries: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [entry, setEntry] = useState('');
+  const [waiver, setWaiver] = useState('');
+  const [resumeWhy, setResumeWhy] = useState('');
+  const [replay, setReplay] = useState<ApiOutcome<Replay> | null>(null);
+  const [replaying, setReplaying] = useState(false);
+
+  const runReplay = async () => {
+    setReplay(null);
+    setReplaying(true);
+    setReplay(await call<Replay>(API_BASE, apiKey, `/v1/change/cases/${enc}/replay`));
+    setReplaying(false);
+  };
 
   const act = async (path: string, body: Record<string, unknown>) => {
     setResult(null);
@@ -77,7 +100,7 @@ export default function CaseDetailPanel({
     setExported(null);
     setNotice('');
     setResult(null);
-    const out = await call<ExportBundle>(API_BASE, apiKey, `/v1/cases/${enc}/export`);
+    const out = await call<ExportBundle>(API_BASE, apiKey, `/v1/change/cases/${enc}/export`);
     if (out.kind !== 'ok') {
       setResult(out);
       return;
@@ -104,9 +127,17 @@ export default function CaseDetailPanel({
   };
 
   return (
-    <PanelFrame id="aw-case" title={`Case ${caseId}`} what="the case" apiKey={apiKey} panel={detail}>
+    <PanelFrame
+      id="aw-case"
+      title={`Case ${caseId}`}
+      what="the case"
+      apiKey={apiKey}
+      panel={detail}
+      notFoundNote="Only your own ledger is searched. A case that belongs to another account reads exactly like one that does not exist."
+    >
       {(c) => {
         const settled = ['closed', 'rejected'].includes(c.status);
+        const deferred = c.status === 'deferred';
         const bundleData = bundle.outcome?.kind === 'ok' ? bundle.outcome.data : null;
         const who = attributeHistory(c.history, bundleData, c.case_id);
         const whoPending = bundle.outcome === null || (bundle.loading && !bundleData);
@@ -128,11 +159,17 @@ export default function CaseDetailPanel({
               <div>
                 <h4>Safety functions and evidence</h4>
                 <ul>
-                  {Object.entries(c.evidence_current).map(([fn, state]) => (
-                    <li key={fn}>
-                      {fn}: <strong>{state}</strong>
-                    </li>
-                  ))}
+                  {Object.entries(c.evidence_current).map(([fn, state]) => {
+                    // A waiver is a person's decision to close an entry WITHOUT evidence. It is shown as
+                    // exactly that, with the words the server sealed, and never as current or verified.
+                    const waived = state === 'waived' ? waiverText(c.history, fn) : '';
+                    return (
+                      <li key={fn} data-testid="evidence-row" data-entry={fn} data-state={state}>
+                        {fn}: <strong>{state}</strong>
+                        {state === 'waived' && <> — {waived || 'waived without evidence (see the history for who and why)'}</>}
+                      </li>
+                    );
+                  })}
                   {Object.keys(c.evidence_current).length === 0 && <li>None recorded.</li>}
                 </ul>
                 <h4>Required actions</h4>
@@ -161,6 +198,30 @@ export default function CaseDetailPanel({
                   ))}
                   {c.human_decisions_required.length === 0 && <li>None outstanding.</li>}
                 </ul>
+                {(c.resolved_decisions ?? []).length > 0 && (
+                  <>
+                    <h4>Resolved human decisions</h4>
+                    <ul data-testid="resolved-decisions">
+                      {(c.resolved_decisions ?? []).map((r, i) => (
+                        <li key={i}>
+                          {r.decision} — <em>{r.resolution}</em>
+                          {r.by ? ` (${r.by}${r.at ? `, ${r.at}` : ''})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                <div className="aw-note" data-testid="reverify-howto">
+                  <strong>How a re-verification becomes evidence.</strong> The only evidence that can clear an entry is
+                  a verification sealed for <em>that machine</em>: (1) seal the machine&apos;s current manifest with{' '}
+                  <code>POST /v1/machinery/manifest</code>; (2) run <code>POST /v1/machine/verify</code> with{' '}
+                  <code>subject</code> set to the machine key (<code>manufacturer/model#serial</code>) — without a{' '}
+                  <code>subject</code> the bundle is filed under the product line and can never clear a case; (3) submit
+                  that manifest below with the <code>content_hash</code> that call returned as{' '}
+                  <code>verification_content_hash</code>. The server checks the hash against the ledger. There is no way
+                  to mark an entry verified from this page; closing one without evidence is the explicit waiver, which
+                  reads &ldquo;waived&rdquo;.
+                </div>
               </div>
               <div>
                 <h4>Source evidence</h4>
@@ -233,7 +294,39 @@ export default function CaseDetailPanel({
               </p>
             )}
 
-            {!settled && (
+            {deferred && (
+              <div className="aw-actions">
+                <h4>Deferred — not settled</h4>
+                <p className="aw-note">
+                  A person decided not to act yet. The case still needs its eventual decision. Resuming puts it back in
+                  review and must be advanced again; it needs a named person and a reason.
+                </p>
+                <label>
+                  Your name
+                  <input value={actor} onChange={(e) => setActor(e.target.value)} />
+                </label>
+                <label>
+                  Why resume
+                  <textarea rows={2} value={resumeWhy} onChange={(e) => setResumeWhy(e.target.value)} />
+                </label>
+                <button
+                  className="btn btn-outline"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!needActor()) return;
+                    if (!resumeWhy.trim()) {
+                      setResult(null);
+                      setNotice('Resuming a case needs a reason.');
+                      return;
+                    }
+                    void act('resume', { reason: resumeWhy.trim(), actor: actor.trim() });
+                  }}
+                >
+                  Resume case
+                </button>
+              </div>
+            )}
+            {!settled && !deferred && (
               <div className="aw-actions">
                 <h4>Actions (recorded under your name)</h4>
                 <label>
@@ -293,6 +386,88 @@ export default function CaseDetailPanel({
                     Submit
                   </button>
                 </details>
+                {c.human_decisions_required.length > 0 && (
+                  <>
+                    <h4>Answer a human question</h4>
+                    <label>
+                      Question
+                      <select value={question || c.human_decisions_required[0]} onChange={(e) => setQuestion(e.target.value)}>
+                        {c.human_decisions_required.map((q) => (
+                          <option key={q} value={q}>
+                            {q}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Answer
+                      <textarea rows={2} value={answer} onChange={(e) => setAnswer(e.target.value)} />
+                    </label>
+                    <button
+                      className="btn btn-outline"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!needActor()) return;
+                        if (!answer.trim()) {
+                          setResult(null);
+                          setNotice('An answer needs the decision the person actually made.');
+                          return;
+                        }
+                        void act('resolve-decision', {
+                          decision: c.human_decisions_required.includes(question) ? question : c.human_decisions_required[0],
+                          resolution: answer.trim(),
+                          actor: actor.trim(),
+                        });
+                      }}
+                    >
+                      Record answer
+                    </button>
+                  </>
+                )}
+                {c.required_reverifications.length > 0 && (
+                  <>
+                    <h4>Waive a re-verification</h4>
+                    <p className="aw-note" data-testid="waive-warning">
+                      This closes the entry <strong>without evidence</strong>. It is recorded under your name with your
+                      reason, and it reads &ldquo;waived&rdquo; here and in every export &mdash; never current or
+                      verified. Use it only when a person accepts that nothing will verify this entry.
+                    </p>
+                    <label>
+                      Re-verification entry
+                      <select value={entry || c.required_reverifications[0]} onChange={(e) => setEntry(e.target.value)}>
+                        {c.required_reverifications.map((q) => (
+                          <option key={q} value={q}>
+                            {q}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Why closing it without evidence is acceptable
+                      <textarea rows={2} value={waiver} onChange={(e) => setWaiver(e.target.value)} />
+                    </label>
+                    <button
+                      className="btn btn-outline"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!needActor()) return;
+                        if (!waiver.trim()) {
+                          setResult(null);
+                          setNotice('A waiver needs a reason: why closing without evidence is acceptable.');
+                          return;
+                        }
+                        void act('waive-reverification', {
+                          entry: c.required_reverifications.includes(entry) ? entry : c.required_reverifications[0],
+                          reason: waiver.trim(),
+                          actor: actor.trim(),
+                        });
+                      }}
+                    >
+                      Waive without evidence
+                    </button>
+                  </>
+                )}
+                <h4>Decide</h4>
                 <label>
                   Decision reason
                   <textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -325,6 +500,50 @@ export default function CaseDetailPanel({
             )}
             {notice && <Notice>{notice}</Notice>}
             {result && result.kind !== 'ok' && <Refusal outcome={result} what="Action" />}
+
+            <div className="aw-export">
+              <h4>Check this case against the ledger</h4>
+              <p className="aw-note">
+                Rebuilds the case from the ledger&apos;s own entries and rejects any step the lifecycle would not have
+                allowed. It does not show that the evidence is adequate: a person still decides that.
+              </p>
+              <button className="btn btn-secondary" disabled={replaying} onClick={() => void runReplay()}>
+                Check this case against the ledger
+              </button>
+              {replaying && (
+                <p className="aw-note" role="status">
+                  Replaying…
+                </p>
+              )}
+              {replay && replay.kind !== 'ok' && <Refusal outcome={replay} what="Replay" />}
+              {replay?.kind === 'ok' && (
+                <div
+                  className={replay.data.ok ? 'aw-prov' : 'aw-alert'}
+                  role={replay.data.ok ? 'status' : 'alert'}
+                  data-testid="replay-result"
+                  data-ok={replay.data.ok ? 'true' : 'false'}
+                >
+                  {replay.data.ok ? (
+                    <p>
+                      {replay.data.entries} ledger entr{replay.data.entries === 1 ? 'y' : 'ies'} rebuild this case, and
+                      every step was legal. That does not show the evidence is adequate; a person still decides that.
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        <strong>THIS CASE DOES NOT REPLAY CLEANLY</strong> — the ledger&apos;s entries do not reproduce
+                        the state shown above. Do not rely on it until each of these is explained:
+                      </p>
+                      <ul>
+                        {replay.data.violations.map((v) => (
+                          <li key={v}>{v}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="aw-export">
               <h4>Evidence export</h4>

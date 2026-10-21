@@ -3,18 +3,27 @@ import { REPO, SRC } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import { ROUTES, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
+import openapi from '../../public/openapi.json';
 
 const SITE_URL = 'https://neuralbridge.io';
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
+// Counted from the OpenAPI schema exported by scripts/export_openapi.py, which a test
+// (tests/test_site_routes_parity.py) keeps equal to what the service really serves.
+const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
+const ROUTE_COUNT = Object.values(openapi.paths as Record<string, Record<string, unknown>>).reduce(
+  (n, item) => n + Object.keys(item).filter((k) => METHODS.includes(k)).length,
+  0,
+);
+
 export const metadata: Metadata = {
   title: 'Developers | Industrial Autonomous Assurance',
   description:
-    'The Assurance API: auth, base URL, the real free-vs-paid route table generated from the actual FastAPI routers, and copy-paste curl/Python.',
+    'The Assurance API: auth, base URL, a curated free-vs-paid route table checked by a test against the real OpenAPI schema of the service, and copy-paste curl/Python.',
   alternates: { canonical: '/developers' },
   openGraph: {
     title: 'Developers | Industrial Autonomous Assurance',
-    description: 'Auth, routes, and examples for the Assurance API — generated from the real routers, not a summary.',
+    description: 'Auth, routes, and examples for the Assurance API — checked against the real OpenAPI schema.',
     url: '/developers',
     type: 'website',
   },
@@ -28,7 +37,7 @@ export default function DevelopersPage() {
           <span className="kicker">FOR AGENTS, CI BOTS, AND HUMANS WITH A TERMINAL</span>
           <h1 style={{ maxWidth: '24ch' }}>The Assurance API</h1>
           <p className="hero-lead" style={{ maxWidth: '68ch' }}>
-            42 routes over CRA Article 14 and Machinery Regulation Annex III evidence. Bearer auth via one
+            {ROUTE_COUNT} routes over CRA Article 14 and Machinery Regulation Annex III evidence. Auth via one
             header, JSON in and out, and a real OpenAPI 3 schema you can fetch instead of trusting this page.
           </p>
           <div className="hero-actions">
@@ -87,7 +96,7 @@ export default function DevelopersPage() {
             <h2>Free vs. paid, straight from the routers</h2>
             <p>
               Every row below is gated in code, in <code>src/assurance/api/deps.py</code> — if it is not gated,
-              it is free. This is a curated view of the 42 routes; the full machine-readable schema (parameters,
+              it is free. This is a curated view of the {ROUTE_COUNT} routes; the full machine-readable schema (parameters,
               response shapes, every route including account/billing) is at{' '}
               <a href="/openapi.json">/openapi.json</a>.
             </p>

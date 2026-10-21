@@ -6,7 +6,16 @@ import { agoText, API_BASE, clock, STALE_AFTER_MS, useNow, type Panel } from './
 
 // A refusal says which one it was (401, 402, 404, 409, 413, 422, 429, unreachable, 5xx)
 // and passes the server's own remedy text through.
-export function Refusal({ outcome, what }: { outcome: ApiOutcome<unknown>; what: string }) {
+export function Refusal({
+  outcome,
+  what,
+  notFoundNote,
+}: {
+  outcome: ApiOutcome<unknown>;
+  what: string;
+  /** What a 404 means for this particular thing, added to the server's words. */
+  notFoundNote?: string;
+}) {
   if (outcome.kind === 'ok') return null;
   const d = describeOutcome(outcome);
   return (
@@ -15,6 +24,7 @@ export function Refusal({ outcome, what }: { outcome: ApiOutcome<unknown>; what:
         {what}: {d.heading}.
       </strong>{' '}
       {d.text}
+      {outcome.kind === 'notfound' && notFoundNote && <span className="aw-remedy">{notFoundNote}</span>}
       {d.remedy && <span className="aw-remedy">{d.remedy}</span>}
     </div>
   );
@@ -69,6 +79,7 @@ export function PanelFrame<T>({
   what,
   apiKey,
   panel,
+  notFoundNote,
   children,
 }: {
   id: string;
@@ -76,6 +87,7 @@ export function PanelFrame<T>({
   what: string;
   apiKey: string;
   panel: Panel<T>;
+  notFoundNote?: string;
   children: (data: T) => ReactNode;
 }) {
   const { outcome, good, loading, reload } = panel;
@@ -92,7 +104,7 @@ export function PanelFrame<T>({
   } else {
     body = (
       <>
-        {outcome.kind !== 'ok' && <Refusal outcome={outcome} what={title} />}
+        {outcome.kind !== 'ok' && <Refusal outcome={outcome} what={title} notFoundNote={notFoundNote} />}
         {outcome.kind !== 'ok' && data !== null && at !== null && (
           <p className="aw-note">
             Showing the last data received, at {clock(at)}. It may be out of date, and the request that would refresh it

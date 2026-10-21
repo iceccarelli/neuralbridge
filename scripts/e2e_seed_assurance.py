@@ -50,6 +50,7 @@ from assurance.collect.plan import CollectionPlan  # noqa: E402
 from assurance.core.evidence import Actor  # noqa: E402
 from assurance.fleet.registry import Fleet  # noqa: E402
 from assurance.evidence.ledger import EvidenceLedger  # noqa: E402
+from assurance.machinery.intervention import Intervention, InterventionKind  # noqa: E402
 from assurance.machinery.manifest import ManifestSource  # noqa: E402
 from assurance.machinery.record import record_manifest  # noqa: E402
 from assurance.watch.config import WatchConfig  # noqa: E402
@@ -131,6 +132,7 @@ def main(out: str, workdir: str) -> int:
     _, key_e = account("echo", "cell")
     id_g, key_g = account("golf", "cell")
     id_h, key_h = account("hotel", "supplier")
+    id_k, key_k = account("kilo", "cell")
     acct_j = store.upsert_account(email="juliet@e2e.invalid", tier="cell", company="juliet",
                                   stripe_customer_id="cus_e2e_juliet", stripe_subscription_id="sub_e2e_juliet",
                                   status="past_due")
@@ -187,7 +189,20 @@ def main(out: str, workdir: str) -> int:
         "clear": advisory("ADV-E2E-CLEAR", supplier="ControlCo", name="Nonexistent safety relay", versions=["9.9"]),
     }
 
+    # K: one verified machine for the case-lifecycle and intervention tests. The page seals the
+    # intervention through the real route; the manifest is the one the collector recorded.
+    k_ledger = build_plant(work, tenant_ledger_path(id_k), "kilo", {"6201": b"firmware 3.8.2"})
+    k_record = Fleet.from_ledger(k_ledger).records[0]
+    k_fw = next(i for i in k_record.manifest.items if i.item_id == "ITM-FW")
+    k_intervention = Intervention(
+        intervention_id="INT-E2E-1", machine_key=k_record.machine_key, item_id="ITM-FW",
+        kind=InterventionKind.UPDATE, occurred_at=datetime(2026, 10, 2, 9, 30, tzinfo=UTC),
+        performed_by=Actor("a.integrator", "integrator"), reason="Vendor advisory: watchdog fix.",
+        from_hash=k_fw.content_hash, to_hash="d" * 64, affects_functions=("SF-01", "SF-02"))
+
     Path(out).write_text(json.dumps({
+        "key_k": key_k, "k_machine": k_record.machine_key, "k_manifest": k_record.manifest.to_dict(),
+        "k_intervention": k_intervention.to_dict(),
         "key_a": key_a, "key_b": key_b, "key_new": key_new, "key_register": key_c, "key_d": key_d, "key_e": key_e,
         "key_g": key_g, "key_hotel": key_h, "key_past_due": key_j, "hotel_account_id": id_h,
         "case_id": case_ids[0], "machines": ["Grimaldi/AR-7#0412", "Grimaldi/AR-7#0501"],
@@ -226,6 +241,7 @@ def publish_feed(seed: dict, workdir: Path, api_url: str) -> None:
     Writes the pristine feed, a tampered copy (a severity edited after signing), the public
     key and the fingerprint, and POSTs every record to the real hosted-feed route.
     """
+    import urllib.error
     import urllib.request
 
     feed_dir = workdir / "supplier"
@@ -266,16 +282,29 @@ def publish_feed(seed: dict, workdir: Path, api_url: str) -> None:
     if _cli("supplier", "verify", "--feed", str(tampered), "--public-key", str(pub)).returncode == 0:
         raise SystemExit("the tampered feed unexpectedly verifies")
 
+    hosted = 0
+    withdrawal_refused = ""
     for line in lines:
         req = urllib.request.Request(
             f"{api_url}/v1/supplier/advisory", data=line.encode(), method="POST",
             headers={"content-type": "application/json", "X-API-Key": seed["key_hotel"]})
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
-            if resp.status != 201:
-                raise SystemExit(f"hosting a record failed: HTTP {resp.status}")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+                if resp.status != 201:
+                    raise SystemExit(f"hosting a record failed: HTTP {resp.status}")
+            hosted += 1
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode()
+            # Known server defect, reported rather than hidden: POST /v1/supplier/advisory refuses a
+            # signed WITHDRAWAL as a duplicate advisory id, so a hosted feed cannot carry one.
+            if exc.code == 409 and json.loads(line).get("withdraws") and "duplicate_advisory_id" in body:
+                withdrawal_refused = body
+                continue
+            raise SystemExit(f"hosting a record failed: HTTP {exc.code} {body}") from exc
     seed["supplier"] = {
         "feed_path": str(feed), "tampered_path": str(tampered), "public_key_path": str(pub),
         "fingerprint": fingerprint, "supplier_id": "ControlCo", "records": len(lines),
+        "hosted_records": hosted, "hosted_withdrawal_refused": withdrawal_refused,
         "hosted_feed_id": seed["hotel_account_id"], "first_advisory_id": "ADV-FEED-1",
         "withdrawn_advisory_id": "ADV-FEED-2",
     }
