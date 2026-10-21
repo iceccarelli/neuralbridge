@@ -19,10 +19,13 @@ deciding may not.
 
 from __future__ import annotations
 
+import random
 import re
+import time
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from typing import TypeVar
 
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
@@ -43,7 +46,9 @@ from assurance.machinery.staleness import (
 )
 
 from .model import CaseStatus, ChangeAssuranceCase, TriggerType
-from .store import CaseStore
+from .store import CaseConflictError, CaseStore
+
+T = TypeVar("T")
 
 __all__ = [
     "INCOMPLETE_COLLECTION_MARK",
@@ -449,7 +454,40 @@ def _grow_deferred(
                         detail="deferred case's exposure grew: " + ", ".join(extra))
 
 
+#: How many times a machine-driven step re-reads and recomputes after losing a
+#: race to another writer before it gives up and reports the conflict.
+_CONFLICT_RETRIES = 8
+
+
+def _retrying(step: Callable[[], T]) -> T:
+    """Run a machine-driven read-decide-append, redoing all of it when it lost a race.
+
+    ``step`` re-reads the case on every call, so a retry judges the new state: a
+    second observer of a recurrence finds the case already reopened and writes
+    nothing; a repeat look finds the human's decision and leaves it alone. Human
+    steps are *not* retried here — a person's decision was made on what they
+    saw, so they are told (409) and decide again.
+    """
+    for attempt in range(_CONFLICT_RETRIES):
+        try:
+            return step()
+        except CaseConflictError:
+            if attempt == _CONFLICT_RETRIES - 1:
+                raise
+            time.sleep(random.random() * 0.01 * (attempt + 1))  # noqa: S311 - jitter
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _open_or_update(
+    store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
+    actions_by_fid: Mapping[str, Sequence[str]] | None = None,
+) -> ChangeAssuranceCase:
+    """:func:`_open_or_update_once`, redone from a fresh read if another writer won."""
+    return _retrying(lambda: _open_or_update_once(
+        store, new, actor=actor, detail=detail, actions_by_fid=actions_by_fid))
+
+
+def _open_or_update_once(
     store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
     actions_by_fid: Mapping[str, Sequence[str]] | None = None,
 ) -> ChangeAssuranceCase:
@@ -699,21 +737,24 @@ def note_advisory_withdrawn(
     decision on the open case — it does not close, reject or advance anything.
     A case already settled is left alone; no case at all returns ``None``.
     """
-    case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
-    if case is None or case.status.is_settled:
-        return case
-    question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "
-                "Decide whether the work this case drove still stands, or reject "
-                "the case as raised on a retracted advisory.")
-    if question in case.human_decisions_required or any(
-            r.get("decision") == question for r in case.resolved_decisions):
-        return case
-    status = CaseStatus.AWAITING_ACTION if case.status is CaseStatus.READY_TO_CLOSE \
-        else case.status
-    return store.update(
-        replace(case, status=status,
-                human_decisions_required=(*case.human_decisions_required, question)),
-        actor=actor, detail=f"advisory {advisory_id} withdrawn by the supplier")
+    def step() -> ChangeAssuranceCase | None:
+        case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
+        if case is None or case.status.is_settled:
+            return case
+        question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "
+                    "Decide whether the work this case drove still stands, or reject "
+                    "the case as raised on a retracted advisory.")
+        if question in case.human_decisions_required or any(
+                r.get("decision") == question for r in case.resolved_decisions):
+            return case
+        status = CaseStatus.AWAITING_ACTION if case.status is CaseStatus.READY_TO_CLOSE \
+            else case.status
+        return store.update(
+            replace(case, status=status,
+                    human_decisions_required=(*case.human_decisions_required, question)),
+            actor=actor, detail=f"advisory {advisory_id} withdrawn by the supplier")
+
+    return _retrying(step)
 
 
 # ---------------------------------------------------------------------------
