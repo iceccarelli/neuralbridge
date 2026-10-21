@@ -71,8 +71,10 @@ a webhook endpoint at `https://<your-fly-app>.fly.dev/v1/billing/webhook`,
 subscribed to:
 
 - `checkout.session.completed`
+- `checkout.session.async_payment_succeeded` (delayed payment methods such as SEPA debit)
 - `customer.subscription.updated`
 - `customer.subscription.deleted`
+- `invoice.payment_failed` (flags the account `past_due`; access continues while Stripe retries)
 
 Copy the signing secret it shows you into `STRIPE_WEBHOOK_SECRET` (step 2) if
 you have not already, and redeploy (`fly deploy`) if you set it after the
