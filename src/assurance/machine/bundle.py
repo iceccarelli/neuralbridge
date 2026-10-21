@@ -37,7 +37,7 @@ from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
-from assurance.machine.trace import Trace
+from assurance.machine.trace import Provenance, Trace
 from assurance.machine.verify import Verdict, VerificationResult, verify
 
 __all__ = [
@@ -250,6 +250,43 @@ def verify_bundle_data(
             f"the bundle records verdict {body.get('verdict')!r} but its own checks "
             f"imply {implied!r} ({len(violated)} violated, {len(unchecked)} unchecked)."
         )
+    if not checks:
+        problems.append(
+            "the bundle records no checks at all, so its verdict rests on nothing. "
+            "The engine always runs and records every check, even when each answers "
+            "'unchecked'."
+        )
+
+    # A seal makes a file self-consistent, not honest: anyone can edit the body and
+    # reseal it. What they cannot do is make the engine produce a tier it never
+    # produces, so the rules the engine applies are applied to the claim here.
+    try:
+        provenance = Provenance(str(body.get("provenance")))
+    except ValueError:
+        problems.append(
+            f"the bundle records provenance {body.get('provenance')!r}, which the "
+            "engine never produces (simulation, bench or field)."
+        )
+    else:
+        try:
+            recorded_tier = AssuranceTier(str(body.get("tier")))
+        except ValueError:
+            problems.append(
+                f"the bundle records tier {body.get('tier')!r}, which is not an "
+                "assurance tier this system defines."
+            )
+        else:
+            if recorded_tier is AssuranceTier.CERTIFIED:
+                problems.append(
+                    "the bundle records tier 'certified'. A trace can never produce it: "
+                    "it requires an accredited third party's certificate, not a file."
+                )
+            elif recorded_tier.rank > provenance.tier_ceiling.rank:
+                problems.append(
+                    f"the bundle records tier {recorded_tier.value!r} from a "
+                    f"{provenance.value} trace, whose ceiling is "
+                    f"{provenance.tier_ceiling.value!r}. The engine cannot produce that."
+                )
 
     if envelope is not None:
         if envelope.content_hash() != body.get("envelope_hash"):
