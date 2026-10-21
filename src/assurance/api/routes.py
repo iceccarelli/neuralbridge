@@ -366,9 +366,17 @@ def get_case_export(
             },
         )
     try:
-        return register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(subject=case_id)
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
+    if not bundle["entries"]:
+        # A well-formed, chain-verified bundle with nothing in it is what an id that
+        # names nothing exports. It would read as a clean record of a case.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "case_not_found", "case_id": case_id},
+        )
+    return bundle
 
 
 @router.get("/register", response_model=dict, summary="Readiness across every case")

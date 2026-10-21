@@ -142,6 +142,8 @@ FREE_ROUTES = {
     ("POST", "/v1/check/machine"): "ad-hoc check of two documents the caller supplies",
     ("GET", "/v1/ledger/attest/key"): "the public verification key",
     ("POST", "/v1/ledger/attest/verify"): "verifies a signed attestation the caller supplies",
+    ("POST", "/v1/evidence/verify"):
+        "stateless: verifies an evidence file the caller supplies; daily allowance via metering",
     ("GET", "/v1/supplier/feed/{supplier_account_id}"):
         "a supplier feed is public by design (ADR-0001)",
 }

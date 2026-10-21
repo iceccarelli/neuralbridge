@@ -143,6 +143,16 @@ def _cell(accounts):
     return account(accounts, "cell", "cell@example.de")
 
 
+def _chain_head(ledger) -> dict:
+    """The head of a chain, without the wall-clock `attested_at` stamp.
+
+    `head_attestation()` carries the moment it was produced (one-second
+    resolution), so two calls straddling a second boundary differ although the
+    chain did not move. What a test means to compare is the head.
+    """
+    return {k: v for k, v in ledger.head_attestation().items() if k != "attested_at"}
+
+
 def ledger_of(acct) -> EvidenceLedger:
     return EvidenceLedger(deps.tenant_ledger_path(acct.id))
 
@@ -753,14 +763,14 @@ class TestTenancy:
         b, hb = account(accounts, "cell", "b@example.de")
         t = now() - timedelta(hours=5)
         post(client, ha, report(good(make_manifest(tmp_path), at=t), started=t))
-        a_len, a_head = len(ledger_of(a)), ledger_of(a).head_attestation()
+        a_len, a_head = len(ledger_of(a)), _chain_head(ledger_of(a))
 
         # B names A's machine. The key is per tenant ledger, so this is B's own
         # row about B's own claim and cannot touch A's record.
         enroll_manifest(b, tmp_path, "0412")
         r = post(client, hb, report(failed("0412", at=now() - timedelta(minutes=1)))).json()
         assert r["machines"][0]["outcome"] == "recorded"
-        assert len(ledger_of(a)) == a_len and ledger_of(a).head_attestation() == a_head
+        assert len(ledger_of(a)) == a_len and _chain_head(ledger_of(a)) == a_head
         assert machine_row(client, ha, KEY_0412)["last_attempt_succeeded"] is True
         assert machine_row(client, hb, KEY_0412)["last_attempt_succeeded"] is False
 
