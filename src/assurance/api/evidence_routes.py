@@ -17,6 +17,11 @@ offline CLI uses:
   public key the caller supplies, because the file carries a key *fingerprint*,
   not the key, and a key delivered with the signature proves nothing.
 
+``ok`` is true only when every check this kind of file needs was actually run and
+none found a problem. An attestation log checked without the issuer's public key
+is therefore never ``ok`` (outcome ``signatures_not_checked``): nothing about a
+signature was established.
+
 The result always separates three lists that must never be merged: ``verified``
 (facts a check actually established), ``assumptions`` (what a pass still takes
 on trust) and ``not_checked`` (every limit). ``ok`` means "no check that ran
@@ -27,14 +32,27 @@ Metering: one unit of the free validator's daily allowance per call (scope
 ``evidence_verify``), per address; paid accounts are unmetered. The body cap on
 this path is small (see :func:`assurance.api.deps.max_body_bytes`) for every
 caller, because the whole point is that the caller has no account.
+
+Cost control, because the caller is anonymous and the deployment has one worker:
+the answer is bounded (lists are capped, every string is clipped), a file with
+more than :data:`MAX_ENTRIES` entries is refused by size rather than walked, at
+most :data:`MAX_ANALYSES` files are analysed at once (the rest get a 503 that
+costs no allowance), and the analysis and the allowance bookkeeping run off the
+event loop. The request must say ``Content-Type: application/json``: that makes a
+browser send a CORS preflight, so another site cannot spend a visitor's allowance
+with a simple cross-site POST. The issuer's public key travels in the
+``X-Issuer-Public-Key`` header, not the URL, and anything that looks like a
+private key is refused unread.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import threading
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from starlette.concurrency import run_in_threadpool
 
 from assurance.api.attest_routes import MAX_VERIFY_RECORDS
@@ -59,6 +77,18 @@ evidence_router = APIRouter(prefix="/v1/evidence", tags=["free"])
 #: Nesting deeper than this is not an evidence file. It also keeps every later
 #: recursive step (canonical JSON for hashing) far from the interpreter's limit.
 MAX_DEPTH = 48
+
+#: A ledger export with more entries than this is refused by size, not walked. A
+#: genuine 4 MiB export holds a few thousand; this is generous.
+MAX_ENTRIES = 50_000
+#: Items per list in the answer, and characters per string. Attacker-controlled text
+#: (a subject, a product name) is quoted in findings and must not be able to make the
+#: answer larger than the question.
+MAX_LIST = 50
+MAX_TEXT = 600
+#: Files analysed at once. The deployment runs one worker; analysis is CPU.
+MAX_ANALYSES = 2
+MAX_KEY_HEADER = 4096
 
 SUPPORTED = (
     "a ledger export (a JSON object with an `entries` list, from "
@@ -108,7 +138,8 @@ def _too_deep(value: Any) -> bool:
             continue
         if depth > MAX_DEPTH:
             return True
-        stack.extend((child, depth + 1) for child in children)
+        stack.extend((child, depth + 1) for child in children
+                     if isinstance(child, (dict, list)))
     return False
 
 
@@ -128,15 +159,42 @@ def _parse(text: str) -> Any:
 
 
 def _parse_lines(text: str) -> list[Any] | None:
-    """A JSON-lines file (the attestation log format); ``None`` if it is not one."""
+    """A JSON-lines file (the attestation log format); ``None`` if it is not one.
+
+    Cheap refusals first, so a hostile file cannot make this parse millions of
+    lines: an attestation log is a few thousand records at most, and every line
+    of one is an object.
+    """
+    if not text.lstrip().startswith("{"):
+        return None
+    if text.count("\n") > MAX_VERIFY_RECORDS + 1:
+        return None
     out: list[Any] = []
     for line in text.splitlines():
-        if line.strip():
-            try:
-                out.append(_parse(line))
-            except _UnreadableError:
-                return None
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("{"):
+            return None
+        try:
+            out.append(_parse(stripped))
+        except _UnreadableError:
+            return None
     return out or None
+
+
+def _clip(value: Any) -> Any:
+    """Bound what goes back to an anonymous caller: strings, lists, and their count."""
+    if isinstance(value, str):
+        return value if len(value) <= MAX_TEXT else value[:MAX_TEXT] + "… (clipped)"
+    if isinstance(value, list):
+        shown = [_clip(v) for v in value[:MAX_LIST]]
+        if len(value) > MAX_LIST:
+            shown.append(f"… and {len(value) - MAX_LIST} more not listed")
+        return shown
+    if isinstance(value, dict):
+        return {k: _clip(v) for k, v in value.items()}
+    return value
 
 
 def _result(
@@ -144,13 +202,15 @@ def _result(
     verified: list[str] | None = None, problems: list[str] | None = None,
     assumptions: list[str] | None = None, not_checked: list[str] | None = None,
     tier: dict[str, Any] | None = None, head: dict[str, Any] | None = None,
-    summary: str = "",
+    summary: str = "", signatures_verified: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    return _clip({
         "kind": kind,
         "outcome": outcome,
-        # True means only: none of the checks that ran found a problem.
+        # True means only: every check this kind needs ran and none found a problem.
         "ok": outcome == "no_inconsistency_found",
+        # Only an attestation log has signatures; null for every other kind.
+        "signatures_verified": signatures_verified,
         "scope": scope,
         "entries": entries,
         "verified": verified or [],
@@ -161,7 +221,7 @@ def _result(
         "head": head,
         "summary": summary,
         "stored": False,
-    }
+    })
 
 
 def _unreadable(problem: str) -> dict[str, Any]:
@@ -175,6 +235,14 @@ def _unreadable(problem: str) -> dict[str, Any]:
 # ledger export
 # ---------------------------------------------------------------------------
 def _ledger(doc: dict[str, Any]) -> dict[str, Any]:
+    if len(doc["entries"]) > MAX_ENTRIES:
+        return _result(
+            "ledger_export", "unsupported",
+            problems=[f"{len(doc['entries']):,} entries is more than the {MAX_ENTRIES:,} "
+                      "this page checks; nothing was checked."],
+            not_checked=["verify a file this large offline: "
+                         "`python -m assurance evidence verify <file>`."],
+            summary="Too many entries to check here.")
     v = verify_export(doc)
     not_checked = list(v.checks_skipped)
     if v.head is not None:
@@ -229,11 +297,23 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
                     verified.append(
                         "the envelope copy in the bundle hashes to the envelope "
                         "hash sealed inside the evidence")
+                    envelope = SafetyEnvelope.from_dict(copy)
+                    try:
+                        recorded_tier = AssuranceTier(str(body.get("tier")))
+                    except ValueError:
+                        recorded_tier = None
+                    if recorded_tier is not None \
+                            and recorded_tier.rank > envelope.tier_ceiling.rank:
+                        problems.append(
+                            f"the bundle records tier {recorded_tier.value!r}, above the "
+                            f"ceiling {envelope.tier_ceiling.value!r} that its own "
+                            "envelope's figures allow (the stop and sensing figures "
+                            "were not measured on this machine)")
             except Exception:  # noqa: BLE001 - report, never crash on input
                 problems.append("the envelope copy in the bundle cannot be read")
         result = doc.get("result")
         if isinstance(result, dict):
-            for key in ("verdict", "tier"):
+            for key in ("verdict", "tier", "provenance"):
                 if key in result and result[key] != body.get(key):
                     problems.append(
                         f"the bundle's unsealed result block says {key} "
@@ -242,7 +322,7 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
                     break
             else:
                 verified.append("the unsealed result block agrees with the sealed "
-                                "verdict and tier")
+                                "verdict, tier and provenance")
 
     if not problems:
         checks = body.get("checks") or []
@@ -252,16 +332,22 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         verified.insert(1, f"the recorded verdict {body.get('verdict')!r} agrees with the "
                            f"bundle's own {len(checks)} checks ({violated} violated, "
                            f"{unchecked} unchecked)")
+        verified.insert(2, "the recorded tier is one the engine can produce from the "
+                           "recorded provenance (not 'certified', not above that "
+                           "provenance's ceiling, not above the envelope's own)")
 
     try:
         recorded = AssuranceTier(str(body.get("tier")))
         tier = {
             "recorded_tier": recorded.value,
-            "may_claim_physical_behaviour": recorded.may_claim_physical_behaviour,
+            # What the file says its tier would allow. Not something this check
+            # established: a resealed file can say anything the engine's rules allow.
+            "as_recorded_may_claim_physical_behaviour": recorded.may_claim_physical_behaviour,
             "evidence_required": recorded.evidence_required,
         }
     except ValueError:
-        tier = {"recorded_tier": body.get("tier"), "may_claim_physical_behaviour": None,
+        tier = {"recorded_tier": body.get("tier"),
+                "as_recorded_may_claim_physical_behaviour": None,
                 "evidence_required": ""}
         if not problems:
             problems.append(f"the recorded tier {body.get('tier')!r} is not a tier "
@@ -275,6 +361,10 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
     })
 
     not_checked = [
+        "a seal is not a signature: anyone can produce a self-consistent file like "
+        "this, including one that records a tier or verdict nobody earned. This "
+        "check applies the engine's own rules to what the file claims; it cannot "
+        "show who made it or that a verification was ever run.",
         "the original envelope and trace were not supplied, so nothing here shows "
         "the machine behaved as the bundle says. To re-run the engine on them: "
         "`python -m assurance machine check <bundle> --envelope ... --trace ...`.",
@@ -340,6 +430,12 @@ def _structure_problems(records: list[HeadAttestation]) -> list[str]:
                             f"{previous.sequence} did — the ledger was shortened")
         if not record.signature:
             problems.append(f"{where}: carries no signature")
+        else:
+            try:
+                record.signature_bytes()
+            except AttestationError:
+                problems.append(f"{where}: the signature is not base64 — the record "
+                                "is damaged, not merely unsigned")
         previous = record
     if len({r.key_fingerprint for r in records}) > 1:
         problems.append("the log names more than one signing key")
@@ -371,10 +467,26 @@ def _attestations(items: list[Any], key_pem: str) -> dict[str, Any]:
             summary="The log has records that cannot be read.")
 
     assumptions = [_SERVICE_ASSUMPTION]
+    for record in records:
+        try:
+            if record.signature:
+                record.signature_bytes()
+        except AttestationError:
+            problems.append(f"attestation {record.sequence}: the signature is not base64 "
+                            "— the record is damaged, not merely unsigned")
+    if problems:
+        return _result(
+            "attestation_log", "inconsistent", entries=len(records), problems=problems,
+            not_checked=["nothing else was checked: a log with a damaged record is "
+                         "damaged as a whole."],
+            summary=f"{len(problems)} problem(s) found in the attestation log.")
     latest = records[-1]
     head = {"seq": latest.head_seq, "link_hash": latest.head_link_hash,
             "length": latest.ledger_length}
     not_checked = [
+        "dropping the most recent attestation(s) from the end of a log cannot be "
+        "detected from the log alone: what remains is still a consistent chain. Compare "
+        "the count and the latest record with a copy you hold from another channel.",
         "the ledger itself was not examined: this cannot say whether it still holds "
         "the records the latest attestation was made over. Compare the head below "
         "with a ledger export, or run `assurance attest verify --ledger`.",
@@ -428,16 +540,25 @@ def _attestations(items: list[Any], key_pem: str) -> dict[str, Any]:
             "the key, so a signature can only be checked against a public key you "
             "obtained independently. Supply it and check again.")
 
-    ok = not problems
+    keyed = bool(key_pem.strip())
+    if problems:
+        outcome, summary = "inconsistent", f"{len(problems)} problem(s) found in the attestation log."
+    elif keyed:
+        outcome = "no_inconsistency_found"
+        summary = ("The log is consistent with itself and every signature verifies "
+                   "against the key you supplied.")
+    else:
+        # Nothing about a signature was established, so this is not an "ok".
+        outcome = "signatures_not_checked"
+        summary = ("The log is consistent with itself, but NO signature was checked: "
+                   "without the issuer's public key this establishes nothing about who "
+                   "made it or whether any record was edited.")
     return _result(
-        "attestation_log", "no_inconsistency_found" if ok else "inconsistent",
+        "attestation_log", outcome,
         scope=f"attestation log, {len(records)} record(s)", entries=len(records),
-        verified=verified if ok else [], problems=problems, assumptions=assumptions,
-        not_checked=not_checked, head=head,
-        summary=("The log is consistent with itself" + (
-            "; signatures verify against the key you supplied." if key_pem.strip()
-            else "; signatures were not checked.")) if ok else
-        f"{len(problems)} problem(s) found in the attestation log.")
+        verified=verified if not problems else [], problems=problems,
+        assumptions=assumptions, not_checked=not_checked, head=head,
+        summary=summary, signatures_verified=keyed and not problems)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +610,71 @@ def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
         summary="Not a file this page can check.")
 
 
+class _Slots:
+    """A small counting gate: at most ``size`` analyses run at once; the rest are refused."""
+
+    def __init__(self, size: int) -> None:
+        self._size = size
+        self._busy = 0
+        self._lock = threading.Lock()
+
+    def full(self) -> bool:
+        with self._lock:
+            return self._busy >= self._size
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            if self._busy >= self._size:
+                return False
+            self._busy += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self._busy -= 1
+
+
+_SLOTS = _Slots(MAX_ANALYSES)
+
+_PEM = re.compile(r"-----BEGIN ([A-Z ]+)-----(.*?)-----END \1-----", re.DOTALL)
+
+
+def _pem_from_header(value: str) -> str:
+    """Rebuild a PEM from the one-line form a header can carry.
+
+    A header cannot hold line breaks, so the key arrives with its lines joined by
+    spaces. Anything that is not a recognisable PEM passes through unchanged and is
+    reported as unreadable by the key parser.
+    """
+    match = _PEM.search(value.strip())
+    if not match:
+        return value
+    body = "".join(match.group(2).split())
+    lines = [body[i:i + 64] for i in range(0, len(body), 64)]
+    return "\n".join([f"-----BEGIN {match.group(1)}-----", *lines,
+                      f"-----END {match.group(1)}-----"]) + "\n"
+
+
+def _meter(principal: Principal, accounts: AccountStore) -> dict[str, str]:
+    """Spend one unit and describe what is left. Blocking SQLite: runs off the event loop."""
+    limit = principal.plan.validations_per_day
+    spend(principal, "evidence_verify", limit, accounts)
+    headers = {"X-Assurance-Tier": principal.tier}
+    if limit is not None:
+        used = accounts.usage_today(principal.subject).get("evidence_verify", 0)
+        headers["X-Assurance-Quota-Limit"] = str(limit)
+        headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
+    return headers
+
+
+def _guarded_analyse(raw: bytes, key_pem: str) -> dict[str, Any]:
+    """Runs in a worker thread; frees the slot when the work (not the request) ends."""
+    try:
+        return analyse(raw, key_pem)
+    finally:
+        _SLOTS.release()
+
+
 @evidence_router.post(
     "/verify",
     summary="Check an evidence file you were handed. Free, anonymous, stores nothing.",
@@ -498,28 +684,58 @@ async def verify_evidence(
     response: Response,
     principal: Annotated[Principal, Anyone],
     accounts: Annotated[AccountStore, Depends(get_accounts)],
-    public_key_pem: Annotated[str, Query(
-        max_length=4096,
-        description="the issuer's Ed25519 public key (PEM), to check attestation "
-                    "signatures. Public by nature; omit for other kinds of file.")] = "",
+    x_issuer_public_key: Annotated[str | None, Header(
+        description="the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to "
+                    "check attestation signatures. Never a private key: those are "
+                    "refused unread.")] = None,
 ) -> dict[str, Any]:
     """The body is the raw JSON file itself (not wrapped in anything).
 
-    Nothing is stored. The body is read into memory, checked and dropped; the
-    only record is the ordinary access log line (method, path, status). The
-    answer separates facts established (`verified`), what is taken on trust
-    (`assumptions`) and every limit (`not_checked`); there is no bare "valid".
+    Send ``Content-Type: application/json``. Nothing is stored. The body is read
+    into memory, checked and dropped; the only record is the ordinary access log
+    line (method, path, status). The answer separates facts established
+    (`verified`), what is taken on trust (`assumptions`) and every limit
+    (`not_checked`); there is no bare "valid".
     """
-    limit = principal.plan.validations_per_day
-    # Spent before the body is read or parsed: an address over its allowance
-    # costs the server a header lookup, not a parse.
-    spend(principal, "evidence_verify", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
+    # Cheap refusals first, none of which cost the caller an allowance unit.
+    media = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if media != "application/json":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"error": "unsupported_media_type",
+                    "detail": "Send the file with Content-Type: application/json."})
+    key_pem = ""
+    if x_issuer_public_key is not None and x_issuer_public_key.strip():
+        if "PRIVATE" in x_issuer_public_key.upper():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "private_key_refused",
+                        "detail": "That looks like a private key. It was not read or kept. "
+                                  "Only a PUBLIC key is ever needed; if this was a real "
+                                  "key, treat it as exposed and replace it."})
+        if len(x_issuer_public_key) > MAX_KEY_HEADER:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "public_key_too_large",
+                        "detail": f"A public key header is at most {MAX_KEY_HEADER} characters."})
+        key_pem = _pem_from_header(x_issuer_public_key)
+    if _SLOTS.full():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, headers={"Retry-After": "3"},
+            detail={"error": "verifier_busy",
+                    "detail": "Other files are being checked right now. Nothing was "
+                              "counted against your allowance; try again in a moment."})
+    # Spent before the body is read or parsed: an address over its allowance costs
+    # the server a header lookup, not a parse. (A chunked body that then turns out to
+    # exceed the cap has already spent its unit; a declared oversize one has not.)
+    # Blocking SQLite, so off the event loop.
+    headers = await run_in_threadpool(_meter, principal, accounts)
+    response.headers.update(headers)
     response.headers["Cache-Control"] = "no-store"
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("evidence_verify", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
     raw = await request.body()
-    return await run_in_threadpool(analyse, raw, public_key_pem)
-
+    if not _SLOTS.try_acquire():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, headers={"Retry-After": "3"},
+            detail={"error": "verifier_busy",
+                    "detail": "Other files are being checked right now; try again in a moment."})
+    return await run_in_threadpool(_guarded_analyse, raw, key_pem)

@@ -160,6 +160,8 @@ test.describe('Evidence verify page', () => {
     const tier = page.getByTestId('ev-tier');
     await expect(tier).toContainText('assurance tier');
     await expect(tier).toContainText('physical machine');
+    await expect(tier).toContainText('as recorded in the file');
+    await expect(page.getByTestId('ev-notchecked')).toContainText('a seal is not a signature');
     await expect(page.getByTestId('ev-notchecked')).toContainText('nothing here shows the machine behaved');
 
     const bundle = JSON.parse(fx.machine);
@@ -169,18 +171,50 @@ test.describe('Evidence verify page', () => {
     await expect(page.getByTestId('ev-headline')).toHaveText('Problems found');
   });
 
-  test('an attestation log: structure only without the key, signatures with it', async ({ page }) => {
+  test('an attestation log: structure only without the key (never a pass), signatures with it', async ({ page }) => {
     await open(page);
     await page.getByTestId('ev-text').fill(fx.attestations);
     await page.getByTestId('ev-run').click();
     await expect(page.getByTestId('ev-kind')).toContainText('attestation log');
+    await expect(page.getByTestId('ev-kind')).toContainText('signatures NOT verified');
+    await expect(page.getByTestId('ev-headline')).toHaveText('Structure only — no signature was checked');
+    await expect(page.getByTestId('ev-result')).not.toContainText('No inconsistency found');
     await expect(page.getByTestId('ev-notchecked')).toContainText('signatures were NOT verified');
+    await expect(page.getByTestId('ev-notchecked')).toContainText('most recent attestation');
     await expect(page.getByTestId('ev-verified')).not.toContainText('signature(s) verify');
 
     await page.getByTestId('ev-key').fill(fx.public_key);
     await page.getByTestId('ev-run').click();
+    await expect(page.getByTestId('ev-headline')).toHaveText('No inconsistency found in the checks that ran');
     await expect(page.getByTestId('ev-verified')).toContainText('signature(s) verify against the public key you supplied');
     await expect(page.getByTestId('ev-assumed')).toContainText('channel');
+  });
+
+  test('a private key is refused in the browser and never sent', async ({ page }) => {
+    await open(page);
+    let sent = false;
+    page.on('request', (r) => {
+      if (r.url().includes('/v1/evidence/verify')) sent = true;
+    });
+    await page.getByTestId('ev-text').fill(fx.attestations);
+    await page.getByTestId('ev-key').fill('-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----');
+    await page.getByTestId('ev-run').click();
+    await expect(page.getByTestId('ev-error')).toContainText('private key');
+    expect(sent).toBe(false);
+  });
+
+  test('the public key is not in the request URL', async ({ page }) => {
+    await open(page);
+    const urls: string[] = [];
+    page.on('request', (r) => {
+      if (r.url().includes('/v1/evidence/verify')) urls.push(r.url());
+    });
+    await page.getByTestId('ev-text').fill(fx.attestations);
+    await page.getByTestId('ev-key').fill(fx.public_key);
+    await page.getByTestId('ev-run').click();
+    await expect(page.getByTestId('ev-headline')).toBeVisible();
+    expect(urls.length).toBeGreaterThan(0);
+    for (const u of urls) expect(u).not.toMatch(/\?|PUBLIC|MCow/);
   });
 
   test('the offline verifier is pointed to', async ({ page }) => {
