@@ -43,8 +43,8 @@ Your ledger, your disk. No account, no API key, no upload. See
 | | Price | Includes |
 |---|---|---|
 | **Validator** | free | Article 14 draft validation, ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, attestation verification, offline enrolment kit |
-| **Register** | €390 / month | The Article 14 register for one manufacturer: unlimited cases, both deadline clocks, hash-chained ledger with verifiable export, 25 product families |
-| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, counter-signed head attestation |
+| **Register** | €390 / month | The Article 14 register for one manufacturer: both deadline clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
+| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, counter-signed head attestation |
 
 Verification is free at every tier, always — see [Pricing](pricing.md) for
 the full comparison, or [neuralbridge.io](https://neuralbridge.io/#pricing)
