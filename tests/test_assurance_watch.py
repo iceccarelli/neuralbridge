@@ -259,7 +259,10 @@ class TestBlindSpots:
             self, work, config, ledger):
         run_watch(config, ledger, now=T0)
         shutil.rmtree(work / "0501")
-        run = run_watch(config, ledger, now=T0 + timedelta(days=30))
+        # The ledger stamps entries with the wall clock, so the injected "now"
+        # has to be far enough ahead of the real one that the observation just
+        # sealed is older than the cadence, whatever day this suite runs.
+        run = run_watch(config, ledger, now=T0 + timedelta(days=3650))
         assert "0501" in run.stale_observations
 
 

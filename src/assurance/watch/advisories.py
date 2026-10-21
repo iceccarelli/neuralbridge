@@ -119,6 +119,14 @@ class AdvisoryFinding:
     machines: tuple[str, ...] = ()
     functions_in_question: tuple[str, ...] = ()
     withdrawal_reason: str = ""
+    #: The change-assurance case the runner opened or updated for this finding.
+    #: Empty until the runner has done so (and always empty in a dry run).
+    case_id: str = ""
+    #: The impact engine's own report, kept in memory so the runner can hand it
+    #: to :func:`assurance.change.service.assess_advisory` without asking the
+    #: engine twice. Never serialised: the sealed run carries the finding, and
+    #: the case carries the report's consequences.
+    report: ImpactReport | None = field(default=None, compare=False, repr=False)
 
     @property
     def stops_use(self) -> bool:
@@ -133,6 +141,7 @@ class AdvisoryFinding:
             "machines": list(self.machines),
             "functions_in_question": list(self.functions_in_question),
             "withdrawal_reason": self.withdrawal_reason,
+            "case_id": self.case_id,
         }
 
 
@@ -355,4 +364,5 @@ def _finding(
         impact=report.verdict,
         machines=tuple(machines),
         functions_in_question=tuple(functions),
+        report=report,
     )

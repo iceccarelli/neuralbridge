@@ -1,7 +1,7 @@
 # Continuous Machine Change Assurance
 
-CHANGE -> IMPACT -> REQUIRED ACTION -> RE-VERIFICATION -> HUMAN DECISION ->
-EVIDENCE-BACKED CLOSURE.
+OBSERVATION OR ADVISORY -> EVIDENCE ASSESSMENT -> CHANGE CASE -> RESPONSIBLE
+ACTION -> RE-VERIFICATION -> HUMAN DECISION -> VERIFIABLE CLOSURE.
 
 ## The gap this closes
 
@@ -34,6 +34,28 @@ object instead of somebody's inbox.
   `safe` or `certified`. The strongest thing it says is `ready_to_close`, and
   turning that into `closed` needs a named human and a reason they wrote.
 
+## Who does what
+
+| | Detects and records | Decides |
+|---|---|---|
+| `assurance watch run` (automation actor) | opens a case; folds a repeat observation into it; reopens a closed one on a genuine recurrence; puts a supplier's withdrawal to the owner | never |
+| A named person (`--actor`, or `actor` in the API body) | claims, advances, submits a re-verification | `decide` (close / reject / defer), `resume`, `resolve-decision` |
+
+`decide`, `resume` and `resolve_decision` refuse any actor whose `kind` is not
+`person` — a scheduled watch (`automation`), a `service`, an `agent`, or a
+caller who gave no name (the CLI and API label that `automation`). The
+reasoning is the product's whole position: detecting and reporting can be
+automated, deciding that the evidence stands again cannot.
+
+**What that does and does not prove.** It refuses the *kind* of actor. The kind
+is set by the layer that calls the domain function. The CLI and the hosted API
+set `person` when an actor name is supplied, and neither can authenticate that
+the name belongs to a human — the API's principal is an account, not a person.
+An agent given an API key and told to pass `"actor": "v.grimaldi"` would be
+accepted. The MCP server therefore exposes no tool that decides (see Surfaces),
+but a deployment that wants more than this has to put identity in front of the
+API itself.
+
 ## The three triggers
 
 | Trigger | Built from | Opens a case when |
@@ -42,38 +64,110 @@ object instead of somebody's inbox.
 | Supplier advisory | `ImpactReport` (from `assess_impact()`) | `verdict != "clear"` |
 | Intervention | `Intervention` + `CoverageReport` | the intervention invalidated at least one function's coverage |
 
-One case per distinct trigger — a repeat observation of the same drift or the
-same advisory updates the existing open case rather than opening a duplicate;
-see `assurance.change.service._case_id` and `_open_or_update`.
+`assurance watch run` opens all three without anyone running anything by hand
+(see `deploy/assurance/WATCH.md`). `assess-drift`, `assess-advisory` and
+`assess-intervention` remain for one-off use and for deployments that do not
+run the watch.
+
+## A repeat observation, a recurrence, and what each does
+
+One case per trigger: `_case_id` is a hash of `(trigger_type, trigger_id)`,
+where the id is the observed configuration hash (drift), the advisory id, or
+the intervention id. What happens when the same trigger is seen again is
+decided by the case's state, in `assurance.change.service._open_or_update`:
+
+| Existing case | A repeat observation of the same trigger | Ledger |
+|---|---|---|
+| none | open it | 1 `opened` entry |
+| `open`, or `in_review` with nothing re-verified | replace the facts and work list with the fresh reading (no progress to protect) | an `updated` entry **only if something differs** |
+| `awaiting_action` and later (`awaiting_reverification`, `ready_to_close`) | **additive only**: new machines, new functions, new questions are added; a function already tracked is never re-inflated; if the addition makes `ready_to_close` untrue the case steps back | an `updated` entry only if something was added |
+| `closed` | nothing — **unless** it genuinely recurred (below) | nothing, or 1 `reopened` entry |
+| `rejected` | nothing. A different trigger id (a different configuration, a different advisory) is a different case and opens normally | nothing |
+| `deferred` | nothing, until a person calls `resume` | nothing |
+
+"Identical input twice" therefore writes **nothing** the second time: no ledger
+entry, no history row. This is tested by counting ledger entries.
+
+**A genuine recurrence of a closed case**, and only these:
+
+- *drift*: the machine was recorded in a **different** configuration after the
+  closure, and has now come back to the closed one (A -> B closed, B -> A,
+  A -> B again). The evidence is the ledger's own manifests ordered by chain
+  position, not by anybody's clock. A watch that sees the closed configuration
+  merely persist reports `observed`, never `changed`, and a direct
+  `assess-drift` re-run with the same pair finds no intervening manifest.
+- *advisory*: the advisory now reaches a machine the closed case did not name.
+- *intervention*: never. An intervention is one event; a new one is a new
+  trigger.
+
+Reopening appends one `assurance.change.reopened` entry. The closure entry is
+not touched and stays in the chain; the case's `history` is carried forward and
+extended; `prior_closures` records who closed it, when, why, and the **ledger
+hash of the closure entry**, and a `concerns` link carries that hash into the
+new cycle. Owner, reviewer and decision are cleared: the new cycle needs a new
+claim and a new decision. A reopened case is `open`.
 
 ## The lifecycle
 
 ```
 OPEN -> IN_REVIEW -> AWAITING_ACTION -> AWAITING_REVERIFICATION -> READY_TO_CLOSE -> CLOSED
-                  \-> REJECTED / DEFERRED (from any open status)
+   \________________ REJECTED / DEFERRED (from any open status) ________________/
+DEFERRED --resume--> IN_REVIEW          CLOSED --recurrence--> OPEN
 ```
 
-`claim()`, `advance()`, `reverify()` and `decide()` in
-`assurance.change.service` are the only ways a case moves. `advance()` never
-guesses which stop is next — it reads the case's own `required_actions` and
-`required_reverifications`, which were computed by an engine, not typed in by
-whoever opened the case. `decide(..., disposition="closed")` is refused
-outside `READY_TO_CLOSE`, no matter who calls it.
+`claim()`, `advance()`, `reverify()`, `resolve_decision()`, `decide()` and
+`resume()` in `assurance.change.service` are the only ways a case moves.
 
-## Persistence
+**`READY_TO_CLOSE` and `CLOSED` cannot be reached with work outstanding.** Three
+independent layers:
+
+1. `advance()` and `reverify()` only choose `ready_to_close` when
+   `required_reverifications` and `human_decisions_required` are both empty.
+   `reverify()` counts a function the manifest no longer declares as *still
+   required* (`unknown`), never as done, and refuses a verification hash that is
+   not among the sealed verifications the coverage check actually ran against.
+2. `decide(..., "closed")` demands `ready_to_close` **and** re-checks that both
+   lists are empty, from a named person.
+3. `CaseStore` refuses to seal a `ready_to_close` or `closed` snapshot that
+   names outstanding work, whoever called it.
+
+A case with an open `human_decisions_required` (a contradictory or low-confidence
+advisory match, or a supplier withdrawal) goes to `awaiting_action` after
+re-verification, not `ready_to_close`. A person answers each question with
+`resolve-decision`; the answer is kept in `resolved_decisions`, and a later
+look at the same advisory does not ask it again. Without that, such a case could
+only ever be rejected or deferred.
+
+`advance()` still does not check that an action was *done* — nothing in this
+codebase observes a person doing paperwork. It checks that the work lists the
+engines produced are empty where they should be.
+
+## Persistence and reconstruction
 
 No case table. Every transition is sealed as its own `Evidence` object in the
 same hash-chained `EvidenceLedger` everything else in this product writes to,
 under `subject=case_id`, carrying a full snapshot of the case at that point.
-Reading a case is "take the last verifying entry for this subject" — see
-`assurance.change.store.CaseStore`. This means a case's history is exactly as
-tamper-evident, exportable and reconstructable as a machine passport already
-is, because it is the same ledger.
+Kinds: `opened`, `updated`, `transition`, `reverification`, `decision`,
+`reopened`.
+
+`assurance.change.replay.reconstruct_case(ledger, case_id)` (CLI:
+`assurance change replay`) rebuilds a case's current state **from the ledger
+alone** and replays every step against the state machine. It verifies each
+entry's sealed evidence and the chain, and reports — by ledger sequence number —
+any entry that: does not verify; makes a move its kind of entry cannot make
+(e.g. `open -> closed`); records `ready_to_close`/`closed` with work outstanding;
+rewrote the case's history rather than appending; altered a prior closure;
+changed the trigger; or records a decision by something that is not a named
+person. It reports; it does not repair. `replay.case` equals `CaseStore.get`
+whenever every entry verifies. This is what "reconstructable from the
+authoritative record" means here, as a function that can fail.
 
 ## Surfaces
 
 ```
-assurance change assess-drift | assess-advisory | list | show | claim | advance | reverify | decide
+assurance change assess-drift | assess-advisory | assess-intervention
+                 list | show | claim | advance | reverify
+                 resolve-decision | decide | resume | replay
 
 POST /v1/change/assess/drift
 POST /v1/change/assess/advisory
@@ -86,23 +180,36 @@ POST /v1/change/cases/{case_id}/decision
 ```
 
 Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
-no new plan was added. MCP: `change_cases`, `change_case` — thin wrappers over
-the same routes, no local simulation, matching every other tool in
-`assurance.mcp.server`.
+no new plan was added.
+
+MCP: `change_cases`, `change_case` (read), and `change_claim`, `change_advance`,
+`change_reverify` (thin relays to the routes above, no local logic). There is
+**deliberately no MCP tool for `decide`, `resume` or `resolve-decision`**: the
+MCP server is the surface an agent drives, and those are the decisions an agent
+must not make.
+
+CLI, API and MCP call the same `assurance.change.service` functions. Known
+divergences, not fixed here: an unknown case id is `404` on `GET
+/v1/change/cases/{id}` but `409` on every `POST` (the service raises
+`CaseTransitionError`, which the routes map to 409); and the API has no route
+yet for `resume`, `resolve-decision` or `assess-intervention` — those are CLI
+and watch only.
 
 ## What is not solved here
 
-- **No watch integration yet.** `assess_drift`/`assess_advisory` take the
-  exact objects `compare()`/`assess_impact()` already produce; wiring
-  `assurance.watch.runner` to call them automatically on every run — so a
-  case opens without anyone running `assess-drift` by hand — is the next
-  piece, not this one.
+- **The hosted API does not run the watch.** `assurance watch run` runs where
+  the exports are — in the customer's kit, from cron — against the customer's
+  ledger. The API serves, and lets a person work, the cases that ledger holds;
+  it never collects from a machine.
 - **No dashboard.** The customer-facing surface today is the CLI queue
-  (`assurance change list`) and the API's `GET /v1/change/cases`. A rendered
-  `/assurance` page in `src/dashboard` does not exist; `ROADMAP.md` already
-  says dashboard integration with the assurance product broadly is not
-  started, and this does not change that.
-- **No "action completed" tracking.** `advance()` moves a case off
-  `AWAITING_ACTION` on the caller's say-so; nothing here checks that a
-  required action was actually done, because nothing in this codebase
-  observes a human doing paperwork.
+  (`assurance change list`) and the API's `GET /v1/change/cases`.
+- **No "action completed" tracking.** See above.
+- **Function ids are not machine-qualified.** A case spanning several machines
+  tracks `SF-01` once; a re-verification on one machine clears the id. A *new*
+  machine joining an advisory case does re-open the work (the case steps back),
+  but within a machine set the bookkeeping is per function id.
+- **A withdrawn advisory only becomes a question to the owner.** If the case is
+  already closed, nothing is raised.
+- **A change made and reverted between two watch runs** leaves no trace, and so
+  no case. The watch compares against the last sealed manifest.
+- **Identity.** See "Who does what".

@@ -23,7 +23,7 @@ from dataclasses import replace
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
-from assurance.evidence.ledger import EvidenceLedger
+from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
 
 from .model import CaseStatus, ChangeAssuranceCase
 
@@ -31,6 +31,7 @@ __all__ = [
     "CASE_KINDS",
     "DECISION_KIND",
     "OPENED_KIND",
+    "REOPENED_KIND",
     "REVERIFICATION_KIND",
     "TRANSITION_KIND",
     "UPDATED_KIND",
@@ -43,11 +44,13 @@ UPDATED_KIND = "assurance.change.updated"
 TRANSITION_KIND = "assurance.change.transition"
 REVERIFICATION_KIND = "assurance.change.reverification"
 DECISION_KIND = "assurance.change.decision"
+REOPENED_KIND = "assurance.change.reopened"
 
 #: Every kind a case's history can be assembled from. A ledger `entries()`
 #: filter that used only ``OPENED_KIND`` would silently drop every case's
 #: later chapters.
-CASE_KINDS = (OPENED_KIND, UPDATED_KIND, TRANSITION_KIND, REVERIFICATION_KIND, DECISION_KIND)
+CASE_KINDS = (OPENED_KIND, UPDATED_KIND, TRANSITION_KIND, REVERIFICATION_KIND,
+              DECISION_KIND, REOPENED_KIND)
 
 
 class CaseStoreError(AssuranceError):
@@ -91,10 +94,38 @@ class CaseStore:
                 out.append(case)
         return sorted(out, key=lambda c: c.opened_at)
 
+    def closure_entry(self, case_id: str) -> LedgerEntry | None:
+        """The ledger entry that most recently closed this case, if any.
+
+        This is what a reopening points back at: the closure stays in the
+        chain exactly as it was sealed, and the new cycle names it.
+        """
+        found: LedgerEntry | None = None
+        for entry in self.ledger.entries(subject=case_id):
+            if entry.kind != DECISION_KIND:
+                continue
+            evidence = entry.evidence()
+            if not evidence.verify():
+                continue
+            if evidence.body["case"].get("decision") == "closed":
+                found = entry
+        return found
+
     # -- writing --------------------------------------------------------
     def _seal_and_append(
         self, case: ChangeAssuranceCase, kind: str, *, actor: Actor, detail: str,
     ) -> ChangeAssuranceCase:
+        # The last line of defence, below every service function: whatever
+        # called this, a case is never recorded as ready to close or closed
+        # while it still names work that has not been done or a question
+        # nobody has answered.
+        if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):
+            outstanding = [*(f"re-verification of {f}" for f in case.required_reverifications),
+                           *(f"decision: {d}" for d in case.human_decisions_required)]
+            if outstanding:
+                raise CaseStoreError(
+                    f"{case.case_id} cannot be recorded as {case.status.value} with "
+                    f"outstanding work: {'; '.join(outstanding)}.")
         now = format_utc(utc_now())
         history = (*case.history, {"kind": kind, "at": now, "detail": detail})
         stamped = replace(case, updated_at=now, history=history)
@@ -141,3 +172,7 @@ class CaseStore:
 
     def decide(self, case: ChangeAssuranceCase, *, actor: Actor, detail: str) -> ChangeAssuranceCase:
         return self._seal_and_append(case, DECISION_KIND, actor=actor, detail=detail)
+
+    def reopen(self, case: ChangeAssuranceCase, *, actor: Actor, detail: str) -> ChangeAssuranceCase:
+        """A closed trigger genuinely recurred. History and closure are kept."""
+        return self._seal_and_append(case, REOPENED_KIND, actor=actor, detail=detail)
