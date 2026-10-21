@@ -63,7 +63,8 @@ python -m assurance kit check plant/kit.json`}</pre>
             <h2>Every domain, its verbs, and what it maps to</h2>
             <p>
               Checked against each domain's own <code>--help</code> output. Two domains — <code>kit</code> and{' '}
-              <code>watch</code> — are offline-first and have no API equivalent; the rest call the same tier of the
+              <code>watch</code> — are offline-first (<code>watch push</code> is the one opt-in command that reports to
+              your own hosted ledger); the rest call the same tier of the
               Assurance API listed on <a href="/developers">/developers</a>.
             </p>
           </div>

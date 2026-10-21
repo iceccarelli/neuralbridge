@@ -273,7 +273,9 @@ and watch only.
 - **The hosted API does not run the watch.** `assurance watch run` runs where
   the exports are — in the customer's kit, from cron — against the customer's
   ledger. The API serves, and lets a person work, the cases that ledger holds;
-  it never collects from a machine.
+  it never collects from a machine. A customer may opt in to *report* a run to
+  their own hosted ledger with `assurance watch push` (see `WATCH.md`); the
+  hosted side then opens cases through the same `assess_drift`.
 - **No dashboard.** The customer-facing surface today is the CLI queue
   (`assurance change list`) and the API's `GET /v1/change/cases`.
 - **No "action completed" tracking.** See above.

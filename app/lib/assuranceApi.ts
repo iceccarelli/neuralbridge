@@ -25,6 +25,33 @@ export type Fleet = {
   chain_problems: string[];
 };
 
+// GET /v1/fleet/observations — what the customer's own Watch reported (assurance
+// watch push). Nothing here is observed by the hosted service.
+export type ObservationRow = {
+  machine: string;
+  reported: boolean;
+  last_successful_observation_at: string | null;
+  last_attempt_at: string | null;
+  last_attempt_status: string | null;
+  last_attempt_succeeded: boolean | null;
+  last_attempt_detail: string;
+  age_hours: number | null;
+  stale: boolean;
+  stale_reason: '' | 'never_reported' | 'never_successfully_observed' | 'older_than_cadence';
+  consecutive_failed_attempts: number;
+  open_case_ids: string[];
+};
+
+export type Observations = {
+  as_of: string;
+  cadence_hours: number;
+  cadence_declared: boolean;
+  reporting: boolean;
+  machines: ObservationRow[];
+  summary: { machines: number; never_reported: number; latest_attempt_failed: number; stale: number };
+  limitations: string[];
+};
+
 export type CaseRow = {
   case_id: string;
   machines: string[];

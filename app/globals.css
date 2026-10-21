@@ -3002,6 +3002,7 @@ table.status-table tbody tr:last-child td {
 .aw-table th, .aw-table td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .aw-table th { color: var(--ink-soft); font-weight: 600; }
 .aw-selected { background: var(--surface-alt); }
+.aw-bad { color: var(--danger); }
 .aw-link { background: none; border: 0; padding: 0; color: var(--link); text-decoration: underline; cursor: pointer; font: inherit; }
 .aw-note { color: var(--ink-soft); font-size: 0.85rem; max-width: 72ch; }
 .aw-detail { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1.25rem; }
