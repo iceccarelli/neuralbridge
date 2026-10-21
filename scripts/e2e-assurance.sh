@@ -12,6 +12,13 @@ export NEXT_PUBLIC_ASSURANCE_API_URL="http://127.0.0.1:$API_PORT"
 export ASSURANCE_E2E_SEED="$WORK/seed.json"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
 
+for port in "$API_PORT" "$WEB_PORT"; do
+  if curl -s -o /dev/null "http://127.0.0.1:$port/"; then
+    echo "port $port is already serving something; refusing to test against an unknown server" >&2
+    exit 2
+  fi
+done
+
 PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work"
 PYTHONPATH=src python -m uvicorn assurance.api.service:app --port "$API_PORT" >"$WORK/api.log" 2>&1 & API=$!
 npx next dev -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
