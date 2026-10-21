@@ -366,3 +366,9 @@ What this does not do: the watch runs where the exports are, in the customer's
 kit or from their cron, against their ledger. The hosted API does not run it and
 cannot collect from a machine; it can only serve and work the cases that ledger
 holds.
+
+**A partial look is not a configuration.** If a run does not find or read every
+item the plan names, the manifest it seals is marked `[collection incomplete: …]`
+and the observation records `complete: false` with the missing item ids. The
+drift it shows can still open a case, with the existing warning, but it can never
+make a closed case look as if the machine "left" its configuration and came back.

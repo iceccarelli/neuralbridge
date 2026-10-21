@@ -94,12 +94,10 @@ class CaseStore:
                 out.append(case)
         return sorted(out, key=lambda c: c.opened_at)
 
-    def closure_entry(self, case_id: str) -> LedgerEntry | None:
-        """The ledger entry that most recently closed this case, if any.
-
-        This is what a reopening points back at: the closure stays in the
-        chain exactly as it was sealed, and the new cycle names it.
-        """
+    def settling_entry(self, case_id: str, decision: str) -> LedgerEntry | None:
+        """The ledger entry that most recently settled this case as ``decision``
+        (``closed``, ``rejected`` or ``deferred``), if any. A reopening points
+        back at it: the entry stays in the chain exactly as it was sealed."""
         found: LedgerEntry | None = None
         for entry in self.ledger.entries(subject=case_id):
             if entry.kind != DECISION_KIND:
@@ -107,9 +105,22 @@ class CaseStore:
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
-            if evidence.body["case"].get("decision") == "closed":
+            if evidence.body["case"].get("decision") == decision:
                 found = entry
         return found
+
+    def closure_entry(self, case_id: str) -> LedgerEntry | None:
+        return self.settling_entry(case_id, "closed")
+
+    def cycle_start_seq(self, case_id: str) -> int:
+        """Ledger position of the entry that began this case's current cycle:
+        its latest opening or reopening. Evidence sealed at or before it
+        cannot be evidence *about* the change that case concerns."""
+        start = 0
+        for entry in self.ledger.entries(subject=case_id):
+            if entry.kind in (OPENED_KIND, REOPENED_KIND) and entry.evidence().verify():
+                start = entry.seq
+        return start
 
     # -- writing --------------------------------------------------------
     def _seal_and_append(

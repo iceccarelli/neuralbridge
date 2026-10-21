@@ -641,7 +641,7 @@ class TestEndToEnd:
                      verification_content_hash=bundle.content_hash, actor=PERSON)
         assert c.status is CaseStatus.READY_TO_CLOSE
         assert {"relation": "supports", "content_hash": bundle.content_hash,
-                "note": "re-verification evidence"} in c.linked_evidence
+                "note": f"re-verification evidence ({KEY_0412})"} in c.linked_evidence
         assert c.evidence_current == {"SF-01": "current", "SF-02": "current"}
 
         # -- a person closes it ------------------------------------------------
@@ -665,3 +665,42 @@ class TestEndToEnd:
         assert replay.case == store.get(case.case_id)
         ok, problems = ledger.verify_chain()
         assert ok, problems
+
+
+class TestAnIncompleteCollectionIsNotAConfiguration:
+    def test_a_week_with_an_export_missing_does_not_reopen_a_closed_case(
+            self, work, config, ledger, store):
+        run_watch(config, ledger, now=T0)
+        reexport(work, "0501", radius=1200)                           # A -> B
+        run_watch(config, ledger, now=T0 + WEEK)
+        case_b = store.list()[0]
+        closed, _ = work_to_closure(ledger, store, case_b.case_id, KEY_0501,
+                                    when=T0 + WEEK + timedelta(days=1))
+        assert closed.status is CaseStatus.CLOSED
+
+        # A transient fault: one export is missing for one week.
+        (work / "0501" / "robot-params.json").unlink()
+        run = run_watch(config, ledger, now=T0 + 3 * WEEK)
+        partial = next(o for o in run.outcomes if o.serial == "0501")
+        assert partial.collection_complete is False
+        assert any("were not found" in w for w in partial.warnings)
+        observation = [e.evidence().body for e in ledger.entries(kind="watch.observation")
+                       if e.evidence().body["serial"] == "0501"][-1]
+        assert observation["complete"] is False and observation["missing"] == ["ITM-PARAMS"]
+        marked = manifests_from_ledger(ledger, KEY_0501)[-1]
+        assert "collection incomplete" in marked.notes
+        assert store.get(case_b.case_id).status is CaseStatus.CLOSED   # not touched
+
+        # The fault clears and the machine is as it was when the case was closed.
+        reexport(work, "0501", radius=1200, stamp="2026-10-12T05:00:00Z")
+        run_watch(config, ledger, now=T0 + 4 * WEEK)
+        again = store.get(case_b.case_id)
+        assert again.status is CaseStatus.CLOSED
+        assert again.prior_closures == ()
+        assert reconstruct_case(ledger, case_b.case_id).ok
+
+    def test_a_complete_look_has_no_incomplete_mark(self, work, config, ledger):
+        run_watch(config, ledger, now=T0)
+        assert "collection incomplete" not in manifests_from_ledger(ledger, KEY_0501)[-1].notes
+        body = [e.evidence().body for e in ledger.entries(kind="watch.observation")][-1]
+        assert body["complete"] is True and body["missing"] == []
