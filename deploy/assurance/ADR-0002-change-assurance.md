@@ -1,6 +1,6 @@
 # ADR-0002: Continuous Machine Change Assurance — a case, not a new plan
 
-**Status:** Accepted, shipped. **Date:** 2026-09-27.
+**Status:** Accepted, shipped; amended by the S2 addendum. **Date:** 2026-09-27.
 
 ## The problem
 
@@ -42,15 +42,9 @@ needed.
 
 ## What was NOT done in this cycle, and why
 
-- **Watch integration.** `assurance.watch.runner` still only produces its own
-  `WatchRun`/`AdvisoryPass` objects; it does not yet call
-  `assess_drift`/`assess_advisory` itself. Wiring that in touches a
-  well-tested, currently-shipping component (`test_assurance_watch*.py`), and
-  doing it as a second, separate change keeps this one reviewable and keeps
-  the watch's own test suite as the safety net for the watch's own behaviour.
-  The two `assess_*` functions already take exactly the objects a watch run
-  produces, so the wiring itself is small; it was left for a follow-up rather
-  than folded into the same diff that introduced the whole case model.
+- **Watch integration — done in slice S2 (see the addendum below).**
+  This cycle shipped the case layer alone, so that the watch's own test suite
+  stayed the safety net for the watch's behaviour.
 - **A rendered UI.** The customer-facing surface shipped this cycle is the
   CLI queue and the JSON API. `src/dashboard` (Next.js) is not touched;
   `ROADMAP.md` already lists "dashboard integration with the assurance
@@ -74,3 +68,44 @@ copied from `test_assurance_machinery.py` and `test_assurance_fleet.py`), the
 CLI end to end, and the HTTP surface including the 402 boundary and the 409 a
 premature `decide(..., "closed")` produces. `tests/test_assurance_mcp.py`
 extended to cover the two new tools.
+
+## Addendum (S2): the watch keeps the cases
+
+`assurance watch run` now opens and updates cases itself: material drift,
+advisories that are `new` or `outstanding`, and recorded interventions that
+invalidated evidence. Decisions taken, and why:
+
+- **No second lifecycle, no new table.** The runner calls the same
+  `assess_drift` / `assess_advisory` / `assess_intervention`. The only new
+  persistence is one more ledger kind, `assurance.change.reopened`.
+- **Case first, manifest second.** The manifest the runner seals becomes the
+  next run's baseline. Sealing it before opening the case let a crash between
+  the two hide the drift for good. Opening first makes a crash recoverable —
+  the next run re-detects and lands on the same case — and both orders of
+  failure are tested.
+- **A repeat observation writes nothing unless it differs**, and a case past
+  review is merged additively, never re-inflated. Previously every re-look
+  appended an `updated` entry and overwrote the work lists.
+- **Explicit reopen/resume rules** (table in CHANGE.md): a closed drift case
+  reopens only when the ledger shows the machine left that configuration after
+  the closure and returned; a closed advisory only for a machine it did not
+  name; rejected stays rejected, a new trigger id is a new case; deferred has a
+  `resume`. The closure entry is never altered.
+- **Only a named person decides.** `decide`, `resume` and `resolve_decision`
+  refuse any actor whose `kind` is not `person`, in the domain layer, so the
+  CLI, API and MCP inherit it. The watch is `automation`. Limit: the kind is
+  set by the caller; the hosted API cannot prove a supplied name is a human.
+  The MCP server exposes no deciding tool for that reason.
+- **Failing to observe is not progress.** An uncollectable machine leaves its
+  cases exactly where they are and names them in the run.
+- **Reconstruction is a function that can fail** (`reconstruct_case`), not a
+  claim.
+
+Still not done: the hosted API does not run the watch (it runs in the
+customer's kit or cron); no dashboard; no completed-action tracking; function
+ids are not machine-qualified within a multi-machine advisory case; API routes
+for `resume`, `resolve-decision` and `assess-intervention` do not exist.
+
+Tests: `tests/test_assurance_watch_cases.py` (real-engine end to end, crash
+window, reopen over the watch, signed-feed advisory path, uncollectable
+machines, interventions) and the S2 classes in `tests/test_assurance_change.py`.
