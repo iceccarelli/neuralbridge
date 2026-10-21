@@ -137,6 +137,12 @@ def main(out: str, workdir: str) -> int:
                                   stripe_customer_id="cus_e2e_juliet", stripe_subscription_id="sub_e2e_juliet",
                                   status="past_due")
     key_j = store.issue_key(acct_j.id, label="e2e")
+    # A customer whose subscription ended: Stripe bound a customer id to it once, so the
+    # server still lets it read, verify and export what it already holds (evidence_readout).
+    acct_l = store.upsert_account(email="lima@e2e.invalid", tier="cell", company="lima",
+                                  stripe_customer_id="cus_e2e_lima", stripe_subscription_id="sub_e2e_lima",
+                                  status="cancelled")
+    key_l = store.issue_key(acct_l.id, label="e2e")
 
     (work / "plan.json").write_text(json.dumps(plan_dict()))
     for serial in ("0412", "0501"):
@@ -204,7 +210,7 @@ def main(out: str, workdir: str) -> int:
         "key_k": key_k, "k_machine": k_record.machine_key, "k_manifest": k_record.manifest.to_dict(),
         "k_intervention": k_intervention.to_dict(),
         "key_a": key_a, "key_b": key_b, "key_new": key_new, "key_register": key_c, "key_d": key_d, "key_e": key_e,
-        "key_g": key_g, "key_hotel": key_h, "key_past_due": key_j, "hotel_account_id": id_h,
+        "key_g": key_g, "key_hotel": key_h, "key_past_due": key_j, "key_lapsed": key_l,"hotel_account_id": id_h,
         "case_id": case_ids[0], "machines": ["Grimaldi/AR-7#0412", "Grimaldi/AR-7#0501"],
         "d_machine": "Grimaldi/AR-7#0900",
         "machines_g": [f"Grimaldi/AR-7#{s}" for s in G_SERIALS],
