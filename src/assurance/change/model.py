@@ -151,6 +151,11 @@ class ChangeAssuranceCase:
     reviewer: str = ""
 
     opened_at: str = ""
+    #: The instant the change this case concerns is known to have happened by:
+    #: the observed manifest's ``taken_at`` (drift) or the intervention's
+    #: ``occurred_at``. Re-verification evidence must describe a state at or
+    #: after it. Empty when no such instant is known (an advisory).
+    trigger_at: str = ""
     review_started_at: str = ""
     reverification_requested_at: str = ""
     reverified_at: str = ""
@@ -267,7 +272,8 @@ class ChangeAssuranceCase:
         lines.append(f"  affected safety functions: "
                      f"{', '.join(self.affected_functions) or '(none)'}")
         lines.append("  evidence state:")
-        for fid in self.affected_functions:
+        keys = [k for k in self.evidence_current if "/" in k] or list(self.affected_functions)
+        for fid in keys:
             before = self.evidence_before.get(fid, "?")
             current = self.evidence_current.get(fid, "?")
             lines.append(f"    {fid}: {before} -> {current}")
@@ -336,6 +342,7 @@ class ChangeAssuranceCase:
             "owner": self.owner,
             "reviewer": self.reviewer,
             "opened_at": self.opened_at,
+            "trigger_at": self.trigger_at,
             "review_started_at": self.review_started_at,
             "reverification_requested_at": self.reverification_requested_at,
             "reverified_at": self.reverified_at,
@@ -378,6 +385,7 @@ class ChangeAssuranceCase:
             owner=str(d.get("owner", "")),
             reviewer=str(d.get("reviewer", "")),
             opened_at=str(d.get("opened_at", "")),
+            trigger_at=str(d.get("trigger_at", "")),
             review_started_at=str(d.get("review_started_at", "")),
             reverification_requested_at=str(d.get("reverification_requested_at", "")),
             reverified_at=str(d.get("reverified_at", "")),

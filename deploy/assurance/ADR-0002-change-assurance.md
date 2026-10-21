@@ -109,3 +109,30 @@ for `resume`, `resolve-decision` and `assess-intervention` do not exist.
 Tests: `tests/test_assurance_watch_cases.py` (real-engine end to end, crash
 window, reopen over the watch, signed-feed advisory path, uncollectable
 machines, interventions) and the S2 classes in `tests/test_assurance_change.py`.
+
+### Amendment: what an independent review proved wrong, and what changed
+
+An adversarial review of the S2 closure logic reproduced real defects. Each was
+re-proved with a failing test before it was fixed:
+
+- **Re-verification accepted the wrong evidence.** Another machine's manifest,
+  a bundle that pre-dated the case, and a bundle that did not pass the
+  function's checks each cleared a case. Now: advisory entries are
+  `machine/function`; the cited bundle must be sealed after the case's current
+  cycle began, describe a state at or after the trigger and the manifest, and
+  pass every check the function declares.
+- **An advisory case could close on never-verified evidence.** Every function an
+  advisory reaches now needs evidence; closing without it is a recorded,
+  human-only `waive-reverification`.
+- **A partial collection reopened a human-closed case.** Incomplete manifests
+  are marked and never count as "left that configuration".
+- **Replay accepted a forged `ready_to_close`.** Work may leave a case only on
+  entries entitled to remove it, and a re-verification entry must cite a real,
+  post-trigger bundle.
+- **The actor guard was porous** (invisible names, `Person`, `bot`). It now
+  normalises, rejects invisible and reserved names, and requires the exact kind.
+- **Settled cases swallowed growing exposure.** A deferred advisory gains the
+  new machine and a question; a rejected advisory reopens like a closed one.
+
+Accepted and documented rather than fixed: a crash in the case/manifest window
+can leave one orphan divergence entry.

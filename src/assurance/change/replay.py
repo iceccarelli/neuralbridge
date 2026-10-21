@@ -30,6 +30,7 @@ from assurance.change.store import (
     UPDATED_KIND,
 )
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.bundle import BUNDLE_KIND
 
 __all__ = ["CaseReplay", "reconstruct_case"]
 
@@ -47,6 +48,10 @@ _LEGAL: dict[str, set[tuple[CaseStatus, CaseStatus]]] = {
         (S.AWAITING_ACTION, S.AWAITING_REVERIFICATION),
         (S.AWAITING_ACTION, S.READY_TO_CLOSE),
         (S.DEFERRED, S.IN_REVIEW),
+        # Only once nothing is left to re-verify: the work lists must already
+        # be empty, which the work-list rules enforce by forbidding a shrink here.
+        (S.AWAITING_REVERIFICATION, S.READY_TO_CLOSE),
+        (S.AWAITING_REVERIFICATION, S.AWAITING_ACTION),
     },
     REVERIFICATION_KIND: {
         (S.AWAITING_REVERIFICATION, S.AWAITING_REVERIFICATION),
@@ -58,9 +63,10 @@ _LEGAL: dict[str, set[tuple[CaseStatus, CaseStatus]]] = {
         *((s, S.DEFERRED) for s in _OPEN_STATES),
         (S.READY_TO_CLOSE, S.CLOSED),
     },
-    REOPENED_KIND: {(S.CLOSED, S.OPEN)},
+    REOPENED_KIND: {(S.CLOSED, S.OPEN), (S.REJECTED, S.OPEN)},
     UPDATED_KIND: {
         *((s, s) for s in _OPEN_STATES),
+        (S.DEFERRED, S.DEFERRED),            # a growing advisory exposure, recorded
         (S.READY_TO_CLOSE, S.AWAITING_REVERIFICATION),
         (S.READY_TO_CLOSE, S.AWAITING_ACTION),
     },
@@ -109,6 +115,7 @@ def reconstruct_case(
 
     state: ChangeAssuranceCase | None = None
     count = 0
+    cycle_start = 0
     for entry in ledger.entries(subject=case_id):
         if entry.kind not in CASE_KINDS:
             continue
@@ -130,8 +137,17 @@ def reconstruct_case(
             violations.append(f"{where}: payload is not a case ({exc}); excluded.")
             continue
 
+        if evidence.kind != entry.kind:
+            violations.append(f"{where}: the ledger files this as {entry.kind} but the "
+                              f"evidence was sealed as {evidence.kind}; excluded.")
+            continue
+
         violations.extend(_check_step(where, entry.kind, state, snap, evidence.actor.kind,
                                       evidence.actor.identifier, case_id))
+        if entry.kind == REVERIFICATION_KIND and state is not None:
+            violations.extend(_check_reverification(ledger, where, state, snap, cycle_start))
+        if entry.kind in (OPENED_KIND, REOPENED_KIND):
+            cycle_start = entry.seq
         state = snap
 
     if count == 0:
@@ -178,6 +194,10 @@ def _check_step(
         out.append(f"{where}: its own history says the last event was "
                    f"{snap.history[-1].get('kind')}.")
 
+    # -- work only goes away through the entries that are allowed to remove it --
+    if prev is not None:
+        out.extend(_check_work_lists(where, kind, prev, snap))
+
     # -- the guards a snapshot must satisfy wherever it sits ----------------
     if snap.status in (S.READY_TO_CLOSE, S.CLOSED):
         if snap.required_reverifications:
@@ -202,4 +222,77 @@ def _check_step(
     if decided and actor_kind.strip().lower() != "person":
         out.append(f"{where}: a decision recorded by {actor_id!r}, kind "
                    f"{actor_kind!r}, which is not a named person.")
+    return out
+
+
+def _pre_work(case: ChangeAssuranceCase) -> bool:
+    """Nothing re-verified yet, so a fresh reading may replace the work lists."""
+    return case.status in (S.OPEN, S.IN_REVIEW) and not case.reverified_at
+
+
+def _check_work_lists(
+    where: str, kind: str, prev: ChangeAssuranceCase, snap: ChangeAssuranceCase,
+) -> list[str]:
+    """Required work may leave a case only on an entry that has the standing to
+    remove it: a ``reverification`` (re-verifications and actions), a person's
+    resolution or waiver (named in ``resolved_decisions``), a fresh reading
+    before any work started, or a reopening. A plain transition that quietly
+    empties the lists is how a case would be walked to ``ready_to_close``
+    without anyone doing anything."""
+    out: list[str] = []
+    if kind == REOPENED_KIND:
+        return out
+    short = kind.rsplit(".", 1)[-1]
+    resolved_now = {r.get("decision") for r in snap.resolved_decisions}
+    grew = len(snap.resolved_decisions) > len(prev.resolved_decisions)
+    free = kind == UPDATED_KIND and _pre_work(prev)
+
+    gone_rev = set(prev.required_reverifications) - set(snap.required_reverifications)
+    if gone_rev and not free and kind != REVERIFICATION_KIND:
+        unwaived = [e for e in gone_rev
+                    if not (grew and f"close without re-verification evidence: {e}"
+                            in resolved_now)]
+        if unwaived:
+            out.append(f"{where}: re-verification of {', '.join(sorted(unwaived))} was "
+                       f"removed by a {short} entry, which cannot remove it (only a "
+                       "re-verification, or a person's recorded waiver, can).")
+    gone_act = set(prev.required_actions) - set(snap.required_actions)
+    if gone_act and not free and kind != REVERIFICATION_KIND:
+        out.append(f"{where}: {len(gone_act)} required action(s) were removed by a "
+                   f"{short} entry, which cannot remove them.")
+    gone_dec = set(prev.human_decisions_required) - set(snap.human_decisions_required)
+    if gone_dec and not free:
+        unresolved = [d for d in gone_dec if d not in resolved_now]
+        if unresolved:
+            out.append(f"{where}: {len(unresolved)} human decision(s) were removed "
+                       "without a recorded resolution.")
+    if kind in (TRANSITION_KIND, DECISION_KIND) and snap.evidence_current != prev.evidence_current:
+        out.append(f"{where}: a {short} entry changed the recorded evidence state, "
+                   "which only a re-verification can do.")
+    return out
+
+
+def _check_reverification(
+    ledger: EvidenceLedger, where: str, prev: ChangeAssuranceCase,
+    snap: ChangeAssuranceCase, cycle_start: int,
+) -> list[str]:
+    """A re-verification entry must cite real, post-trigger evidence."""
+    out: list[str] = []
+    new_links = [r for r in snap.linked_evidence
+                 if r not in prev.linked_evidence and r.get("relation") == "supports"]
+    if not snap.reverified_at:
+        out.append(f"{where}: a re-verification entry that does not record when it "
+                   "was re-verified (reverified_at).")
+    if not new_links:
+        out.append(f"{where}: a re-verification entry that cites no 'supports' evidence.")
+    for link in new_links:
+        h = link.get("content_hash", "")
+        found = [e for e in ledger.entries(kind=BUNDLE_KIND) if e.content_hash == h]
+        if not found:
+            out.append(f"{where}: it cites {h[:12]!r}, which is not a sealed verification "
+                       "in this ledger.")
+        elif not any(e.seq > cycle_start and e.subject in snap.machines for e in found):
+            out.append(f"{where}: it cites verification {h[:12]}, which was sealed before "
+                       "the case's current cycle began or for a machine the case does "
+                       "not concern.")
     return out
