@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--out", type=Path, default=None)
     rn.add_argument("--ledger", type=Path, default=None,
                     help="seal the manifest into this evidence ledger")
+    rn.add_argument("--seal-incomplete", action="store_true",
+                    help="seal even when a required item could not be read. The "
+                         "manifest then becomes the machine's current one with those "
+                         "items absent, and an advisory about them will not match "
+                         "this machine; by default an incomplete collection is not "
+                         "sealed")
     rn.add_argument("--json", action="store_true")
 
     return p
@@ -148,7 +154,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             encoding="utf-8")
 
     sealed = ""
-    if args.ledger:
+    refused = ""
+    if args.ledger and not result.complete and not args.seal_incomplete:
+        refused = ("not sealed: the collection is incomplete, and a sealed manifest "
+                   "becomes the machine's current one with the missing items absent "
+                   "from every later comparison. Fix the export, or pass "
+                   "--seal-incomplete to seal what was read.")
+    elif args.ledger:
         ledger = EvidenceLedger(args.ledger)
         evidence = record_manifest(ledger, result.manifest)
         sealed = f"{evidence.content_hash[:16]} as entry {len(ledger)}"
@@ -156,6 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.json:
         payload = result.to_dict()
         payload["sealed"] = sealed
+        payload["not_sealed"] = refused
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(result.summary())
@@ -163,6 +176,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"\n  manifest written to {args.out}")
         if sealed:
             print(f"  sealed {sealed}")
+        if refused:
+            print(f"  {refused}")
         if not result.complete:
             print("\n  This collection is INCOMPLETE. The missing items are absent "
                   "from the manifest, so nothing derived from it says anything "

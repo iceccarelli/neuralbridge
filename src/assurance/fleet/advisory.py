@@ -40,6 +40,7 @@ advisory that means "everything before 3.9" can enumerate the versions it means.
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -56,12 +57,44 @@ __all__ = [
     "AffectedArtefact",
     "ComponentAdvisory",
     "MatchBasis",
+    "fold_hash",
+    "fold_text",
     "match_item",
 ]
 
 
 class AdvisoryError(AssuranceError):
     """An advisory is malformed, or identifies nothing it could be matched on."""
+
+
+def fold_text(text: str) -> str:
+    """The form in which two names or version labels are compared.
+
+    Unicode compatibility-normalised, case-folded, with every run of whitespace
+    (including a non-breaking space) reduced to one space and the ends trimmed.
+    That is *identity of the same string in different dress* — composed against
+    decomposed accents, ``ß`` against ``SS``, full-width letters, a trailing tab
+    from a spreadsheet. It is not similarity: ``ControlCo`` and ``Control Co
+    GmbH`` stay different, and so do strings that differ by an invisible
+    character. An advisory that fails to match because of encoding clears a cell
+    that should have been stopped; one that matches too eagerly costs a
+    person ten minutes.
+    """
+    form = unicodedata.normalize("NFKC", text)
+    form = " ".join(form.split()).casefold()
+    return unicodedata.normalize("NFKC", form)
+
+
+def fold_hash(text: str) -> str:
+    """A content hash for comparison: trimmed, lower-cased, ``sha256:`` prefix dropped.
+
+    Exact otherwise. A prefix of a hash is *not* the hash, and nothing here
+    compares on one.
+    """
+    h = text.strip().lower()
+    if h.startswith("sha256:"):
+        h = h[len("sha256:"):].strip()
+    return h
 
 
 class AdvisorySeverity(StrEnum):
@@ -120,7 +153,7 @@ class AffectedArtefact:
     version_note: str = ""
 
     def __post_init__(self) -> None:
-        if not self.supplier or not self.name:
+        if not fold_text(self.supplier) or not fold_text(self.name):
             raise AdvisoryError(
                 "an affected artefact needs a supplier and a component name; "
                 "without both it cannot be matched to anything."
@@ -130,6 +163,13 @@ class AffectedArtefact:
                 f"{self.supplier} {self.name}: the advisory names neither a version "
                 "nor a hash, so it would match every version of this component ever "
                 "shipped. List the affected versions, or the hashes."
+            )
+        if any(not fold_text(v) for v in self.versions) or any(
+                not fold_hash(h) for h in self.content_hashes):
+            raise AdvisoryError(
+                f"{self.supplier} {self.name}: an affected version or hash is empty. "
+                "A blank entry is not a value; it would read as 'a version nobody "
+                "recorded' and match accordingly."
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -190,6 +230,12 @@ class ComponentAdvisory:
                 f"advisory {self.advisory_id!r} carries no reference. An advisory a "
                 "reader cannot trace to its source is a rumour."
             )
+        if any(not fold_text(v) for v in self.fixed_versions) or any(
+                not fold_hash(h) for h in self.fixed_hashes):
+            raise AdvisoryError(
+                f"advisory {self.advisory_id!r} lists an empty fixed version or hash. "
+                "A blank 'fixed' entry would read as demonstrably remedied."
+            )
 
     @property
     def publishes_hashes(self) -> bool:
@@ -238,14 +284,112 @@ class ComponentAdvisory:
 
 
 def _same_component(artefact: AffectedArtefact, item: SafetyItem) -> bool:
-    """Supplier and component name, compared case-insensitively and trimmed.
+    """Supplier and component name, compared as :func:`fold_text` folds them.
 
     Deliberately not fuzzy. "ControlCo" and "Control Co GmbH" are different
     strings, and guessing they are the same supplier is how an advisory silently
     fails to match, or matches something it should not.
     """
-    return (artefact.supplier.strip().lower() == item.supplier.strip().lower()
-            and artefact.name.strip().lower() == item.name.strip().lower())
+    return (fold_text(artefact.supplier) == fold_text(item.supplier)
+            and fold_text(artefact.name) == fold_text(item.name))
+
+
+def _same_component_unknown_supplier(artefact: AffectedArtefact, item: SafetyItem) -> bool:
+    """The component name matches and the item records no supplier at all.
+
+    Neither affected nor clear: the advisory is about this component from a
+    named supplier, and the machine does not say who made it.
+    """
+    return (not fold_text(item.supplier)
+            and fold_text(artefact.name) == fold_text(item.name))
+
+
+#: Strongest evidence first. When one advisory has several entries for the same
+#: component, the answer is the strongest basis any of them supports, so the
+#: order in which a supplier happened to list them cannot change it.
+_PRIORITY = {MatchBasis.HASH: 0, MatchBasis.HASH_MISMATCH: 1, MatchBasis.VERSION: 2,
+             MatchBasis.NAME_ONLY: 3}
+
+
+def _match_artefact(
+    advisory: ComponentAdvisory, artefact: AffectedArtefact, item: SafetyItem,
+) -> tuple[MatchBasis, str] | None:
+    if not _same_component(artefact, item):
+        if _same_component_unknown_supplier(artefact, item):
+            return MatchBasis.NAME_ONLY, (
+                f"this is a {item.name!r} with no supplier recorded, and the advisory "
+                f"concerns {artefact.supplier}'s {artefact.name}. The machine does "
+                "not say who made it, so this can be neither confirmed nor cleared. "
+                "Somebody has to look."
+            )
+        return None
+
+    versions = {fold_text(v) for v in artefact.versions}
+    affected_hashes = {fold_hash(h) for h in artefact.content_hashes}
+    fixed_hashes = {fold_hash(h) for h in advisory.fixed_hashes}
+    fixed_versions = {fold_text(v) for v in advisory.fixed_versions}
+    label = fold_text(item.version)
+
+    # A hash is evidence about this machine only if it was read from this
+    # machine. One computed from a vendor's download, or typed in, says what
+    # should be here, not what is.
+    recorded = fold_hash(item.content_hash)
+    machine_hash = recorded if item.hash_source.describes_this_unit else ""
+    set_aside = (
+        f" The hash recorded for it ({recorded[:12]}, {item.hash_source.value}) was "
+        "not read from this machine, so it was not compared."
+        if recorded and not machine_hash else ""
+    )
+
+    if machine_hash and machine_hash in affected_hashes:
+        return MatchBasis.HASH, (
+            f"the artefact on this machine is byte-identical to one "
+            f"{advisory.issued_by} named as affected ({machine_hash[:12]})."
+        )
+
+    label_matches = bool(label) and label in versions
+
+    if label_matches and machine_hash and (
+            affected_hashes or machine_hash in fixed_hashes):
+        # The label says affected and the artefact disagrees with the supplier's
+        # own figures. This is not "affected" and not "clear".
+        if machine_hash in fixed_hashes:
+            return MatchBasis.HASH_MISMATCH, (
+                f"this machine reports version {item.version!r}, which the "
+                f"advisory names, but the artefact hashes to a value "
+                f"{advisory.issued_by} lists as FIXED "
+                f"({machine_hash[:12]}). The label is stale; the software "
+                "may already be remedied. Confirm before acting."
+            )
+        return MatchBasis.HASH_MISMATCH, (
+            f"this machine reports version {item.version!r}, which the advisory "
+            f"names, but the artefact hashes to {machine_hash[:12]}, which "
+            f"is not among the hashes {advisory.issued_by} published for that "
+            "version. Either the supplier's figure is wrong or this machine is "
+            "not running what it says it is running. Both need a person."
+        )
+
+    if label_matches:
+        return MatchBasis.VERSION, (
+            f"the version label {item.version!r} matches one the advisory names. "
+            f"{advisory.issued_by} published no artefact hash for it that could be "
+            "compared, so this rests on a label, and a label is not an artefact."
+            + set_aside
+        )
+
+    if machine_hash and machine_hash in fixed_hashes:
+        return None  # demonstrably remedied
+
+    if label and (versions or fixed_versions):
+        return None  # a known version that is not on the affected list
+
+    return MatchBasis.NAME_ONLY, (
+        f"this is {artefact.supplier} {artefact.name}, which the advisory "
+        "concerns, but the version on this machine is "
+        + (f"{item.version!r}, which the advisory does not list"
+           if item.version else "not recorded")
+        + ". Somebody has to look." + set_aside
+    )
 
 
 def match_item(
@@ -255,61 +399,19 @@ def match_item(
 
     The order of evidence is fixed: a hash that matches settles it; a version
     label that matches while the hash contradicts the supplier's published value
-    is its own finding and outranks a plain label match.
+    is its own finding and outranks a plain label match. Across the advisory's
+    entries the strongest basis wins, in that order, so the answer does not
+    depend on which entry the supplier listed first.
+
+    Only a hash read from the machine counts as a hash. Names and version labels
+    are compared as :func:`fold_text` folds them; hashes as :func:`fold_hash`
+    folds them, and never by prefix.
     """
+    best: tuple[MatchBasis, str] | None = None
     for artefact in advisory.affected:
-        if not _same_component(artefact, item):
+        found = _match_artefact(advisory, artefact, item)
+        if found is None:
             continue
-
-        if item.content_hash and item.content_hash in artefact.content_hashes:
-            return MatchBasis.HASH, (
-                f"the artefact on this machine is byte-identical to one "
-                f"{advisory.issued_by} named as affected "
-                f"({item.content_hash[:12]})."
-            )
-
-        label_matches = item.version and item.version in artefact.versions
-
-        if label_matches and artefact.content_hashes and item.content_hash:
-            # The supplier published hashes for this version and ours is not
-            # among them. This is not "affected" and not "clear".
-            if item.content_hash in advisory.fixed_hashes:
-                return MatchBasis.HASH_MISMATCH, (
-                    f"this machine reports version {item.version!r}, which the "
-                    f"advisory names, but the artefact hashes to a value "
-                    f"{advisory.issued_by} lists as FIXED "
-                    f"({item.content_hash[:12]}). The label is stale; the software "
-                    "may already be remedied. Confirm before acting."
-                )
-            return MatchBasis.HASH_MISMATCH, (
-                f"this machine reports version {item.version!r}, which the advisory "
-                f"names, but the artefact hashes to {item.content_hash[:12]}, which "
-                f"is not among the hashes {advisory.issued_by} published for that "
-                "version. Either the supplier's figure is wrong or this machine is "
-                "not running what it says it is running. Both need a person."
-            )
-
-        if label_matches:
-            return MatchBasis.VERSION, (
-                f"the version label {item.version!r} matches one the advisory names. "
-                f"{advisory.issued_by} published no artefact hash, so this rests on "
-                "a label, and a label is not an artefact."
-            )
-
-        if item.content_hash and item.content_hash in advisory.fixed_hashes:
-            continue  # demonstrably remedied
-
-        if item.version and (artefact.versions or advisory.fixed_versions):
-            if item.version in advisory.fixed_versions:
-                continue  # the supplier says this version is fixed
-            continue  # a known version that is not on the affected list
-
-        return MatchBasis.NAME_ONLY, (
-            f"this is {artefact.supplier} {artefact.name}, which the advisory "
-            "concerns, but the version on this machine is "
-            + (f"{item.version!r}, which the advisory does not list"
-               if item.version else "not recorded")
-            + ". Somebody has to look."
-        )
-
-    return None
+        if best is None or _PRIORITY[found[0]] < _PRIORITY[best[0]]:
+            best = found
+    return best
