@@ -176,7 +176,26 @@ def _refused(exc: AssuranceError) -> HTTPException:
     """
     if isinstance(exc, CaseNotFoundError):
         return _not_found(exc.case_id)
+    if isinstance(exc, LedgerIntegrityError):
+        # The account's chain does not verify: nothing is shown or extended.
+        return HTTPException(status_code=500, detail={
+            "error": "ledger_integrity", "detail": str(exc)})
     return HTTPException(status_code=409, detail=str(exc))
+
+
+#: What a case operation may refuse with. ``LedgerIntegrityError`` is the chain
+#: guard in :class:`~assurance.change.store.CaseStore`.
+_REFUSALS = (CaseTransitionError, CaseStoreError, LedgerIntegrityError)
+
+
+def _intact(store: CaseStore) -> CaseStore:
+    """``store``, after checking the chain: a read that skipped this could show a
+    case as it was before someone edited its newest entry."""
+    try:
+        store.require_intact()
+    except LedgerIntegrityError as exc:
+        raise _refused(exc) from exc
+    return store
 
 
 @change_router.post("/assess/drift", summary="Turn a manifest divergence into a case")
@@ -198,8 +217,11 @@ async def assess_drift_route(
     verifications = VerificationRecord.from_ledger(register.ledger, subject=key)
     interventions = interventions_from_ledger(register.ledger, key)
     store = CaseStore(register.ledger)
-    case = assess_drift(store, divergence, observed, verifications, interventions,
-                        actor=_actor(body.actor, "watch", principal))
+    try:
+        case = assess_drift(store, divergence, observed, verifications, interventions,
+                            actor=_actor(body.actor, "watch", principal))
+    except _REFUSALS as exc:
+        raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
            "verdict": divergence.verdict}
 
@@ -216,7 +238,10 @@ async def assess_advisory_route(
     fleet = Fleet.from_ledger(register.ledger)
     report = assess_impact(advisory, fleet)
     store = CaseStore(register.ledger)
-    case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal))
+    try:
+        case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal))
+    except _REFUSALS as exc:
+        raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
            "verdict": report.verdict}
 
@@ -242,6 +267,8 @@ async def assess_intervention_route(
     except UnknownInterventionError as exc:
         raise HTTPException(status_code=422, detail={
             "error": "unknown_intervention", "detail": str(exc)}) from exc
+    except _REFUSALS as exc:
+        raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
             "intervention_id": chosen.intervention_id}
 
@@ -251,7 +278,7 @@ async def list_cases(
     principal: Annotated[Principal, Machine], status: str = "",
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
-    store = CaseStore(register.ledger)
+    store = _intact(CaseStore(register.ledger))
     try:
         parsed = CaseStatus(status) if status else None
     except ValueError as exc:
@@ -265,7 +292,7 @@ async def get_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
-    case = CaseStore(register.ledger).get(case_id)
+    case = _intact(CaseStore(register.ledger)).get(case_id)
     if case is None:
         raise _not_found(case_id)
     return case.to_dict()
@@ -279,7 +306,7 @@ async def claim_case_route(
     try:
         case = claim(CaseStore(register.ledger), case_id, owner=body.owner,
                     actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -292,7 +319,7 @@ async def advance_case_route(
     try:
         case = advance(CaseStore(register.ledger), case_id,
                        actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -313,7 +340,7 @@ async def reverify_case_route(
         case = reverify(CaseStore(register.ledger), case_id, manifest, verifications,
                         interventions, verification_content_hash=body.verification_content_hash,
                         actor=_actor(body.actor, "verification engineer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -326,7 +353,7 @@ async def decide_case_route(
     try:
         case = decide(CaseStore(register.ledger), case_id, disposition=body.disposition,
                      reason=body.reason, actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -339,7 +366,7 @@ async def resume_case_route(
     try:
         case = resume(CaseStore(register.ledger), case_id, reason=body.reason,
                       actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -354,7 +381,7 @@ async def resolve_decision_route(
         case = resolve_decision(CaseStore(register.ledger), case_id, decision=body.decision,
                                 resolution=body.resolution,
                                 actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -371,7 +398,7 @@ async def waive_reverification_route(
         case = waive_reverification(CaseStore(register.ledger), case_id, entry=body.entry,
                                     reason=body.reason,
                                     actor=_actor(body.actor, "reviewer", principal))
-    except (CaseTransitionError, CaseStoreError) as exc:
+    except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
 
@@ -391,8 +418,7 @@ async def export_case(
     try:
         bundle = register.ledger.export(subject=case_id)
     except LedgerIntegrityError as exc:
-        raise HTTPException(status_code=500, detail={
-            "error": "ledger_integrity", "detail": str(exc)}) from exc
+        raise _refused(exc) from exc
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
         raise _not_found(case_id)
     return bundle

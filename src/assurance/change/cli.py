@@ -61,7 +61,7 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CASE_KINDS, CaseStore
+from assurance.change.store import CASE_KINDS, CaseStore, ChainBrokenError
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
@@ -249,7 +249,9 @@ def _cmd_assess_intervention(args: argparse.Namespace) -> int:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     status = CaseStatus(args.status) if args.status else None
-    cases = _store(args.ledger).list(status=status)
+    store = _store(args.ledger)
+    store.require_intact()
+    cases = store.list(status=status)
     summary = queue_summary(cases)
     open_cases = [c for c in cases if c.is_open]
     if args.json:
@@ -274,7 +276,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_show(args: argparse.Namespace) -> int:
-    case = _store(args.ledger).get(args.case_id)
+    store = _store(args.ledger)
+    store.require_intact()
+    case = store.get(args.case_id)
     if case is None:
         raise CaseNotFoundError(args.case_id)
     if args.json:
@@ -391,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
         return handlers[args.command](args)
     except CaseNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except ChainBrokenError as exc:
+        # First and loud, and nothing is printed to stdout: a pipe that reads the
+        # queue gets an empty queue and a non-zero exit, never a stale one.
+        print(f"THE LEDGER CHAIN DOES NOT VERIFY — {exc}", file=sys.stderr)
         return 2
     except CaseTransitionError as exc:
         print(f"finding: {exc}", file=sys.stderr)

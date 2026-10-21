@@ -8,12 +8,16 @@ returns the same honest "not configured" error instead of pretending to
 have called anything, matching the fail-closed pattern the rest of this
 site uses (see ``/console`` and ``/developers``).
 
-Tool set is deliberately small: the two always-free routes (``plans``,
-``spec_validate``) plus two paid routes (``machine_verify``, a Cell-tier
-route; ``register_cases``, a Register-tier route) chosen specifically
-because calling them on the wrong plan or with no key surfaces the API's
-real, structured 401/402 shape — the thing an agent actually needs to see
-to route a human to checkout, not a summary of it.
+Tool set is deliberately small, and pinned to the list in
+``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``: the two
+always-free routes (``plans``, ``spec_validate``), two paid routes
+(``machine_verify``, Cell tier; ``register_cases``, Register tier) chosen because
+calling them on the wrong plan or with no key surfaces the API's real, structured
+401/402 shape, and the change queue: three reads (``change_cases``,
+``change_case``, ``change_export``) and three writes an agent may make
+(``change_claim``, ``change_advance``, ``change_reverify``). There is no tool that
+closes, rejects, defers or resumes a case, answers its open questions or waives a
+re-verification: those are a named person's, on the CLI or the HTTP API.
 
 Run with ``assurance-mcp`` (installed via ``pip install -e '.[assurance-mcp]'``)
 or ``python -m assurance.mcp.server``. Transport is stdio by default, which
@@ -23,8 +27,8 @@ is what Cursor's ``mcp.json`` and most MCP clients expect.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -36,10 +40,12 @@ mcp: MCPServer = MCPServer(
         "Tools for the Industrial Autonomous Assurance API "
         "(CRA Article 14 / Machinery Regulation Annex III evidence). "
         "Free tools (plans, spec_validate) need no configuration beyond "
-        "ASSURANCE_API_URL. Paid tools (machine_verify, register_cases) "
-        "also want ASSURANCE_API_KEY; without one they return the API's "
-        "real 401, which is the correct, informative answer — not an error "
-        "in this server."
+        "ASSURANCE_API_URL. Paid tools (machine_verify, register_cases, the "
+        "change_* tools) also want ASSURANCE_API_KEY; without one they return "
+        "the API's real 401, which is the correct, informative answer — not an "
+        "error in this server. You can read and work the change queue; you "
+        "cannot decide a case, resume it, answer its open questions or waive a "
+        "re-verification — those need a named person."
     ),
 )
 
@@ -69,14 +75,30 @@ _NOT_CONFIGURED = {
 }
 
 
-def _case_path(case_id: str, suffix: str = "") -> str:
-    """``/v1/change/cases/{case_id}{suffix}`` with the id as ONE path segment.
+#: What a case id looks like (``case-`` and sixteen hex digits today). Anything
+#: with a slash, a dot-segment, a query or a space is not one.
+_CASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
-    An agent chooses ``case_id``. Percent-encoding it means a value such as
-    ``x/resume`` or ``x?`` can only ever name a (nonexistent) case; it can never
-    steer the call onto another route.
+
+def _invalid_case_id(case_id: str) -> dict[str, Any]:
+    return {
+        "error": "invalid_case_id",
+        "detail": f"{case_id[:80]!r} is not a case id. Ids look like 'case-0123456789abcdef'; "
+                  "nothing was sent.",
+    }
+
+
+def _case_path(case_id: str, suffix: str = "") -> str | None:
+    """``/v1/change/cases/{case_id}{suffix}``, or ``None`` if the id is not one.
+
+    An agent chooses ``case_id``, and the API server decodes ``%2F`` before it
+    routes, so percent-encoding cannot keep ``x/decision`` inside one segment.
+    The id is checked instead, and a value that is not an id never leaves this
+    process: it cannot steer a call onto another route.
     """
-    return f"/v1/change/cases/{quote(case_id, safe='')}{suffix}"
+    if not _CASE_ID.fullmatch(case_id):
+        return None
+    return f"/v1/change/cases/{case_id}{suffix}"
 
 
 async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = None,
@@ -173,7 +195,8 @@ async def change_case(case_id: str) -> dict[str, Any]:
 
     Cell-tier only.
     """
-    return await _call("GET", _case_path(case_id))
+    path = _case_path(case_id)
+    return await _call("GET", path) if path else _invalid_case_id(case_id)
 
 
 @mcp.tool()
@@ -184,7 +207,8 @@ async def change_export(case_id: str) -> dict[str, Any]:
     The ``body`` is what ``assurance evidence verify`` checks offline. It proves the
     bundle is internally consistent; it does not prove it is the operator's ledger.
     """
-    return await _call("GET", _case_path(case_id, "/export"))
+    path = _case_path(case_id, "/export")
+    return await _call("GET", path) if path else _invalid_case_id(case_id)
 
 
 # Write parity for the change queue — claim, advance, reverify. Deliberately NOT
@@ -204,8 +228,10 @@ async def change_claim(case_id: str, owner: str, actor: str) -> dict[str, Any]:
     refuses a blank one (422). A case in any other state is a real 409, and an
     unknown case id is a 404, the same as the read tools return for it.
     """
-    return await _call("POST", _case_path(case_id, "/claim"),
-                       json_body={"owner": owner, "actor": actor})
+    path = _case_path(case_id, "/claim")
+    if path is None:
+        return _invalid_case_id(case_id)
+    return await _call("POST", path, json_body={"owner": owner, "actor": actor})
 
 
 @mcp.tool()
@@ -216,8 +242,10 @@ async def change_advance(case_id: str, actor: str) -> dict[str, Any]:
 
     Cell-tier only. ``actor`` is the named person this step is taken for.
     """
-    return await _call("POST", _case_path(case_id, "/advance"),
-                       json_body={"actor": actor})
+    path = _case_path(case_id, "/advance")
+    if path is None:
+        return _invalid_case_id(case_id)
+    return await _call("POST", path, json_body={"actor": actor})
 
 
 @mcp.tool()
@@ -232,7 +260,10 @@ async def change_reverify(
     resume a case, to answer its open questions or to waive a re-verification: those
     need a named person, on the CLI or the HTTP API.
     """
-    return await _call("POST", _case_path(case_id, "/reverification"),
+    path = _case_path(case_id, "/reverification")
+    if path is None:
+        return _invalid_case_id(case_id)
+    return await _call("POST", path,
                        json_body={"manifest": manifest, "actor": actor,
                                   "verification_content_hash": verification_content_hash})
 

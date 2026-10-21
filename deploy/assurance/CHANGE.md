@@ -235,38 +235,92 @@ person. It reports; it does not repair. `replay.case` equals `CaseStore.get`
 whenever every entry verifies. This is what "reconstructable from the
 authoritative record" means here, as a function that can fail.
 
+**A ledger that does not verify shows no case and takes no write.** The store
+skips an entry whose sealed evidence no longer verifies, which is right for a
+replay that reports it and wrong for a screen: a case whose newest entry was
+edited would read as the state before the edit. So `CaseStore.require_intact()`
+(the whole chain) runs before every write and before every read an interface
+presents as the case: HTTP answers `500 {"error": "ledger_integrity"}` and the
+CLI prints `THE LEDGER CHAIN DOES NOT VERIFY` to stderr first, prints nothing to
+stdout and exits 2. `replay` and `export` keep their own behaviour (a report of
+the violations; a refusal). The cost is one chain walk per request, which grows
+with the account's ledger.
+
 ## Surfaces
 
 ```
 assurance change assess-drift | assess-advisory | assess-intervention
                  list | show | claim | advance | reverify
-                 resolve-decision | waive-reverification | decide | resume | replay
+                 resolve-decision | waive-reverification | decide | resume
+                 replay | export
 
-POST /v1/change/assess/drift
-POST /v1/change/assess/advisory
-GET  /v1/change/cases
+POST /v1/change/assess/drift                       {baseline, observed, actor?}
+POST /v1/change/assess/advisory                    {advisory, actor?}
+POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
+GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}
-POST /v1/change/cases/{case_id}/claim
-POST /v1/change/cases/{case_id}/advance
-POST /v1/change/cases/{case_id}/reverification
-POST /v1/change/cases/{case_id}/decision
+GET  /v1/change/cases/{case_id}/export             a bundle `assurance evidence verify` checks
+GET  /v1/change/cases/{case_id}/replay             the case rebuilt from the ledger alone
+POST /v1/change/cases/{case_id}/claim              {owner, actor}
+POST /v1/change/cases/{case_id}/advance            {actor}
+POST /v1/change/cases/{case_id}/reverification     {manifest, verification_content_hash, actor}
+POST /v1/change/cases/{case_id}/resolve-decision   {decision, resolution, actor}
+POST /v1/change/cases/{case_id}/waive-reverification {entry, reason, actor}
+POST /v1/change/cases/{case_id}/decision           {disposition, reason, actor}
+POST /v1/change/cases/{case_id}/resume             {reason, actor}
 ```
 
 Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
-no new plan was added.
+no new plan was added. 401 with no or an invalid key, 402 when authenticated but
+not entitled, always from the account's own ledger.
 
-MCP: `change_cases`, `change_case` (read), and `change_claim`, `change_advance`,
-`change_reverify` (thin relays to the routes above, no local logic). There is
-**deliberately no MCP tool for `decide`, `resume` or `resolve-decision`**: the
-MCP server is the surface an agent drives, and those are the decisions an agent
-must not make.
+MCP tools (exactly these): plans, spec_validate, machine_verify, register_cases, change_cases, change_case, change_export, change_claim, change_advance, change_reverify
 
-CLI, API and MCP call the same `assurance.change.service` functions. Known
-divergences, not fixed here: an unknown case id is `404` on `GET
-/v1/change/cases/{id}` but `409` on every `POST` (the service raises
-`CaseTransitionError`, which the routes map to 409); and the API has no route
-yet for `resume`, `resolve-decision` or `assess-intervention` — those are CLI
-and watch only.
+The change tools are thin relays to the routes above, with no local logic:
+`change_cases`, `change_case` and `change_export` read; `change_claim`,
+`change_advance` and `change_reverify` write. There is **deliberately no MCP
+tool for `decide`, `resume`, `resolve-decision` or `waive-reverification`** (nor
+for closing, rejecting or deferring): the MCP server is the surface an agent
+drives, and those are the decisions an agent must not make.
+`tests/test_interfaces_mcp.py` fails if a tool is added without this line being
+updated, and shows from the outside that no tool, whatever it is passed, reaches
+those routes (case ids are percent-encoded as one path segment).
+
+CLI, API and MCP call the same `assurance.change.service` functions, and the
+parity tests (`tests/test_interfaces_*.py`) run one sequence through the
+library, the command line, the HTTP API and the MCP read tools and compare.
+What is the same on every interface:
+
+| | |
+|---|---|
+| unknown case id | HTTP `404` `{"detail": {"error": "case_not_found", "case_id"}}` on every verb; CLI exit `2` on every verb (`show`, `claim`, ..., `replay`, `export`) |
+| a refused transition (wrong state, non-person actor on a decision, nothing outstanding) | HTTP `409` with the domain sentence; CLI exit `1`, `finding: ...` on stderr |
+| invalid input | HTTP `422`; CLI exit `2` |
+| the actor rules (`_require_human`), the waiver and resolution rules | one implementation, in the service; no interface re-implements them |
+| the queue | `GET /v1/change/cases` and `assurance change list --json` print the same document: `cases` (rows) and `summary` (`open`, `safety_relevant`, `awaiting_reverification`, `ready_to_close`, `degraded`, `deferred`, from `queue_summary`) |
+
+What is **intentionally different**, so nobody mistakes it for a bug:
+
+- `assurance change list` (the table) prints the work queue: open cases only,
+  plus a count of deferred ones, and exits `1` while any case is open (a cron
+  job can alert on it). The API and `list --json` return every case, or those
+  with `status`; `open` in the summary never includes deferred cases.
+- A command line with no `--actor` runs as automation: it may claim, advance and
+  reverify, and is refused (`exit 1`) on `decide`, `resume`, `resolve-decision`
+  and `waive-reverification`. The HTTP API requires a non-blank `actor` on every
+  write that moves a case (`422` otherwise), because the hosted record names
+  both the person and the account that vouched for them. `assess/*` may omit it
+  (recorded as automation).
+- `resolve-decision`: the CLI takes `--number` (position as `show` lists it);
+  the API takes `decision`, the question's exact text, so a position that moved
+  because someone else answered a question cannot answer the wrong one.
+- The API records `role` as "reviewer via account <id>"; the CLI records the
+  role only.
+- A verification only counts as evidence for a unit when it is filed under the
+  machine's key. `assurance machine verify --subject <manufacturer/model#serial>`
+  and `POST /v1/machine/verify {"subject": ...}` do that (without it a bundle is
+  filed under `product@version`, a product line, and `reverify` will not find
+  it). The API response carries the hash to cite as `content_hash`.
 
 ## What is not solved here
 
@@ -276,8 +330,9 @@ and watch only.
   it never collects from a machine. A customer may opt in to *report* a run to
   their own hosted ledger with `assurance watch push` (see `WATCH.md`); the
   hosted side then opens cases through the same `assess_drift`.
-- **No dashboard.** The customer-facing surface today is the CLI queue
-  (`assurance change list`) and the API's `GET /v1/change/cases`.
+- **The workspace is a client of the API.** `/assurance` (the Next.js app)
+  calls the routes above with the caller's own key; the CLI queue
+  (`assurance change list`) is the offline equivalent.
 - **No "action completed" tracking.** See above.
 - **Re-verification needs a newer bundle, and that is a choice.** A bundle that
   genuinely describes the machine after the change, but was sealed before the
