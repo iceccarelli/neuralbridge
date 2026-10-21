@@ -824,3 +824,37 @@ class TestObservationsReadModel:
         assert "never count as a successful observation" in text
         assert "advisory" in text
         assert observations(client, h)["limitations"]
+
+
+class TestWhenTheIngestLockIsHeld:
+    def test_a_report_behind_a_stuck_ingest_is_a_503_that_writes_nothing_not_a_hang(
+            self, client, cell, tmp_path, monkeypatch):
+        import threading
+
+        from assurance.watch import ingest
+
+        acct, h = cell
+        enroll_manifest(acct, tmp_path)
+        before = len(ledger_of(acct))
+        monkeypatch.setattr(ingest, "LOCK_DEADLINE", 0.5)
+        inside, release = threading.Event(), threading.Event()
+
+        def hold() -> None:
+            with ingest._ingest_lock(ledger_of(acct)):
+                inside.set()
+                release.wait(20)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert inside.wait(5)
+        try:
+            r = post(client, h, report(failed("0412", at=now() - timedelta(minutes=1))))
+        finally:
+            release.set()
+            holder.join(10)
+        assert r.status_code == 503
+        assert r.json()["detail"]["error"] == "ingest_busy"
+        assert r.headers["Retry-After"] == "5"
+        assert len(ledger_of(acct)) == before
+        # and the same report is accepted once the lock is free (retry is safe)
+        assert post(client, h, report(failed("0412", at=now() - timedelta(minutes=1)))).status_code == 200
