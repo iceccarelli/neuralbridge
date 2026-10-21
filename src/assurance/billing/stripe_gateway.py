@@ -32,6 +32,7 @@ __all__ = [
     "create_checkout_session",
     "create_billing_portal_session",
     "create_meter_event",
+    "is_configuration_error",
     "is_definitive_rejection",
     "list_meter_event_summaries",
     "list_invoices",
@@ -66,10 +67,14 @@ class StripeError(RuntimeError):
     for a call that never reached Stripe.
     """
 
-    def __init__(self, message: str = "", *, status: int | None = None, code: str = "") -> None:
+    def __init__(
+        self, message: str = "", *, status: int | None = None, code: str = "", param: str = "",
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        #: The request parameter Stripe blames (``event_name``), when it names one.
+        self.param = param
 
 
 class SignatureError(StripeError):
@@ -152,6 +157,7 @@ def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, An
             f"Stripe {response.status_code}: {_scrub(str(detail))}",
             status=response.status_code,
             code=str(error.get("code") or ""),
+            param=str(error.get("param") or ""),
         )
     if not isinstance(body, dict):
         raise StripeError(f"Stripe {response.status_code}: response was not a JSON object")
@@ -190,21 +196,46 @@ def _call(
         raise StripeError(
             f"Stripe {status}: {_scrub(str(error.get('message') or f'HTTP {status}'))}",
             status=status, code=str(error.get("code") or ""),
+            param=str(error.get("param") or ""),
         )
     if not isinstance(body, dict):
         raise StripeError(f"Stripe {status}: response was not a JSON object", status=status)
     return body
 
 
+def is_configuration_error(exc: StripeError) -> bool:
+    """Is this refusal about OUR setup rather than about the event sent?
+
+    A 401/403 (the key was rotated, revoked or lacks the permission), a 404 (the
+    meter path is wrong) or a 400 that blames the meter or its ``event_name``
+    would be returned for *every* event until an operator fixes the
+    configuration. Treating one as a verdict on the event would throw away
+    revenue that is perfectly billable, so callers abort the run and leave the
+    rows as they were.
+    """
+    if exc.status in (401, 403, 404):
+        return True
+    if exc.status == 400:
+        text = f"{exc} {exc.param}".lower()
+        return exc.param == "event_name" or "event_name" in text or "meter" in text
+    return False
+
+
 def is_definitive_rejection(exc: StripeError) -> bool:
-    """Did Stripe look at the request and refuse it for good?
+    """Did Stripe look at *this event* and refuse it for good?
 
     A 4xx other than 408 (timeout), 409 (a request with this idempotency key is
-    in flight) and 429 (slow down) will fail the same way every time. Anything
-    else - a 5xx, a timeout, no answer at all - may have been received, and the
-    caller must retry with the *same* identifier rather than conclude anything.
+    in flight) and 429 (slow down) will fail the same way every time - unless it
+    is a :func:`configuration error <is_configuration_error>`, which says nothing
+    about the event. Anything else - a 5xx, a timeout, no answer at all - may
+    have been received, and the caller must retry with the *same* identifier
+    rather than conclude anything.
     """
-    return exc.status is not None and 400 <= exc.status < 500 and exc.status not in (408, 409, 429)
+    return (
+        exc.status is not None and 400 <= exc.status < 500
+        and exc.status not in (408, 409, 429)
+        and not is_configuration_error(exc)
+    )
 
 
 def create_meter_event(
