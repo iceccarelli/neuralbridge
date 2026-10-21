@@ -17,7 +17,9 @@ strength of a URL anyone could visit.
 so nobody, including the operator, can retrieve it later. The one exception is
 the handover: from the webhook until the returning browser collects it, and
 never longer than 24 hours, the new key waits in a staging row; collecting it
-deletes the row, and an uncollected one is purged at expiry.
+deletes the row. An uncollected one stops being claimable at expiry and is
+removed the next time any billing event or collection touches the store, so
+treat a backup of the accounts database as holding secrets.
 
 **A webhook is applied once.** Stripe retries, and reorders, deliveries. Each
 event id is recorded in the same transaction as its effects, subscription
@@ -30,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..billing import stripe_gateway as stripe
@@ -92,7 +94,24 @@ def get_plans() -> list[dict[str, Any]]:
 @billing_router.post(
     "/checkout", response_model=CheckoutOut, summary="Start a subscription"
 )
-def post_checkout(body: CheckoutIn, request: Request) -> CheckoutOut:
+def post_checkout(
+    body: CheckoutIn, request: Request, principal: Principal = Depends(current_principal)
+) -> CheckoutOut:
+    account = principal.account
+    if account is not None and account.id != "operator" and account.status in {"active", "past_due"} \
+            and account.tier in _PURCHASABLE_TIERS:
+        # A second checkout would create a second Stripe customer, a second
+        # account and a second, empty ledger — splitting the evidence the
+        # customer is paying to keep — and could bill both subscriptions.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "already_subscribed",
+                "tier": account.tier,
+                "remedy": "Change or cancel your plan in the billing portal: "
+                          "POST /v1/billing/portal with your key.",
+            },
+        )
     plan = PLANS[body.tier]
     if not plan.purchasable:
         raise HTTPException(
@@ -119,7 +138,11 @@ def post_checkout(body: CheckoutIn, request: Request) -> CheckoutOut:
     except stripe.StripeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": "checkout_unavailable", "detail": str(exc)},
+            # The provider's own error text is not returned to an anonymous
+            # caller: it can carry identifiers (a price id) and nothing the
+            # caller can act on.
+            detail={"error": "checkout_unavailable",
+                    "detail": "The payment provider could not start checkout. Try again shortly."},
         ) from exc
     return CheckoutOut(checkout_url=session.url, tier=plan.tier, price=plan.price_label)
 
@@ -128,13 +151,15 @@ def post_checkout(body: CheckoutIn, request: Request) -> CheckoutOut:
     "/checkout/complete", response_model=dict, summary="Collect the key after paying"
 )
 def get_checkout_complete(
-    session_id: str, accounts: AccountStore = Depends(get_accounts)
+    session_id: str, response: Response, accounts: AccountStore = Depends(get_accounts)
 ) -> dict[str, Any]:
     """Hand over the key the webhook minted for this checkout session.
 
     Returns 202 while the webhook is still in flight. It does not mint a key
     here: landing on this URL proves only that a browser followed a redirect.
     """
+    # The body of a successful reply is a secret: nothing may cache it.
+    response.headers["Cache-Control"] = "no-store"
     pending = accounts.claim_pending_key(session_id)
     if pending is None:
         raise HTTPException(
@@ -221,6 +246,12 @@ def _handle_checkout(
 ) -> dict[str, Any]:
     metadata = obj.get("metadata") or {}
     tier = metadata.get("tier")
+    if tier is None:
+        # Not one of ours: a Stripe account that sells anything else sends this
+        # endpoint those sessions too. Acknowledge (200) so Stripe does not retry
+        # for days and, eventually, disable the endpoint that carries our own
+        # cancellations. A tier that is present and wrong is still a 400.
+        return {"handled": kind, "ignored": "no_neuralbridge_tier"}
     if tier not in _PURCHASABLE_TIERS:
         # Nothing from the payload is echoed back or logged: it is attacker-
         # or misconfiguration-controlled text and this endpoint is public.
@@ -515,6 +546,7 @@ def post_portal(principal: Principal = Depends(current_principal)) -> dict[str, 
         )
     except stripe.StripeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The billing portal is unavailable. Try again shortly."
         ) from exc
     return {"portal_url": url}

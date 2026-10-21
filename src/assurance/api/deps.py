@@ -51,6 +51,7 @@ that can forget a ``WHERE account_id = ?``.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -264,8 +265,23 @@ def _client_address(request: Request, fly_client_ip: str | None) -> str:
     if os.environ.get(_FLY_ENV) == "1" and fly_client_ip:
         candidate = fly_client_ip.strip()
         if 0 < len(candidate) <= 64 and re.fullmatch(r"[0-9A-Fa-f:.]+", candidate):
-            return candidate
-    return request.client.host if request.client else "unknown"
+            return _bucket(candidate)
+    return _bucket(request.client.host) if request.client else "unknown"
+
+
+def _bucket(address: str) -> str:
+    """One quota bucket per caller: an IPv6 /64, an IPv4 address.
+
+    A single IPv6 subscriber is routinely handed a whole /64, so keying on the
+    full address would give one person 2**64 daily allowances.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address):
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
 
 
 async def current_principal(

@@ -372,6 +372,12 @@ class AccountStore:
             return "unknown_customer"
         if event_created and row["last_event_at"] > event_created:
             return "stale"
+        if (event_created and row["last_event_at"] == event_created
+                and row["status"] == "cancelled" and status != "cancelled"):
+            # Stripe stamps events to the second. When a cancellation and a
+            # "still active" event share one, arrival order is not causal order;
+            # of the two mistakes, leaving access on is the worse one.
+            return "stale"
         if only_from is not None and row["status"] not in only_from:
             return "not_applicable"
         now = format_utc(utc_now())
@@ -735,6 +741,18 @@ class AccountStore:
 
         A row older than :data:`PENDING_KEY_TTL` is gone before it is read.
         """
+        # An unauthenticated GET lands here with any string. Look first without
+        # the write lock, so a flood of guesses cannot queue behind (or in front
+        # of) real billing writes; only a row that exists takes the lock.
+        probe = self._connect()
+        try:
+            found = probe.execute(
+                "SELECT 1 FROM pending_keys WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        finally:
+            probe.close()
+        if found is None:
+            return None
         with self._txn() as db:
             self._purge_db(db)
             row = db.execute(
@@ -770,6 +788,12 @@ class AccountStore:
                 (subject, scope, today),
             ).fetchone()
             used = row["count"] if row else 0
+            if row is None:
+                # First spend of the day for this subject and scope: the cheap
+                # moment to drop counters from last week, so the table is
+                # bounded by recent activity and not by every address ever seen.
+                cutoff = (utc_now().date() - timedelta(days=7)).isoformat()
+                db.execute("DELETE FROM usage WHERE day < ?", (cutoff,))
             if used >= limit:
                 raise QuotaExceededError(scope, limit, used, tier or "free")
             db.execute(
