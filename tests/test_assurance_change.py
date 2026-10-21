@@ -492,6 +492,15 @@ def keyed(account_store, tier):
     return {"X-API-Key": account_store.issue_key(account.id)}
 
 
+def _account_ids(store):
+    import sqlite3
+    db = sqlite3.connect(store.path)
+    try:
+        return [r[0] for r in db.execute("SELECT id FROM accounts")]
+    finally:
+        db.close()
+
+
 class TestHttp:
     def test_assess_drift_is_a_402_without_the_cell_plan(self, client, account_store):
         r = client.post("/v1/change/assess/drift",
@@ -528,14 +537,44 @@ class TestHttp:
         assert r.status_code == 200
 
         r = client.post(f"/v1/change/cases/{case_id}/claim",
-                        json={"owner": "v.grimaldi"}, headers=headers)
+                        json={"owner": "v.grimaldi", "actor": "v.grimaldi"},
+                        headers=headers)
         assert r.status_code == 200
         assert r.json()["status"] == "in_review"
 
         r = client.post(f"/v1/change/cases/{case_id}/decision",
-                        json={"disposition": "closed", "reason": "too early"},
+                        json={"disposition": "closed", "reason": "too early",
+                              "actor": "v.grimaldi"},
                         headers=headers)
         assert r.status_code == 409  # not ready_to_close yet
+
+    def test_a_human_step_needs_a_named_actor_bound_to_the_account(self, client, account_store):
+        headers = keyed(account_store, "cell")
+        r = client.post("/v1/change/assess/drift",
+                        json={"baseline": manifest(manifest_id="BASE").to_dict(),
+                              "observed": manifest(item(content_hash="d" * 64),
+                                                   manifest_id="NOW").to_dict()},
+                        headers=headers)
+        case_id = r.json()["case"]["case_id"]
+        base = f"/v1/change/cases/{case_id}"
+        for path, body in (
+            ("claim", {"owner": "o"}),
+            ("advance", {}),
+            ("decision", {"disposition": "closed", "reason": "r"}),
+        ):
+            assert client.post(f"{base}/{path}", json=body, headers=headers).status_code == 422
+            assert client.post(f"{base}/{path}", json={**body, "actor": "  "},
+                               headers=headers).status_code == 422
+        # The ledger records the declared person AND the authenticated account.
+        r = client.post(f"{base}/claim", json={"owner": "o", "actor": "v.grimaldi"},
+                        headers=headers)
+        assert r.status_code == 200
+        from assurance.api import deps
+        account = account_store.account(_account_ids(account_store)[0])
+        ledger = deps._tenant_register_for(str(deps.tenant_ledger_path(account.id))).ledger
+        recorded = json.dumps([e.payload for e in ledger.entries()])
+        assert "v.grimaldi" in recorded
+        assert f"via account {account.id}" in recorded
 
     def test_an_unknown_case_is_a_404(self, client, account_store):
         r = client.get("/v1/change/cases/case-doesnotexist", headers=keyed(account_store, "cell"))

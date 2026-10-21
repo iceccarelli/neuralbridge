@@ -491,7 +491,7 @@ class TestEntitlementCopy:
             assert "Priority" not in body, tier
         assert "no per-case cap or charge" in text["register"]
         assert "Cases are not metered" in text["register"]
-        assert "POST/GET /v1/change/*" in text["cell"]
+        assert "over /v1/change/*" in text["cell"]
         assert "named human decision" in text["cell"]
 
     def test_every_advertised_limit_has_a_backing_field_and_a_consumer(self):
