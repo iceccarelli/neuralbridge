@@ -9,6 +9,7 @@
     advance            move to the next stop the case's own required work names
     reverify           supply fresh verification evidence; may reach READY_TO_CLOSE
     resolve-decision   a named person answers one of a case's open questions
+    waive-reverification  a named person closes one entry without evidence, on the record
     decide             the human decision: close, reject, or defer
     resume             a named person takes a deferred case back up
     replay             rebuild a case from the ledger alone and check every step
@@ -49,6 +50,7 @@ from assurance.change.service import (
     resolve_decision,
     resume,
     reverify,
+    waive_reverification,
 )
 from assurance.change.store import CaseStore
 from assurance.core.errors import AssuranceError
@@ -147,6 +149,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="which open decision, counting from 1 as `show` lists them")
     rd.add_argument("--resolution", required=True)
     rd.add_argument("--actor", default="")
+
+    wv = verbs.add_parser("waive-reverification",
+                          help="close one re-verification entry WITHOUT evidence (a person, with a reason)")
+    ledger_arg(wv)
+    wv.add_argument("case_id")
+    wv.add_argument("--entry", required=True,
+                    help="the entry as `show` lists it (machine/function for an advisory case)")
+    wv.add_argument("--reason", required=True)
+    wv.add_argument("--actor", default="")
 
     rs = verbs.add_parser("resume", help="DEFERRED -> IN_REVIEW; a person, with a reason")
     ledger_arg(rs)
@@ -314,6 +325,13 @@ def _cmd_resolve_decision(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_waive(args: argparse.Namespace) -> int:
+    case = waive_reverification(_store(args.ledger), args.case_id, entry=args.entry,
+                                reason=args.reason, actor=_actor(args.actor, "reviewer"))
+    print(f"{case.case_id}: {len(case.required_reverifications)} re-verification(s) still outstanding")
+    return 0
+
+
 def _cmd_resume(args: argparse.Namespace) -> int:
     case = resume(_store(args.ledger), args.case_id, reason=args.reason,
                   actor=_actor(args.actor, "reviewer"))
@@ -345,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         "list": _cmd_list, "show": _cmd_show, "claim": _cmd_claim,
         "advance": _cmd_advance, "reverify": _cmd_reverify, "decide": _cmd_decide,
         "resolve-decision": _cmd_resolve_decision, "resume": _cmd_resume,
+        "waive-reverification": _cmd_waive,
         "replay": _cmd_replay,
     }
     try:

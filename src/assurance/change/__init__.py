@@ -37,6 +37,7 @@ from assurance.change.service import (
     resolve_decision,
     resume,
     reverify,
+    waive_reverification,
 )
 from assurance.change.store import CaseStore, CaseStoreError
 
@@ -60,4 +61,5 @@ __all__ = [
     "resolve_decision",
     "resume",
     "reverify",
+    "waive_reverification",
 ]
