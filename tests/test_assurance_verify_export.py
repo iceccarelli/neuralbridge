@@ -100,3 +100,22 @@ def test_cli_exit_codes_separate_wrong_from_unreadable(ledger, tmp_path, capsys)
     out = capsys.readouterr().out
     assert "VERIFIED" in out and "DOES NOT VERIFY" in out
     assert verify_export_file(good).ok
+
+
+def test_an_empty_whole_bundle_cannot_hide_an_attestation_naming_records(ledger):
+    bundle = ledger.export()
+    bundle["entries"] = []
+    result = verify_export(bundle)
+    assert not result.ok and any("cut from the end" in p for p in result.problems)
+
+
+def test_a_genuinely_empty_ledger_still_verifies(tmp_path):
+    empty = EvidenceLedger(tmp_path / "empty.db")
+    assert verify_export(empty.export()).ok
+
+
+def test_rewriting_the_actor_column_is_found(ledger):
+    bundle = ledger.export()
+    bundle["entries"][0]["actor"] = "someone.else"
+    result = verify_export(bundle)
+    assert not result.ok and any("actor" in p for p in result.problems)

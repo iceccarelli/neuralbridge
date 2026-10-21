@@ -108,6 +108,12 @@ def verify_export(bundle: Any) -> ExportVerification:
             elif ev.content_hash != entry.content_hash or ev.kind != entry.kind:
                 problems.append(f"{label}: the entry names different evidence "
                                 "than it contains")
+            elif entry.actor != ev.actor.identifier:
+                # The actor column sits outside the link hash, so it can be
+                # rewritten without breaking the chain; it must agree with the
+                # sealed evidence it summarises.
+                problems.append(f"{label}: the recorded actor {entry.actor!r} is "
+                                f"not the evidence's actor {ev.actor.identifier!r}")
         except Exception as exc:  # noqa: BLE001 - report, never crash on input
             problems.append(f"{label}: evidence is unreadable ({type(exc).__name__})")
         if not whole and entry.subject != subject:
@@ -130,13 +136,16 @@ def verify_export(bundle: Any) -> ExportVerification:
         if entries and entries[0].seq == 1 and entries[0].prev_hash != GENESIS:
             problems.append("seq 1 does not chain to genesis")
         att = bundle.get("attestation")
-        if isinstance(att, dict) and entries:
-            last = entries[-1]
-            if att.get("head_link_hash") != last.link_hash or att.get("head_seq") != last.seq \
+        if isinstance(att, dict):
+            # Checked even for an empty bundle: "no entries" is a claim too,
+            # and an attestation naming N > 0 records contradicts it.
+            head_seq = entries[-1].seq if entries else 0
+            head_link = entries[-1].link_hash if entries else GENESIS
+            if att.get("head_link_hash") != head_link or att.get("head_seq") != head_seq \
                     or att.get("length") != len(entries):
                 problems.append("the bundle's attestation names a different head "
                                 "than its last entry — records were cut from the end")
-        elif entries:
+        else:
             problems.append("a whole-ledger bundle must carry its head attestation")
     else:
         skipped.append(
