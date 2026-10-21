@@ -44,24 +44,17 @@ from ..billing.accounts import (
     Principal,
     hash_key,
 )
-from ..billing.plans import PLANS, plan_for_price, public_catalogue
+from ..billing.plans import PLANS, public_catalogue
+from ..billing.subscription_state import PURCHASABLE_TIERS, map_subscription
 from .deps import current_principal, get_accounts, marketing_url, public_url
 
 __all__ = ["billing_router"]
 
 billing_router = APIRouter(prefix="/v1", tags=["billing"])
 
-#: Tiers a Stripe checkout may grant. Never ``free``, never ``supplier``
-#: (sales-assigned), never anything the webhook payload merely claims.
-_PURCHASABLE_TIERS = ("register", "cell")
-
-#: Stripe subscription statuses, and what each does to the entitlement.
-_ENTITLED = {"active", "trialing"}
-#: The subscription is over: back to the free plan, tier record included.
-_TERMINAL = {"canceled", "unpaid", "incomplete_expired"}
-#: Not paying right now and not yet over: no paid entitlement, tier remembered
-#: so that a return to ``active`` restores it.
-_SUSPENDED = {"paused", "incomplete"}
+#: Tiers a Stripe checkout may grant (shared with the reconciler; the
+#: subscription-status mapping lives in ``billing/subscription_state.py``).
+_PURCHASABLE_TIERS = PURCHASABLE_TIERS
 
 
 class CheckoutIn(BaseModel):
@@ -302,47 +295,22 @@ def _handle_checkout(
     return {"handled": kind, "account_id": outcome["account_id"], "tier": tier}
 
 
-def _subscription_tier(obj: dict[str, Any]) -> str | None:
-    """Which purchasable tier a subscription object is for, or None if not ours.
-
-    The price id is authoritative; the tier written into the subscription's
-    metadata at checkout is the fallback. Anything that is not a purchasable
-    tier is None, which is also how another product's subscription on the same
-    Stripe account is recognised and left alone.
-    """
-    price = ((obj.get("items", {}).get("data") or [{}])[0].get("price") or {}).get("id", "")
-    plan = plan_for_price(price) if price else None
-    if plan is not None and plan.tier in _PURCHASABLE_TIERS:
-        return plan.tier
-    declared = (obj.get("metadata") or {}).get("tier")
-    return declared if declared in _PURCHASABLE_TIERS else None
-
-
 def _handle_subscription(
     accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
 ) -> dict[str, Any]:
     customer = obj.get("customer", "") or ""
-    stripe_status = obj.get("status", "")
-    ours = _subscription_tier(obj) is not None
-
-    if kind == "customer.subscription.deleted" or stripe_status in _TERMINAL:
-        status_, tier, label = "cancelled", "free", "downgraded_to_free"
-    elif stripe_status in _SUSPENDED:
-        status_, tier, label = "cancelled", None, "suspended"
-    elif stripe_status == "past_due":
-        status_, tier, label = "past_due", None, "marked_past_due"
-    elif stripe_status in _ENTITLED:
-        status_, tier, label = "active", _subscription_tier(obj), "reactivated"
-    else:
+    state = map_subscription(obj, deleted=kind == "customer.subscription.deleted")
+    if state is None:
         # A status this build does not know. Guessing in either direction is
         # wrong (the old code granted access); acknowledge and change nothing.
         return {"handled": kind, "result": "ignored_unknown_status"}
 
     outcome = accounts.apply_subscription_event(
         event_id=event_id, kind=kind, stripe_customer_id=customer,
-        status=status_, tier=tier, event_created=created, hold_if_unknown=ours,
+        status=state.status, tier=state.tier, event_created=created,
+        hold_if_unknown=state.ours,
     )
-    return _subscription_response(kind, outcome, label)
+    return _subscription_response(kind, outcome, state.label)
 
 
 def _subscription_response(kind: str, outcome: str, label: str) -> dict[str, Any]:
