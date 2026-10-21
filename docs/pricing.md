@@ -10,11 +10,12 @@ instance returns this same table, generated from the entitlements
 | Free verification (Declaration, manifest, attestation) | ✓ | ✓ | ✓ |
 | Article 14 draft validation & calculators | ✓ | ✓ | ✓ |
 | Offline enrolment kit | ✓ | ✓ | ✓ |
-| Article 14 register (unlimited cases, both clocks) | — | ✓ | ✓ |
+| Article 14 register (both clocks; cases are not metered — no per-case cap or charge) | — | ✓ | ✓ |
 | Hash-chained ledger with verifiable export | — | ✓ | ✓ |
 | Machine safety verification | — | — | ✓ |
 | Annex III manifests & passports | — | — | ✓ |
 | Fleet advisory fan-out | — | — | ✓ |
+| Change-assurance cases (`/v1/change/*`; closure is a named human decision) | — | — | ✓ |
 | Counter-signed head attestation | — | — | ✓ |
 
 | | Price |
@@ -22,6 +23,8 @@ instance returns this same table, generated from the entitlements
 | **Validator** | Free. No card, no account required. |
 | **Register** | €390 / month |
 | **Cell** | €1,290 / month |
+
+These prices are launch hypotheses; they have not been validated with paying customers.
 
 Verification stays free at every tier, forever — the audience for a piece of
 evidence is a regulator, an insurer, or a customer's customer, none of whom
