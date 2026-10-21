@@ -32,10 +32,19 @@ than the cadence the watch declared.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
+from assurance.change.model import ChangeAssuranceCase, TriggerType
+from assurance.change.service import (
+    assess_advisory,
+    assess_drift,
+    assess_intervention,
+    case_id_for,
+    note_advisory_withdrawn,
+)
+from assurance.change.store import CaseStore
 from assurance.collect.collector import CollectionError, collect
 from assurance.collect.plan import CollectionPlan
 from assurance.core.evidence import (
@@ -101,6 +110,16 @@ class MachineOutcome:
     affected_functions: tuple[str, ...] = ()
     detail: str = ""
     warnings: tuple[str, ...] = ()
+    #: The change-assurance case this run opened or updated for the drift, or
+    #: ``""`` when there was none (no drift, a drift that is not safety-relevant,
+    #: or a dry run, which writes nothing).
+    case_id: str = ""
+    case_status: str = ""
+    #: Cases opened for recorded interventions this run found unreferenced.
+    intervention_case_ids: tuple[str, ...] = ()
+    #: Open cases already concerning this machine. Listed on an uncollectable
+    #: machine so it is plain that they were left exactly where they were.
+    open_case_ids: tuple[str, ...] = ()
 
     @property
     def is_finding(self) -> bool:
@@ -122,6 +141,10 @@ class MachineOutcome:
             "affected_functions": list(self.affected_functions),
             "detail": self.detail,
             "warnings": list(self.warnings),
+            "case_id": self.case_id,
+            "case_status": self.case_status,
+            "intervention_case_ids": list(self.intervention_case_ids),
+            "open_case_ids": list(self.open_case_ids),
         }
 
 
@@ -212,6 +235,10 @@ class WatchRun:
             if o.still_uncovered:
                 lines.append("           still uncovered (reported before): "
                              + ", ".join(o.still_uncovered))
+            if o.case_id:
+                lines.append(f"           case {o.case_id} [{o.case_status}]")
+            for cid in o.intervention_case_ids:
+                lines.append(f"           intervention case {cid}")
             for w in o.warnings:
                 lines.append(f"           ! {w}")
         if self.stale_observations:
@@ -385,6 +412,7 @@ def run_watch(
     previous = last_run(ledger, config.watch_id)
     prior = _previous_state(previous)
 
+    store = CaseStore(ledger)
     outcomes: list[MachineOutcome] = []
     sealed: list[str] = []
     caveats: list[str] = []
@@ -401,13 +429,21 @@ def run_watch(
             )
         except (CollectionError, FileNotFoundError, OSError) as exc:
             detail = f"could not be collected: {exc}"
+            # Failing to observe is a finding, never progress. No case is
+            # advanced, closed or touched on the strength of a machine nobody
+            # could see; the ones already open are named so that is visible.
+            held = _open_cases_for(store, machine_key or target.serial)
             outcomes.append(MachineOutcome(
                 serial=target.serial, machine_key=machine_key or target.serial,
                 status="uncollectable", detail=detail,
                 still_uncovered=tuple(
                     prior.get(target.serial, {}).get("still_uncovered", ())
                 ),
-                warnings=("an absent export is not an unchanged machine.",),
+                warnings=("an absent export is not an unchanged machine.",
+                          *(f"case {c.case_id} stays {c.status.value}: a machine "
+                            "that could not be observed cannot advance or close "
+                            "a case." for c in held)),
+                open_case_ids=tuple(c.case_id for c in held),
             ))
             if seal and machine_key:
                 _seal_observation(ledger, target, machine_key, "", "uncollectable",
@@ -426,6 +462,7 @@ def run_watch(
         drift_items: tuple[str, ...] = ()
         affected: tuple[str, ...] = ()
         detail = ""
+        case: ChangeAssuranceCase | None = None
 
         if status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
@@ -442,6 +479,19 @@ def run_watch(
                       f"{observed[:12]}: " + ", ".join(
                           f"{c.item_id} {c.kind.value}" for c in divergence.changes))
             if seal:
+                # The case comes first, before the new manifest becomes the
+                # baseline. If this run dies between the two, the next run
+                # still sees the old baseline, finds the same drift, and
+                # lands on the same case (assess_drift writes nothing the
+                # second time). Sealing the manifest first would make the
+                # drift undetectable after a crash and the case would never
+                # have existed.
+                case = assess_drift(
+                    store, divergence, manifest,
+                    VerificationRecord.from_ledger(ledger, subject=machine_key),
+                    interventions_from_ledger(ledger, machine_key), actor=actor)
+                if case is not None:
+                    sealed.append(f"case {case.case_id}")
                 record_divergence(ledger, divergence, actor=actor)
                 sealed.append(f"divergence {divergence.observed_id}")
             if worst is Severity.SAFETY_RELEVANT:
@@ -479,6 +529,12 @@ def run_watch(
                 "no country recorded: this unit cannot be named in a CRA Article "
                 "14 filing's Member State list.")
 
+        intervention_cases: tuple[str, ...] = ()
+        if seal:
+            intervention_cases = _assess_interventions(
+                store, ledger, manifest, machine_key, actor)
+            sealed.extend(f"case {c}" for c in intervention_cases)
+
         outcomes.append(MachineOutcome(
             serial=target.serial, machine_key=machine_key, status=status,
             configuration_hash=observed,
@@ -486,6 +542,9 @@ def run_watch(
             newly_uncovered=newly, still_uncovered=still, recovered=recovered,
             drift_severity=drift_severity, drift_items=drift_items,
             affected_functions=affected, detail=detail, warnings=tuple(warnings),
+            case_id=case.case_id if case else "",
+            case_status=case.status.value if case else "",
+            intervention_case_ids=intervention_cases,
         ))
 
         if seal:
@@ -517,6 +576,10 @@ def run_watch(
             now=started,
         )
         caveats.extend(advisories.checks_skipped)
+        if seal:
+            advisories = _open_advisory_cases(store, advisories, actor)
+            sealed.extend(f"case {f.case_id}" for f in advisories.findings
+                          if f.case_id)
 
     # Intakes are drafted from the advisories this run just established, and
     # only when the operator has declared the duty. See watch.filings.
@@ -578,6 +641,66 @@ def run_watch(
         ledger.append(evidence, subject=f"watch/{config.watch_id}")
 
     return run
+
+
+def _open_cases_for(store: CaseStore, machine_key: str) -> list[ChangeAssuranceCase]:
+    return [c for c in store.list() if c.is_open and machine_key in c.machines]
+
+
+def _assess_interventions(
+    store: CaseStore, ledger: EvidenceLedger, manifest: Any, machine_key: str,
+    actor: Actor,
+) -> tuple[str, ...]:
+    """Open a case for each recorded intervention nobody has a case for yet.
+
+    "Unreferenced" means no case exists for that intervention. One whose
+    functions an open case on this machine already covers is skipped — the
+    drift case that prompted the paperwork already owns that work, and a
+    second case for the same change would be forty-one rows where there is one
+    job. It is looked at again next run, so it is not lost if that case is
+    rejected.
+    """
+    interventions = interventions_from_ledger(ledger, machine_key)
+    if not interventions:
+        return ()
+    verifications = VerificationRecord.from_ledger(ledger, subject=machine_key)
+    open_cases = _open_cases_for(store, machine_key)
+    opened: list[str] = []
+    for intervention in interventions:
+        cid = case_id_for(TriggerType.INTERVENTION, intervention.intervention_id)
+        if store.get(cid) is not None:
+            continue
+        declared = set(intervention.affects_functions)
+        if declared and any(declared <= set(c.affected_functions) for c in open_cases):
+            continue
+        case = assess_intervention(store, intervention, manifest, verifications,
+                                   interventions, actor=actor)
+        if case is not None:
+            opened.append(case.case_id)
+    return tuple(opened)
+
+
+def _open_advisory_cases(
+    store: CaseStore, advisories: AdvisoryPass, actor: Actor,
+) -> AdvisoryPass:
+    """Open or fold into a case for each advisory this fleet is exposed to.
+
+    ``new`` and ``outstanding`` are both handled, and each run's call for a
+    standing advisory writes nothing unless the exposure actually grew (a
+    machine joined the fleet, a question appeared) — see
+    :func:`assurance.change.service._open_or_update`. A withdrawal does not
+    close anything: it puts a question to the person who owns the case.
+    """
+    findings: list[Any] = []
+    for finding in advisories.findings:
+        case = None
+        if finding.state in ("new", "outstanding") and finding.report is not None:
+            case = assess_advisory(store, finding.report, actor=actor)
+        elif finding.state == "withdrawn":
+            case = note_advisory_withdrawn(
+                store, finding.advisory_id, finding.withdrawal_reason, actor=actor)
+        findings.append(replace(finding, case_id=case.case_id) if case else finding)
+    return replace(advisories, findings=tuple(findings))
 
 
 def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None:

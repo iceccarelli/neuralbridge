@@ -87,9 +87,11 @@ class CaseStatus(StrEnum):
     def is_settled(self) -> bool:
         """``CLOSED``, ``REJECTED`` or ``DEFERRED`` — nothing left to detect twice.
 
-        Used only to decide whether a *recurring* observation of the same
-        trigger should update this case or leave it alone; a settled case is
-        not reopened by a watch run seeing the same thing again.
+        Used to decide whether a *recurring* observation of the same trigger
+        updates this case or leaves it alone. The rule table is in
+        ``deploy/assurance/CHANGE.md``: a settled case is left alone by an
+        identical re-observation; only ``CLOSED`` can be reopened, and only by
+        a recurrence the service can show was a genuine one.
         """
         return self in (CaseStatus.CLOSED, CaseStatus.REJECTED, CaseStatus.DEFERRED)
 
@@ -141,6 +143,9 @@ class ChangeAssuranceCase:
     #: this case can reach ``READY_TO_CLOSE``.
     required_reverifications: tuple[str, ...] = ()
     human_decisions_required: tuple[str, ...] = ()
+    #: Decisions a named person has answered, ``{decision, resolution, by, at}``.
+    #: Kept so a re-observation never re-asks a question already answered.
+    resolved_decisions: tuple[dict[str, str], ...] = ()
 
     owner: str = ""
     reviewer: str = ""
@@ -161,6 +166,11 @@ class ChangeAssuranceCase:
     #: impact report, the reverification bundle. ``{relation, content_hash,
     #: note}``, the same shape as :class:`assurance.core.evidence.EvidenceRef`.
     linked_evidence: tuple[dict[str, str], ...] = ()
+    #: Every earlier closure of this same trigger that a later recurrence
+    #: reopened, ``{closed_at, closed_by, reason, closure_hash, reopened_at,
+    #: reopened_because}``. The closure's own ledger entry is never erased;
+    #: this is the pointer to it from the new cycle.
+    prior_closures: tuple[dict[str, str], ...] = ()
 
     checks_skipped: tuple[str, ...] = ()
     confidence: str = ""
@@ -201,9 +211,11 @@ class ChangeAssuranceCase:
         if self.status is CaseStatus.IN_REVIEW:
             return "Confirm the action plan below to move this case forward."
         if self.status is CaseStatus.AWAITING_ACTION:
-            first = self.required_actions[0] if self.required_actions else \
-                "Complete the required action."
-            return first
+            if self.required_actions:
+                return self.required_actions[0]
+            if self.human_decisions_required:
+                return "Decide: " + self.human_decisions_required[0]
+            return "Complete the required action."
         if self.status is CaseStatus.AWAITING_REVERIFICATION:
             if self.required_reverifications:
                 return ("Re-verify " + ", ".join(self.required_reverifications)
@@ -212,7 +224,7 @@ class ChangeAssuranceCase:
         if self.status is CaseStatus.READY_TO_CLOSE:
             return "Evidence is current. A human decision is required to close this case."
         if self.status is CaseStatus.DEFERRED:
-            return "Deferred. Resume the review when ready."
+            return "Deferred. A named person resumes the review with `resume`."
         if self.status is CaseStatus.REJECTED:
             return f"Rejected: {self.decision_reason or 'no reason recorded'}."
         return f"Closed by {self.decision_by or 'unknown'}: {self.decision_reason}."
@@ -271,6 +283,14 @@ class ChangeAssuranceCase:
             lines.append("  human decisions required:")
             for d in self.human_decisions_required:
                 lines.append(f"    ? {d}")
+        for r in self.resolved_decisions:
+            lines.append(f"  resolved by {r.get('by', '?')}: {r.get('decision', '')} "
+                         f"-> {r.get('resolution', '')}")
+        for pc in self.prior_closures:
+            lines.append(f"  reopened: closed by {pc.get('closed_by', '?')} on "
+                         f"{pc.get('closed_at', '?')} "
+                         f"({pc.get('closure_hash', '')[:12]}); "
+                         f"{pc.get('reopened_because', '')}")
         lines.append("")
         lines.append(f"  owner: {self.owner or '(unassigned)'}   "
                      f"reviewer: {self.reviewer or '—'}")
@@ -312,6 +332,7 @@ class ChangeAssuranceCase:
             "required_actions": list(self.required_actions),
             "required_reverifications": list(self.required_reverifications),
             "human_decisions_required": list(self.human_decisions_required),
+            "resolved_decisions": [dict(r) for r in self.resolved_decisions],
             "owner": self.owner,
             "reviewer": self.reviewer,
             "opened_at": self.opened_at,
@@ -323,6 +344,7 @@ class ChangeAssuranceCase:
             "decision_reason": self.decision_reason,
             "decision_by": self.decision_by,
             "linked_evidence": [dict(r) for r in self.linked_evidence],
+            "prior_closures": [dict(r) for r in self.prior_closures],
             "checks_skipped": list(self.checks_skipped),
             "confidence": self.confidence,
             "provenance": dict(self.provenance),
@@ -352,6 +374,7 @@ class ChangeAssuranceCase:
             required_actions=tuple(d.get("required_actions", ())),
             required_reverifications=tuple(d.get("required_reverifications", ())),
             human_decisions_required=tuple(d.get("human_decisions_required", ())),
+            resolved_decisions=tuple(dict(r) for r in d.get("resolved_decisions", ())),
             owner=str(d.get("owner", "")),
             reviewer=str(d.get("reviewer", "")),
             opened_at=str(d.get("opened_at", "")),
@@ -363,6 +386,7 @@ class ChangeAssuranceCase:
             decision_reason=str(d.get("decision_reason", "")),
             decision_by=str(d.get("decision_by", "")),
             linked_evidence=tuple(dict(r) for r in d.get("linked_evidence", ())),
+            prior_closures=tuple(dict(r) for r in d.get("prior_closures", ())),
             checks_skipped=tuple(d.get("checks_skipped", ())),
             confidence=str(d.get("confidence", "")),
             provenance=dict(d.get("provenance", {})),
