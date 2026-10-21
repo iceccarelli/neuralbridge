@@ -280,6 +280,10 @@ def _bucket(address: str) -> str:
     except ValueError:
         return address
     if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            # ::ffff:a.b.c.d is an IPv4 client seen through a dual-stack socket;
+            # as an IPv6 /64 they would all share the single bucket "::/64".
+            return str(ip.ipv4_mapped)
         return str(ipaddress.ip_network(f"{ip}/64", strict=False))
     return str(ip)
 
@@ -584,14 +588,20 @@ def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
 
 
 def _key_resolves(presented: str) -> bool:
-    """Whether ``presented`` is a live operator or account key. Never raises."""
+    """Whether ``presented`` may send a large recorded trace. Never raises.
+
+    True for an operator key, or a live account key whose plan includes machine
+    verification (the only route with the large allowance). Read-only: this runs
+    before authentication, so it must not take the write lock.
+    """
     if not presented:
         return False
     try:
         raw = presented.encode()
         if any(hmac.compare_digest(raw, k.encode()) for k in _operator_keys()):
             return True
-        return get_accounts().resolve_key(presented) is not None
+        principal = get_accounts().peek_key(presented)
+        return principal is not None and principal.plan.machine_verification
     except Exception:  # noqa: BLE001 - an unresolvable key just gets the small cap
         return False
 

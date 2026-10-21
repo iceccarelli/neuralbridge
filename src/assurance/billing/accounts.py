@@ -694,6 +694,27 @@ class AccountStore:
             )
         return Principal(account=self._row_to_account(row), key_prefix=row["prefix"])
 
+    def peek_key(self, key: str) -> Principal | None:
+        """Like :meth:`resolve_key` but read-only: no write lock, no ``last_used``.
+
+        For checks that run before authentication proper (the body-size guard),
+        where taking the single write lock for every request that carries a
+        guessed key would let anyone queue behind, and in front of, real writes.
+        """
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT k.prefix, k.account_id, a.* FROM api_keys k "
+                "JOIN accounts a ON a.id = k.account_id "
+                "WHERE k.key_hash = ? AND k.revoked_at IS NULL",
+                (hash_key(key),),
+            ).fetchone()
+        finally:
+            db.close()
+        if row is None:
+            return None
+        return Principal(account=self._row_to_account(row), key_prefix=row["prefix"])
+
     def keys_for(self, account_id: str) -> list[dict[str, Any]]:
         """The account's keys by prefix. Never a hash and never a key."""
         db = self._connect()
