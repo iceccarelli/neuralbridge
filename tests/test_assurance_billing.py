@@ -85,6 +85,7 @@ def _checkout_event(session_id="cs_test_1", tier="register", customer="cus_1"):
         "data": {
             "object": {
                 "id": session_id,
+                "payment_status": "paid",
                 "customer": customer,
                 "subscription": "sub_1",
                 "customer_details": {"email": "m.braun@sk-maschinenbau.de"},
@@ -104,7 +105,9 @@ class TestCatalogue:
         assert plans["free"]["limits"]["register_access"] is False
         assert plans["register"]["limits"]["register_access"] is True
         assert plans["free"]["limits"]["validations_per_day"] == PLANS["free"].validations_per_day
-        assert plans["cell"]["limits"]["product_families"] is None
+        # Register cases are not metered, so no caps are advertised for them.
+        assert "product_families" not in plans["cell"]["limits"]
+        assert "cases_per_day" not in plans["register"]["limits"]
 
     def test_a_plan_with_no_configured_price_is_not_purchasable(self, client):
         plans = {p["tier"]: p for p in client.get("/v1/plans").json()}
@@ -359,7 +362,10 @@ class TestWebhook:
         # Paying stopped, so access stopped.
         assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 402
 
-    def test_past_due_also_suspends_access(self, client):
+    def test_past_due_keeps_access_and_warns(self, client):
+        # Changed deliberately (it used to assert 402): a single failed card must
+        # not cut a manufacturer off from a register with a 24-hour clock. Stripe's
+        # dunning decides when the subscription ends; the account is flagged.
         raw, headers = _signed(_checkout_event())
         client.post("/v1/billing/webhook", content=raw, headers=headers)
         key = client.get(
@@ -372,7 +378,11 @@ class TestWebhook:
             }
         )
         client.post("/v1/billing/webhook", content=due_raw, headers=due_headers)
-        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 402
+        assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
+        me = client.get("/v1/me", headers={"X-API-Key": key}).json()
+        assert me["account"]["status"] == "past_due"
+        assert me["tier"] == "register"
+        assert "payment failed" in me["warning"]
 
     def test_an_unrecognised_event_is_acknowledged_not_retried(self, client):
         raw, headers = _signed({"type": "invoice.created", "data": {"object": {}}})
