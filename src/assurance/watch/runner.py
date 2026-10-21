@@ -55,7 +55,7 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import format_utc, parse_utc, utc_now
+from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
@@ -74,6 +74,11 @@ from assurance.machinery.staleness import (
 from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
+from assurance.watch.observations import (
+    OBSERVATION_KIND,
+    observation_succeeded,
+    observed_at_of,
+)
 
 __all__ = [
     "OBSERVATION_KIND",
@@ -84,7 +89,6 @@ __all__ = [
     "run_watch",
 ]
 
-OBSERVATION_KIND = "watch.observation"
 RUN_KIND = "watch.run"
 RUN_SCHEMA = "assurance.watch.run/1"
 
@@ -733,14 +737,14 @@ def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None
             continue
         if evidence.body.get("serial") != serial:
             continue
-        if evidence.body.get("status") == "uncollectable":
+        # An attempt that failed, or saw only part of the plan, is not a look at
+        # the machine (observations.observation_succeeded, shared with the
+        # hosted workspace so the two cannot disagree about what counts).
+        if not observation_succeeded(evidence.body):
             continue
         # The run's own clock when it recorded one: the ledger stamps append
         # time, which differs from the observation time whenever a run is given
         # an explicit `now` (a replay, a backfill, a test). Records sealed before
         # this field existed fall back to the append time.
-        try:
-            return parse_utc(str(evidence.body.get("observed_at") or entry.at))
-        except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
-            return None
+        return observed_at_of(evidence.body, entry.at)
     return None

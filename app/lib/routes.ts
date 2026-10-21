@@ -63,6 +63,12 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/change/cases/{case_id}/reverification', tier: 'cell', summary: 'Supply fresh verification evidence; body {manifest, verification_content_hash, actor?}' },
   { method: 'POST', path: '/v1/change/cases/{case_id}/decision', tier: 'cell', summary: 'Close, reject or defer — a named human decision; body {disposition, reason, actor?}' },
 
+  // Watch results the customer chooses to report (src/assurance/api/watch_routes.py and
+  // fleet_routes.py:observations): Machine dependency, i.e. Cell; the data lands in the
+  // caller's own per-account ledger. Sent by `assurance watch push`.
+  { method: 'POST', path: '/v1/watch/report', tier: 'cell', summary: 'Report what your own Watch saw (manifests and observation status) to your ledger — opt-in, idempotent' },
+  { method: 'GET', path: '/v1/fleet/observations', tier: 'cell', summary: 'Per machine: last successful observation, last attempt, stale, open cases' },
+
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
 ];
 
@@ -76,8 +82,8 @@ export const TIER_LABEL: Record<Tier, string> = {
 // The CLI's domain/verb tree (python -m assurance <domain> <verb>), checked
 // against each domain's --help at the time this was written — re-verify the
 // same way before trusting it after a CLI change. Not every CLI verb calls
-// the hosted API: kit and watch are offline-first by design and have no API
-// equivalent; art14/bridge manage local case state before anything is filed.
+// the hosted API: kit and `watch run` are offline-first by design and have no API
+// equivalent (`watch push` is the one opt-in exception); art14/bridge manage local case state before anything is filed.
 export interface CliDomain {
   domain: string;
   verbs: string[];
@@ -92,7 +98,7 @@ export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'fleet', verbs: ['list', 'advisory', 'declare', 'declaration'], summary: 'Advisory fan-out and Declaration binding across a fleet.', apiTier: 'cell' },
   { domain: 'change', verbs: ['assess-drift', 'assess-advisory', 'list', 'show', 'claim', 'advance', 'reverify', 'decide'], summary: 'Change-assurance cases: open from drift or an advisory, claim, re-verify, and close by a named human decision.', apiTier: 'cell' },
   { domain: 'attest', verbs: ['keygen', 'sign', 'verify', 'log'], summary: 'Counter-signed head attestation — catches deletion, not just editing.', apiTier: 'cell' },
-  { domain: 'watch', verbs: ['run', 'status'], summary: 'The component that runs when nobody is looking — runs in your own kit or cron, not hosted; no API equivalent.' },
+  { domain: 'watch', verbs: ['run', 'status', 'push'], summary: 'The component that runs when nobody is looking — runs in your own kit or cron, never hosted. run and status are offline; push is the one opt-in command that reports the latest run to your own hosted ledger.' },
   { domain: 'supplier', verbs: ['keygen', 'publish', 'withdraw', 'verify', 'list'], summary: 'Sign and publish advisories to a hosted feed.', apiTier: 'supplier' },
   { domain: 'art14', verbs: ['signal', 'awareness', 'triage', 'availability', 'measure', 'file', 'notify-users', 'validate', 'fields', 'case', 'register', 'verify', 'export'], summary: 'Case triage and the two Article 14 deadline clocks.', apiTier: 'register' },
   { domain: 'bridge', verbs: ['art14'], summary: 'Assembles the Article 14 export from local case state — local only.' },
