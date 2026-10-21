@@ -259,6 +259,16 @@ class TestHostileArchives:
         assert not r.complete
         assert any("is not in the archive" in w for w in r.warnings)
 
+    def test_one_of_two_declared_members_missing_is_still_incomplete(self, tmp_path):
+        """The other member was found and hashed; the digest is still of less than
+        the rule asked for."""
+        p = zip_with(tmp_path / "a.zip", {"main.st": b"CODE"})
+        rule = Rule(kind=Normaliser.ZIP_MEMBERS, members=("main.st", "gone.st"),
+                    note="x")
+        r = normalise_file(p, rule)
+        assert r.bytes_hashed == 4
+        assert not r.complete and not r.usable
+
     def test_a_non_zip_file_under_a_zip_rule_is_refused(self, tmp_path):
         p = tmp_path / "a.zip"
         p.write_bytes(b"this is not a zip")
@@ -590,3 +600,70 @@ class TestProbeDoesNotCallAnUnexercisedPlanStable:
         plan_path.write_text(json.dumps(plan(spec()).to_dict()), encoding="utf-8")
         assert main(["probe", str(plan_path), "--first", str(tmp_path / "mon"),
                      "--second", str(tmp_path / "tue")]) != 0
+
+
+class TestSizeCapsOnBytesInHand:
+    def test_normalise_bytes_refuses_text_over_the_cap_without_a_file(self, monkeypatch):
+        monkeypatch.setattr(normalise_mod, "MAX_TEXT_BYTES", 100)
+        with pytest.raises(NormalisationError, match="too large"):
+            normalise_bytes(b"x" * 500, TEXT_RULE)
+        with pytest.raises(NormalisationError, match="too large"):
+            normalise_bytes(b"{}" + b" " * 500, JSON_RULE)
+
+    def test_normalise_bytes_refuses_raw_bytes_over_the_cap(self, monkeypatch):
+        monkeypatch.setattr(normalise_mod, "MAX_RAW_BYTES", 100)
+        with pytest.raises(NormalisationError, match="exceeds"):
+            normalise_bytes(b"x" * 500, Rule())
+
+
+class TestVersionLabels:
+    @pytest.mark.parametrize("doc", [b'{"v": null}', b'{"v": true}', b'{"v": 3.1}',
+                                     b'{"v": [1]}', b'{"v": {"a": 1}}'])
+    def test_null_a_boolean_a_float_or_a_container_is_not_a_version(self, doc):
+        """null read as the label 'None', true as 'True', and 3.10 as '3.1' (a
+        different version) would each later match an advisory on a label nobody
+        read off the machine."""
+        assert VersionSource(kind="json", value="v").read(doc) == ""
+
+    @pytest.mark.parametrize("doc,want", [(b'{"v": "3.10"}', "3.10"),
+                                          (b'{"v": 7}', "7"),
+                                          (b'{"v": " 3.8.2 "}', "3.8.2")])
+    def test_a_string_or_a_whole_number_is_a_version(self, doc, want):
+        assert VersionSource(kind="json", value="v").read(doc) == want
+
+    def test_a_regex_whose_group_did_not_participate_reads_empty_not_crash(self):
+        v = VersionSource(kind="regex", value=r"(?:x(\d+))?y")
+        assert v.read(b"y") == ""
+
+
+class TestIncompleteCollectionsAreNotSealed:
+    def _plan(self, tmp_path):
+        (tmp_path / "a.cfg").write_bytes(b"x")
+        (tmp_path / "b.cfg").write_bytes(b"")
+        p = tmp_path / "plan.json"
+        p.write_text(json.dumps(plan(spec("ITM-A", "a.cfg"),
+                                     spec("ITM-B", "b.cfg")).to_dict()),
+                     encoding="utf-8")
+        return p
+
+    def test_an_incomplete_collection_is_not_sealed_by_default(self, tmp_path, capsys):
+        from assurance.collect.cli import main
+        from assurance.evidence.ledger import EvidenceLedger
+        p = self._plan(tmp_path)
+        ledger = tmp_path / "l.db"
+        code = main(["run", str(p), "--root", str(tmp_path), "--serial", "1",
+                     "--actor", "a.person", "--ledger", str(ledger)])
+        assert code == 1
+        assert len(EvidenceLedger(ledger)) == 0
+        assert "not sealed" in capsys.readouterr().out
+
+    def test_it_can_be_sealed_when_asked_to(self, tmp_path):
+        from assurance.collect.cli import main
+        from assurance.evidence.ledger import EvidenceLedger
+        p = self._plan(tmp_path)
+        ledger = tmp_path / "l.db"
+        code = main(["run", str(p), "--root", str(tmp_path), "--serial", "1",
+                     "--actor", "a.person", "--ledger", str(ledger),
+                     "--seal-incomplete"])
+        assert code == 1                       # still INCOMPLETE
+        assert len(EvidenceLedger(ledger)) == 1

@@ -29,6 +29,7 @@ from typing import Any
 from assurance.core.identity import format_utc, utc_now
 from assurance.fleet.advisory import AdvisorySeverity, ComponentAdvisory, MatchBasis, match_item
 from assurance.fleet.registry import Fleet
+from assurance.machinery.manifest import ManifestSource
 from assurance.machinery.staleness import Coverage
 
 __all__ = ["Exposure", "FunctionExposure", "ImpactReport", "assess_impact"]
@@ -290,6 +291,15 @@ def assess_impact(advisory: ComponentAdvisory, fleet: Fleet) -> ImpactReport:
     if not fleet.chain_verified:
         caveats.insert(0, "THE LEDGER CHAIN DOES NOT VERIFY. Every statement here is "
                           "drawn from a store whose integrity is in question.")
+    declared_only = [r.machine_key for r in fleet.records
+                     if r.manifest.source is not ManifestSource.AS_FOUND]
+    if declared_only:
+        caveats.append(
+            f"{len(declared_only)} machine(s) are known only from a declared baseline "
+            "(" + ", ".join(declared_only[:5]) + ("…" if len(declared_only) > 5 else "")
+            + "): what is installed on them was never observed, so a match or a clear "
+            "here is about the paperwork."
+        )
     if len(fleet) == 0:
         caveats.insert(0, (
             "no machine is enrolled in this ledger, so no machine was assessed. A "

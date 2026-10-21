@@ -120,6 +120,30 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
     }
 
 
+def _refuse_foreign_result(
+    result: VerificationResult, envelope: SafetyEnvelope, trace: Trace,
+) -> None:
+    mismatches = []
+    if result.envelope_hash != envelope.content_hash():
+        mismatches.append("it was computed against a different envelope")
+    if result.trace_hash != trace.content_hash():
+        mismatches.append("it was computed against a different trace")
+    if result.provenance != trace.provenance.value:
+        mismatches.append(f"it names provenance {result.provenance!r}, the trace is "
+                          f"{trace.provenance.value!r}")
+    if (result.product, result.product_version) != (envelope.product,
+                                                    envelope.product_version):
+        mismatches.append("it names a different product or version")
+    ceiling = min(trace.provenance.tier_ceiling, envelope.tier_ceiling)
+    if result.tier > ceiling:
+        mismatches.append(f"it claims tier {result.tier.value!r}, above the "
+                          f"{ceiling.value!r} these inputs can support")
+    if mismatches:
+        raise BundleError(
+            "the supplied result does not belong to this envelope and trace: "
+            + "; ".join(mismatches) + ".")
+
+
 def build_bundle(
     envelope: SafetyEnvelope,
     trace: Trace,
@@ -141,8 +165,15 @@ def build_bundle(
     key (``MachineIdentity.key``) when the verification is about one specific
     unit, so that :mod:`assurance.machinery.staleness` can find it alongside
     that unit's intervention records.
+
+    ``result`` lets a caller seal a verification it already ran. It must be the
+    verification of *these* inputs: a result for another trace or envelope, or one
+    claiming a tier its inputs cannot support, is refused rather than sealed under
+    a trace it says nothing about.
     """
     res = result if result is not None else verify(envelope, trace, limits=limits)
+    if result is not None:
+        _refuse_foreign_result(result, envelope, trace)
 
     state = {
         Verdict.PASS: ValidationState.VERIFIED,
@@ -195,7 +226,7 @@ _STATE_FOR_VERDICT = {
 
 
 def _checks_by_name(checks: Any) -> dict[str, Any]:
-    return {c.get("name"): c for c in checks if isinstance(c, dict)}
+    return {str(c.get("name")): c for c in checks if isinstance(c, dict)}
 
 
 def _coherence_problems(

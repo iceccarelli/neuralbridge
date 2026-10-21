@@ -5,9 +5,13 @@ normalisation rule that is not doing its job — it is hashing the export's own
 noise along with the machine — and every future weekly report will cry wolf
 about it until somebody fixes the rule or stops reading the report.
 
-This is the step no configuration-drift tool ships and every one of them needs.
-It costs one extra export and it is the difference between a drift report a
-safety engineer acts on and one they filter to a folder.
+This is the step that shows whether the rules do their job. It costs one extra
+export and it is the difference between a drift report a safety engineer can act
+on and one that cries wolf.
+
+A plan is STABLE only if every rule in it was run on both exports and held. A
+rule whose files were in neither export, or which could not be read, has not
+been exercised, and the verdict is INCOMPLETE.
 
 The probe also does the tedious half of the fix: where the item is text, it
 shows the lines that actually differed, which is almost always a timestamp, an

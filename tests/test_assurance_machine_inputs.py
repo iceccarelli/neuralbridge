@@ -564,3 +564,16 @@ class TestNumberHelper:
         before = copy.deepcopy(d)
         SafetyEnvelope.from_dict(d)
         assert d == before
+
+
+class TestLimitsVerificationDate:
+    def test_a_verification_date_in_the_future_is_refused(self):
+        with pytest.raises(LimitsError, match="future"):
+            LimitsTable.from_dict(limits_dict(verified_on="2099-01-01"))
+
+    def test_a_verification_date_that_is_not_a_date_is_refused(self):
+        with pytest.raises(LimitsError, match="ISO date"):
+            LimitsTable.from_dict(limits_dict(verified_on="last week"))
+
+    def test_a_past_date_is_accepted(self):
+        assert LimitsTable.from_dict(limits_dict(verified_on="2026-04-01")).is_verified

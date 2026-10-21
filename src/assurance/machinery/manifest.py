@@ -2,10 +2,10 @@
 
 Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
 1.1.9 requires a machine to identify its safety-relevant software and to record
-evidence of intervention in it. Almost nobody can do either today: the safety
-PLC program lives on a laptop, the scanner zones live in a vendor tool, the
-robot's safety parameters live in the controller, and the only record that a
-technician changed any of them is that technician's memory.
+evidence of intervention in it. Doing either by hand is hard: the safety
+PLC program may live on a laptop, the scanner zones in a vendor tool, the
+robot's safety parameters in the controller, and the only record that a
+technician changed any of them may be that technician's memory.
 
 A manifest is the answer to "what is running on this machine right now", in a
 form two manifests can be compared with. The whole product turns on one field
@@ -16,7 +16,7 @@ one that was read from the machine is the one that is true.
 A safety function is declared with the checks that exercise it. That is not
 bureaucracy — it is the link that lets an intervention invalidate the
 verification that preceded it, which is what :mod:`assurance.machinery.staleness`
-computes and what nobody else can currently produce.
+computes.
 """
 
 from __future__ import annotations

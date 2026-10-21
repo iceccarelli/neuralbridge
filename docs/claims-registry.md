@@ -42,6 +42,20 @@ homepage, `README.md`, `docs/index.md`, `docs/pricing.md` and `public/llms.txt`.
 | Checkout is disabled, not faked, until a Stripe price exists | Register, Cell | `plans.py:Plan.purchasable` (price env var set); `api/billing_routes.py:post_checkout` returns 503 `price_not_configured` otherwise |
 | Prices €390 / month, €1,290 / month (no annual price appears in code or copy) | Register, Cell | Labels only: `plans.py:price_label`. The charged amount lives in Stripe. **These are unvalidated launch hypotheses, not market-tested numbers.** |
 
+## Physical statements — what the code establishes, and what it does not
+
+These are not commercial claims, but a public sentence about physics is held to
+the same rule: it says what the code does and nothing the code does not.
+
+| Statement | What the code does | What it does **not** do |
+|---|---|---|
+| "ISO/TS 15066 protective separation distance" (`POST /v1/machine/separation`, `assurance machine separation`, plan cards, README) | Computes `Sh + Sr + Ss + C + Zd + Zr` from the figures supplied, term by term, in mm / mm/s / s (`machine/ssm.py`). Checked against an independent SI calculation, for monotonicity, unit-rescaling and the boundary (`tests/test_assurance_ssm_reference.py`) | Reproduce the standard: no copy of ISO/TS 15066 or ISO 13855 is in the repository, so the term definitions, the 1600 / 2000 mm/s closing speeds and C = 850 mm are **UNVERIFIED**. It is arithmetic on supplied figures, not a risk assessment and not a conformity statement. `Sr` uses the whole TCP speed (conservative) |
+| "power-and-force" check | Compares recorded contact force and pressure with a body-region table **the customer supplies**, quasi-static limits only; unverified tables cap the tier at `community` | Ship any limit value, or evaluate transient contact. A nonzero force recorded where contact is not permitted is `unchecked`, not evaluated |
+| "each with its worst margin" | `worst_margin` is the smallest margin among the samples that *passed*; a failing check's summary line shows the shortfall instead | Say how close a failing check came on its passing samples |
+| `validated` tier on a bundle | Floor of the stopping-figure basis, sensing-figure basis, trace provenance and limits-table state (`machine/verify.py`) | Grade C or the declared approach speed: they carry no evidence basis and do not lower the tier (the bundle states when the declared speed was used) |
+| "`unchecked` is a first-class outcome" | A gap beside a separation-controlled sample, an all-`None` separation, a missing limits table, contact outside a contact mode, and any contact sample with no area or an uncovered body region are `unchecked`; any `unchecked` makes the verdict `incomplete` | Detect that a blank CSV separation was a dropped value rather than "nobody detected" (a partly-`None` separation list passes with the count stated; an all-`None` one is `unchecked`) |
+| Any input in other units | Refuses strings, booleans, NaN, infinity, negatives and values past a plausibility rail; refuses unknown envelope fields and unit-suffixed trace columns | Convert units (nothing converts), or notice a factor-of-1000 slip that stays inside a rail |
+
 ## Not enforced — removed
 
 | Former claim | Status |
