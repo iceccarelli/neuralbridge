@@ -95,11 +95,16 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
   const contradictory = report.exposures.filter((e) => e.basis === 'hash_mismatch').length;
   const byLabel = report.exposures.filter((e) => e.basis === 'version' || e.basis === 'name_only').length;
   const needs = report.exposures.filter((e) => e.needs_a_human).length;
+  // needs_review with nothing matched is the server saying the ledger chain did not
+  // verify (fleet/impact.py): the check could not be made, which is not a match.
+  const unverifiedLedger = report.verdict === 'needs_review' && report.exposures.length === 0;
   const verdictText =
     report.verdict === 'exposed'
       ? 'EXPOSED — standing safety evidence is now in question'
-      : report.verdict === 'needs_review'
-        ? 'NEEDS REVIEW — matches found, none with standing evidence'
+      : unverifiedLedger
+        ? 'NEEDS REVIEW — the ledger chain does not verify, so no match check was possible. No match was found, and that is not evidence that no machine is affected'
+        : report.verdict === 'needs_review'
+          ? 'NEEDS REVIEW — matches found, none with standing evidence'
         : 'No enrolled machine matches this advisory in its latest sealed manifest. That does not show that no machine is exposed: absence here is not evidence of safety.';
   return (
     <div data-testid="impact-result">
@@ -386,7 +391,7 @@ export default function AdvisoriesPanel({
       {impact && impact.kind !== 'ok' && <Refusal outcome={impact} what="Fleet impact" />}
       {impactOk && selected && parsedOk && <ImpactResult report={impactOk} parsed={parsedOk} rec={selected} />}
 
-      {impactOk && selected && impactOk.verdict !== 'clear' && (
+      {impactOk && selected && impactOk.verdict !== 'clear' && impactOk.exposures.length > 0 && (
         <div className="aw-actions">
           <h4>Open an assurance case</h4>
           <p className="aw-note">
