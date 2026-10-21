@@ -64,6 +64,98 @@ The signing secret Stripe shows you is `STRIPE_WEBHOOK_SECRET`. Without it the
 endpoint refuses every event, which is the correct behaviour: an unverified
 webhook is a way for anyone to grant themselves a subscription.
 
+## Reconciliation
+
+> **Verified against a fake transport only; run with a Stripe test-mode key
+> first.** `assurance.billing.reconcile` has never been run against real Stripe.
+> Its tests use an injected fake gateway and `httpx.MockTransport`. Before
+> trusting it, run it dry (no `--apply`) with a `sk_test_…` key against a
+> test-mode account store and read the report.
+
+Entitlements follow webhooks, and webhooks get lost: the endpoint was down,
+Stripe auto-disabled it after repeated failures, a deploy left a gap. A paying
+customer then silently loses access, or a cancelled one silently keeps it.
+Reconciliation compares every account that has a Stripe customer id with what
+Stripe says today and reports the disagreements as one number, the **drift
+count**: how many accounts (and orphan subscriptions) disagree with Stripe. It
+should be 0; it is the SLI to alert on.
+
+```bash
+# report only; writes nothing
+fly ssh console -C "python -m assurance.billing.reconcile"
+# machine-readable, for a scheduler or an alert
+fly ssh console -C "python -m assurance.billing.reconcile --json"
+# correct what can be corrected safely (after reading a dry run)
+fly ssh console -C "python -m assurance.billing.reconcile --apply"
+```
+
+It reads `STRIPE_SECRET_KEY` and `ASSURANCE_ACCOUNTS` from the environment like
+the service does, and never prints either. Run it where the volume is (the
+account store is SQLite with one writer at a time; it takes the same write lock
+as the webhook for each correction). Opening the store runs the same additive
+migration the service runs at start-up. `--past-due-days N` (default 30) is how
+long a `past_due` that Stripe has not recovered may stand.
+
+| Exit | Meaning |
+|---|---|
+| 0 | every checked account agrees with Stripe |
+| 1 | drift found (with or without `--apply`: it reports what it found, then what it corrected) |
+| 2 | could not run, or could not finish (no key, no store, a Stripe error). **Nothing was written.** |
+
+Output lists the drift count, a count per category, and the **account ids**
+affected (ids only, no email addresses, no keys). Scheduling it (a daily Fly
+scheduled machine or a cron on the host) and alerting on exit 1 or 2 is the
+operator's to set up; nothing here schedules it.
+
+What it reports:
+
+| Category | Meaning | `--apply` |
+|---|---|---|
+| `stripe_active_but_we_deny` | Stripe has the customer paying (or in dunning) and we block them | restores access, tier from the price id |
+| `stripe_ended_but_we_grant` | Stripe's subscription is over (canceled, unpaid, expired, paused, incomplete) and we still grant | ends the grant. If Stripe has **no** subscription of ours for the customer, reported for a human and not changed |
+| `tier_mismatch` | both entitled, different tier (price id → plan via `plan_for_price`) | sets the tier to the price's |
+| `status_mismatch` | `active` vs `past_due`; no entitlement change, only the `/v1/me` warning | sets the status |
+| `past_due_too_long` | `past_due` for more than N days and Stripe still has not recovered it. This closes the open risk that `past_due` has no local expiry | status → `cancelled` (tier kept, so a later `active` restores it) |
+| `unknown_in_stripe` | the account's customer id is not known to Stripe (a test key against a live store, or the wrong account, looks exactly like this) | never |
+| `stripe_subscription_without_account` | a paying subscription of ours whose customer has no account | never. **Report only**: no account and no API key is ever created here; an account comes from a signed checkout event |
+| `ambiguous` | an unknown Stripe status, two live subscriptions disagreeing on the tier, or a tier named only by subscription metadata (which a payload can write) rather than a price id we recognise | never. Nobody is upgraded on a guess |
+
+It uses the same status mapping as the webhook (`billing/subscription_state.py`),
+so it cannot "correct" what the webhook set correctly.
+
+Safety properties, each pinned by a test:
+
+- **Dry run by default.** Only `--apply` writes. It changes `status` and `tier`
+  of existing accounts and nothing else; never the operator, never an account
+  with no customer id, never a sales-assigned tier (`supplier`).
+- **Each correction is one transaction with its audit row** in
+  `entitlement_reconciliations` (run id, account id, old and new status/tier, the
+  Stripe subscription id and status, the snapshot time; no email). The table is
+  created `IF NOT EXISTS`; the schema version is unchanged and an older database
+  still opens.
+- **A newer webhook wins.** Stripe subscriptions carry no "updated" timestamp,
+  so the snapshot instant is the start of the run (or a later Stripe-side time if
+  Stripe's clock is ahead) less a 60-second skew margin. An account whose newest
+  applied webhook is later is *deferred*, not compared; the check is repeated
+  inside the write transaction, so a webhook that lands mid-run also wins. After
+  a correction the account's `last_event_at` moves up to the snapshot, so a
+  delayed older webhook retry cannot undo it.
+- **All Stripe reads happen before any write.** Any Stripe error leaves the
+  store untouched; the report is marked incomplete (`complete: false`, exit 2)
+  and still lists what could be read. One account whose lookup fails therefore
+  blocks `--apply` for the whole run until it is fixed.
+- **Idempotent.** A second `--apply` finds nothing to do. A `past_due` ended by
+  this tool is not re-granted while Stripe still reports it `past_due`; it
+  returns when Stripe reports `active`.
+
+Known limits: the age of a `past_due` is the time the *webhook* first marked
+the account `past_due` (`past_due_since`); accounts marked before this change
+fall back to their last event time, and a `customer.subscription.updated` that
+re-marks a cancelled account `past_due` restarts the clock. "No such customer"
+is recognised from Stripe's 404 `resource_missing`; that response shape is an
+assumption until run against Stripe. Accounts whose newest webhook is within a
+minute of the run are deferred to the next run.
+
 ## Connect the marketing site
 
 The Next.js site in `app/` reads `NEXT_PUBLIC_ASSURANCE_API_URL` at **build
