@@ -74,6 +74,7 @@ from assurance.watch.observations import (
     NOT_A_LOOK_STATUSES,
     OBSERVATION_KIND,
     REPORT_KIND,
+    last_complete_manifest,
     observed_at_of,
 )
 
@@ -597,7 +598,7 @@ def _ingest_entry(
     assert manifest is not None
     observed_hash = manifest.configuration_hash()
     history = manifests_from_ledger(ledger, key)
-    baseline = history[-1] if history else None
+    baseline = last_complete_manifest(history)
     case_id = ""
     case_status = ""
     case_opened = False

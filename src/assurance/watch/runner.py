@@ -76,6 +76,7 @@ from assurance.watch.config import WatchConfig, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
 from assurance.watch.observations import (
     OBSERVATION_KIND,
+    last_complete_manifest,
     observation_succeeded,
     observed_at_of,
 )
@@ -478,7 +479,7 @@ def run_watch(
                 + f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]")
         observed = manifest.configuration_hash()
         history = manifests_from_ledger(ledger, machine_key)
-        baseline = history[-1] if history else None
+        baseline = last_complete_manifest(history)
 
         status = "first_seen" if baseline is None else (
             "changed" if baseline.configuration_hash() != observed else "observed")
@@ -489,7 +490,11 @@ def run_watch(
         detail = ""
         case: ChangeAssuranceCase | None = None
 
-        if status == "first_seen":
+        if status == "first_seen" and not result.complete:
+            detail = (f"first look is incomplete ({', '.join(missing_items)} not "
+                      "collected); no baseline was set, because a partial look is "
+                      "not a configuration the machine was in")
+        elif status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
                       f"{len(manifest.items)} item(s)")
         elif status == "observed":
@@ -525,7 +530,10 @@ def run_watch(
                     "evidence for " + ", ".join(affected) + " is in doubt until it "
                     "is re-run; the watch cannot re-run it.")
 
-        if seal and status in ("first_seen", "changed"):
+        # An incomplete first look is not sealed: with no complete configuration
+        # before it there is nothing for it to differ from, and as the first
+        # manifest held it would become the baseline every later look is judged by.
+        if seal and (status == "changed" or (status == "first_seen" and result.complete)):
             record_manifest(ledger, manifest, actor=actor)
             sealed.append(f"manifest {manifest.manifest_id}")
 
