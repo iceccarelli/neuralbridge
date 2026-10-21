@@ -363,9 +363,12 @@ class TestDelete:
         assert_same_404(r, a_conn["id"], missing)
         assert client.delete(f"{API}/connections/{missing}", headers=h(keys.b)).status_code == 404
 
+        # Anonymous: no key means no connections of their own -> the same 404 for a
+        # real foreign id and a missing one (delete is not behind the paid gate).
         anon = client.delete(f"{API}/connections/{a_conn['id']}", headers=h())
         anon_missing = client.delete(f"{API}/connections/{missing}", headers=h())
-        assert anon.status_code == anon_missing.status_code == 402
+        assert anon.status_code == anon_missing.status_code == 404
+        assert anon.json()["detail"].replace(a_conn["id"], "X") == anon_missing.json()["detail"].replace(missing, "X")
 
         assert a_conn["id"] in client.get(f"{API}/connections", headers=h(keys.a)).text
         assert read(client, keys.a, a_conn["id"]).status_code == 200
@@ -401,7 +404,8 @@ class TestSeededDemo:
     def test_anonymous_cannot_write_or_delete_the_demo(self, client, keys: Keys) -> None:
         demo = demo_id(client)
         assert write_plan(client, None, demo, "UPDATE tenancy_a_secrets SET note='x'").status_code == 402
-        assert client.delete(f"{API}/connections/{demo}", headers=h()).status_code == 402
+        assert client.delete(f"{API}/connections/{demo}", headers=h()).status_code == 404
+        assert demo_id(client) == demo
 
     def test_a_customer_account_cannot_delete_the_demo(self, client, keys: Keys) -> None:
         demo = demo_id(client)
@@ -410,7 +414,11 @@ class TestSeededDemo:
         assert demo_id(client) == demo
         assert read(client, None, demo, operation="list_tables").status_code == 200
 
-    def test_a_plan_on_the_demo_belongs_to_the_account_that_proposed_it(self, client, keys: Keys) -> None:
+    def test_a_plan_on_the_demo_belongs_to_the_account_that_proposed_it(
+        self, client, keys: Keys, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Demo writes exist only behind the local-development switch (default off).
+        monkeypatch.setenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", "1")
         demo = demo_id(client)
         plan = write_plan(client, keys.a, demo, "UPDATE tenancy_a_secrets SET note=note")
         assert plan.status_code == 200
@@ -671,3 +679,266 @@ class TestLegacyStoreMigration:
             op = c.get(f"{API}/connections", headers=h(OPERATOR_KEY))
             assert "legacy-private" in op.text
             assert c.get(f"{API}/plan/legacy-plan", headers=h(OPERATOR_KEY)).status_code == 200
+
+
+# ═══════════════════ hardening round: findings from the adversarial review ═══════════════════
+
+
+UNREACHABLE = {"host": "127.0.0.1", "port": 1}  # nothing listens on port 1
+
+
+def bind_unreachable(client: TestClient, key: str, name: str) -> dict:
+    r = client.post(
+        f"{API}/connections", headers=h(key),
+        json={"name": name, "user": "u", "password": "p", "database": "d", **UNREACHABLE},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+class TestAuditLogsRouteIsTenantScoped:
+    """/api/v1/logs used to be unauthenticated and returned every tenant's audit events."""
+
+    @pytest.mark.parametrize("path", ["/api/v1/logs", "/api/v1/logs/export", "/api/v1/logs/stats"])
+    def test_anonymous_is_401(self, client, keys: Keys, path: str) -> None:
+        a_conn = bind(client, keys.a, A_NAME)
+        read(client, keys.a, a_conn["id"], operation="health_check")
+        r = client.get(path, headers=h())
+        assert r.status_code == 401, r.text
+        assert a_conn["id"] not in r.text
+
+    def test_account_sees_only_its_own_entries_operator_sees_all(self, client, keys: Keys) -> None:
+        a_conn = bind(client, keys.a, A_NAME)
+        b_conn = bind(client, keys.b, B_NAME)
+        read(client, keys.a, a_conn["id"], operation="health_check")
+        read(client, keys.b, b_conn["id"], operation="health_check")
+
+        b_logs = client.get("/api/v1/logs", headers=h(keys.b))
+        assert b_logs.status_code == 200
+        assert b_conn["id"] in b_logs.text
+        assert a_conn["id"] not in b_logs.text
+        a_logs = client.get("/api/v1/logs", headers=h(keys.a))
+        assert a_conn["id"] in a_logs.text and b_conn["id"] not in a_logs.text
+
+        # A forged actor filter cannot widen the view.
+        forged = client.get("/api/v1/logs", params={"actor": "human_session:tenant-actor"}, headers=h(keys.b))
+        assert a_conn["id"] not in forged.text
+
+        op = client.get("/api/v1/logs", headers=h(OPERATOR_KEY)).text
+        assert a_conn["id"] in op and b_conn["id"] in op
+
+    def test_pagination_applies_after_the_owner_filter(self, client, keys: Keys) -> None:
+        a_conn = bind(client, keys.a, A_NAME)
+        b_conn = bind(client, keys.b, B_NAME)
+        for _ in range(3):
+            read(client, keys.a, a_conn["id"], operation="health_check")
+        read(client, keys.b, b_conn["id"], operation="health_check")
+        r = client.get("/api/v1/logs", params={"limit": 5, "offset": 0}, headers=h(keys.b)).json()
+        assert r["total"] == 1 and a_conn["id"] not in str(r)
+
+    def test_failed_call_error_text_is_not_visible_to_other_accounts(self, client, keys: Keys) -> None:
+        a_conn = bind_unreachable(client, keys.a, "A-UNREACHABLE")
+        assert read(client, keys.a, a_conn["id"], operation="health_check").status_code == 502
+        text = client.get("/api/v1/logs", headers=h(keys.b)).text
+        assert a_conn["id"] not in text and "refused" not in text.lower() and "127.0.0.1" not in text
+        assert "adapter_error" in client.get("/api/v1/logs", headers=h(OPERATOR_KEY)).text
+        assert "adapter_error" not in client.get("/api/v1/logs", headers=h(keys.b)).text
+
+    def test_stats_count_only_the_callers_own_entries(self, client, keys: Keys) -> None:
+        a_conn = bind(client, keys.a, A_NAME)
+        b_conn = bind(client, keys.b, B_NAME)
+        for _ in range(3):
+            read(client, keys.a, a_conn["id"], operation="health_check")
+        read(client, keys.b, b_conn["id"], operation="health_check")
+
+        b_stats = client.get("/api/v1/logs/stats", headers=h(keys.b))
+        assert b_stats.status_code == 200
+        assert b_stats.json()["total_events"] == 1
+        assert a_conn["id"] not in b_stats.text
+        assert client.get("/api/v1/logs/stats", headers=h(keys.a)).json()["total_events"] == 3
+        assert client.get("/api/v1/logs/stats", headers=h(OPERATOR_KEY)).json()["total_events"] == 4
+
+    def test_export_is_operator_only_and_leaves_no_file_behind(
+        self, client, keys: Keys, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import tempfile
+
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+        a_conn = bind(client, keys.a, A_NAME)
+        read(client, keys.a, a_conn["id"], operation="health_check")
+
+        assert client.get("/api/v1/logs/export", headers=h()).status_code == 401
+        assert client.get("/api/v1/logs/export", headers=h(keys.b)).status_code == 403
+        assert client.get("/api/v1/logs/export", headers=h(keys.a)).status_code == 403
+
+        r = client.get("/api/v1/logs/export", headers=h(OPERATOR_KEY))
+        assert r.status_code == 200, r.text
+        assert a_conn["id"] in r.text
+        assert r.headers["x-hash-chain-verified"] in ("true", "false")
+        csv_export = client.get("/api/v1/logs/export", params={"file_format": "csv"}, headers=h(OPERATOR_KEY))
+        assert csv_export.status_code == 200
+        bad = client.get("/api/v1/logs/export", params={"file_format": "../etc/passwd"}, headers=h(OPERATOR_KEY))
+        assert bad.status_code == 400
+        assert list(scratch.iterdir()) == []
+
+
+class TestLegacyConnectionsRouteIsOperatorOnly:
+    """/api/v1/connections is a global in-memory store that returned posted config
+    (DSNs) to anyone. Nothing in app/ or the MCP server calls it."""
+
+    PAYLOAD = {"name": "dsn-holder", "adapter_type": "postgres", "config": {"dsn": "postgresql://u:SECRET-DSN-PASS@h/db"}}
+
+    def test_anonymous_and_customers_are_refused(self, client, keys: Keys) -> None:
+        planted = client.post("/api/v1/connections", headers=h(OPERATOR_KEY), json=self.PAYLOAD)
+        assert planted.status_code == 201
+        cid = planted.json()["id"]
+        for method, path in (("get", ""), ("get", f"/{cid}"), ("delete", f"/{cid}"), ("post", f"/{cid}/test")):
+            anon = getattr(client, method)(f"/api/v1/connections{path}", headers=h())
+            assert anon.status_code == 401, (method, path)
+            assert "SECRET-DSN-PASS" not in anon.text
+            cust = getattr(client, method)(f"/api/v1/connections{path}", headers=h(keys.a))
+            assert cust.status_code == 403, (method, path)
+            assert "SECRET-DSN-PASS" not in cust.text
+        assert client.post("/api/v1/connections", headers=h(keys.a), json=self.PAYLOAD).status_code == 403
+        assert client.post("/api/v1/connections", headers=h(), json=self.PAYLOAD).status_code == 401
+        assert client.patch(f"/api/v1/connections/{cid}", headers=h(keys.a), json={"name": "x"}).status_code == 403
+
+    def test_operator_keeps_access(self, client) -> None:
+        r = client.post("/api/v1/connections", headers=h(OPERATOR_KEY), json=self.PAYLOAD)
+        assert r.status_code == 201
+        assert client.get("/api/v1/connections", headers=h(OPERATOR_KEY)).json()["total"] >= 1
+
+
+class TestUnreachableConnectionIsAGeneric502:
+    def test_read_on_unreachable_bound_connection_is_502_without_host_or_driver_text(self, client, keys: Keys) -> None:
+        a_conn = bind_unreachable(client, keys.a, "A-UNREACHABLE")
+        r = read(client, keys.a, a_conn["id"], operation="health_check")
+        assert r.status_code == 502, r.text
+        low = r.text.lower()
+        for leak in ("127.0.0.1", "refused", "asyncpg", "errno", "port", "postgresql connection failed"):
+            assert leak not in low, leak
+
+    def test_approve_on_unreachable_connection_is_generic_too(self, client, keys: Keys) -> None:
+        a_conn = bind_unreachable(client, keys.a, "A-UNREACHABLE")
+        plan = write_plan(client, keys.a, a_conn["id"], "UPDATE t SET x=1")
+        assert plan.status_code == 200
+        r = client.post(f"{API}/plan/{plan.json()['plan']['id']}/approve", headers=h(keys.a))
+        assert r.status_code == 502
+        for leak in ("127.0.0.1", "refused", "asyncpg", "errno"):
+            assert leak not in r.text.lower()
+
+
+class TestDemoIsReadOnlyForPaidAccountsByDefault:
+    def test_paid_account_cannot_plan_or_approve_writes_on_the_demo(self, client, keys: Keys, monkeypatch) -> None:
+        monkeypatch.delenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", raising=False)
+        demo = demo_id(client)
+        for sql in ("CREATE TABLE tenancy_demo_hijack (x int)", "DROP TABLE tenancy_a_secrets"):
+            r = write_plan(client, keys.a, demo, sql)
+            assert r.status_code == 403, r.text
+            assert "read-only" in r.json()["detail"].lower()
+        # nothing was planned or run
+        rows = read(client, keys.a, demo, sql="SELECT note FROM tenancy_a_secrets").json()["data"]
+        assert rows == [{"note": "a-only-row"}]
+        # the demo is still READ-discoverable for everyone
+        assert read(client, None, demo, operation="list_tables").status_code == 200
+        assert read(client, keys.a, demo, sql="SELECT 1 AS one").status_code == 200
+
+    def test_paid_account_still_writes_on_its_own_connection(self, client, keys: Keys, monkeypatch) -> None:
+        monkeypatch.delenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", raising=False)
+        own = bind(client, keys.a, A_NAME)
+        plan = write_plan(client, keys.a, own["id"], "UPDATE tenancy_a_secrets SET note='own-write'")
+        assert plan.status_code == 200
+        assert client.post(f"{API}/plan/{plan.json()['plan']['id']}/approve", headers=h(keys.a)).status_code == 200
+
+    def test_pending_demo_plan_cannot_be_approved_once_the_switch_is_off(self, client, keys: Keys, monkeypatch) -> None:
+        demo = demo_id(client)
+        monkeypatch.setenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", "1")
+        plan_id = write_plan(client, keys.a, demo, "UPDATE tenancy_a_secrets SET note=note").json()["plan"]["id"]
+        monkeypatch.delenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", raising=False)
+        assert client.post(f"{API}/plan/{plan_id}/approve", headers=h(keys.a)).status_code == 403
+
+    @pytest.mark.parametrize("value", ["0", "true", "yes", "", "2"])
+    def test_only_the_literal_1_enables_the_local_dev_switch(self, client, keys: Keys, monkeypatch, value: str) -> None:
+        monkeypatch.setenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", value)
+        assert write_plan(client, keys.a, demo_id(client), "UPDATE tenancy_a_secrets SET note=note").status_code == 403
+
+    def test_the_local_dev_switch_restores_demo_writes(self, client, keys: Keys, monkeypatch) -> None:
+        monkeypatch.setenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", "1")
+        demo = demo_id(client)
+        assert write_plan(client, keys.a, demo, "UPDATE tenancy_a_secrets SET note=note").status_code == 200
+        assert write_plan(client, None, demo, "UPDATE tenancy_a_secrets SET note=note").status_code == 402
+
+    def test_operator_may_still_write_the_demo(self, client, monkeypatch) -> None:
+        monkeypatch.delenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", raising=False)
+        r = write_plan(client, OPERATOR_KEY, demo_id(client), "UPDATE tenancy_a_secrets SET note=note")
+        assert r.status_code == 200
+
+
+class TestAuditLimitIsValidated:
+    @pytest.mark.parametrize("limit", ["-1", "0", "501", "abc"])
+    def test_bad_limits_are_422(self, client, keys: Keys, limit: str) -> None:
+        assert client.get(f"{API}/audit", params={"limit": limit}, headers=h(keys.a)).status_code == 422
+
+    def test_negative_limit_cannot_bypass_the_free_tier_cap(self, client, keys: Keys) -> None:
+        demo = demo_id(client)
+        for _ in range(6):
+            read(client, None, demo, operation="health_check")
+        assert client.get(f"{API}/audit", params={"limit": -1}, headers=h()).status_code == 422
+        assert len(client.get(f"{API}/audit", params={"limit": 500}, headers=h()).json()) <= 3
+
+
+class TestLapsedAccountCanStillShrinkItsExposure:
+    def test_downgraded_account_can_delete_its_own_connection_but_not_plan(self, client, keys: Keys) -> None:
+        from assurance.billing.accounts import AccountStore
+
+        store = AccountStore(os.environ["ASSURANCE_ACCOUNTS"])
+        account = store.resolve_key(keys.a).account
+        assert account is not None
+        own = bind(client, keys.a, A_NAME)
+        other = bind(client, keys.b, B_NAME)
+        store.upsert_account(email="a@example.com", tier="free", company="Account A", account_id=account.id)
+
+        assert write_plan(client, keys.a, own["id"], "UPDATE tenancy_a_secrets SET note=note").status_code == 402
+        # someone else's id is still a plain 404, and the demo is still not deletable
+        assert client.delete(f"{API}/connections/{other['id']}", headers=h(keys.a)).status_code == 404
+        assert client.delete(f"{API}/connections/{demo_id(client)}", headers=h(keys.a)).status_code == 404
+        r = client.delete(f"{API}/connections/{own['id']}", headers=h(keys.a))
+        assert r.status_code == 200, r.text
+        assert own["id"] not in client.get(f"{API}/connections", headers=h(keys.a)).text
+
+
+class TestEachRawAdapterRouteHidesConnectionKeys:
+    """One test per route so disabling any single guard in adapters.py fails something."""
+
+    def _key(self, client, keys: Keys) -> str:
+        return f"postgres:{bind(client, keys.a, A_NAME)['id']}"
+
+    def test_get_adapter(self, client, keys: Keys) -> None:
+        key = self._key(client, keys)
+        assert client.get(f"/api/v1/adapters/{key}", headers=h(keys.b)).status_code == 404
+        assert client.get(f"/api/v1/adapters/{key}", headers=h(OPERATOR_KEY)).status_code == 200
+
+    def test_validate_credentials(self, client, keys: Keys) -> None:
+        key = self._key(client, keys)
+        assert client.post(f"/api/v1/adapters/{key}/validate", headers=h(keys.b)).status_code == 404
+        assert client.post(f"/api/v1/adapters/{key}/validate", headers=h()).status_code == 404
+        assert client.post(f"/api/v1/adapters/{key}/validate", headers=h(OPERATOR_KEY)).status_code == 200
+
+    def test_config_schema(self, client, keys: Keys) -> None:
+        key = self._key(client, keys)
+        assert client.get(f"/api/v1/adapters/{key}/schema", headers=h(keys.b)).status_code == 404
+        assert client.get(f"/api/v1/adapters/{key}/schema", headers=h(OPERATOR_KEY)).status_code == 200
+
+    def test_execute(self, client, keys: Keys) -> None:
+        key = self._key(client, keys)
+        body = {"operation": "query", "params": {"sql": "SELECT note FROM tenancy_a_secrets"}}
+        assert client.post(f"/api/v1/adapters/{key}/execute", headers=h(keys.b), json=body).status_code == 404
+        assert client.post(f"/api/v1/adapters/{key}/execute", headers=h(OPERATOR_KEY), json=body).status_code == 200
+
+    def test_listing(self, client, keys: Keys) -> None:
+        key = self._key(client, keys)
+        assert key not in client.get("/api/v1/adapters", headers=h(keys.b)).text
+        assert key not in client.get("/api/v1/adapters", headers=h()).text
+        assert key in client.get("/api/v1/adapters", headers=h(OPERATOR_KEY)).text

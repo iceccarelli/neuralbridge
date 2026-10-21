@@ -7,6 +7,7 @@ and compliance endpoints.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -48,7 +49,21 @@ class TestAdapterEndpoints:
 
 
 class TestConnectionEndpoints:
-    """Tests for /api/v1/connections/* endpoints."""
+    """Tests for /api/v1/connections/* endpoints.
+
+    That router is a global in-memory store that returns posted config, so it
+    is operator-only (anonymous 401, customer 403 — see
+    tests/test_ai_tenancy.py); these CRUD tests therefore act as the operator.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ASSURANCE_API_KEYS", "test-api-operator-key")
+        api_client.headers["X-API-Key"] = "test-api-operator-key"
+
+    def test_anonymous_is_refused(self, api_client: TestClient):
+        del api_client.headers["X-API-Key"]
+        assert api_client.get("/api/v1/connections").status_code == 401
 
     def test_list_connections(self, api_client: TestClient):
         response = api_client.get("/api/v1/connections")
