@@ -283,6 +283,19 @@
             ],
             "title": "Envelope"
           },
+          "limits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the body-region limits table the bundle was verified against, if its envelope names one; without it a power-and-force bundle cannot be replayed and is reported as integrity-only",
+            "title": "Limits"
+          },
           "trace": {
             "anyOf": [
               {
@@ -5292,7 +5305,7 @@
     },
     "/v1/machine/bundle/check": {
       "post": {
-        "description": "Check somebody else's bundle without trusting them or us.\n\nDeliberately outside every paywall. If a bundle can only be checked by\nsomeone with a subscription, it is a vendor certificate rather than\nevidence, and the customer's auditor is right to ignore it.",
+        "description": "Check somebody else's bundle without trusting them or us.\n\nDeliberately outside every paywall. If a bundle can only be checked by\nsomeone with a subscription, it is a vendor certificate rather than\nevidence, and the customer's auditor is right to ignore it.\n\n``ok`` means no inconsistency was found. ``level`` says how far the check got:\n``integrity_only`` (seal and coherence, the engine was not re-run on the\noriginals, so nothing shows the machine behaved as recorded), ``reproduced``\n(the original envelope, trace and, if needed, limits table were supplied and\nre-running the engine reproduced every sealed field) or ``rejected``. Each flag\nunder ``checked`` is true only if that check ran and passed. A seal is not a\nsignature.\n\nThe checking is CPU work, so it runs in a worker thread and cannot stall the\nevent loop; the request size cap is unchanged.",
         "operationId": "check_bundle_v1_machine_bundle_check_post",
         "parameters": [
           {

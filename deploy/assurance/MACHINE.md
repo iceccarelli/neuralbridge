@@ -207,6 +207,17 @@ Four separate things are checked and the caller is told which failed:
 Supplying neither envelope nor trace returns `ok` **with** a stated limitation,
 never a clean pass: integrity alone does not make a claim true.
 
+`ok` means *no inconsistency found*, and a seal is not a signature, so a bundle
+someone built by hand and sealed again can be `ok`. The answer therefore carries
+`level`: `integrity_only` (seal and coherence only — the CLI prints `NOT
+REPRODUCED`, exit status still 0), `reproduced` (the engine was re-run on the
+original envelope, trace and, if needed, limits table, and every sealed field
+matched) or `rejected`. Over HTTP, `POST /v1/machine/bundle/check` takes an
+optional `limits` table and each flag under `checked` is true only if that check
+ran and passed. The coherence step also requires the recorded checks to be exactly
+the set the engine produces, and a tier no higher than the ceiling of the envelope
+printed beside the seal.
+
 ## Regulatory context
 
 Machinery Regulation (EU) 2023/1230 applies from **20 January 2027**. Annex III
