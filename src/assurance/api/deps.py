@@ -411,10 +411,33 @@ def quota_refusal(
     )
 
 
-def _quota_remedy(limit: int) -> str:
+def _quota_remedy(limit: int, *, tier: str = "free", scope: str = "validate") -> str:
+    """What to do about a spent daily allowance, true for this plan and this route.
+
+    Pay-as-you-go bills only the scopes in ``METERED_SCOPES``; a daily guard such
+    as ``evidence_verify`` is never billed, so it is not offered as a way past one,
+    and an account already on the ``payg`` plan is never told to choose it.
+    """
+    plans = "GET /v1/plans, then POST /v1/checkout"
+    if scope not in METERED_SCOPES:
+        text = (
+            f"This route is not billed per call, so pay-as-you-go does not extend it: "
+            f"its daily guard is {limit} calls per day, per caller, and it renews at "
+            f"resets_at. A Register or Cell plan has no daily cap on it ({plans})."
+        )
+        if tier == "payg":
+            text = ("Your account is on pay-as-you-go, and " + text[0].lower() + text[1:])
+        return text
+    if tier == "payg":
+        return (
+            f"Your account is on the pay-as-you-go plan, but billing is not active for it "
+            f"right now (it needs an active subscription bound to a Stripe customer, on a "
+            f"deployment where pay-as-you-go is configured), so the {limit} calls per day "
+            "are a hard cap. See GET /v1/usage; the allowance renews at resets_at."
+        )
     text = (
         f"The free allowance is {limit} calls per day, per caller. A paid plan removes "
-        "the cap: see GET /v1/plans, then POST /v1/checkout."
+        f"the cap: see {plans}."
     )
     if payg_available():
         text += (
@@ -437,7 +460,7 @@ def spend(principal: Principal, scope: str, limit: int | None, accounts: Account
     except QuotaExceededError as exc:
         raise quota_refusal(
             error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
-            tier=exc.tier, remedy=_quota_remedy(exc.limit),
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         ) from exc
 
 
@@ -469,7 +492,7 @@ def _metering_refusal(exc: Exception, principal: Principal) -> HTTPException:
     if isinstance(exc, QuotaExceededError):
         return quota_refusal(
             error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
-            tier=exc.tier, remedy=_quota_remedy(exc.limit),
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         )
     assert isinstance(exc, IdempotencyConflictError)
     return HTTPException(
