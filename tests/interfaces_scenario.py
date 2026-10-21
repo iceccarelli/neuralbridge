@@ -58,9 +58,12 @@ SRC = str(Path(__file__).resolve().parents[1] / "src")
 KEY = "Grimaldi/AR-7#0501"         # the machine whose firmware changes
 OTHER = "Grimaldi/AR-7#0412"
 PERSON = "v.grimaldi"
-#: After any real collection moment, so the run describes the machine as it is
-#: after the change. The engine compares instants; it does not forbid a date.
-TRACE_START = datetime(2031, 1, 1, tzinfo=UTC)
+#: The moment the verification run started: now, at import. It is after every
+#: synthetic collection moment in this scenario (they are all in the past), so the
+#: run describes the machine as it is after the change, and it is not in the
+#: future: a run dated after the moment it is filed is treated as suspect and
+#: cannot clear a case (a future date must not outrun a real change).
+TRACE_START = datetime.now(UTC).replace(microsecond=0)
 ADVISORY_ID = "ROBO-2026-03"
 
 
