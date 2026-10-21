@@ -33,6 +33,8 @@ __all__ = [
     "current_principal",
     "get_accounts",
     "require_ai_control_plane",
+    "require_operator",
+    "require_scope",
     "resolve_principal",
     "scope_for",
     "spend_ai_read",
@@ -61,6 +63,30 @@ def scope_for(principal: Principal) -> Scope:
     if account.id == _OPERATOR.id:
         return Scope(owner=OPERATOR_OWNER, is_operator=True)
     return Scope(owner=account.id)
+
+
+def require_scope(principal: Principal) -> Scope:
+    """Any *identified* caller: 401 for an anonymous one (outside open mode).
+    For surfaces with no free tier — the audit-log routes."""
+    scope = scope_for(principal)
+    if principal.account is None and not scope.is_operator:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="An API key is required.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    return scope
+
+
+def require_operator(principal: Principal) -> Scope:
+    """Operator only: 401 with no key, 403 for a customer account."""
+    scope = require_scope(principal)
+    if not scope.is_operator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is restricted to the operator.",
+        )
+    return scope
 
 
 async def require_ai_control_plane(principal: Principal) -> Principal:

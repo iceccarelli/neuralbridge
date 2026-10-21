@@ -99,6 +99,10 @@ curl -s http://127.0.0.1:8001/v1/cases -H "X-API-Key: $BUYER_KEY"
 
 ```bash
 export NEURALBRIDGE_AI_STORE=./buyer-journey-ai.db
+# This walkthrough writes the shared seeded demo database as a paid account.
+# That is read-only for paid accounts by default (tenant isolation), so the
+# LOCAL stack must opt in — a local-development switch, never set in production:
+export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1
 # (plus the NEURALBRIDGE_AI_PG_* vars from docs/ai-local-setup.md, and
 # ASSURANCE_ACCOUNTS from step 1 — /ai reads the same account store)
 uvicorn neuralbridge.main:app --port 8000 &

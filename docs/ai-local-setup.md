@@ -35,6 +35,19 @@ export NEURALBRIDGE_AI_PG_DATABASE=neuralbridge_ai
 
 ## Start the backend
 
+The seeded demo connection is shared by every caller, so by default a paid
+account can only READ it; it proposes/approves writes on connections it binds
+itself (`POST /ai/connections`). For the local single-user demo (the buyer
+path in `docs/buyer-journey.md`, `scripts/verify-buyer-path.sh`) that writes
+the demo database, export this in the shell running uvicorn:
+
+```bash
+export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1   # LOCAL DEVELOPMENT ONLY — never in production
+```
+
+Without it a paid account's plan on the demo connection gets a real `403`
+("demo connection is read-only").
+
 ```bash
 pip install -e ".[dev]"
 uvicorn neuralbridge.main:app --reload --port 8000

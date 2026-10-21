@@ -5,6 +5,12 @@ Endpoints for managing adapter connections — the YAML-configured
 "bridges" between AI agents and external systems.  Business users
 create connections via the dashboard's Connection Wizard; developers
 can also use these endpoints directly.
+
+**Operator-only.** This is one global, in-memory store whose ``config`` is
+returned verbatim (only ``auth`` is masked), so it must never be reachable by
+a customer: anonymous callers get 401 and customer accounts 403. Customers'
+own connections live in the tenant-scoped ``/ai/connections``; nothing in
+``app/`` or the MCP server calls this router.
 """
 
 from __future__ import annotations
@@ -13,10 +19,17 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-router = APIRouter(prefix="/connections")
+from neuralbridge.ai.entitlements import Principal, current_principal, require_operator
+
+
+async def _operator_only(principal: Principal = Depends(current_principal)) -> None:
+    require_operator(principal)
+
+
+router = APIRouter(prefix="/connections", dependencies=[Depends(_operator_only)])
 
 
 # ── In-Memory Store (production: PostgreSQL) ─────────────────

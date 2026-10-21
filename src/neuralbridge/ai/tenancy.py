@@ -21,9 +21,13 @@ Visibility rules (the single place they are written down):
   the operator only, *except* the seeded demo connection, which is
   identified by ``source == "seeded_from_env"`` and so stays a shared demo.
 * The seeded demo connection is **not deletable** by a non-operator. A paid
-  account may still propose/approve WRITEs against it (the documented
-  Register/Cell write path — see ``DEMO_WRITABLE_BY_PAID``); anonymous/free
-  callers cannot, as before (402 at the paid gate).
+  account may NOT propose/approve WRITEs against it by default: it is one
+  shared database, so a write is a cross-tenant write. Paid accounts write
+  only on connections they bound themselves. A LOCAL-DEVELOPMENT switch,
+  ``NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1`` (see
+  :func:`demo_writable_by_paid`), re-enables paid writes on the demo for
+  the local buyer-path demo; never set it in production. Anonymous/free
+  callers cannot write either way (402 at the paid gate).
 
 A record the caller may not see is indistinguishable from one that does not
 exist: callers get the same 404 body for both. There is no existence oracle.
@@ -31,17 +35,24 @@ exist: callers get the same 404 body for both. There is no existence oracle.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Protocol
 
 #: ``source`` of the env-seeded demo connection — shared, READ-discoverable.
 DEMO_SOURCE = "seeded_from_env"
 
-#: Whether a *paid* (non-operator) account may propose/approve WRITEs on the
-#: shared seeded demo connection. True preserves the documented Register/Cell
-#: write loop on the demo database (see tests/test_ai_buyer_journey.py);
-#: flip to False to make the demo strictly read-only for every non-operator.
-DEMO_WRITABLE_BY_PAID = True
+DEMO_WRITABLE_ENV = "NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID"
+
+
+def demo_writable_by_paid() -> bool:
+    """Whether a *paid* (non-operator) account may propose/approve WRITEs on
+    the shared seeded demo connection. **Default: no.** Only the literal
+    ``NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1`` enables it, and that is a
+    LOCAL-DEVELOPMENT switch for the single-user buyer-path demo — the demo
+    database is shared by every tenant, so never set it in production."""
+    return os.environ.get(DEMO_WRITABLE_ENV, "") == "1"
+
 
 OPERATOR_OWNER = "operator"
 
@@ -85,7 +96,7 @@ def can_plan_on_connection(scope: Scope, connection: _Connection) -> bool:
     if scope.is_operator:
         return True
     if is_demo(connection):
-        return DEMO_WRITABLE_BY_PAID
+        return demo_writable_by_paid()
     return bool(connection.owner) and connection.owner == scope.owner
 
 
