@@ -32,13 +32,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.errors import LedgerIntegrityError
+from ..core.errors import LedgerConflictError, LedgerIntegrityError
 from ..core.evidence import Evidence
 from ..core.identity import content_hash_of, format_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
@@ -167,21 +167,38 @@ class EvidenceLedger:
         with self._lock:
             db = self._connect()
             try:
+                # Outside the rollback guard: when BEGIN itself fails (the file
+                # is locked) there is no transaction, and a ROLLBACK would raise
+                # "cannot rollback - no transaction is active" over the real error.
                 db.execute("BEGIN IMMEDIATE")
-                yield db
-                db.execute("COMMIT")
-            except Exception:
-                db.execute("ROLLBACK")
-                raise
+                try:
+                    yield db
+                    db.execute("COMMIT")
+                except Exception:
+                    if db.in_transaction:
+                        db.execute("ROLLBACK")
+                    raise
             finally:
                 db.close()
 
     # -- writing ----------------------------------------------------------
-    def append(self, evidence: Evidence, subject: str = "") -> LedgerEntry:
+    def append(
+        self, evidence: Evidence, subject: str = "", *,
+        expect_subject_head: int | None = None,
+        expect_kinds: Sequence[str] | None = None,
+    ) -> LedgerEntry:
         """Append a sealed evidence object and return its link.
 
         The object must already be sealed. Sealing on the caller's behalf would
         mean this ledger could record content the caller never saw.
+
+        ``expect_subject_head`` makes the append a compare-and-swap for a
+        read-modify-append: the ``seq`` of the newest entry under ``subject`` (of
+        ``expect_kinds`` when given; ``0`` for none) that the caller's decision was
+        based on. It is checked **inside** the write transaction, so no other writer
+        can slip between the check and the insert; if the subject has moved on,
+        :class:`~assurance.core.errors.LedgerConflictError` is raised and nothing is
+        written. Without it the append is unconditional, as before.
         """
         if not evidence.is_sealed:
             raise LedgerIntegrityError(
@@ -198,6 +215,18 @@ class EvidenceLedger:
         at = format_utc(utc_now())
 
         with self._write_txn() as db:
+            if expect_subject_head is not None:
+                sql = "SELECT COALESCE(MAX(seq), 0) FROM chain WHERE subject = ?"
+                args: list[Any] = [subject]
+                if expect_kinds:
+                    sql += f" AND kind IN ({','.join('?' * len(expect_kinds))})"
+                    args.extend(expect_kinds)
+                current = int(db.execute(sql, args).fetchone()[0])
+                if current != expect_subject_head:
+                    raise LedgerConflictError(
+                        f"{subject or 'the ledger'} changed since it was read: its newest "
+                        f"entry is seq {current}, not seq {expect_subject_head}. "
+                        "Nothing was written.")
             tail = db.execute("SELECT seq, link_hash FROM chain ORDER BY seq DESC LIMIT 1").fetchone()
             prev_hash = tail["link_hash"] if tail else GENESIS
             seq = (tail["seq"] + 1) if tail else 1

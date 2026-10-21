@@ -26,9 +26,26 @@ T = TypeVar("T")
 DEFAULT_DEADLINE = 30.0
 
 
+#: SQLite's own busy/locked messages (``SQLITE_BUSY`` / ``SQLITE_LOCKED``).
+_BUSY_MESSAGES = frozenset({
+    "database is locked", "database table is locked", "database is busy",
+})
+#: Primary result codes; extended codes carry them in the low byte.
+_BUSY_CODES = frozenset({5, 6})  # SQLITE_BUSY, SQLITE_LOCKED
+
+
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
+    """Is this SQLite's "someone else holds the lock", and nothing else?
+
+    The error code decides when Python provides it (3.11+); otherwise the
+    message must be one of SQLite's own busy/locked messages **exactly**. A
+    substring test would retry ``no such table: blocked_items`` until the
+    deadline: a permanent error dressed as a transient one.
+    """
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) in _BUSY_CODES
+    return str(exc).strip().lower() in _BUSY_MESSAGES
 
 
 def retry_locked(
