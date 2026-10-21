@@ -36,6 +36,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Getting started', group: 'Docs', href: '/docs/getting-started', blurb: 'The offline kit walkthrough, one command at a time.' },
   { title: 'Pricing (docs)', group: 'Docs', href: '/docs/pricing', blurb: 'The same capability table, generated from enforced entitlements.' },
   { title: 'Platform status', group: 'Docs', href: '/docs/platform', blurb: 'What is Supported vs. Evolving today.' },
+  { title: 'Check an evidence file', group: 'Docs', href: '/verify', blurb: 'Free, no account, nothing stored: what can and cannot be established from an export, bundle or attestation log.' },
   { title: 'Developers — API reference', group: 'Docs', href: '/developers', blurb: 'Auth, the real free-vs-paid route table, curl and Python examples.' },
   { title: 'Applications', group: 'Docs', href: '/applications', blurb: 'Cobots, packaging, fleet, OEM register, insurer evidence — mapped to real routes.' },
   { title: 'CLI', group: 'Docs', href: '/cli', blurb: 'python -m assurance — the real command tree.' },

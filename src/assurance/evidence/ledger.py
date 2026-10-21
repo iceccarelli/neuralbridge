@@ -296,7 +296,16 @@ class EvidenceLedger:
         problems: list[str] = []
         prev = GENESIS
         expected_seq = 1
-        for entry in self.entries():
+        try:
+            entries = self.entries()
+        except sqlite3.DatabaseError as exc:
+            if isinstance(exc, sqlite3.OperationalError):
+                raise  # busy/locked/unreadable path: transient or environmental, not a finding
+            # The file opens but its pages are damaged (SQLITE_CORRUPT / NOTADB). A
+            # verifier that crashes on the very thing it exists to find is no verifier.
+            return (False, [f"the ledger's storage is damaged and cannot be read ({exc}) "
+                            "— restore from a backup and run `python -m assurance.evidence.restore_check verify`"])
+        for entry in entries:
             if entry.seq != expected_seq:
                 problems.append(
                     f"seq {entry.seq}: gap in the chain, expected {expected_seq} "

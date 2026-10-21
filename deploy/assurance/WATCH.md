@@ -492,7 +492,9 @@ with no or an invalid key, 402 when authenticated but not entitled) writes to
   at most 200 new ones. The route runs in the threadpool, and ingest into one
   ledger is serialised across threads and processes by an advisory file lock
   beside the ledger (POSIX), so overlapping retries from several workers still
-  write once. The assurance image runs one worker by design; the repository's
+  write once. The wait for that lock is bounded (30 s, per ledger): past it the
+  route answers `503 ingest_busy` with `Retry-After: 5` and has written nothing,
+  and `watch push` retries 5xx. The assurance image runs one worker by design; the repository's
   root `Dockerfile` serves `neuralbridge.main`, not this API.
 
 The response says, per machine, `recorded` / `already_recorded` / `refused` and

@@ -46,6 +46,7 @@ __all__ = [
     "EvidenceBundle",
     "build_bundle",
     "verify_bundle",
+    "verify_bundle_data",
 ]
 
 BUNDLE_KIND = "machine.safety_verification"
@@ -206,8 +207,20 @@ def verify_bundle(
     Supplying neither envelope nor trace is allowed and is reported as a stated
     limitation, not a pass: integrity alone does not make a claim true.
     """
-    problems: list[str] = []
     raw = json.loads(Path(bundle_path).read_text(encoding="utf-8"))
+    return verify_bundle_data(raw, envelope=envelope, trace=trace)
+
+
+def verify_bundle_data(
+    raw: Any,
+    *,
+    envelope: SafetyEnvelope | None = None,
+    trace: Trace | None = None,
+) -> tuple[bool, list[str]]:
+    """:func:`verify_bundle` for a bundle already parsed, so nothing is written to disk."""
+    problems: list[str] = []
+    if not isinstance(raw, dict):
+        return False, ["not a machine verification bundle: the top level is not an object."]
 
     if raw.get("schema") != BUNDLE_SCHEMA:
         problems.append(

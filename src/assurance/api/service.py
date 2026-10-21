@@ -25,6 +25,7 @@ from .billing_routes import billing_router
 from .change_routes import change_router
 from .check_routes import check_router
 from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode
+from .evidence_routes import evidence_router
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
@@ -134,6 +135,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(watch_router)
     application.include_router(fleet_router)
     application.include_router(check_router)
+    application.include_router(evidence_router)
     application.include_router(attest_router)
     application.include_router(supplier_router)
     application.include_router(router)

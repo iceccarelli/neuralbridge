@@ -33,6 +33,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from assurance.evidence.ledger import EvidenceLedger
@@ -45,13 +46,41 @@ _TENANT = re.compile(r"^acc_[0-9a-f]{16}\.db$")
 _LOG_DIRS = ("attestations", "supplier-feeds")
 
 
+#: Longest a snapshot waits for a source that stays locked, in seconds. sqlite3's
+#: ``backup()`` retries a busy source for ever on its own.
+BACKUP_DEADLINE = 30.0
+
+
+def _ro_uri(path: Path) -> str:
+    """A read-only SQLite URI for ``path``, percent-encoded.
+
+    ``f"file:{path}?mode=ro"`` ends the URI at a ``#`` or ``?`` in the path: the
+    "source" became a different, nonexistent file that SQLite then created empty,
+    and the backup reported success with an empty snapshot.
+    """
+    return f"{Path(path).resolve().as_uri()}?mode=ro"
+
+
 def _snapshot(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
+    # A short busy timeout on the source: each backup step then returns BUSY after about
+    # a second instead of waiting out 30 s inside SQLite, so ``bounded`` below gets to
+    # enforce BACKUP_DEADLINE at that granularity.
+    source = sqlite3.connect(_ro_uri(src), uri=True, timeout=min(1.0, BACKUP_DEADLINE))
+    started = time.monotonic()
+
+    def bounded(status: int, remaining: int, total: int) -> None:
+        # Called after every step, including the ones that found the source busy.
+        if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) \
+                and time.monotonic() - started >= BACKUP_DEADLINE:
+            raise sqlite3.OperationalError(
+                f"database is locked: gave up after {BACKUP_DEADLINE:g}s waiting to "
+                f"snapshot {src.name}")
+
     try:
         target = sqlite3.connect(dest)
         try:
-            source.backup(target)
+            source.backup(target, progress=bounded)
         finally:
             target.close()
     finally:
@@ -81,7 +110,7 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
 
 
 def _integrity(path: Path) -> str:
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    db = sqlite3.connect(_ro_uri(path), uri=True, timeout=30)
     try:
         return str(db.execute("PRAGMA integrity_check").fetchone()[0])
     finally:
@@ -89,7 +118,7 @@ def _integrity(path: Path) -> str:
 
 
 def _account_ids(accounts: Path) -> set[str]:
-    db = sqlite3.connect(f"file:{accounts}?mode=ro", uri=True, timeout=30)
+    db = sqlite3.connect(_ro_uri(accounts), uri=True, timeout=30)
     try:
         return {r[0] for r in db.execute("SELECT id FROM accounts")}
     finally:
