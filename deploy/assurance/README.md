@@ -189,7 +189,7 @@ reads Stripe before writing anything and refuses a live key for `--apply`
 without `--i-have-run-this-in-test-mode`, exactly like the rest. It lists, per
 account, the pay-as-you-go drift categories below and adds its own
 `usage.drift_count`; any usage drift makes the exit code 1, an unreadable
-Stripe makes it 2. See [Pay as you go](#pay-as-you-go-off-by-default).
+Stripe makes it 2. See the "Pay as you go" section below.
 
 ## Pay as you go (off by default)
 
