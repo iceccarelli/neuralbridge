@@ -84,6 +84,13 @@ class VerifyIn(BaseModel):
     role: str = Field(default="verification engineer", max_length=200)
     seal: bool = Field(default=True,
                        description="append the sealed bundle to the evidence ledger")
+    subject: str = Field(
+        default="", max_length=400,
+        description="file the sealed bundle under this ledger subject. Give the "
+                    "machine's key (manufacturer/model#serial) for the verification "
+                    "to count as evidence for that unit in coverage, re-verification "
+                    "and the passport; omitted, it is filed under product@version, "
+                    "a product line")
 
 
 class BundleCheckIn(BaseModel):
@@ -242,9 +249,13 @@ async def verify_run(
         actor=Actor(identifier=body.actor, role=body.role, kind="person"),
         limits=limits,
         ledger=register.ledger if (body.seal and register is not None) else None,
+        subject=body.subject,
     )
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
+    # The hash a re-verification cites (``verification_content_hash`` on
+    # POST /v1/change/cases/{id}/reverification); also at evidence.content_hash.
+    payload["content_hash"] = bundle.content_hash
     payload["verdict"] = bundle.verdict.value
     payload["tier"] = bundle.tier.value
     payload["may_claim_physical_behaviour"] = \

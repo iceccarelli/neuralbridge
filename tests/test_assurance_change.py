@@ -1117,7 +1117,7 @@ class TestCliS2:
                             "--reason", "back", "--actor", "v.grimaldi") == 0
         assert self._change("replay", "--ledger", str(path), case.case_id) == 0
         assert "every step was legal" in capsys.readouterr().out
-        assert self._change("replay", "--ledger", str(path), "case-nope") == 1
+        assert self._change("replay", "--ledger", str(path), "case-nope") == 2  # unknown: could not run
         assert self._change("resolve-decision", "--ledger", str(path), case.case_id,
                             "--number", "1", "--resolution", "x",
                             "--actor", "v.grimaldi") == 1           # none open
