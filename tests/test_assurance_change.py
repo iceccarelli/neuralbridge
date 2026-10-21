@@ -12,7 +12,7 @@ rest of this product already tests against.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,6 +30,7 @@ from assurance.change import (
     reverify,
 )
 from assurance.core.evidence import Actor
+from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
 from assurance.fleet.impact import assess_impact
@@ -661,8 +662,11 @@ def advisory_case_ready(ledger, store):
     case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
     while case.status is not CaseStatus.AWAITING_REVERIFICATION:
         case = advance(store, case.case_id, actor=REVIEWER)
-    bundle = seal_a_real_verification(ledger, when=LATER)
-    case = reverify(store, case.case_id, manifest(fw()),
+    after = utc_now() + timedelta(hours=1)          # after the case opened
+    fresh = manifest(fw(), manifest_id="MAN-AFTER", taken_at=after)
+    record_manifest(ledger, fresh)                  # ledger-backed, collected after
+    bundle = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+    case = reverify(store, case.case_id, fresh,
                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
                     interventions_from_ledger(ledger, MACHINE.key),
                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
@@ -936,6 +940,7 @@ class TestGuards:
         # A manifest that no longer declares SF-02: it cannot be shown current.
         without = manifest(item(content_hash="d" * 64, implements=("SF-01",)),
                            functions=FUNCS[:1], manifest_id="NOW")
+        record_manifest(ledger, without)             # ledger truth, not the caller's say-so
         c = reverify(store, case.case_id, without,
                      VerificationRecord.from_ledger(ledger, subject=MACHINE.key), [],
                      verification_content_hash=bundle.content_hash, actor=REVIEWER)
@@ -1207,14 +1212,20 @@ class TestF1ReverifyAcceptsOnlyTheRightEvidence:
         assert {e.rsplit("/", 1)[0] for e in case.required_reverifications} \
             == {MACHINE.key, OTHER.key}
 
-        b1 = seal_a_real_verification(ledger, when=LATER)
-        c = reverify(store, case.case_id, manifest(fw()), verifs(ledger, MACHINE.key), [],
+        after = utc_now() + timedelta(hours=1)
+        m1 = manifest(fw(), manifest_id="AFTER-0412", taken_at=after)
+        m2 = manifest(fw(), manifest_id="AFTER-0413", taken_at=after, machine=OTHER)
+        record_manifest(ledger, m1)
+        record_manifest(ledger, m2)
+        b1 = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+        c = reverify(store, case.case_id, m1, verifs(ledger, MACHINE.key), [],
                      verification_content_hash=b1.content_hash, actor=REVIEWER)
         assert c.status is CaseStatus.AWAITING_REVERIFICATION
         assert {e.rsplit("/", 1)[0] for e in c.required_reverifications} == {OTHER.key}
 
-        b2 = seal_a_real_verification(ledger, when=LATER, subject=OTHER.key)
-        c = reverify(store, c.case_id, manifest(fw(), machine=OTHER), verifs(ledger, OTHER.key),
+        b2 = seal_a_real_verification(ledger, when=after + timedelta(minutes=5),
+                                      subject=OTHER.key)
+        c = reverify(store, c.case_id, m2, verifs(ledger, OTHER.key),
                      [], verification_content_hash=b2.content_hash, actor=REVIEWER)
         assert c.status is CaseStatus.READY_TO_CLOSE
         assert c.required_reverifications == ()
@@ -1244,6 +1255,7 @@ class TestF1ReverifyAcceptsOnlyTheRightEvidence:
                                              "laser_scan_resolution")),
                  FUNCS[1])
         wider = manifest(item(content_hash="d" * 64), functions=funcs, manifest_id="NOW")
+        record_manifest(ledger, wider)               # ledger truth, not the caller's say-so
         c = reverify(store, case.case_id, wider, verifs(ledger, MACHINE.key), [],
                      verification_content_hash=bundle.content_hash, actor=REVIEWER)
         assert c.status is CaseStatus.AWAITING_REVERIFICATION
@@ -1512,3 +1524,146 @@ class TestTheSurvivingMutant:
         assert store.get(case.case_id).status is CaseStatus.READY_TO_CLOSE
         with pytest.raises(CaseTransitionError, match="outstanding work"):
             decide(store, case.case_id, disposition="closed", reason="x", actor=REVIEWER)
+
+
+# =====================================================================
+# Slice S2, third pass — a second review: the floor and the manifest must
+# come from the case and the ledger, never from the caller.
+# =====================================================================
+
+class TestAReverifyFloorComesFromTheCaseNotTheCaller:
+    def _advisory_awaiting(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+        case = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+            case = advance(store, case.case_id, actor=REVIEWER)
+        return case
+
+    def test_an_advisory_case_stamps_its_own_opening_time_as_the_trigger(self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        assert case.trigger_at == case.opened_at != ""
+        # and a repeat look does not move it
+        again = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert again.trigger_at == case.trigger_at
+
+    def test_the_reviews_repro_a_2020_run_with_a_2019_manifest_cannot_close_it(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        stale = seal_a_real_verification(ledger, when=datetime(2020, 1, 1, tzinfo=UTC))
+        # The caller's manifest is the ledger's own, relabelled as taken in 2019.
+        forged_date = manifest(fw(), manifest_id="MAN-0412",
+                               taken_at=datetime(2019, 1, 1, tzinfo=UTC))
+        with pytest.raises(CaseTransitionError):
+            reverify(store, case.case_id, forged_date, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=stale.content_hash, actor=REVIEWER)
+        assert store.get(case.case_id).status is CaseStatus.AWAITING_REVERIFICATION
+
+    def test_an_advisory_case_is_cleared_by_evidence_after_the_case_and_a_fresh_manifest(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        after = utc_now() + timedelta(hours=1)
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-AFTER", taken_at=after))
+        bundle = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+        c = reverify(store, case.case_id, manifest(fw(), taken_at=after),
+                     verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+    def test_a_manifest_older_than_the_case_is_refused_even_with_a_new_bundle(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)      # ledger manifest: January
+        bundle = seal_a_real_verification(ledger, when=utc_now() + timedelta(hours=1))
+        with pytest.raises(CaseTransitionError, match="predates"):
+            reverify(store, case.case_id, manifest(fw()), verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+
+class TestBTheManifestIsBoundToTheLedger:
+    def test_a_manifest_for_an_unrelated_configuration_cannot_clear_a_drift_case(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        unrelated = manifest(item(content_hash="9" * 64), manifest_id="NOW")
+        assert unrelated.configuration_hash() != case.after_hash
+        with pytest.raises(CaseTransitionError, match="configuration"):
+            reverify(store, case.case_id, unrelated, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+    def test_the_declared_checks_come_from_the_ledgers_manifest_not_the_callers(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        strict = (SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
+                                 verified_by=("ssm_separation", "stop_characterisation",
+                                              "laser_scan_resolution")), FUNCS[1])
+        record_manifest(ledger, manifest(item(content_hash="d" * 64), functions=strict,
+                                         manifest_id="LEDGER-STRICT"))
+        # The caller sends the same configuration with the extra check removed.
+        weakened = manifest(item(content_hash="d" * 64), manifest_id="NOW")
+        assert weakened.configuration_hash() == case.after_hash
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, weakened, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == ("SF-01",)
+
+    def test_a_machine_the_ledger_has_no_manifest_for_is_refused(self, ledger, store):
+        observed = manifest(item(content_hash="d" * 64), manifest_id="NOW")
+        case = assess_drift(store, compare(manifest(manifest_id="BASE"), observed),
+                            observed, [], [], actor=ENG)
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        case = advance(store, case.case_id, actor=REVIEWER)
+        case = advance(store, case.case_id, actor=REVIEWER)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        with pytest.raises(CaseTransitionError, match="no manifest"):
+            reverify(store, case.case_id, observed, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+    def test_a_later_ledger_manifest_is_accepted_and_is_the_one_used(self, ledger, store):
+        """The caller's manifest may be the newest sealed one rather than the one the
+        case was opened on."""
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        newer = manifest(item(content_hash="d" * 64, version="3.8.3"), manifest_id="NEWER")
+        record_manifest(ledger, newer)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, newer, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+
+    def test_coverage_is_assessed_against_the_ledgers_manifest_too(self, ledger, store):
+        """Whatever the caller declares, the verdict is the ledger's: a garbled
+        function list in the request neither clears nor blocks anything."""
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        garbled = manifest(
+            item(content_hash="d" * 64),
+            functions=(SafetyFunction("SF-01", "x", "PL d", verified_by=("no_such_check",)),
+                       SafetyFunction("SF-02", "x", "PL d", verified_by=("no_such_check",))),
+            manifest_id="NOW")
+        assert garbled.configuration_hash() == case.after_hash
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, garbled, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+
+class TestCConfusableNames:
+    @pytest.mark.parametrize("name", [
+        "agent.", "system:", "аutomation", "AGENT!", "‘bot’", "bot-7",
+        "operator_1", "automation bot", "ορerator", "aɡent",
+        "(watch)", "ѕervice", "ASSISTANT 2",
+    ])
+    def test_a_reserved_word_in_disguise_is_refused(self, ledger, store, name):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        with pytest.raises(CaseTransitionError):
+            decide(store, case.case_id, disposition="closed", reason="r",
+                   actor=Actor(name, "reviewer", kind="person"))
+
+    @pytest.mark.parametrize("name", ["Agent Smith", "Watch Dog", "v.grimaldi",
+                                      "Systems Engineer Rossi", "Botticelli"])
+    def test_names_that_merely_contain_a_reserved_word_are_allowed(self, ledger, store, name):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        assert decide(store, case.case_id, disposition="closed", reason="r",
+                      actor=Actor(name, "reviewer")).status is CaseStatus.CLOSED
