@@ -12,7 +12,7 @@ rest of this product already tests against.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,6 +30,7 @@ from assurance.change import (
     reverify,
 )
 from assurance.core.evidence import Actor
+from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
 from assurance.fleet.impact import assess_impact
@@ -109,7 +110,7 @@ def intervention(**over):
     return Intervention(**kw)
 
 
-def seal_a_real_verification(ledger, *, when):
+def seal_a_real_verification(ledger, *, when, subject=None):
     env = SafetyEnvelope(
         envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
         workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
@@ -123,7 +124,7 @@ def seal_a_real_verification(ledger, *, when):
                 samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0), tcp_speed=400.0,
                                      mode=OperatingMode.SSM, separation=2200.0)
                              for i in range(10)))
-    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
+    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
 
 
 @pytest.fixture
@@ -492,6 +493,15 @@ def keyed(account_store, tier):
     return {"X-API-Key": account_store.issue_key(account.id)}
 
 
+def _account_ids(store):
+    import sqlite3
+    db = sqlite3.connect(store.path)
+    try:
+        return [r[0] for r in db.execute("SELECT id FROM accounts")]
+    finally:
+        db.close()
+
+
 class TestHttp:
     def test_assess_drift_is_a_402_without_the_cell_plan(self, client, account_store):
         r = client.post("/v1/change/assess/drift",
@@ -528,15 +538,1132 @@ class TestHttp:
         assert r.status_code == 200
 
         r = client.post(f"/v1/change/cases/{case_id}/claim",
-                        json={"owner": "v.grimaldi"}, headers=headers)
+                        json={"owner": "v.grimaldi", "actor": "v.grimaldi"},
+                        headers=headers)
         assert r.status_code == 200
         assert r.json()["status"] == "in_review"
 
         r = client.post(f"/v1/change/cases/{case_id}/decision",
-                        json={"disposition": "closed", "reason": "too early"},
+                        json={"disposition": "closed", "reason": "too early",
+                              "actor": "v.grimaldi"},
                         headers=headers)
         assert r.status_code == 409  # not ready_to_close yet
+
+    def test_a_human_step_needs_a_named_actor_bound_to_the_account(self, client, account_store):
+        headers = keyed(account_store, "cell")
+        r = client.post("/v1/change/assess/drift",
+                        json={"baseline": manifest(manifest_id="BASE").to_dict(),
+                              "observed": manifest(item(content_hash="d" * 64),
+                                                   manifest_id="NOW").to_dict()},
+                        headers=headers)
+        case_id = r.json()["case"]["case_id"]
+        base = f"/v1/change/cases/{case_id}"
+        for path, body in (
+            ("claim", {"owner": "o"}),
+            ("advance", {}),
+            ("decision", {"disposition": "closed", "reason": "r"}),
+        ):
+            assert client.post(f"{base}/{path}", json=body, headers=headers).status_code == 422
+            assert client.post(f"{base}/{path}", json={**body, "actor": "  "},
+                               headers=headers).status_code == 422
+        # The ledger records the declared person AND the authenticated account.
+        r = client.post(f"{base}/claim", json={"owner": "o", "actor": "v.grimaldi"},
+                        headers=headers)
+        assert r.status_code == 200
+        from assurance.api import deps
+        account = account_store.account(_account_ids(account_store)[0])
+        ledger = deps._tenant_register_for(str(deps.tenant_ledger_path(account.id))).ledger
+        recorded = json.dumps([e.payload for e in ledger.entries()])
+        assert "v.grimaldi" in recorded
+        assert f"via account {account.id}" in recorded
 
     def test_an_unknown_case_is_a_404(self, client, account_store):
         r = client.get("/v1/change/cases/case-doesnotexist", headers=keyed(account_store, "cell"))
         assert r.status_code == 404
+
+
+# =====================================================================
+# Slice S2 — the rules that make the case trustworthy
+#
+# Idempotency, additive merging, reopening, the human-only decision, the
+# guards on READY_TO_CLOSE, and reconstruction from the ledger alone. All of it
+# over the real engines (compare / assess_coverage / assess_impact).
+# =====================================================================
+
+import sqlite3  # noqa: E402
+from dataclasses import replace  # noqa: E402
+
+from assurance.change import (  # noqa: E402
+    CaseStoreError,
+    reconstruct_case,
+    resolve_decision,
+    resume,
+)
+from assurance.change.service import _open_or_update  # noqa: E402
+from assurance.change.store import CASE_KINDS, TRANSITION_KIND  # noqa: E402
+from assurance.core.evidence import Evidence, Origin  # noqa: E402
+
+BOT = Actor("watch-01", "scheduled watch", kind="automation")
+LATER = datetime(2026, 4, 1, tzinfo=UTC)
+
+
+def case_entries(ledger, case_id):
+    return [e for e in ledger.entries(subject=case_id) if e.kind in CASE_KINDS]
+
+
+def drift(store, ledger=None, *, changed="d", baseline=None, actor=ENG):
+    baseline = baseline or manifest(manifest_id="BASE")
+    observed = manifest(item(content_hash=changed * 64), manifest_id="NOW")
+    verifs = VerificationRecord.from_ledger(ledger, subject=MACHINE.key) if ledger else []
+    intervs = interventions_from_ledger(ledger, MACHINE.key) if ledger else []
+    return assess_drift(store, compare(baseline, observed), observed, verifs, intervs,
+                        actor=actor), observed
+
+
+def drive(ledger, store, status, *, changed="d"):
+    """A drift case taken, through the real service calls, to ``status``."""
+    record_manifest(ledger, manifest(manifest_id="BASE"))
+    seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+    case, observed = drift(store, ledger, changed=changed)
+    if status is CaseStatus.OPEN:
+        return case, observed
+    if status in (CaseStatus.REJECTED, CaseStatus.DEFERRED):
+        return decide(store, case.case_id, disposition=status.value, reason="r",
+                      actor=REVIEWER), observed
+    case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+    if status is CaseStatus.IN_REVIEW:
+        return case, observed
+    case = advance(store, case.case_id, actor=REVIEWER)
+    if status is CaseStatus.AWAITING_ACTION:
+        return case, observed
+    case = advance(store, case.case_id, actor=REVIEWER)
+    if status is CaseStatus.AWAITING_REVERIFICATION:
+        return case, observed
+    bundle = seal_a_real_verification(ledger, when=LATER)
+    case = reverify(store, case.case_id, observed,
+                    VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+                    interventions_from_ledger(ledger, MACHINE.key),
+                    verification_content_hash=bundle.content_hash, actor=REVIEWER)
+    assert case.status is CaseStatus.READY_TO_CLOSE
+    if status is CaseStatus.READY_TO_CLOSE:
+        return case, observed
+    case = decide(store, case.case_id, disposition="closed", reason="re-verified",
+                  actor=REVIEWER)
+    assert status is CaseStatus.CLOSED
+    return case, observed
+
+
+def advisory_case_ready(ledger, store):
+    """An advisory case on one machine, worked to READY_TO_CLOSE."""
+    record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+    seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+    case = assess_advisory(
+        store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+    case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+    while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+        case = advance(store, case.case_id, actor=REVIEWER)
+    after = utc_now() + timedelta(hours=1)          # after the case opened
+    fresh = manifest(fw(), manifest_id="MAN-AFTER", taken_at=after)
+    record_manifest(ledger, fresh)                  # ledger-backed, collected after
+    bundle = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+    case = reverify(store, case.case_id, fresh,
+                    VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+                    interventions_from_ledger(ledger, MACHINE.key),
+                    verification_content_hash=bundle.content_hash, actor=REVIEWER)
+    assert case.status is CaseStatus.READY_TO_CLOSE
+    return case
+
+
+def add_second_machine(ledger):
+    other = MachineIdentity("Grimaldi", "AR-7", "0413", site="Plant 3")
+    record_manifest(ledger, manifest(fw(), manifest_id="MAN-0413", machine=other))
+    return other
+
+
+class TestIdempotency:
+    """Identical input twice: one case, and the ledger does not move."""
+
+    def test_the_same_drift_twice_writes_nothing_the_second_time(self, ledger, store):
+        first, _ = drift(store, ledger)
+        before = len(ledger)
+        second, _ = drift(store, ledger)
+        assert second.case_id == first.case_id
+        assert len(ledger) == before
+        assert len(case_entries(ledger, first.case_id)) == 1
+        assert len(store.get(first.case_id).history) == 1
+
+    def test_the_same_advisory_twice_writes_nothing_the_second_time(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+        report = assess_impact(advisory(), Fleet.from_ledger(ledger))
+        first = assess_advisory(store, report, actor=BOT)
+        before = len(ledger)
+        again = assess_advisory(store, assess_impact(advisory(), Fleet.from_ledger(ledger)),
+                                actor=BOT)
+        assert again.case_id == first.case_id
+        assert len(ledger) == before
+
+    def test_the_same_intervention_twice_writes_nothing_the_second_time(self, ledger, store):
+        record_manifest(ledger, manifest())
+        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+        interv = intervention()
+        record_intervention(ledger, interv)
+        args = (manifest(), VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+                interventions_from_ledger(ledger, MACHINE.key))
+        first = assess_intervention(store, interv, *args, actor=BOT)
+        before = len(ledger)
+        assess_intervention(store, interv, *args, actor=BOT)
+        assert len(ledger) == before
+        assert len(case_entries(ledger, first.case_id)) == 1
+
+    def test_a_re_observation_with_real_new_information_is_still_recorded(self, ledger, store):
+        """No-op means 'nothing differs', not 'ignore the watch'."""
+        first, _ = drift(store)                   # no verification on record yet
+        record_manifest(ledger, manifest(manifest_id="BASE"))
+        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+        second, _ = drift(store, ledger)          # now there is one
+        assert second.case_id == first.case_id
+        assert second.evidence_current != first.evidence_current
+        assert len(case_entries(ledger, first.case_id)) == 2
+
+    def test_a_re_observation_never_re_inflates_a_case_past_review(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        assert case.required_actions == () and case.required_reverifications == ()
+        before = len(ledger)
+        # The watch looks again with data as stale as it was at the start.
+        again, _ = drift(store, None)
+        assert again.status is CaseStatus.READY_TO_CLOSE
+        assert again.required_actions == ()
+        assert again.required_reverifications == ()
+        assert len(ledger) == before
+
+    def test_an_in_flight_case_keeps_its_progress_when_a_function_is_added(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        # Fresh data names a function the case did not track before.
+        extra = replace(case, status=CaseStatus.OPEN,
+                        affected_functions=(*case.affected_functions, "SF-09"),
+                        required_reverifications=("SF-01", "SF-02", "SF-09"),
+                        required_actions=("Re-run for SF-09",),
+                        evidence_current={"SF-09": "stale"})
+        merged = _open_or_update(store, extra, actor=BOT, detail="more",
+                                 actions_by_fid={"SF-09": ["Re-run for SF-09"]})
+        assert merged.status is CaseStatus.AWAITING_REVERIFICATION
+        assert merged.affected_functions == (*case.affected_functions, "SF-09")
+        assert merged.required_reverifications == (*case.required_reverifications, "SF-09")
+        assert merged.required_actions == (*case.required_actions, "Re-run for SF-09")
+        assert merged.owner == "v.grimaldi"
+
+    def test_a_new_machine_steps_a_ready_advisory_case_back(self, ledger, store):
+        case = advisory_case_ready(ledger, store)
+        other = add_second_machine(ledger)
+        widened = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert widened.status is CaseStatus.AWAITING_REVERIFICATION
+        assert set(widened.machines) == {MACHINE.key, other.key}
+        assert widened.required_reverifications
+        assert widened.owner == "v.grimaldi"           # progress kept, not reset
+        assert widened.reverified_at == case.reverified_at
+
+
+class TestReopen:
+    """The rule table in CHANGE.md, one test per row."""
+
+    def test_the_same_closed_drift_seen_again_does_not_reopen(self, ledger, store):
+        drive(ledger, store, CaseStatus.CLOSED)
+        before = len(ledger)
+        again, _ = drift(store, ledger)
+        assert again.status is CaseStatus.CLOSED
+        assert len(ledger) == before
+
+    def test_a_to_b_closed_then_b_to_a_then_a_to_b_again_reopens_it(self, ledger, store):
+        case, observed_b = drive(ledger, store, CaseStatus.CLOSED)
+        closure = store.closure_entry(case.case_id)
+        assert closure is not None
+        cycle1_history = len(case.history)
+
+        # B -> A: the machine goes back; the ledger now holds A after the closure.
+        record_manifest(ledger, manifest(manifest_id="BACK-TO-A"))
+        # A -> B again: the same trigger, a second time.
+        reopened, _ = drift(store, ledger, baseline=manifest(manifest_id="BACK-TO-A"))
+
+        assert reopened.case_id == case.case_id
+        assert reopened.status is CaseStatus.OPEN
+        assert reopened.owner == "" and reopened.decision == ""
+        assert len(reopened.prior_closures) == 1
+        prior = reopened.prior_closures[0]
+        assert prior["closure_hash"] == closure.content_hash
+        assert prior["closed_by"] == "v.grimaldi"
+        assert "returned to" in prior["reopened_because"]
+        assert any(link["content_hash"] == closure.content_hash
+                   for link in reopened.linked_evidence)
+        # History is carried, not rewritten; the closure entry is untouched.
+        assert reopened.history[:cycle1_history] == case.history
+        assert len(reopened.history) == cycle1_history + 1
+        assert reopened.history[-1]["kind"] == "assurance.change.reopened"
+        assert store.closure_entry(case.case_id).content_hash == closure.content_hash
+        assert reconstruct_case(ledger, case.case_id).ok
+
+        # And the new cycle is worked like any other, and can close again.
+        c = claim(store, case.case_id, owner="w.second", actor=REVIEWER)
+        c = advance(store, c.case_id, actor=REVIEWER)
+        c = advance(store, c.case_id, actor=REVIEWER)
+        bundle = seal_a_real_verification(ledger, when=datetime(2026, 5, 1, tzinfo=UTC))
+        c = reverify(store, c.case_id, observed_b,
+                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+                     interventions_from_ledger(ledger, MACHINE.key),
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        c = decide(store, c.case_id, disposition="closed", reason="second cycle",
+                   actor=REVIEWER)
+        assert c.status is CaseStatus.CLOSED and len(c.prior_closures) == 1
+        assert reconstruct_case(ledger, case.case_id).ok
+
+    def test_a_closed_advisory_reopens_only_for_a_machine_it_did_not_name(self, ledger, store):
+        case = advisory_case_ready(ledger, store)
+        decide(store, case.case_id, disposition="closed", reason="remedy applied",
+               actor=REVIEWER)
+        before = len(ledger)
+        same = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert same.status is CaseStatus.CLOSED and len(ledger) == before
+
+        add_second_machine(ledger)
+        wider = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert wider.status is CaseStatus.OPEN
+        assert "did not name" in wider.prior_closures[0]["reopened_because"]
+
+    def test_a_rejected_trigger_stays_rejected_but_a_new_trigger_is_a_new_case(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.REJECTED)
+        before = len(ledger)
+        again, _ = drift(store, ledger)
+        assert again.status is CaseStatus.REJECTED and len(ledger) == before
+
+        fresh, _ = drift(store, ledger, changed="e")      # a different configuration
+        assert fresh.case_id != case.case_id
+        assert fresh.status is CaseStatus.OPEN
+        assert len(store.list()) == 2
+
+    def test_a_deferred_case_is_left_alone_until_a_person_resumes_it(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.DEFERRED)
+        before = len(ledger)
+        again, _ = drift(store, ledger)
+        assert again.status is CaseStatus.DEFERRED and len(ledger) == before
+
+        resumed = resume(store, case.case_id, reason="supplier visit is done",
+                         actor=REVIEWER)
+        assert resumed.status is CaseStatus.IN_REVIEW
+        assert resumed.decision == "" and resumed.decision_by == ""
+        assert "deferred by v.grimaldi" in resumed.history[-1]["detail"]
+        assert resumed.history[-1]["kind"] == TRANSITION_KIND
+        # ... and it can be worked on from there.
+        assert advance(store, case.case_id, actor=REVIEWER).status \
+            is CaseStatus.AWAITING_ACTION
+        assert reconstruct_case(ledger, case.case_id).ok
+
+    def test_resume_needs_a_person_a_reason_and_a_deferred_case(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.DEFERRED)
+        with pytest.raises(CaseTransitionError, match="named person"):
+            resume(store, case.case_id, reason="go", actor=BOT)
+        with pytest.raises(CaseTransitionError, match="needs a reason"):
+            resume(store, case.case_id, reason=" ", actor=REVIEWER)
+        resume(store, case.case_id, reason="go", actor=REVIEWER)
+        with pytest.raises(CaseTransitionError, match="not deferred"):
+            resume(store, case.case_id, reason="again", actor=REVIEWER)
+
+
+ALL_STATES = [CaseStatus.OPEN, CaseStatus.IN_REVIEW, CaseStatus.AWAITING_ACTION,
+              CaseStatus.AWAITING_REVERIFICATION, CaseStatus.READY_TO_CLOSE,
+              CaseStatus.CLOSED, CaseStatus.REJECTED, CaseStatus.DEFERRED]
+
+
+class TestGuards:
+    """READY_TO_CLOSE and CLOSED cannot be reached around the rules."""
+
+    @pytest.mark.parametrize(
+        "status", [s for s in ALL_STATES if s is not CaseStatus.READY_TO_CLOSE],
+        ids=lambda s: s.value)
+    def test_closing_is_refused_from_every_state_but_ready_to_close(
+            self, ledger, store, status):
+        case, _ = drive(ledger, store, status)
+        assert case.status is status
+        with pytest.raises(CaseTransitionError):
+            decide(store, case.case_id, disposition="closed", reason="bypass",
+                   actor=REVIEWER)
+        assert store.get(case.case_id).status is status          # and nothing moved
+
+    @pytest.mark.parametrize("verb,allowed", [
+        ("claim", {CaseStatus.OPEN}),
+        ("advance", {CaseStatus.IN_REVIEW, CaseStatus.AWAITING_ACTION}),
+        ("reverify", {CaseStatus.AWAITING_REVERIFICATION}),
+        ("resume", {CaseStatus.DEFERRED}),
+    ])
+    def test_every_verb_refuses_every_wrong_state(self, tmp_path, verb, allowed):
+        """The mutation test: call each service verb from each state it is not for."""
+        for status in ALL_STATES:
+            if status in allowed:
+                continue
+            led = EvidenceLedger(tmp_path / f"{verb}-{status.value}.db")
+            st = CaseStore(led)
+            case, observed = drive(led, st, status)
+            with pytest.raises(CaseTransitionError):
+                self._attempt(verb, st, led, case, observed)
+            assert st.get(case.case_id).status is status
+
+    @staticmethod
+    def _attempt(verb, st, led, case, observed):
+        if verb == "claim":
+            return claim(st, case.case_id, owner="x", actor=REVIEWER)
+        if verb == "advance":
+            return advance(st, case.case_id, actor=REVIEWER)
+        if verb == "reverify":
+            return reverify(
+                st, case.case_id, observed,
+                VerificationRecord.from_ledger(led, subject=MACHINE.key), [],
+                verification_content_hash="0" * 64, actor=REVIEWER)
+        return resume(st, case.case_id, reason="x", actor=REVIEWER)
+
+    def test_the_store_itself_refuses_ready_to_close_with_work_outstanding(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        with pytest.raises(CaseStoreError, match="outstanding"):
+            store.transition(replace(case, status=CaseStatus.READY_TO_CLOSE),
+                             actor=REVIEWER, detail="forced")
+        with pytest.raises(CaseStoreError, match="outstanding"):
+            store.decide(replace(case, status=CaseStatus.CLOSED, decision="closed"),
+                         actor=REVIEWER, detail="forced")
+        assert store.get(case.case_id).status is CaseStatus.AWAITING_REVERIFICATION
+
+    def test_a_reverification_that_does_not_make_the_function_current_stays_put(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        # A manifest that no longer declares SF-02: it cannot be shown current.
+        without = manifest(item(content_hash="d" * 64, implements=("SF-01",)),
+                           functions=FUNCS[:1], manifest_id="NOW")
+        record_manifest(ledger, without)             # ledger truth, not the caller's say-so
+        c = reverify(store, case.case_id, without,
+                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert "SF-02" in c.required_reverifications
+        assert c.evidence_current["SF-02"] == "unknown"
+        with pytest.raises(CaseTransitionError):
+            decide(store, c.case_id, disposition="closed", reason="x", actor=REVIEWER)
+
+    def test_a_verification_the_check_was_not_run_against_is_refused(self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        with pytest.raises(CaseTransitionError, match="not among the sealed"):
+            reverify(store, case.case_id, observed,
+                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key), [],
+                     verification_content_hash="f" * 64, actor=REVIEWER)
+
+    def test_an_open_human_decision_blocks_ready_to_close_until_a_person_answers(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        question = "0412/ITM-FW: matched by medium confidence only."
+        store.update(replace(case, human_decisions_required=(question,)),
+                     actor=BOT, detail="the advisory pass raised a question")
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, observed,
+                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        # Everything is re-verified, and it still is not ready.
+        assert c.required_reverifications == ()
+        assert c.status is CaseStatus.AWAITING_ACTION
+        assert "Decide:" in c.next_action()
+        with pytest.raises(CaseTransitionError):
+            decide(store, c.case_id, disposition="closed", reason="x", actor=REVIEWER)
+        with pytest.raises(CaseTransitionError, match="unresolved"):
+            advance(store, c.case_id, actor=REVIEWER)
+
+        with pytest.raises(CaseTransitionError, match="named person"):
+            resolve_decision(store, c.case_id, decision=question, resolution="ok", actor=BOT)
+        with pytest.raises(CaseTransitionError, match="no open human decision"):
+            resolve_decision(store, c.case_id, decision="something else",
+                             resolution="ok", actor=REVIEWER)
+        c = resolve_decision(store, c.case_id, decision=question,
+                             resolution="Hash checked against the supplier's table.",
+                             actor=REVIEWER)
+        assert c.human_decisions_required == ()
+        assert c.resolved_decisions[0]["by"] == "v.grimaldi"
+        c = advance(store, c.case_id, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+        # A later look at the same advisory does not ask it again.
+        again = replace(c, status=CaseStatus.OPEN, human_decisions_required=(question,))
+        assert _open_or_update(store, again, actor=BOT, detail="x") \
+            .human_decisions_required == ()
+        assert decide(store, c.case_id, disposition="closed", reason="done",
+                      actor=REVIEWER).status is CaseStatus.CLOSED
+        assert reconstruct_case(ledger, c.case_id).ok
+
+    @pytest.mark.parametrize("who", [
+        Actor("watch-01", "scheduled watch", kind="automation"),
+        Actor("svc-api", "service", kind="service"),
+        Actor("claude-agent", "assistant", kind="agent"),
+        Actor("operator", "", kind="automation"),
+        Actor("  ", "reviewer", kind="person"),
+    ], ids=["automation", "service", "agent", "anonymous", "blank-name"])
+    def test_an_automated_or_anonymous_actor_cannot_decide(self, ledger, store, who):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        for disposition in ("closed", "rejected", "deferred"):
+            with pytest.raises(CaseTransitionError, match="named person"):
+                decide(store, case.case_id, disposition=disposition, reason="r", actor=who)
+        assert store.get(case.case_id).status is CaseStatus.READY_TO_CLOSE
+        assert decide(store, case.case_id, disposition="closed", reason="r",
+                      actor=REVIEWER).decision_by == "v.grimaldi"
+
+    def test_the_watch_actor_can_open_but_not_close(self, ledger, store):
+        case, _ = drift(store, ledger, actor=BOT)
+        assert case.history[0]["kind"] == "assurance.change.opened"
+        evidence = case_entries(ledger, case.case_id)[0].evidence()
+        assert evidence.actor.kind == "automation"
+
+
+class TestReconstruction:
+    """State rebuilt from the ledger alone, and every step replayed."""
+
+    def test_a_whole_lifecycle_replays_cleanly_and_matches_the_store(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.CLOSED)
+        replay = reconstruct_case(ledger, case.case_id)
+        assert replay.ok, replay.violations
+        assert replay.entries == len(case.history) == 6
+        assert replay.case == store.get(case.case_id)
+        assert replay.case.status is CaseStatus.CLOSED
+        assert "every step was legal" in replay.summary()
+
+    def test_a_case_with_no_entries_does_not_replay(self, ledger):
+        replay = reconstruct_case(ledger, "case-nope")
+        assert not replay.ok and replay.case is None
+        assert "no ledger entries" in replay.violations[0]
+
+    def test_a_tampered_entry_is_reported_and_excluded(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.IN_REVIEW)
+        entries = case_entries(ledger, case.case_id)
+        db = sqlite3.connect(ledger.path)
+        db.execute("UPDATE chain SET payload = replace(payload, 'in_review', 'closed') "
+                   "WHERE seq = ?", (entries[-1].seq,))
+        db.commit()
+        db.close()
+        replay = reconstruct_case(ledger, case.case_id)
+        assert not replay.ok
+        assert any("does not verify" in v for v in replay.violations)
+        assert any(v.startswith("ledger chain:") for v in replay.violations)
+        assert replay.case.status is CaseStatus.OPEN        # the last entry that verified
+
+    def test_an_illegal_jump_is_reported(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.OPEN)
+        # Open straight to closed: the store accepts the write (nothing is
+        # outstanding), the lifecycle never would have.
+        store.decide(replace(case, status=CaseStatus.CLOSED, decision="closed",
+                             decision_by="v.grimaldi", decision_reason="r",
+                             closed_at="2026-01-01T00:00:00Z",
+                             required_actions=(), required_reverifications=()),
+                     actor=REVIEWER, detail="closed: r")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert not replay.ok
+        assert any("open -> closed" in v for v in replay.violations)
+
+    def test_a_closure_by_something_that_is_not_a_person_is_reported(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        store.decide(replace(case, status=CaseStatus.CLOSED, decision="closed",
+                             decision_by="watch-01", decision_reason="r",
+                             closed_at="2026-01-01T00:00:00Z"),
+                     actor=BOT, detail="closed: r")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("not a named person" in v for v in replay.violations)
+
+    def _forge(self, ledger, case, snapshot):
+        ledger.append(Evidence(kind=TRANSITION_KIND, body={"case": snapshot.to_dict()},
+                               actor=REVIEWER,
+                               origin=Origin(system="assurance.change",
+                                             reference=case.case_id)).seal(),
+                      subject=case.case_id)
+
+    def test_a_forged_ready_to_close_with_work_outstanding_is_reported(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        self._forge(ledger, case, replace(
+            case, status=CaseStatus.READY_TO_CLOSE,
+            history=(*case.history, {"kind": TRANSITION_KIND, "at": "x",
+                                     "detail": "forged"})))
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("re-verification" in v and "outstanding" in v
+                   for v in replay.violations)
+
+    def test_rewritten_history_is_reported(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.IN_REVIEW)
+        self._forge(ledger, case, replace(
+            case, status=CaseStatus.AWAITING_ACTION,
+            history=({"kind": "assurance.change.opened", "at": "x", "detail": "edited"},
+                     {"kind": TRANSITION_KIND, "at": "y", "detail": "z"})))
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("history was rewritten" in v for v in replay.violations)
+
+
+class TestCliS2:
+    def _change(self, *argv) -> int:
+        from assurance.change.cli import main
+
+        return main(list(argv))
+
+    def test_replay_resume_and_resolve_through_the_cli(self, tmp_path, capsys):
+        path = tmp_path / "l.db"
+        ledger = EvidenceLedger(path)
+        store = CaseStore(ledger)
+        case, _ = drive(ledger, store, CaseStatus.DEFERRED)
+        capsys.readouterr()
+        assert self._change("resume", "--ledger", str(path), case.case_id,
+                            "--reason", "back") == 1               # no --actor: automation
+        assert self._change("resume", "--ledger", str(path), case.case_id,
+                            "--reason", "back", "--actor", "v.grimaldi") == 0
+        assert self._change("replay", "--ledger", str(path), case.case_id) == 0
+        assert "every step was legal" in capsys.readouterr().out
+        assert self._change("replay", "--ledger", str(path), "case-nope") == 1
+        assert self._change("resolve-decision", "--ledger", str(path), case.case_id,
+                            "--number", "1", "--resolution", "x",
+                            "--actor", "v.grimaldi") == 1           # none open
+
+    def test_assess_intervention_through_the_cli(self, tmp_path, capsys):
+        path = tmp_path / "l.db"
+        ledger = EvidenceLedger(path)
+        record_manifest(ledger, manifest())
+        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+        record_intervention(ledger, intervention())
+        mpath = tmp_path / "m.json"
+        mpath.write_text(json.dumps(manifest().to_dict()))
+        capsys.readouterr()
+        assert self._change("assess-intervention", "--ledger", str(path),
+                            "--manifest", str(mpath), "--intervention-id", "INT-0007") == 0
+        assert "case-" in capsys.readouterr().out
+        assert self._change("assess-intervention", "--ledger", str(path),
+                            "--manifest", str(mpath), "--intervention-id", "INT-9999") == 2
+
+
+class TestHttpDecisionsNeedAPerson:
+    def test_an_anonymous_decision_is_refused_and_a_named_one_is_not(
+            self, client, account_store):
+        headers = keyed(account_store, "cell")
+        r = client.post("/v1/change/assess/drift",
+                        json={"baseline": manifest(manifest_id="BASE").to_dict(),
+                              "observed": manifest(item(content_hash="d" * 64),
+                                                   manifest_id="NOW").to_dict()},
+                        headers=headers)
+        case_id = r.json()["case"]["case_id"]
+
+        # No actor, or a blank one, never reaches the domain: the API refuses it
+        # at the door (422). The domain's own refusal of a non-person actor is
+        # tested at service level (TestGuards), so CLI and MCP inherit it too.
+        for actor in ({}, {"actor": ""}, {"actor": "   "}):
+            r = client.post(f"/v1/change/cases/{case_id}/decision",
+                            json={"disposition": "rejected", "reason": "not real", **actor},
+                            headers=headers)
+            assert r.status_code == 422, actor
+        still_open = client.get(f"/v1/change/cases/{case_id}", headers=headers).json()
+        assert still_open["status"] == "open"
+
+        r = client.post(f"/v1/change/cases/{case_id}/decision",
+                        json={"disposition": "rejected", "reason": "not real",
+                              "actor": "v.grimaldi"}, headers=headers)
+        assert r.status_code == 200 and r.json()["status"] == "rejected"
+
+
+# =====================================================================
+# Slice S2, second pass — defects an adversarial review proved. Each test
+# below failed against the first version of this module.
+# =====================================================================
+
+import unicodedata  # noqa: E402
+
+OTHER = MachineIdentity(manufacturer="Grimaldi", model="AR-7", serial="0413", site="Plant 3")
+EARLY = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def two_machine_advisory_case(ledger, store):
+    """An advisory case naming both machines, both verified once before it."""
+    record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+    record_manifest(ledger, manifest(fw(), manifest_id="MAN-0413", machine=OTHER))
+    seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+    seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC), subject=OTHER.key)
+    case = assess_advisory(
+        store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+    case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+    while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+        case = advance(store, case.case_id, actor=REVIEWER)
+    return case
+
+
+def verifs(ledger, key):
+    return VerificationRecord.from_ledger(ledger, subject=key)
+
+
+class TestF1ReverifyAcceptsOnlyTheRightEvidence:
+    def test_another_machines_manifest_cannot_clear_this_machines_case(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        record_manifest(ledger, manifest(manifest_id="OTHER", machine=OTHER))
+        bundle = seal_a_real_verification(ledger, when=LATER, subject=OTHER.key)
+        with pytest.raises(CaseTransitionError, match="does not concern"):
+            reverify(store, case.case_id, manifest(manifest_id="OTHER", machine=OTHER),
+                     verifs(ledger, OTHER.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert store.get(case.case_id).status is CaseStatus.AWAITING_REVERIFICATION
+
+    def test_a_two_machine_advisory_case_is_ready_only_when_every_machine_is(
+            self, ledger, store):
+        case = two_machine_advisory_case(ledger, store)
+        assert {e.rsplit("/", 1)[0] for e in case.required_reverifications} \
+            == {MACHINE.key, OTHER.key}
+
+        after = utc_now() + timedelta(hours=1)
+        m1 = manifest(fw(), manifest_id="AFTER-0412", taken_at=after)
+        m2 = manifest(fw(), manifest_id="AFTER-0413", taken_at=after, machine=OTHER)
+        record_manifest(ledger, m1)
+        record_manifest(ledger, m2)
+        b1 = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+        c = reverify(store, case.case_id, m1, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=b1.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert {e.rsplit("/", 1)[0] for e in c.required_reverifications} == {OTHER.key}
+
+        b2 = seal_a_real_verification(ledger, when=after + timedelta(minutes=5),
+                                      subject=OTHER.key)
+        c = reverify(store, c.case_id, m2, verifs(ledger, OTHER.key),
+                     [], verification_content_hash=b2.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+        assert c.required_reverifications == ()
+        assert reconstruct_case(ledger, c.case_id).ok
+
+    def test_a_bundle_sealed_before_the_case_cannot_clear_it(self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        pre = verifs(ledger, MACHINE.key)[0]          # the February bundle, pre-change
+        with pytest.raises(CaseTransitionError, match="before this case"):
+            reverify(store, case.case_id, observed, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=pre.content_hash, actor=REVIEWER)
+
+    def test_a_bundle_sealed_after_but_describing_a_state_before_the_change_cannot(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        old_run = seal_a_real_verification(ledger, when=EARLY)       # filed now, a January run
+        with pytest.raises(CaseTransitionError, match="describes a state before"):
+            reverify(store, case.case_id, observed, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=old_run.content_hash, actor=REVIEWER)
+
+    def test_a_function_whose_checks_the_bundle_did_not_pass_is_not_cleared(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        funcs = (SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
+                                verified_by=("ssm_separation", "stop_characterisation",
+                                             "laser_scan_resolution")),
+                 FUNCS[1])
+        wider = manifest(item(content_hash="d" * 64), functions=funcs, manifest_id="NOW")
+        record_manifest(ledger, wider)               # ledger truth, not the caller's say-so
+        c = reverify(store, case.case_id, wider, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == ("SF-01",)
+        assert c.evidence_current["SF-01"] == "no_new_evidence"
+        assert c.evidence_current["SF-02"] == "current"
+
+
+class TestF2AdvisoryClosureNeedsEvidenceOrAnExplicitWaiver:
+    def _never_verified(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))      # nothing ever verified
+        case = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        return case
+
+    def test_every_exposed_function_needs_re_verification_even_if_never_verified(
+            self, ledger, store):
+        case = self._never_verified(ledger, store)
+        assert case.evidence_before[f"{MACHINE.key}/SF-01"] == "never_verified"
+        assert set(case.required_reverifications) == {f"{MACHINE.key}/SF-01",
+                                                      f"{MACHINE.key}/SF-02"}
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+            case = advance(store, case.case_id, actor=REVIEWER)
+        with pytest.raises(CaseTransitionError):
+            advance(store, case.case_id, actor=REVIEWER)
+        with pytest.raises(CaseTransitionError):
+            decide(store, case.case_id, disposition="closed", reason="x", actor=REVIEWER)
+
+    def test_closing_with_no_evidence_is_possible_only_as_a_recorded_human_waiver(
+            self, ledger, store):
+        from assurance.change import waive_reverification
+
+        case = self._never_verified(ledger, store)
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+            case = advance(store, case.case_id, actor=REVIEWER)
+        entries = list(case.required_reverifications)
+        with pytest.raises(CaseTransitionError, match="named person"):
+            waive_reverification(store, case.case_id, entry=entries[0],
+                                 reason="not needed", actor=BOT)
+        with pytest.raises(CaseTransitionError, match="reason"):
+            waive_reverification(store, case.case_id, entry=entries[0],
+                                 reason=" ", actor=REVIEWER)
+        for e in entries:
+            case = waive_reverification(store, case.case_id, entry=e,
+                                        reason="Machine is out of service; no run possible.",
+                                        actor=REVIEWER)
+        assert case.required_reverifications == ()
+        assert all(case.evidence_current[e] == "waived" for e in entries)
+        assert len(case.resolved_decisions) == len(entries)
+        case = advance(store, case.case_id, actor=REVIEWER)
+        assert case.status is CaseStatus.READY_TO_CLOSE
+        closed = decide(store, case.case_id, disposition="closed",
+                        reason="Closed without evidence, on the waivers above.",
+                        actor=REVIEWER)
+        assert closed.status is CaseStatus.CLOSED
+        assert reconstruct_case(ledger, case.case_id).ok
+
+
+class TestF3IncompleteCollectionNeverReopens:
+    def test_an_incomplete_manifest_is_not_another_configuration(self, ledger, store):
+        from assurance.change.service import INCOMPLETE_COLLECTION_MARK
+
+        case, _ = drive(ledger, store, CaseStatus.CLOSED)
+        # A transient, partial collection of the same machine after the closure ...
+        partial = manifest(item("ITM-OTHER", content_hash="9" * 64), manifest_id="PARTIAL",
+                           notes=f"{INCOMPLETE_COLLECTION_MARK}: robot-params.json missing]")
+        record_manifest(ledger, partial)
+        # ... and then the closed configuration comes back, complete.
+        before = len(ledger)
+        again, _ = drift(store, ledger, baseline=partial)
+        assert again.status is CaseStatus.CLOSED
+        assert len(ledger) == before
+
+    def test_a_complete_other_configuration_still_counts(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.CLOSED)
+        record_manifest(ledger, manifest(item("ITM-OTHER", content_hash="9" * 64),
+                                         manifest_id="REAL-OTHER"))
+        again, _ = drift(store, ledger)
+        assert again.status is CaseStatus.OPEN
+        assert len(again.prior_closures) == 1
+
+
+class TestF4ReplayDoesNotAcceptAForgedReadyToClose:
+    def test_the_reviews_repro_a_plain_transition_that_empties_the_lists(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.IN_REVIEW)
+        forged = store.transition(
+            replace(case, status=CaseStatus.READY_TO_CLOSE, required_reverifications=(),
+                    required_actions=()), actor=BOT, detail="forged")
+        replay = reconstruct_case(ledger, forged.case_id)
+        assert not replay.ok
+        assert any("shrank" in v or "cannot remove" in v for v in replay.violations)
+
+    def test_a_reverification_entry_that_cites_nothing_is_reported(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        store.reverify(replace(case, status=CaseStatus.READY_TO_CLOSE,
+                               required_reverifications=(), required_actions=()),
+                       actor=REVIEWER, detail="forged reverification")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("supports" in v or "reverified_at" in v for v in replay.violations)
+
+    def test_a_reverification_citing_a_bundle_that_is_not_in_the_ledger_is_reported(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        store.reverify(replace(
+            case, status=CaseStatus.READY_TO_CLOSE, required_reverifications=(),
+            required_actions=(), reverified_at="2026-04-01T00:00:00Z",
+            linked_evidence=(*case.linked_evidence,
+                             {"relation": "supports", "content_hash": "e" * 64,
+                              "note": "re-verification evidence"})),
+            actor=REVIEWER, detail="forged reverification")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("not a sealed verification" in v for v in replay.violations)
+
+    def test_a_reverification_citing_a_bundle_from_before_the_case_is_reported(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        pre = verifs(ledger, MACHINE.key)[0]
+        store.reverify(replace(
+            case, status=CaseStatus.READY_TO_CLOSE, required_reverifications=(),
+            required_actions=(), reverified_at="2026-04-01T00:00:00Z",
+            linked_evidence=(*case.linked_evidence,
+                             {"relation": "supports", "content_hash": pre.content_hash,
+                              "note": "re-verification evidence"})),
+            actor=REVIEWER, detail="forged reverification")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("before the case" in v for v in replay.violations)
+
+    def test_an_entry_whose_evidence_kind_disagrees_with_its_ledger_kind_is_reported(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.IN_REVIEW)
+        # Sealed as a transition, then the ledger row's kind column is rewritten.
+        store.transition(replace(case, status=CaseStatus.AWAITING_ACTION),
+                         actor=REVIEWER, detail="advanced")
+        db = sqlite3.connect(ledger.path)
+        db.execute("UPDATE chain SET kind = ? WHERE seq = (SELECT MAX(seq) FROM chain)",
+                   ("assurance.change.decision",))
+        db.commit()
+        db.close()
+        replay = reconstruct_case(ledger, case.case_id)
+        assert any("sealed as" in v for v in replay.violations)
+
+    def test_a_legitimate_lifecycle_still_replays_clean(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.CLOSED)
+        assert reconstruct_case(ledger, case.case_id).ok
+
+
+class TestF6TheActorGuard:
+    @pytest.mark.parametrize("name", [
+        "ㅤ", "ᅟ", "ᅠ", "ﾠ", "⠀", "​", "a​b", "‮x",
+        "x y", "line\nbreak", "tab\tname", "!!!", "...", "   ",
+        "AUTOMATION", " Watch ", "agent", "SERVICE", "system", "Bot", "assistant",
+        "operator", "AI", "ａｇｅｎｔ",
+    ])
+    def test_a_name_that_is_not_a_visible_person_is_refused(self, ledger, store, name):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        who = Actor(name, "reviewer", kind="person")
+        for call in (
+            lambda: decide(store, case.case_id, disposition="closed", reason="r", actor=who),
+            lambda: decide(store, case.case_id, disposition="deferred", reason="r", actor=who),
+            lambda: resolve_decision(store, case.case_id, decision="q", resolution="r",
+                                     actor=who),
+            lambda: resume(store, case.case_id, reason="r", actor=who),
+        ):
+            with pytest.raises(CaseTransitionError):
+                call()
+        assert store.get(case.case_id).status is CaseStatus.READY_TO_CLOSE
+
+    @pytest.mark.parametrize("kind", ["Person", "person ", " person", "PERSON", "persons", ""])
+    def test_the_kind_must_be_exactly_person(self, ledger, store, kind):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        with pytest.raises(CaseTransitionError, match="named person"):
+            decide(store, case.case_id, disposition="closed", reason="r",
+                   actor=Actor("v.grimaldi", "reviewer", kind=kind))
+
+    def test_a_claim_owner_must_be_a_visible_name_too(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.OPEN)
+        for owner in ("ㅤ", "bot", "!!!"):
+            with pytest.raises(CaseTransitionError):
+                claim(store, case.case_id, owner=owner, actor=BOT)
+
+    def test_ordinary_names_still_work(self, ledger, store):
+        for name in ("v.grimaldi", "Vincenzo Grimaldi", "jürgen.müller", "田中"):
+            assert not any(unicodedata.category(c) in ("Cf", "Cc") for c in name)
+            led = EvidenceLedger(ledger.path.parent / f"{abs(hash(name))}.db")
+            st = CaseStore(led)
+            case, _ = drive(led, st, CaseStatus.READY_TO_CLOSE)
+            assert decide(st, case.case_id, disposition="closed", reason="r",
+                          actor=Actor(name, "reviewer")).status is CaseStatus.CLOSED
+
+
+class TestF7SettledCasesDoNotSwallowGrowingExposure:
+    def _deferred_advisory(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+        case = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        return decide(store, case.case_id, disposition="deferred", reason="supplier call",
+                      actor=REVIEWER)
+
+    def test_a_deferred_case_gains_the_new_machine_and_a_question(self, ledger, store):
+        case = self._deferred_advisory(ledger, store)
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0413", machine=OTHER))
+        report = assess_impact(advisory(), Fleet.from_ledger(ledger))
+        grown = assess_advisory(store, report, actor=BOT)
+        assert grown.status is CaseStatus.DEFERRED
+        assert set(grown.machines) == {MACHINE.key, OTHER.key}
+        assert any(OTHER.key in q for q in grown.human_decisions_required)
+        # Recorded once: the same look again writes nothing.
+        before = len(ledger)
+        assess_advisory(store, report, actor=BOT)
+        assert len(ledger) == before
+        assert reconstruct_case(ledger, case.case_id).ok
+
+    def test_a_rejected_advisory_reopens_for_a_machine_it_did_not_name(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+        case = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        decide(store, case.case_id, disposition="rejected", reason="not ours",
+               actor=REVIEWER)
+        before = len(ledger)
+        same = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert same.status is CaseStatus.REJECTED and len(ledger) == before   # stable
+
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0413", machine=OTHER))
+        wider = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert wider.status is CaseStatus.OPEN
+        assert wider.prior_closures[0]["disposition"] == "rejected"
+        assert wider.prior_closures[0]["closed_by"] == "v.grimaldi"
+        assert reconstruct_case(ledger, case.case_id).ok
+
+    def test_a_rejected_drift_stays_rejected(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.REJECTED)
+        record_manifest(ledger, manifest(item("ITM-OTHER", content_hash="9" * 64),
+                                         manifest_id="REAL-OTHER"))
+        again, _ = drift(store, ledger)
+        assert again.status is CaseStatus.REJECTED
+
+
+class TestTheSurvivingMutant:
+    def test_decide_closed_checks_the_status_on_its_own(self, ledger, store):
+        """Empty work lists must not be enough: the status check is its own guard."""
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        emptied = store.update(replace(case, required_reverifications=(),
+                                       required_actions=(), human_decisions_required=()),
+                               actor=BOT, detail="lists emptied, status untouched")
+        assert emptied.status is CaseStatus.AWAITING_REVERIFICATION
+        with pytest.raises(CaseTransitionError, match="not ready_to_close"):
+            decide(store, case.case_id, disposition="closed", reason="x", actor=REVIEWER)
+
+
+    def test_decide_closed_re_checks_the_work_lists_on_its_own(self, ledger, store):
+        """A ready_to_close snapshot that names outstanding work (forged straight
+        into the ledger, past the store's own guard) still cannot be closed."""
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        forged = replace(case, required_reverifications=("SF-01",),
+                         history=(*case.history, {"kind": TRANSITION_KIND, "at": "x",
+                                                  "detail": "forged"}))
+        ledger.append(Evidence(kind=TRANSITION_KIND, body={"case": forged.to_dict()},
+                               actor=REVIEWER,
+                               origin=Origin(system="assurance.change",
+                                             reference=case.case_id)).seal(),
+                      subject=case.case_id)
+        assert store.get(case.case_id).status is CaseStatus.READY_TO_CLOSE
+        with pytest.raises(CaseTransitionError, match="outstanding work"):
+            decide(store, case.case_id, disposition="closed", reason="x", actor=REVIEWER)
+
+
+# =====================================================================
+# Slice S2, third pass — a second review: the floor and the manifest must
+# come from the case and the ledger, never from the caller.
+# =====================================================================
+
+class TestAReverifyFloorComesFromTheCaseNotTheCaller:
+    def _advisory_awaiting(self, ledger, store):
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-0412"))
+        case = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        while case.status is not CaseStatus.AWAITING_REVERIFICATION:
+            case = advance(store, case.case_id, actor=REVIEWER)
+        return case
+
+    def test_an_advisory_case_stamps_its_own_opening_time_as_the_trigger(self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        assert case.trigger_at == case.opened_at != ""
+        # and a repeat look does not move it
+        again = assess_advisory(
+            store, assess_impact(advisory(), Fleet.from_ledger(ledger)), actor=BOT)
+        assert again.trigger_at == case.trigger_at
+
+    def test_the_reviews_repro_a_2020_run_with_a_2019_manifest_cannot_close_it(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        stale = seal_a_real_verification(ledger, when=datetime(2020, 1, 1, tzinfo=UTC))
+        # The caller's manifest is the ledger's own, relabelled as taken in 2019.
+        forged_date = manifest(fw(), manifest_id="MAN-0412",
+                               taken_at=datetime(2019, 1, 1, tzinfo=UTC))
+        with pytest.raises(CaseTransitionError):
+            reverify(store, case.case_id, forged_date, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=stale.content_hash, actor=REVIEWER)
+        assert store.get(case.case_id).status is CaseStatus.AWAITING_REVERIFICATION
+
+    def test_an_advisory_case_is_cleared_by_evidence_after_the_case_and_a_fresh_manifest(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)
+        after = utc_now() + timedelta(hours=1)
+        record_manifest(ledger, manifest(fw(), manifest_id="MAN-AFTER", taken_at=after))
+        bundle = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+        c = reverify(store, case.case_id, manifest(fw(), taken_at=after),
+                     verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+    def test_a_manifest_older_than_the_case_is_refused_even_with_a_new_bundle(
+            self, ledger, store):
+        case = self._advisory_awaiting(ledger, store)      # ledger manifest: January
+        bundle = seal_a_real_verification(ledger, when=utc_now() + timedelta(hours=1))
+        with pytest.raises(CaseTransitionError, match="predates"):
+            reverify(store, case.case_id, manifest(fw()), verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+
+class TestBTheManifestIsBoundToTheLedger:
+    def test_a_manifest_for_an_unrelated_configuration_cannot_clear_a_drift_case(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        unrelated = manifest(item(content_hash="9" * 64), manifest_id="NOW")
+        assert unrelated.configuration_hash() != case.after_hash
+        with pytest.raises(CaseTransitionError, match="configuration"):
+            reverify(store, case.case_id, unrelated, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+    def test_the_declared_checks_come_from_the_ledgers_manifest_not_the_callers(
+            self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        strict = (SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
+                                 verified_by=("ssm_separation", "stop_characterisation",
+                                              "laser_scan_resolution")), FUNCS[1])
+        record_manifest(ledger, manifest(item(content_hash="d" * 64), functions=strict,
+                                         manifest_id="LEDGER-STRICT"))
+        # The caller sends the same configuration with the extra check removed.
+        weakened = manifest(item(content_hash="d" * 64), manifest_id="NOW")
+        assert weakened.configuration_hash() == case.after_hash
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, weakened, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == ("SF-01",)
+
+    def test_a_machine_the_ledger_has_no_manifest_for_is_refused(self, ledger, store):
+        observed = manifest(item(content_hash="d" * 64), manifest_id="NOW")
+        case = assess_drift(store, compare(manifest(manifest_id="BASE"), observed),
+                            observed, [], [], actor=ENG)
+        case = claim(store, case.case_id, owner="v.grimaldi", actor=REVIEWER)
+        case = advance(store, case.case_id, actor=REVIEWER)
+        case = advance(store, case.case_id, actor=REVIEWER)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        with pytest.raises(CaseTransitionError, match="no manifest"):
+            reverify(store, case.case_id, observed, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+
+    def test_a_later_ledger_manifest_is_accepted_and_is_the_one_used(self, ledger, store):
+        """The caller's manifest may be the newest sealed one rather than the one the
+        case was opened on."""
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        newer = manifest(item(content_hash="d" * 64, version="3.8.3"), manifest_id="NEWER")
+        record_manifest(ledger, newer)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, newer, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+
+    def test_coverage_is_assessed_against_the_ledgers_manifest_too(self, ledger, store):
+        """Whatever the caller declares, the verdict is the ledger's: a garbled
+        function list in the request neither clears nor blocks anything."""
+        case, _ = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        garbled = manifest(
+            item(content_hash="d" * 64),
+            functions=(SafetyFunction("SF-01", "x", "PL d", verified_by=("no_such_check",)),
+                       SafetyFunction("SF-02", "x", "PL d", verified_by=("no_such_check",))),
+            manifest_id="NOW")
+        assert garbled.configuration_hash() == case.after_hash
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        c = reverify(store, case.case_id, garbled, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+
+
+class TestCConfusableNames:
+    @pytest.mark.parametrize("name", [
+        "agent.", "system:", "аutomation", "AGENT!", "‘bot’", "bot-7",
+        "operator_1", "automation bot", "ορerator", "aɡent",
+        "(watch)", "ѕervice", "ASSISTANT 2",
+    ])
+    def test_a_reserved_word_in_disguise_is_refused(self, ledger, store, name):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        with pytest.raises(CaseTransitionError):
+            decide(store, case.case_id, disposition="closed", reason="r",
+                   actor=Actor(name, "reviewer", kind="person"))
+
+    @pytest.mark.parametrize("name", ["Agent Smith", "Watch Dog", "v.grimaldi",
+                                      "Systems Engineer Rossi", "Botticelli"])
+    def test_names_that_merely_contain_a_reserved_word_are_allowed(self, ledger, store, name):
+        case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
+        assert decide(store, case.case_id, disposition="closed", reason="r",
+                      actor=Actor(name, "reviewer")).status is CaseStatus.CLOSED

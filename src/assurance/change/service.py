@@ -12,21 +12,26 @@ existing product's own doctrine says that verdict means for a human's queue.
 The rest of the module moves an already-open case through its lifecycle.
 Nothing here invents ``compliant``, ``safe`` or ``certified`` — the strongest
 thing any function in this file says is ``ready_to_close``, and only
-:func:`decide` can turn that into ``closed``, and only with a named actor and
-a reason that actor wrote.
+:func:`decide` can turn that into ``closed``, and only with a named *person*
+and a reason that person wrote. Detecting and reporting may be automated;
+deciding may not.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
-from assurance.core.identity import content_hash_of, format_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.record import MANIFEST_KIND, manifests_from_ledger
 from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
@@ -37,14 +42,20 @@ from .model import CaseStatus, ChangeAssuranceCase, TriggerType
 from .store import CaseStore
 
 __all__ = [
+    "INCOMPLETE_COLLECTION_MARK",
     "CaseTransitionError",
+    "advance",
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
+    "case_id_for",
     "claim",
     "decide",
-    "advance",
+    "note_advisory_withdrawn",
+    "resolve_decision",
+    "resume",
     "reverify",
+    "waive_reverification",
 ]
 
 
@@ -63,31 +74,394 @@ def _case_id(trigger_type: TriggerType, trigger_id: str) -> str:
                                       "trigger_id": trigger_id})[:16]
 
 
-def _open_or_update(
-    store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
-) -> ChangeAssuranceCase:
-    """One persistent case per trigger, never a duplicate per observation.
+def case_id_for(trigger_type: TriggerType, trigger_id: str) -> str:
+    """The id a trigger's case has (or would have), without building the case."""
+    return _case_id(trigger_type, trigger_id)
 
-    A settled case (closed, rejected or deferred) seeing the exact same
-    trigger again is left alone — the watch is not wrong to look again, and
-    this is not wrong to say nothing changed about the decision already made.
+
+#: Names no person is called. A caller that labels itself one of these is saying
+#: what it is, not who it is.
+_RESERVED_NAMES = frozenset({
+    "automation", "watch", "agent", "service", "system", "bot", "assistant",
+    "operator", "ai",
+})
+#: Code points that render as nothing (or as a blank) but are not control or
+#: format characters, so a category test alone lets them through.
+_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
+#: Letters from other scripts that read as Latin ones, mapped to the Latin
+#: letter. A short list of the common ones, not Unicode's full confusables
+#: table: it closes the obvious disguises of a reserved word, no more.
+_CONFUSABLES = str.maketrans({
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c",
+    "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0455": "s", "\u0458": "j",
+    "\u04bb": "h", "\u0501": "d", "\u0475": "v", "\u043a": "k", "\u043c": "m",
+    "\u0442": "t", "\u043d": "h",
+    "\u03b1": "a", "\u03bf": "o", "\u03c1": "p", "\u03bd": "v", "\u03b9": "i",
+    "\u03ba": "k", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x", "\u03b5": "e",
+    "\u03b7": "n", "\u03c2": "s",
+    "\u0261": "g", "\u0131": "i", "\u0237": "j",
+})
+
+
+def _skeleton(name: str) -> str:
+    """The name as it would read in Latin letters: NFKC, accents dropped,
+    lookalike letters mapped, case folded."""
+    norm = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
+    stripped = "".join(c for c in norm if not unicodedata.combining(c))
+    return stripped.casefold().translate(_CONFUSABLES)
+
+
+def _name_problem(name: str) -> str:
+    """Why ``name`` cannot be the name of a person, or ``""`` if it can."""
+    norm = unicodedata.normalize("NFKC", name)
+    for ch in norm:
+        if ch in _FILLERS or unicodedata.category(ch) in _INVISIBLE_CATEGORIES:
+            return f"it contains an invisible or control character (U+{ord(ch):04X})"
+    if not any(ch.isalnum() for ch in norm):
+        return "it has no letter or digit in it"
+    # Reserved if every word in it that is not a number is a reserved word:
+    # "agent.", "system:", "bot-7", "automation bot", and the same in lookalike
+    # letters. "Agent Smith" and "Botticelli" are somebody's name and pass.
+    words = [w for w in re.findall(r"[^\W_]+", _skeleton(name)) if not w.isdigit()]
+    if words and all(w in _RESERVED_NAMES for w in words):
+        return f"{name.strip()!r} is what an automated actor is called, not who it is"
+    return ""
+
+
+def _require_human(actor: Actor, what: str) -> None:
+    """Only a named person may make a decision on a case.
+
+    ``Actor.kind`` must be exactly ``person`` (the alternatives are ``service``
+    and ``automation``; a watch runs as ``automation``, and so does anything an
+    HTTP or CLI caller did not put a name to), and the name must be one a
+    person could have: visible, with a letter or digit in it, and not one of
+    the labels automation goes by. Neither can close, reject, defer, resume,
+    resolve or waive — those are the human decisions the whole workflow exists
+    to lead up to.
+
+    This refuses the *kind* and the *shape* of an actor. A name is declared by
+    whoever holds the account or the shell; nothing here proves the person
+    behind it is who they say, so "named person" means a name declared by an
+    authenticated account holder, not an identity-proofed human (see CHANGE.md).
     """
-    existing = store.get(new.case_id)
-    if existing is None:
-        now = format_utc(utc_now())
-        opened = replace(new, opened_at=now, created_at=now, updated_at=now)
-        return store.open(opened, actor=actor, detail=detail)
-    if existing.status.is_settled:
-        return existing
-    merged = replace(
+    problem = _name_problem(actor.identifier) if actor.kind == "person" else ""
+    if actor.kind != "person" or problem or not actor.identifier.strip():
+        why = f" ({problem})" if problem else ""
+        raise CaseTransitionError(
+            f"{what} is a human decision and needs a named person. Actor "
+            f"{actor.identifier!r} is kind {actor.kind!r}{why}; an automated, "
+            "service or anonymous actor can detect and report, but it cannot decide.")
+
+
+#: Written into a manifest's ``notes`` by the watch when a collection did not
+#: find or read every item its plan names. Such a manifest is a partial look,
+#: not a configuration the machine was in, so it cannot count as "left that
+#: configuration" when judging whether a closed case recurred.
+INCOMPLETE_COLLECTION_MARK = "[collection incomplete"
+
+
+def _entry_machine(case: ChangeAssuranceCase, entry: str) -> str | None:
+    """The machine an entry of ``required_reverifications`` concerns.
+
+    Advisory cases span machines, so their entries are ``machine/function``.
+    Every other case concerns one machine and keeps bare function ids.
+    """
+    if case.trigger_type is TriggerType.SUPPLIER_ADVISORY and "/" in entry:
+        return entry.rpartition("/")[0]
+    if case.trigger_type is TriggerType.SUPPLIER_ADVISORY:
+        return None
+    return case.machines[0] if case.machines else None
+
+
+def _entry_function(case: ChangeAssuranceCase, entry: str) -> str:
+    if case.trigger_type is TriggerType.SUPPLIER_ADVISORY and "/" in entry:
+        return entry.rpartition("/")[2]
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# Folding a repeat observation into the case that already exists
+# ---------------------------------------------------------------------------
+
+def _content(case: ChangeAssuranceCase) -> dict[str, object]:
+    """A case minus the bookkeeping a repeat observation always changes."""
+    d = case.to_dict()
+    d.pop("updated_at", None)
+    d.pop("history", None)
+    return d
+
+
+def _key(item: Mapping[str, object]) -> object:
+    return item.get("item_id") or item.get("detail") or repr(sorted(item.items()))
+
+
+def _union(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys([*a, *b]))
+
+
+def _links_union(
+    existing: Sequence[dict[str, str]], new: Sequence[dict[str, str]],
+) -> tuple[dict[str, str], ...]:
+    """Existing links first. A new link is added only when no existing link has
+    the same relation and note, so re-observing the same drift with a
+    re-collected manifest does not pile up near-identical links."""
+    seen = {(r.get("relation"), r.get("note")) for r in existing if r.get("note")}
+    out = list(existing)
+    for r in new:
+        if r.get("note") and (r.get("relation"), r.get("note")) in seen:
+            continue
+        if r not in out:
+            out.append(r)
+    return tuple(out)
+
+
+def _carry_workflow(existing: ChangeAssuranceCase, new: ChangeAssuranceCase,
+                    ) -> ChangeAssuranceCase:
+    """``new`` with everything that is the human workflow taken from ``existing``."""
+    return replace(
         new,
         status=existing.status, owner=existing.owner, reviewer=existing.reviewer,
         opened_at=existing.opened_at, created_at=existing.created_at,
         review_started_at=existing.review_started_at,
         reverification_requested_at=existing.reverification_requested_at,
-        reverified_at=existing.reverified_at,
-        history=existing.history,
+        reverified_at=existing.reverified_at, closed_at=existing.closed_at,
+        trigger_at=existing.trigger_at or new.trigger_at,
+        decision=existing.decision, decision_reason=existing.decision_reason,
+        decision_by=existing.decision_by,
+        resolved_decisions=existing.resolved_decisions,
+        prior_closures=existing.prior_closures,
+        history=existing.history, updated_at=existing.updated_at,
     )
+
+
+def _merge(
+    existing: ChangeAssuranceCase, new: ChangeAssuranceCase,
+    actions_by_fid: Mapping[str, Sequence[str]],
+) -> ChangeAssuranceCase:
+    """Fold a repeat observation of an open trigger into its case.
+
+    Before any work has started — ``OPEN`` or ``IN_REVIEW`` with nothing yet
+    re-verified — the freshest reading of the engines simply replaces the facts
+    and the work list, because there is no progress to protect. Once work is
+    under way the case is **additive only**: new machines, new functions and
+    new questions are added; nothing already recorded is rewritten, and a
+    function the case already tracks never has its work list re-inflated by a
+    later look. If an addition makes ``READY_TO_CLOSE`` untrue, the case steps
+    back to the stop that has work.
+    """
+    resolved = {r.get("decision") for r in existing.resolved_decisions}
+    fresh_decisions = tuple(d for d in new.human_decisions_required if d not in resolved)
+    base = _carry_workflow(existing, new)
+
+    pre_work = existing.status in (CaseStatus.OPEN, CaseStatus.IN_REVIEW) \
+        and not existing.reverified_at
+    if pre_work:
+        # Links the case earned itself (a prior closure it follows) survive.
+        kept = tuple(r for r in existing.linked_evidence
+                     if r.get("note", "").startswith("prior closure by"))
+        return replace(base, human_decisions_required=fresh_decisions,
+                       linked_evidence=_links_union(new.linked_evidence, kept))
+
+    items = list(existing.changed_items)
+    known = {_key(i) for i in items}
+    for i in new.changed_items:
+        if _key(i) not in known:
+            items.append(i)
+            known.add(_key(i))
+    # Work is new only if the case has never tracked that entry: a machine the
+    # case did not name, or a function it did not list. An entry the case has
+    # already handled (it is in evidence_current) is never re-added, which is
+    # what stops a later look re-inflating a case that has been worked.
+    tracked = (set(existing.evidence_before) | set(existing.evidence_current)
+               | set(existing.required_reverifications))
+    added_reverifs = [e for e in new.required_reverifications if e not in tracked]
+    added_actions = [a for e in added_reverifs for a in actions_by_fid.get(e, ())]
+    decisions = _union(existing.human_decisions_required, fresh_decisions)
+    reverifs = _union(existing.required_reverifications, added_reverifs)
+
+    status = existing.status
+    requested = existing.reverification_requested_at
+    if status is CaseStatus.READY_TO_CLOSE:
+        if reverifs:
+            status, requested = CaseStatus.AWAITING_REVERIFICATION, format_utc(utc_now())
+        elif decisions:
+            status = CaseStatus.AWAITING_ACTION
+
+    return replace(
+        existing,
+        status=status, reverification_requested_at=requested,
+        machines=_union(existing.machines, new.machines),
+        sites=_union(existing.sites, new.sites),
+        changed_items=tuple(items),
+        affected_functions=_union(existing.affected_functions, new.affected_functions),
+        evidence_before={**new.evidence_before, **existing.evidence_before},
+        evidence_current={**new.evidence_current, **existing.evidence_current},
+        required_actions=_union(existing.required_actions, added_actions),
+        required_reverifications=reverifs,
+        human_decisions_required=decisions,
+        linked_evidence=_links_union(existing.linked_evidence, new.linked_evidence),
+        checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
+    )
+
+
+def _recurrence(
+    store: CaseStore, settled: ChangeAssuranceCase, new: ChangeAssuranceCase,
+) -> str:
+    """Why a *closed or rejected* case's trigger counts as having happened again, or ``""``.
+
+    Seeing the same trigger again is not a recurrence. A recurrence is the
+    trigger happening a second time:
+
+    * drift, closed only: the machine was recorded in some *other* complete
+      configuration after the closure and has now come back to the closed one
+      (A -> B closed, B -> A, A -> B again). The evidence is the ledger's own
+      manifests ordered by chain position, not by anybody's clock. A partial
+      collection (a missing export) is not another configuration and does not
+      count. A rejected drift stays rejected.
+    * advisory, closed or rejected: the advisory now reaches a machine the
+      settled case did not name.
+    * intervention: never. An intervention is one event; a new one is a new
+      trigger and gets its own case.
+    """
+    settling = store.settling_entry(settled.case_id, settled.decision)
+    if settling is None:
+        return ""
+    if settled.trigger_type is TriggerType.MACHINE_DRIFT \
+            and settled.status is CaseStatus.CLOSED:
+        key = settled.machines[0] if settled.machines else ""
+        for entry in store.ledger.entries(kind=MANIFEST_KIND, subject=key):
+            if entry.seq <= settling.seq:
+                continue
+            evidence = entry.evidence()
+            if not evidence.verify():
+                continue
+            if INCOMPLETE_COLLECTION_MARK in str(
+                    evidence.body.get("manifest", {}).get("notes", "")):
+                continue
+            other = str(evidence.body.get("configuration_hash", ""))
+            if other and other != settled.trigger_id:
+                return (f"{key} was recorded at configuration {other[:12]} after "
+                        f"this case was closed and has returned to "
+                        f"{settled.trigger_id[:12]}")
+        return ""
+    if settled.trigger_type is TriggerType.SUPPLIER_ADVISORY:
+        extra = [m for m in new.machines if m not in settled.machines]
+        if extra:
+            return ("the advisory now reaches machine(s) the "
+                    f"{settled.status.value} case did not name: " + ", ".join(extra))
+    return ""
+
+
+def _reopen(
+    store: CaseStore, settled: ChangeAssuranceCase, new: ChangeAssuranceCase,
+    because: str, *, actor: Actor, detail: str,
+) -> ChangeAssuranceCase:
+    """Append a ``reopened`` entry that points at the decision it follows.
+
+    Nothing about the earlier cycle is deleted: the closing (or rejecting)
+    entry stays in the chain exactly as sealed, the old history is carried
+    forward and extended, and ``prior_closures`` plus a ``concerns`` link carry
+    its hash into the new cycle. Owner, reviewer and decision are cleared — a
+    new cycle needs a new claim and a new decision.
+    """
+    settling = store.settling_entry(settled.case_id, settled.decision)
+    now = format_utc(utc_now())
+    chash = settling.content_hash if settling else ""
+    prior = {
+        "disposition": settled.decision,
+        "closed_at": settled.closed_at or settled.updated_at,
+        "closed_by": settled.decision_by,
+        "reason": settled.decision_reason, "closure_hash": chash,
+        "reopened_at": now, "reopened_because": because,
+    }
+    reopened = replace(
+        new, status=CaseStatus.OPEN, opened_at=now, created_at=settled.created_at,
+        trigger_at=new.trigger_at or now,
+        history=settled.history,
+        prior_closures=(*settled.prior_closures, prior),
+        linked_evidence=(*new.linked_evidence,
+                         {"relation": "concerns", "content_hash": chash,
+                          "note": f"prior {settled.decision} by {settled.decision_by}: "
+                                  f"{settled.decision_reason}"}),
+    )
+    return store.reopen(
+        reopened, actor=actor,
+        detail=f"reopened ({because}); follows {settled.decision} {chash[:12]} by "
+               f"{settled.decision_by}. {detail}")
+
+
+def _grow_deferred(
+    store: CaseStore, deferred: ChangeAssuranceCase, new: ChangeAssuranceCase,
+    *, actor: Actor,
+) -> ChangeAssuranceCase:
+    """A deferred advisory case whose exposure has grown.
+
+    Deferral is "not today", not "never look again". The machine is added to
+    the case and a question is put to its owner — recorded, once — but the case
+    stays deferred: only a person resumes it.
+    """
+    extra = [m for m in new.machines if m not in deferred.machines]
+    if not extra or deferred.trigger_type is not TriggerType.SUPPLIER_ADVISORY:
+        return deferred
+    known = {_key(i) for i in deferred.changed_items}
+    rows = [i for i in new.changed_items
+            if any(str(i.get("item_id", "")).startswith(m + "/") for m in extra)
+            and _key(i) not in known]
+    questions = [
+        f"{m}: this deferred advisory case now also exposes this machine. Resume the "
+        "case to work it, or decide it needs nothing." for m in extra]
+    resolved = {r.get("decision") for r in deferred.resolved_decisions}
+    grown = replace(
+        deferred,
+        machines=_union(deferred.machines, extra),
+        sites=_union(deferred.sites, new.sites),
+        changed_items=(*deferred.changed_items, *rows),
+        human_decisions_required=_union(
+            deferred.human_decisions_required, [q for q in questions if q not in resolved]),
+    )
+    return store.update(grown, actor=actor,
+                        detail="deferred case's exposure grew: " + ", ".join(extra))
+
+
+def _open_or_update(
+    store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
+    actions_by_fid: Mapping[str, Sequence[str]] | None = None,
+) -> ChangeAssuranceCase:
+    """One persistent case per trigger; seeing it again writes nothing unless it matters.
+
+    ========== ==============================================================
+    existing   a repeat observation of the same trigger
+    ========== ==============================================================
+    none       open it
+    open ..    merge (:func:`_merge`); **no ledger entry if nothing differs**
+    closed     reopen only on a genuine recurrence (:func:`_recurrence`),
+               else leave alone
+    rejected   reopen only if an advisory now exposes a machine the rejection
+               did not name; an identical trigger stays rejected
+    deferred   leave alone until a person calls :func:`resume` — but a growing
+               advisory exposure is added and put to the owner as a question
+    ========== ==============================================================
+    """
+    existing = store.get(new.case_id)
+    if existing is None:
+        now = format_utc(utc_now())
+        # The case stamps its own opening time as the trigger when the engine
+        # gave none (an advisory has no observation time): the floor for
+        # re-verification evidence is the case's, never the caller's.
+        opened = replace(new, opened_at=now, created_at=now, updated_at=now,
+                         trigger_at=new.trigger_at or now)
+        return store.open(opened, actor=actor, detail=detail)
+    if existing.status in (CaseStatus.CLOSED, CaseStatus.REJECTED):
+        because = _recurrence(store, existing, new)
+        if not because:
+            return existing
+        return _reopen(store, existing, new, because, actor=actor, detail=detail)
+    if existing.status is CaseStatus.DEFERRED:
+        return _grow_deferred(store, existing, new, actor=actor)
+    merged = _merge(existing, new, actions_by_fid or {})
+    if _content(merged) == _content(existing):
+        return existing
     return store.update(merged, actor=actor, detail=detail)
 
 
@@ -125,6 +499,7 @@ def assess_drift(
 
     required_actions: list[str] = []
     required_reverifications: list[str] = []
+    actions_by_fid: dict[str, list[str]] = {}
     invalidation_reason = ""
     for fid in affected:
         fc = next((f for f in coverage.functions if f.function_id == fid), None)
@@ -132,25 +507,25 @@ def assess_drift(
             continue
         if fc.coverage is Coverage.STALE:
             invalidation_reason = invalidation_reason or fc.detail
-            required_actions.append(
+            action = (
                 f"Re-run {', '.join(fc.checks) or 'the declared checks'} "
                 f"for {fid} ({fc.description}); last valid evidence "
                 f"{fc.last_verified_hash[:12] or 'none'} was invalidated by "
                 f"{fc.invalidated_by or 'this change'}.")
-            required_reverifications.append(fid)
         elif fc.coverage in (Coverage.CURRENT,):
-            required_actions.append(
+            action = (
                 f"File an Annex III 1.1.9 intervention record for the change to "
                 f"{divergence.machine_key}, then re-run coverage for {fid} — "
                 "a safety-relevant configuration change was observed with no "
                 "intervention record naming it, so evidence still reads "
                 "'current' for a reason that will not survive an audit.")
-            required_reverifications.append(fid)
         else:
-            required_actions.append(
+            action = (
                 f"Establish verification evidence for {fid} ({fc.coverage.value}): "
                 f"{fc.detail}")
-            required_reverifications.append(fid)
+        required_actions.append(action)
+        required_reverifications.append(fid)
+        actions_by_fid.setdefault(fid, []).append(action)
 
     case = ChangeAssuranceCase(
         case_id=_case_id(TriggerType.MACHINE_DRIFT, divergence.observed_configuration),
@@ -164,6 +539,7 @@ def assess_drift(
         affected_functions=affected,
         before_hash=divergence.baseline_configuration,
         after_hash=divergence.observed_configuration,
+        trigger_at=format_utc(manifest.taken_at),
         evidence_before={},
         evidence_current=evidence_current,
         invalidation_reason=invalidation_reason,
@@ -183,7 +559,7 @@ def assess_drift(
         },
     )
     return _open_or_update(
-        store, case, actor=actor,
+        store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"drift on {divergence.machine_key}: "
               f"{len(divergence.safety_relevant)} safety-relevant change(s)")
 
@@ -214,16 +590,26 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
             "functions": [f.function_id for f in e.functions],
         }
 
+    # Every function an exposed item implements needs evidence that postdates
+    # the advisory — not only the ones that were current until now. A function
+    # that was never verified, or already stale, is not supported by anything
+    # either; leaving it off the list let a case close on no evidence at all.
+    # Entries are machine-qualified (``machine/function``) because SF-01 on one
+    # machine is not SF-01 on another.
     affected: list[str] = []
     evidence_before: dict[str, str] = {}
+    required_reverifications: list[str] = []
     for exposure in impact.exposures:
         for f in exposure.functions:
             if f.function_id not in affected:
                 affected.append(f.function_id)
-            evidence_before[f.function_id] = f.coverage_before.value
+            key = f"{exposure.machine_key}/{f.function_id}"
+            evidence_before[key] = f.coverage_before.value
+            required_reverifications.append(key)
 
     human_decisions: list[str] = []
     required_actions: list[str] = []
+    actions_by_fid: dict[str, list[str]] = {}
     for exposure in impact.contradictory:
         human_decisions.append(
             f"{exposure.machine_key}/{exposure.item_id}: label and artefact hash "
@@ -235,11 +621,21 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
                 f"{exposure.machine_key}/{exposure.item_id}: matched by "
                 f"{exposure.confidence} confidence only ({exposure.basis.value}).")
     for exposure in impact.exposures:
-        for f in exposure.newly_in_question:
-            required_actions.append(
-                f"Re-verify {f.function_id} on {exposure.machine_key} "
-                f"per the supplier's remedy: nothing declared beyond the "
-                "advisory itself.")
+        for f in exposure.functions:
+            key = f"{exposure.machine_key}/{f.function_id}"
+            if f.newly_in_question:
+                action = (
+                    f"Re-verify {f.function_id} on {exposure.machine_key} "
+                    f"per the supplier's remedy: nothing declared beyond the "
+                    "advisory itself.")
+            else:
+                action = (
+                    f"Establish verification evidence for {f.function_id} on "
+                    f"{exposure.machine_key} ({f.coverage_before.value}): the "
+                    "advisory reaches an item that implements it, and nothing "
+                    "currently supports it.")
+            required_actions.append(action)
+            actions_by_fid.setdefault(key, []).append(action)
 
     case = ChangeAssuranceCase(
         case_id=_case_id(TriggerType.SUPPLIER_ADVISORY, impact.advisory_id),
@@ -254,8 +650,7 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
         evidence_before=evidence_before,
         evidence_current=dict(evidence_before),
         required_actions=tuple(dict.fromkeys(required_actions)),
-        required_reverifications=tuple(dict.fromkeys(
-            f.function_id for e in impact.exposures for f in e.newly_in_question)),
+        required_reverifications=tuple(dict.fromkeys(required_reverifications)),
         human_decisions_required=tuple(dict.fromkeys(human_decisions)),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
                           "note": f"advisory {impact.advisory_id} from {impact.issued_by}"},),
@@ -264,9 +659,36 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
         provenance={"changed_items": "assurance.fleet.impact.assess_impact"},
     )
     return _open_or_update(
-        store, case, actor=actor,
+        store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"advisory {impact.advisory_id}: {len(impact.machines_affected)} "
               f"machine(s) affected")
+
+
+def note_advisory_withdrawn(
+    store: CaseStore, advisory_id: str, reason: str, *, actor: Actor,
+) -> ChangeAssuranceCase | None:
+    """The supplier retracted an advisory this fleet had a case for.
+
+    Whatever was done because of it now rests on a retracted advisory, and only
+    a person can say whether that matters. So the withdrawal becomes a human
+    decision on the open case — it does not close, reject or advance anything.
+    A case already settled is left alone; no case at all returns ``None``.
+    """
+    case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
+    if case is None or case.status.is_settled:
+        return case
+    question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "
+                "Decide whether the work this case drove still stands, or reject "
+                "the case as raised on a retracted advisory.")
+    if question in case.human_decisions_required or any(
+            r.get("decision") == question for r in case.resolved_decisions):
+        return case
+    status = CaseStatus.AWAITING_ACTION if case.status is CaseStatus.READY_TO_CLOSE \
+        else case.status
+    return store.update(
+        replace(case, status=status,
+                human_decisions_required=(*case.human_decisions_required, question)),
+        actor=actor, detail=f"advisory {advisory_id} withdrawn by the supplier")
 
 
 # ---------------------------------------------------------------------------
@@ -295,11 +717,12 @@ def assess_intervention(
     if not mine:
         return None
 
-    required_actions = [
-        f"Re-run {', '.join(f.checks) or 'the declared checks'} for {f.function_id} "
-        f"({f.description}); {f.detail}"
+    actions_by_fid = {
+        f.function_id: [
+            f"Re-run {', '.join(f.checks) or 'the declared checks'} for {f.function_id} "
+            f"({f.description}); {f.detail}"]
         for f in mine
-    ]
+    }
     case = ChangeAssuranceCase(
         case_id=_case_id(TriggerType.INTERVENTION, intervention.intervention_id),
         trigger_type=TriggerType.INTERVENTION,
@@ -313,11 +736,13 @@ def assess_intervention(
                      f"{intervention.reason}",
         },),
         change_severity="safety_relevant",
+        trigger_at=format_utc(intervention.occurred_at),
         affected_functions=tuple(f.function_id for f in mine),
         evidence_before={f.function_id: "current" for f in mine},
         evidence_current={f.function_id: f.coverage.value for f in mine},
         invalidation_reason=mine[0].detail,
-        required_actions=tuple(dict.fromkeys(required_actions)),
+        required_actions=tuple(dict.fromkeys(
+            a for acts in actions_by_fid.values() for a in acts)),
         required_reverifications=tuple(f.function_id for f in mine),
         linked_evidence=({"relation": "concerns", "content_hash": intervention.to_hash,
                           "note": f"intervention {intervention.intervention_id}"},)
@@ -328,7 +753,7 @@ def assess_intervention(
                    "evidence_current": "assurance.machinery.staleness.assess_coverage"},
     )
     return _open_or_update(
-        store, case, actor=actor,
+        store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"intervention {intervention.intervention_id} invalidated "
               f"{len(mine)} function(s)")
 
@@ -339,6 +764,11 @@ def assess_intervention(
 
 def claim(store: CaseStore, case_id: str, *, owner: str, actor: Actor) -> ChangeAssuranceCase:
     """OPEN -> IN_REVIEW. A named person is now responsible for this case."""
+    problem = _name_problem(owner)
+    if problem:
+        raise CaseTransitionError(
+            f"{owner!r} cannot own a case: {problem}. An owner is the person "
+            "who answers for it.")
     case = _require(store, case_id)
     if case.status is not CaseStatus.OPEN:
         raise CaseTransitionError(
@@ -354,20 +784,38 @@ def advance(store: CaseStore, case_id: str, *, actor: Actor) -> ChangeAssuranceC
     """Move a case to the next stop its own required work says it needs.
 
     IN_REVIEW moves to AWAITING_ACTION when actions are outstanding, else
-    AWAITING_REVERIFICATION when only re-verification is outstanding, else
-    READY_TO_CLOSE. AWAITING_ACTION moves on the same rule once its actions
-    are confirmed done (the caller's job — this never marks an action done
-    itself, since only the reviewer knows whether it actually happened).
+    AWAITING_REVERIFICATION when only re-verification is outstanding, else —
+    when only human decisions remain — AWAITING_ACTION, else READY_TO_CLOSE.
+    AWAITING_ACTION moves on the same rule once its actions are confirmed done
+    (the caller's job — this never marks an action done itself, since only the
+    reviewer knows whether it actually happened). AWAITING_REVERIFICATION
+    moves only once nothing is left to re-verify (each entry cleared by
+    evidence, or waived by a person). It will not reach READY_TO_CLOSE while a
+    re-verification or a human decision is outstanding.
     """
     case = _require(store, case_id)
-    if case.status not in (CaseStatus.IN_REVIEW, CaseStatus.AWAITING_ACTION):
+    if case.status not in (CaseStatus.IN_REVIEW, CaseStatus.AWAITING_ACTION,
+                           CaseStatus.AWAITING_REVERIFICATION):
         raise CaseTransitionError(
             f"{case_id} is {case.status.value}. advance() is only valid from "
-            "in_review or awaiting_action.")
+            "in_review, awaiting_action or (once nothing is left to re-verify) "
+            "awaiting_reverification.")
+    if case.status is CaseStatus.AWAITING_REVERIFICATION and case.required_reverifications:
+        raise CaseTransitionError(
+            f"{case_id} is awaiting re-verification of "
+            f"{', '.join(case.required_reverifications)}. advance() will not move it "
+            "until each is cleared by re-verification evidence or waived by a person.")
     if case.status is CaseStatus.IN_REVIEW and case.required_actions:
         nxt = CaseStatus.AWAITING_ACTION
     elif case.required_reverifications:
         nxt = CaseStatus.AWAITING_REVERIFICATION
+    elif case.human_decisions_required:
+        if case.status is CaseStatus.AWAITING_ACTION:
+            raise CaseTransitionError(
+                f"{case_id} still has {len(case.human_decisions_required)} human "
+                "decision(s) unresolved, so it cannot be ready to close. A person "
+                "answers each with resolve_decision(), or rejects/defers the case.")
+        nxt = CaseStatus.AWAITING_ACTION
     else:
         nxt = CaseStatus.READY_TO_CLOSE
     if nxt is CaseStatus.AWAITING_REVERIFICATION:
@@ -383,42 +831,218 @@ def reverify(
     interventions: list[Intervention],
     *, verification_content_hash: str, actor: Actor,
 ) -> ChangeAssuranceCase:
-    """Re-run coverage with a fresh verification bundle on record, and see.
+    """Record a fresh verification against one machine, and see what it clears.
 
-    This never marks a function covered by assertion — it calls
-    :func:`assess_coverage` again with ``verifications`` that must already
-    include the new bundle, and reads what that engine says now.
+    This never marks a function covered by assertion. It clears an entry only
+    when **all** of these hold, each read from the record and never from the
+    caller's say-so:
+
+    * the manifest is for a machine this case concerns, and the entry is that
+      machine's (advisory entries are ``machine/function``; one machine's
+      bundle never clears another's);
+    * the cited verification is one the coverage check actually ran against,
+      was sealed *after this case's current cycle began*, and describes a state
+      at or after both the change that triggered the case and the manifest it
+      is checked against — a bundle that already existed when the change was
+      found cannot be evidence about it;
+    * that bundle passed every check the function declares; and
+    * :func:`assess_coverage` reads the function ``current``.
+
+    An entry that fails any of them stays required, with the reason in
+    ``evidence_current``. A function the manifest no longer declares cannot be
+    shown current and stays required too.
     """
     case = _require(store, case_id)
     if case.status is not CaseStatus.AWAITING_REVERIFICATION:
         raise CaseTransitionError(
             f"{case_id} is {case.status.value}. reverify() is only valid from "
             "awaiting_reverification.")
-    coverage = assess_coverage(manifest, verifications, interventions)
-    still_required = []
-    evidence_current = dict(case.evidence_current)
-    for fid in case.required_reverifications:
-        fc = next((f for f in coverage.functions if f.function_id == fid), None)
-        if fc is None:
-            continue
-        evidence_current[fid] = fc.coverage.value
-        if fc.coverage is not Coverage.CURRENT:
-            still_required.append(fid)
+    key = manifest.machine.key
+    if key not in case.machines:
+        raise CaseTransitionError(
+            f"the manifest is for {key}, which does not concern {case_id} "
+            f"(it concerns {', '.join(case.machines) or 'no machine'}). "
+            "A re-verification of another machine is not evidence about this one.")
+    record = next((v for v in verifications if v.content_hash == verification_content_hash),
+                  None)
+    if record is None:
+        raise CaseTransitionError(
+            f"verification {verification_content_hash[:12]!r} is not among the "
+            "sealed verifications this re-check was run against, so it cannot "
+            "be recorded as the evidence behind it.")
+    start = store.cycle_start_seq(case_id)
+    if record.ledger_seq <= start:
+        raise CaseTransitionError(
+            f"verification {record.content_hash[:12]} was sealed before this case "
+            f"was opened (ledger position {record.ledger_seq}, case at {start}). "
+            "Evidence that already existed when the change was found cannot be "
+            "evidence about it; run the checks again.")
+    # Ledger truth: the machine's declared functions and checks, and its current
+    # configuration, are read from the newest manifest sealed for it, never from
+    # the manifest in the caller's hands (which only has to agree with it).
+    sealed_manifests = manifests_from_ledger(store.ledger, key)
+    if not sealed_manifests:
+        raise CaseTransitionError(
+            f"the ledger holds no manifest sealed for {key}, so there is nothing to "
+            "check a re-verification against. Record the machine's manifest first.")
+    sealed = sealed_manifests[-1]
+    allowed = {sealed.configuration_hash()}
+    if case.trigger_type is TriggerType.MACHINE_DRIFT:
+        allowed.add(case.after_hash)
+    if manifest.configuration_hash() not in allowed:
+        raise CaseTransitionError(
+            f"the manifest's configuration {manifest.configuration_hash()[:12]} is "
+            f"neither the one this case concerns nor the newest sealed for {key} "
+            f"({sealed.configuration_hash()[:12]}); a re-verification of some other "
+            "configuration is not evidence about this one.")
+    floor = parse_utc(case.trigger_at or case.opened_at)
+    if sealed.taken_at < floor:
+        raise CaseTransitionError(
+            f"the newest manifest sealed for {key} was taken {format_utc(sealed.taken_at)}, "
+            f"which predates this case's trigger ({format_utc(floor)}). Collect and seal "
+            "the machine's manifest again after the change, then re-verify.")
+    if record.effective_at < floor:
+        raise CaseTransitionError(
+            f"verification {record.content_hash[:12]} describes a state before "
+            f"{format_utc(floor)} (the run started {format_utc(record.effective_at)}). "
+            "It cannot show the machine as it is after the change.")
+    mine = [e for e in case.required_reverifications
+            if _entry_machine(case, e) in (key, None)]
+    if not mine:
+        raise CaseTransitionError(
+            f"{case_id} has nothing outstanding for {key}; it awaits "
+            f"{', '.join(case.required_reverifications) or 'nothing'}.")
 
-    nxt = CaseStatus.AWAITING_REVERIFICATION if still_required else CaseStatus.READY_TO_CLOSE
+    coverage = assess_coverage(sealed, verifications, interventions)
+    cleared: set[str] = set()
+    evidence_current = dict(case.evidence_current)
+    for entry in mine:
+        fid = _entry_function(case, entry)
+        fn = sealed.function(fid)
+        fc = next((f for f in coverage.functions if f.function_id == fid), None)
+        if fn is None or fc is None:
+            evidence_current[entry] = "unknown"
+        elif fc.coverage is not Coverage.CURRENT:
+            evidence_current[entry] = fc.coverage.value
+        elif not fn.verified_by or not set(fn.verified_by) <= set(record.checks_verified):
+            evidence_current[entry] = "no_new_evidence"
+        else:
+            evidence_current[entry] = Coverage.CURRENT.value
+            cleared.add(entry)
+    still_required = tuple(e for e in case.required_reverifications if e not in cleared)
+
+    if still_required:
+        nxt = CaseStatus.AWAITING_REVERIFICATION
+    elif case.human_decisions_required:
+        nxt = CaseStatus.AWAITING_ACTION
+    else:
+        nxt = CaseStatus.READY_TO_CLOSE
     linked = (*case.linked_evidence,
              {"relation": "supports", "content_hash": verification_content_hash,
-              "note": "re-verification evidence"})
+              "note": f"re-verification evidence ({key})"})
     updated = replace(
         case, status=nxt, evidence_current=evidence_current,
-        required_reverifications=tuple(still_required),
+        required_reverifications=still_required,
         required_actions=() if not still_required else case.required_actions,
         reverified_at=format_utc(utc_now()), linked_evidence=linked,
     )
     return store.reverify(
         updated, actor=actor,
-        detail=f"re-verified against {verification_content_hash[:12]}; "
-              f"{len(still_required)} function(s) still not current")
+        detail=f"re-verified {key} against {verification_content_hash[:12]}; "
+              f"{len(still_required)} entr{'y' if len(still_required) == 1 else 'ies'} "
+              "still not current")
+
+
+def waive_reverification(
+    store: CaseStore, case_id: str, *, entry: str, reason: str, actor: Actor,
+) -> ChangeAssuranceCase:
+    """A named person closes one re-verification entry *without* evidence.
+
+    The only way a case can reach ready-to-close with an entry that no
+    verification cleared, and it is a decision, not a default: it needs a
+    person and a reason, it is kept in ``resolved_decisions`` under the entry's
+    name, and the entry's ``evidence_current`` reads ``waived`` rather than
+    ``current``.
+    """
+    _require_human(actor, "waiving a re-verification")
+    if not reason.strip():
+        raise CaseTransitionError(
+            "a waiver needs a reason: why closing without evidence is acceptable.")
+    case = _require(store, case_id)
+    if case.status.is_settled:
+        raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
+    if entry not in case.required_reverifications:
+        raise CaseTransitionError(f"{case_id} has no outstanding re-verification {entry!r}.")
+    updated = replace(
+        case,
+        required_reverifications=tuple(e for e in case.required_reverifications if e != entry),
+        evidence_current={**case.evidence_current, entry: "waived"},
+        resolved_decisions=(*case.resolved_decisions, {
+            "decision": f"close without re-verification evidence: {entry}",
+            "resolution": reason, "by": actor.identifier, "at": format_utc(utc_now()),
+            "kind": "waiver"}),
+    )
+    return store.update(updated, actor=actor,
+                        detail=f"re-verification of {entry} waived by {actor.identifier}: {reason}")
+
+
+def resolve_decision(
+    store: CaseStore, case_id: str, *, decision: str, resolution: str, actor: Actor,
+) -> ChangeAssuranceCase:
+    """A named person answers one of the case's open human decisions.
+
+    The question moves from ``human_decisions_required`` to
+    ``resolved_decisions`` with the answer and who gave it, so a later look at
+    the same advisory never asks it again. Without this, a case that names a
+    human decision could only ever be rejected or deferred.
+    """
+    _require_human(actor, "resolving a human decision")
+    if not resolution.strip():
+        raise CaseTransitionError("a resolution needs the answer the person gave.")
+    case = _require(store, case_id)
+    if case.status.is_settled:
+        raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
+    if decision not in case.human_decisions_required:
+        raise CaseTransitionError(
+            f"{case_id} has no open human decision {decision!r}.")
+    updated = replace(
+        case,
+        human_decisions_required=tuple(
+            d for d in case.human_decisions_required if d != decision),
+        resolved_decisions=(*case.resolved_decisions, {
+            "decision": decision, "resolution": resolution,
+            "by": actor.identifier, "at": format_utc(utc_now())}),
+    )
+    return store.update(updated, actor=actor,
+                        detail=f"decision resolved by {actor.identifier}: {resolution}")
+
+
+def resume(store: CaseStore, case_id: str, *, reason: str, actor: Actor) -> ChangeAssuranceCase:
+    """DEFERRED -> IN_REVIEW. A named person takes the review back up.
+
+    The way out of the one dead end the lifecycle used to have. The deferral
+    stays in the history; the decision fields are cleared so the next
+    ``decide`` is a fresh one. The resumed case is ``IN_REVIEW`` and must be
+    advanced again, so nobody inherits a stop they did not confirm.
+    """
+    _require_human(actor, "resuming a deferred case")
+    if not reason.strip():
+        raise CaseTransitionError("resuming a case needs a reason.")
+    case = _require(store, case_id)
+    if case.status is not CaseStatus.DEFERRED:
+        raise CaseTransitionError(
+            f"{case_id} is {case.status.value}, not deferred. resume() is only "
+            "valid from deferred.")
+    now = format_utc(utc_now())
+    updated = replace(
+        case, status=CaseStatus.IN_REVIEW, owner=case.owner or actor.identifier,
+        review_started_at=case.review_started_at or now,
+        decision="", decision_reason="", decision_by="",
+    )
+    return store.transition(
+        updated, actor=actor,
+        detail=f"resumed by {actor.identifier}: {reason} "
+               f"(deferred by {case.decision_by}: {case.decision_reason})")
 
 
 def decide(
@@ -427,14 +1051,17 @@ def decide(
     """The one human decision this whole product exists to lead up to.
 
     ``closed`` is only accepted from ``READY_TO_CLOSE`` — this function will
-    not close a case that still has an outstanding action or re-verification,
-    no matter who asks. ``rejected`` and ``deferred`` are accepted from any
-    open status, because a human is always allowed to say "this is not a real
-    problem" or "not now" without the deterministic engines' agreement.
+    not close a case that still has an outstanding action, re-verification or
+    human decision, no matter who asks. ``rejected`` and ``deferred`` are
+    accepted from any open status, because a human is always allowed to say
+    "this is not a real problem" or "not now" without the deterministic
+    engines' agreement. Every disposition needs a named *person*: an
+    automated, service or anonymous actor is refused.
     """
     if disposition not in ("closed", "rejected", "deferred"):
         raise CaseTransitionError(
             f"disposition must be closed, rejected or deferred, not {disposition!r}.")
+    _require_human(actor, f"{disposition} a case")
     if not reason.strip():
         raise CaseTransitionError(
             "a decision needs a reason. This is the sentence a reviewer reads "
@@ -442,11 +1069,17 @@ def decide(
     case = _require(store, case_id)
     if case.status.is_settled:
         raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
-    if disposition == "closed" and case.status is not CaseStatus.READY_TO_CLOSE:
-        raise CaseTransitionError(
-            f"{case_id} is {case.status.value}, not ready_to_close. This system "
-            "does not close a case with outstanding actions or re-verifications, "
-            "and it never infers 'safe' or 'compliant' from anything short of that.")
+    if disposition == "closed":
+        if case.status is not CaseStatus.READY_TO_CLOSE:
+            raise CaseTransitionError(
+                f"{case_id} is {case.status.value}, not ready_to_close. This system "
+                "does not close a case with outstanding actions or re-verifications, "
+                "and it never infers 'safe' or 'compliant' from anything short of that.")
+        if case.required_reverifications or case.human_decisions_required:
+            raise CaseTransitionError(
+                f"{case_id} names outstanding work "
+                f"({', '.join((*case.required_reverifications, *case.human_decisions_required))}"
+                ") and cannot be closed.")
 
     now = format_utc(utc_now())
     status = {"closed": CaseStatus.CLOSED, "rejected": CaseStatus.REJECTED,

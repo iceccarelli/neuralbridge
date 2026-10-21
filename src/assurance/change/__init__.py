@@ -13,26 +13,36 @@ is the thing none of those engines were ever asked to be: a queue a person can
 work from, with a status that never claims more than the evidence does.
 
     service    assess_drift, assess_advisory, assess_intervention — build a
-               case from an engine's output; claim, advance, reverify, decide
-               — move an open case through its lifecycle
+               case from an engine's output; claim, advance, reverify,
+               resolve_decision, decide, resume — move a case through its
+               lifecycle (decide/resume/resolve need a named person)
+    replay     reconstruct_case — rebuild a case from the ledger alone and
+               check every step was legal
     store      CaseStore — the ledger-backed persistence
     model      ChangeAssuranceCase, CaseStatus, TriggerType
 """
 
 from assurance.change.model import CaseStatus, ChangeAssuranceCase, TriggerType
+from assurance.change.replay import CaseReplay, reconstruct_case
 from assurance.change.service import (
     CaseTransitionError,
     advance,
     assess_advisory,
     assess_drift,
     assess_intervention,
+    case_id_for,
     claim,
     decide,
+    note_advisory_withdrawn,
+    resolve_decision,
+    resume,
     reverify,
+    waive_reverification,
 )
 from assurance.change.store import CaseStore, CaseStoreError
 
 __all__ = [
+    "CaseReplay",
     "CaseStatus",
     "CaseStore",
     "CaseStoreError",
@@ -43,7 +53,13 @@ __all__ = [
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
+    "case_id_for",
     "claim",
     "decide",
+    "note_advisory_withdrawn",
+    "reconstruct_case",
+    "resolve_decision",
+    "resume",
     "reverify",
+    "waive_reverification",
 ]

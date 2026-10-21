@@ -40,8 +40,25 @@ Create the webhook endpoint at `https://<app>.fly.dev/v1/billing/webhook`,
 subscribed to:
 
 - `checkout.session.completed` — grants the plan and mints the API key
-- `customer.subscription.updated` — reactivation, and `past_due` suspension
+- `checkout.session.async_payment_succeeded` — the same grant, for delayed
+  payment methods (SEPA debit): the session completes as `unpaid` and nothing
+  is granted until this event says the money arrived
+- `customer.subscription.updated` — reactivation, `past_due` flagging, and
+  loss of entitlement for `canceled`/`unpaid`/`incomplete_expired`/`paused`/
+  `incomplete`
 - `customer.subscription.deleted` — downgrade to free
+- `invoice.payment_failed` — flags the account `past_due`. Access **continues**
+  while Stripe retries the card (a single failed payment must not cut a
+  manufacturer off from a register with a 24-hour clock); `/v1/me` shows a
+  `warning`. Stripe's retry schedule decides when the subscription ends, and
+  says so with `customer.subscription.updated`/`deleted`. Configure that
+  schedule in Stripe (Billing → Settings → Subscriptions and emails).
+
+Deliveries are idempotent: each event id is recorded in the same transaction
+as its effects, so Stripe's retries cannot mint a second key, and a
+subscription event older than the newest one already applied is ignored.
+A subscription event that arrives before its `checkout.session.completed` is
+held for up to seven days and applied when the account exists.
 
 The signing secret Stripe shows you is `STRIPE_WEBHOOK_SECRET`. Without it the
 endpoint refuses every event, which is the correct behaviour: an unverified
@@ -93,14 +110,66 @@ is not an EU Member State — without an account, and recording nothing.
 `ASSURANCE_ALLOW_UNAUTHENTICATED=1` is set and anyone can write to the
 register. Unset it.
 
+## Tenancy, proxy and request limits
+
+**One ledger per customer account.** Every account's evidence lives in its own
+SQLite file at `$ASSURANCE_TENANT_LEDGERS/<account-id>.db` (default: a
+`tenants/` directory beside `ASSURANCE_LEDGER`, so `/data/tenants` on the
+volume; the Dockerfile sets it explicitly). Operator keys
+(`ASSURANCE_API_KEYS`) and open mode keep using the shared
+`ASSURANCE_LEDGER`. Back up the whole `/data` directory, not just the shared
+file, and treat `tenants/` as customer records.
+
+Records written to the shared ledger by a customer account *before* this change
+stay in the shared ledger and are not visible to that customer's key any more.
+No production deployment predates this change, so no migration tool ships; if
+you have one, export them with an operator key before upgrading.
+
+**Free-tier quota behind Fly.** Behind Fly's proxy every socket peer is the
+proxy, so the per-address quota would be one bucket for the whole internet. Set
+`ASSURANCE_TRUST_FLY_PROXY=1` (in `fly.toml`'s `[env]`) and the quota is keyed
+on `Fly-Client-IP`, which Fly's proxy sets. Set it **only** where every request
+arrives through that proxy: on any other host the header is client-controlled
+and would let a caller mint themselves a fresh quota per request. Without the
+variable the socket peer is used, which is correct for a directly exposed host.
+
+**Request bodies** on `/v1` writes are capped at `ASSURANCE_MAX_BODY_BYTES`
+(default 1 MiB; 413 above it). `POST /v1/machine/verify` takes recorded traces
+and has its own cap, `ASSURANCE_MAX_TRACE_BODY_BYTES` (default 32 MiB). The
+Stripe webhook is exempt.
+
+**Keys.** `GET /v1/keys`, `POST /v1/keys` and `POST /v1/keys/revoke` let an
+account list, add and revoke its own keys (at most 10 live). Operator keys are
+rotated in `ASSURANCE_API_KEYS`.
+
+**`/healthz`** is unauthenticated and cheap: it confirms both stores open and
+reports the shared ledger's entry count, and nothing about the host. Chain
+verification is `GET /v1/ledger/verify`, with a key.
+
 ## Backups
 
+Everything the service remembers is on the `/data` volume: `accounts.db` (accounts,
+key hashes, billing events), `art14-register.db` (the operator-only shared
+ledger) and `tenants/<account id>.db` (**one ledger per customer** — their
+evidence). Backing up only the shared ledger, as an earlier version of this page
+suggested, would back up none of a customer's records.
+
+On the machine that holds the volume (single writer, so run it where the app
+runs):
+
 ```bash
-fly ssh console -C "sqlite3 /data/art14-register.db .dump" > ledger-$(date +%F).sql
+fly ssh console -C "python -m assurance.evidence.restore_check backup /data /data/backups/$(date +%F)"
+fly ssh sftp get -r /data/backups/$(date +%F) ./backup-$(date +%F)   # off the volume, off the provider
+python -m assurance.evidence.restore_check verify ./backup-$(date +%F)
 ```
 
-The ledger is append-only and self-verifying, so a restored copy can be checked
-with `GET /v1/ledger/verify` rather than trusted.
+`backup` takes a transactionally consistent snapshot of every database (a plain
+file copy of a WAL database can miss its newest records). `verify` checks each
+database's integrity and each ledger's hash chain, and that every tenant ledger
+belongs to a known account. **Rehearse a restore before relying on it**: restore
+the files to a scratch volume, point a throwaway service at them, and call
+`GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
+done against a deployed service — there is none.
 
 That check answers "was anything **edited**?" and not "was anything
 **removed**?" — a chain rebuilt without the inconvenient records verifies

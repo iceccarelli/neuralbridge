@@ -133,7 +133,7 @@ const platformStatus = [
   { area: 'Connection management model', status: 'Supported' },
   { area: 'MCP tool listing / invocation', status: 'Supported' },
   { area: 'Dashboard foundation (separate admin UI, not wired to the assurance API)', status: 'Evolving' },
-  { area: 'Basic audit trail', status: 'Supported' },
+  { area: 'Basic audit trail (in memory by default; cleared on restart)', status: 'Evolving' },
   { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
   { area: 'Broad adapter ecosystem', status: 'Evolving' },
   { area: 'Full enterprise compliance posture', status: 'Evolving' },
@@ -437,7 +437,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>/ai control plane — propose-and-approve writes, bind connections, full audit</td>
+                  <td>/ai control plane — propose-and-approve writes, bind connections, an in-memory audit log for your account</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>

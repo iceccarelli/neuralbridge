@@ -35,8 +35,8 @@ from .deps import (
     current_principal,
     get_accounts,
     get_register,
-    ledger_path,
     require_register,
+    shared_register,
     spend,
 )
 from .schemas import (
@@ -331,11 +331,29 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     response_model=dict,
     summary="A verifiable evidence bundle for one case",
 )
-def get_case_export(case_id: str, register: Art14Register = Depends(get_register)) -> dict[str, Any]:
+def get_case_export(
+    case_id: str,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
+) -> dict[str, Any]:
     """Refuses if the chain does not verify.
 
     An export is the moment records leave the system and start being relied on.
+    Gated on the plan's ``export`` entitlement as well as on the register
+    itself, so the ``verifiable_export`` limit on ``GET /v1/plans`` is a
+    statement about code that runs.
     """
+    if not principal.plan.export:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "plan_does_not_include_export",
+                "tier": principal.tier,
+                "account_status": principal.account.status if principal.account else "",
+                "remedy": "Verifiable export is included with the Register plan "
+                          "and above. GET /v1/plans, then POST /v1/checkout.",
+            },
+        )
     try:
         return register.ledger.export(subject=case_id)
     except Exception as exc:  # noqa: BLE001
@@ -462,16 +480,34 @@ def root() -> dict[str, Any]:
 
 
 @public_router.get("/healthz", response_model=dict, summary="Liveness and configuration")
-def healthz(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
-    """Reports what is actually true, including an unauthenticated deployment."""
-    ok, _ = register.ledger.verify_chain()
+def healthz(
+    response: Response, accounts: AccountStore = Depends(get_accounts)
+) -> dict[str, Any]:
+    """Reports what is actually true, including an unauthenticated deployment.
+
+    Unauthenticated and polled every few seconds, so it is cheap and says
+    nothing about the host: no filesystem path, and no chain verification
+    (that is O(n) in the ledger and lives at the authenticated
+    ``GET /v1/ledger/verify``). It does confirm that both stores open, which
+    exercises their schema-version checks, and reports the operator ledger's
+    entry count.
+    """
     mode = auth_mode()
-    payload: dict[str, Any] = {
-        "status": "ok",
-        "auth_mode": mode,
-        "ledger": ledger_path(),
-        "ledger_records": len(register.ledger),
-        "chain_verified": ok,
+    payload: dict[str, Any] = {"status": "ok", "auth_mode": mode}
+    try:
+        payload["ledger_records"] = len(shared_register().ledger)
+        payload["ledger_ok"] = True
+    except Exception:  # noqa: BLE001 - reported as a state, never echoed
+        payload["ledger_ok"] = False
+    try:
+        accounts.usage_today("healthz")
+        payload["accounts_ok"] = True
+    except Exception:  # noqa: BLE001
+        payload["accounts_ok"] = False
+    if not (payload["ledger_ok"] and payload["accounts_ok"]):
+        payload["status"] = "unavailable"
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    payload |= {
         "field_spec": {"source": "ENISA CRA SRP Glossary", "version": GLOSSARY_VERSION,
                        "dated": GLOSSARY_DATE},
         "regulation": "Regulation (EU) 2024/2847, Article 14",
@@ -483,7 +519,8 @@ def healthz(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
             "Configure ASSURANCE_API_KEYS before this holds anything real."
         )
     if mode == "unconfigured":
-        payload["status"] = "degraded"
+        if payload["status"] == "ok":
+            payload["status"] = "degraded"
         payload["warning"] = (
             "No API keys configured; register routes return 503. Set ASSURANCE_API_KEYS."
         )

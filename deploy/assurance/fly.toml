@@ -28,7 +28,15 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
   # One attestation log per account. On the volume: it is the one
   # artefact in this system that a ledger rewind cannot reach.
   ASSURANCE_ATTEST_LOGS = "/data/attestations"
+  # Hosted supplier feeds. Without this they land in the container filesystem
+  # and vanish on every deploy.
+  ASSURANCE_SUPPLIER_FEEDS = "/data/supplier-feeds"
   ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
+  # Every request reaches this app through Fly's proxy, which sets Fly-Client-IP.
+  # Without this the free-tier quota is one shared bucket for the proxy's address.
+  # Never set this on a host that is reachable without Fly's proxy in front.
+  ASSURANCE_TRUST_FLY_PROXY = "1"
+  ASSURANCE_TENANT_LEDGERS = "/data/tenants"
 
 [[mounts]]
   source = "assurance_data"

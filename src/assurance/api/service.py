@@ -24,7 +24,7 @@ from .attest_routes import attest_router
 from .billing_routes import billing_router
 from .change_routes import change_router
 from .check_routes import check_router
-from .deps import allowed_origins, auth_mode
+from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
@@ -93,6 +93,10 @@ def create_app(**kwargs: Any) -> FastAPI:
         ],
         **kwargs,
     )
+
+    # Added before CORS so it sits inside it: a 413 still carries CORS headers
+    # and a browser caller sees "too large", not a CORS failure.
+    application.add_middleware(BodySizeLimitMiddleware)
 
     # Bearer-token auth, never cookies — allow_credentials stays False so a
     # wide origin list can never be combined with credentialed requests.

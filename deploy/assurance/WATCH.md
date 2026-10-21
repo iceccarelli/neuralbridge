@@ -316,3 +316,59 @@ surveillance authority asks about first — the interval from receipt to awarene
 **The prompt stops when a person records awareness.** From that moment the
 register holds the clock, and a second system nagging about a decision already
 taken is how people learn to close the tab.
+
+
+---
+
+# From a finding to a case
+
+A finding that is only printed is a finding somebody has to remember. Since the
+change-assurance layer (`deploy/assurance/CHANGE.md`), a watch run with sealing
+on opens and keeps the **case** itself, so what it found is already a row in the
+queue when the Monday mail arrives.
+
+```
+  [DRIFT] 0501  configuration moved 849a1dd1a879 → e3881c29e874: ITM-ZONES content_changed
+           case case-5b2e0c91a7d4f336 [open]
+```
+
+| The run found | It does | Where it shows |
+|---|---|---|
+| A safety-relevant drift | opens (or finds) the machine's drift case, **before** sealing the new manifest | `MachineOutcome.case_id`, `sealed: case …` |
+| An advisory, `new` or `outstanding`, that exposes the fleet | opens one case for the advisory naming every exposed machine; a standing advisory is folded in and writes nothing unless the exposure grew | `AdvisoryFinding.case_id` (sealed with the run) |
+| A withdrawal of an advisory with a case | adds a question to the owner ("decide whether the work still stands"); closes and rejects nothing | the case's `human_decisions_required` |
+| A recorded intervention nobody has a case for, that invalidated evidence | opens an intervention case, unless an open case on that machine already owns the same functions | `MachineOutcome.intervention_case_ids` |
+| A dry run (`--dry-run`) | nothing. No case is opened, because nothing is sealed | `case_id` is empty |
+
+**The case is opened first, then the manifest is sealed.** The manifest becomes
+the next run's baseline, so sealing it first would let a crash between the two
+swallow the drift: the next run would compare the new manifest with itself and
+report `observed`. In this order a crash leaves the old baseline in place, the
+next run sees the same drift, and `assess_drift` lands on the same case without
+writing a duplicate. Both directions of the failure are tested.
+
+**Running it twice writes nothing the second time.** A run over an unchanged
+configuration reports `observed` and touches no case. A run that does re-assess
+a case (a standing advisory, a recovered crash) leaves the ledger as it was
+unless the reading actually differs. A case already past review is never
+re-inflated by a later look.
+
+**A machine that could not be collected never moves a case.** An uncollectable
+machine is `BLIND`, the run is `degraded`, and no case on it advances, closes or
+is touched; its open cases are named in the warning so that is not left to be
+inferred. Silence is not progress.
+
+**The watch opens; it never decides.** It runs as an `automation` actor, which
+`decide`, `resume` and `resolve-decision` refuse. Nothing the watch does can
+close a case.
+
+What this does not do: the watch runs where the exports are, in the customer's
+kit or from their cron, against their ledger. The hosted API does not run it and
+cannot collect from a machine; it can only serve and work the cases that ledger
+holds.
+
+**A partial look is not a configuration.** If a run does not find or read every
+item the plan names, the manifest it seals is marked `[collection incomplete: …]`
+and the observation records `complete: false` with the missing item ids. The
+drift it shows can still open a case, with the existing warning, but it can never
+make a closed case look as if the machine "left" its configuration and came back.

@@ -18,7 +18,11 @@ from typing import Any
 
 __all__ = ["Tier", "Plan", "PLANS", "plan_for", "plan_for_price", "public_catalogue"]
 
-Tier = str  # "free" | "register" | "cell"
+Tier = str  # "free" | "register" | "cell" | "supplier"
+
+#: The one sentence every public surface uses about case volume. Kept identical
+#: to CASES_NOT_METERED in app/lib/plans.ts (tests/test_assurance_plans_parity.py).
+CASES_NOT_METERED = "Cases are not metered — no per-case cap or charge"
 
 
 @dataclass(frozen=True)
@@ -35,12 +39,15 @@ class Plan:
     validations_per_day: int | None = None
     #: May create and write cases in the register.
     register: bool = False
-    #: Product families that may appear in availability records.
-    product_families: int | None = None
-    #: Cases per UTC day.
-    cases_per_day: int | None = None
-    #: May export a verifiable evidence bundle.
+    #: May export a verifiable evidence bundle (GET /v1/cases/{id}/export).
+    #: Enforced there; see routes.get_case_export.
     export: bool = False
+    # Register cases are deliberately NOT metered or capped: a cap on
+    # regulatory filings would discourage investigating a serious finding.
+    # There is no ``cases_per_day`` or ``product_families`` field for that
+    # reason, and none should be added unless something enforces it
+    # (tests/test_assurance_billing_hardening.py fails an advertised limit
+    # that nothing consults).
     #: May have the service counter-sign the head of their own ledger. The
     #: verification side is deliberately outside this gate: see attest_routes.
     signed_attestation: bool = False
@@ -59,7 +66,7 @@ class Plan:
     supplier_publish: bool = False
     #: May propose and approve a WRITE through the /ai control plane (and the
     #: same-policy raw adapters/MCP paths — see reports/NEURALBRIDGE-AI-PHASE2.md),
-    #: bind additional connections, and fetch the full audit trail. The
+    #: bind additional connections, and fetch the account's own audit log. The
     #: control plane's discovery and READ path stays free — see
     #: ai_reads_per_day — the same "verification stays free" rule the rest
     #: of this table follows: reading is how a prospect evaluates the
@@ -88,8 +95,6 @@ class Plan:
             "includes": list(self.included),
             "limits": {
                 "validations_per_day": self.validations_per_day,
-                "product_families": self.product_families,
-                "cases_per_day": self.cases_per_day,
                 "register_access": self.register,
                 "verifiable_export": self.export,
                 "signed_attestation": self.signed_attestation,
@@ -156,19 +161,17 @@ PLANS: dict[Tier, Plan] = {
         price_label="€390 / month",
         validations_per_day=None,
         register=True,
-        product_families=25,
-        cases_per_day=50,
         export=True,
         ai_control_plane=True,
         included=(
             "Everything in Validator, without the daily cap",
-            "Unlimited cases; awareness records with the reasoning that defends them",
+            CASES_NOT_METERED,
+            "Awareness records with the reasoning that defends them",
             "Both final-report clocks computed correctly, and the platform's counter "
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
-            "Up to 25 product families",
             "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, full audit trail",
+            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
         ),
     ),
     "cell": Plan(
@@ -185,8 +188,6 @@ PLANS: dict[Tier, Plan] = {
         price_label="€1,290 / month",
         validations_per_day=None,
         register=True,
-        product_families=None,
-        cases_per_day=None,
         export=True,
         signed_attestation=True,
         machine_verification=True,
@@ -194,7 +195,7 @@ PLANS: dict[Tier, Plan] = {
         included=(
             "Everything in Register",
             "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, full audit trail",
+            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
             "Machine safety verification: POST /v1/machine/verify checks a recorded "
             "run against a declared safety envelope and seals the result",
             "Separation, speed, workspace, stop characterisation, power-and-force and "
@@ -209,12 +210,13 @@ PLANS: dict[Tier, Plan] = {
             "puts in question",
             "Declarations of Conformity bound to a configuration hash, so a "
             "declaration can be shown to have stopped describing the machine",
-            "Unlimited product families and cases",
+            CASES_NOT_METERED,
+            "Change-assurance cases: open, claim, re-verify and close a "
+            "ChangeAssuranceCase over /v1/change/*; closure is a named human decision",
             "Counter-signed head attestation: POST /v1/ledger/attest signs the "
             "head of your ledger with a key you do not hold, so a rewind "
             "contradicts a signed statement. Your ledger is never uploaded — "
             "we sign three numbers and never see a record",
-            "Priority response",
         ),
     ),
     # Not in public_catalogue(): this is a second, different buyer — a

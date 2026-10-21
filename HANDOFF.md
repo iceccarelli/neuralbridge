@@ -1,11 +1,69 @@
 # HANDOFF — Industrial Autonomous Assurance
 
-For the next agent. Written 2026-09-15. Everything here is checkable against the
-repository; where something is unproven or unsold it says so, because a handoff
-that flatters the work is worse than no handoff.
+For the next agent. Written 2026-09-15; §0 added 2026-10-21. Everything here is
+checkable against the repository; where something is unproven or unsold it says
+so, because a handoff that flatters the work is worse than no handoff.
 
-**Repository** `github.com/iceccarelli/neuralbridge` — one branch `main`, zero
-tags, 16 assurance commits, 734 tests passing on Python 3.11 / 3.12 / 3.13 / 3.14.
+**Repository** `github.com/iceccarelli/neuralbridge` — zero tags. Test counts
+below were observed on 2026-10-21, not carried forward from older text.
+
+---
+
+## 0. State on 2026-10-21 (read this first; later sections predate it)
+
+**Observed, by running it:** `python -m pytest tests/ -q --no-cov` with a local
+PostgreSQL 16 → **all tests pass, 0 skipped** (without Postgres the `/ai` tests
+skip honestly); `ruff check src/ tests/` clean; `npx tsc --noEmit` and
+`npm run build` clean; `scripts/e2e-assurance.sh` (real API, real per-account
+ledgers, real Next server, Chromium) 7/7; `scripts/verify-buyer-path.sh` against
+a real local stack passes. Exact counts are in the PR description.
+
+**What changed since the section-5 priorities were written:**
+
+| Was open | Now |
+|---|---|
+| P0 launch truth: "Unlimited cases" vs a 50/day field nothing enforced | Removed end to end. Cases are **not metered** on Register or Cell; `cases_per_day` / `product_families` no longer exist. `tests/test_assurance_plans_parity.py` parses `app/lib/plans.ts` and fails if the backend catalogue, the frontend fallback or the claims registry drift, or a stale claim returns. `docs/claims-registry.md` maps each public claim to its enforcing code. |
+| One global ledger: any paying account could read/write every other account's cases | **Per-account ledger files** (`tenants/<account id>.db`), chosen in exactly one place (`api/deps.py:get_register`). The shared ledger is operator-only; anonymous callers get no ledger. Same for attestation logs and supplier feeds. |
+| Webhook merged accounts by email; non-idempotent; wrong status mapping | Accounts bind to the Stripe customer id only; events are deduplicated in the same transaction as their effects; stale and same-second events are ordered (cancel wins ties); `past_due` keeps access (Stripe dunning decides) and is flagged; `paused`/`incomplete` lose it; unpaid waits for `async_payment_succeeded`; sessions that are not ours are acknowledged, not retried. |
+| Plaintext key staging forever; no revoke | 24 h TTL, deleted on collection, `Cache-Control: no-store`; `GET/POST /v1/keys`, `POST /v1/keys/revoke`. |
+| Watch did not open cases (§5 item 8a) | **Done.** `run_watch` opens and keeps `ChangeAssuranceCase`s itself for drift, supplier advisories and interventions, idempotently. See `deploy/assurance/CHANGE.md` for exactly what is automated and what is not. |
+| Case closure only as strong as its status field | Closure requires post-trigger re-verification evidence **for the machine and function named**, no open human question, and a human actor (`person`, a visible name, not a reserved word). The only way to close without evidence is the explicit, human-only `waive_reverification`, which reads `waived`, never `current`. A case's state is reconstructable from the ledger alone (`assurance change replay`) and the replay rejects forged transitions. Independent adversarial review found and we fixed: cross-machine and pre-change evidence clearing a case, advisory cases closing on `never_verified`, a transient partial collection reopening a human-closed case, replay accepting a forged `ready_to_close`. |
+| `/ai` control plane had no tenancy: any caller could list and read another account's bound Postgres connection; `/api/v1/logs` was public and listed every tenant's audit events; the raw `adapters/postgres:<id>/execute` route ran SQL on another account's connection | Every connection, plan and audit entry is owned by the account that made it (`neuralbridge/ai/tenancy.py`); a foreign id is a 404 on every route, including the raw adapter routes. `/logs` needs a key and is owner-filtered (export is operator-only); the legacy `/connections` router is operator-only. The **shared seeded demo database is now read-only for paid accounts by default** (it let any paying account `DROP` tables for everyone); `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1` re-enables it for a **local** dev stack only (`scripts/verify-buyer-path.sh` needs it). The `/ai` audit log is in memory and cleared on restart; plan proposals are not audit events — the copy now says so instead of "full audit trail". |
+| No customer-facing view (§5 item 8) | `/assurance` (Next.js): fleet, evidence freshness, case queue, case detail with history, claim/advance/decide, export download and offline-verification instructions. It calls the real API with the caller's own key; the server decides what is shown or allowed. |
+| No way for an outsider to check an exported bundle | `assurance evidence verify <bundle.json>` — offline, no account. Proves internal consistency; **does not** prove the bundle is the operator's ledger (that needs a signed head attestation). |
+| Backups covered only the shared ledger | `python -m assurance.evidence.restore_check backup|verify` snapshots and checks accounts, operator ledger, every tenant ledger, attestation logs and supplier feeds. **No restore has been rehearsed against a deployed service — none exists.** |
+
+**Verification history (so you can judge how much to trust this):** three independent adversarial reviews were run by agents that did not write the code, against the real diff, with reproductions. They proved real defects in what had just been built — all fixed with failing-first tests and mutation checks: closure on another machine's or pre-change evidence; advisory cases closing on never-verified evidence; a stale run or a forged manifest clearing a case (reverify now binds to the ledger's own manifest for the machine); replay accepting a forged `ready_to_close`; a transient partial collection reopening a closed case; cross-tenant leaks in `/ai` and `/logs`; an unauthenticated memory-pressure lever on the webhook; non-ASCII headers causing 500s. **The final round of fixes (reverify ledger-binding, name rules, `/logs`, demo default) was mutation-checked by its authors but has not had a further independent review.** Because of the ledger-binding, advisory and intervention cases now require the machine to be re-collected and sealed *after* the case opened before it can be re-verified (CHANGE.md).
+
+**Still true / still not done (do not claim otherwise):**
+- Zero revenue, zero customers, zero pilots. Nothing deployed. Stripe has never
+  processed a payment; webhook handling is tested with locally signed payloads
+  only. `docs/pmf/PILOT-PROGRAMME.md` is a plan; no outreach has been sent.
+- The hosted API does not run Watch. Watch runs in the customer's kit/cron; the
+  workspace's "last sealed manifest" is a record date, not a live observation.
+- "Named person" means a name declared by an authenticated account holder. It
+  is not identity-proofed.
+- A hosted deployment that previously let accounts write to the shared ledger
+  would hide that data from those accounts after this change; there is no
+  migration tool (no production deployment exists).
+- `src/dashboard/` (Vite) is still not wired to the assurance API. `/assurance`
+  is the working surface.
+- Unreviewed/untested against reality: real Stripe behaviour (event ordering,
+  endpoint auto-disable, portal plan-switching configuration — `already_subscribed`
+  sends upgrades to the billing portal, which must be configured to allow plan
+  changes), the `Fly-Client-IP` path, Postgres failure text with real credentials,
+  and a restore of a deployed volume.
+- Open design risks: the checkout-success key handover is claimable by anyone
+  holding the Stripe session id for up to 24 h; `past_due` has no local expiry,
+  so a lost webhook endpoint could leave it standing; there is no periodic
+  reconciliation between Stripe and the account store; the crash window in
+  `run_watch` can leave one orphan divergence record (case itself is not
+  duplicated).
+- Regulatory framing was corrected in §1: Annex III 1.1.9 is a design
+  requirement on the machine and Art. 14 a reporting process; the ENISA Single
+  Reporting Platform has no API at launch, so our Art. 14 output is a prefill a
+  person keys in. Primary EUR-Lex/ENISA text was not read directly in the
+  research pass — verify before quoting.
 
 ---
 
@@ -87,7 +145,7 @@ change simply because two things are related.**
 ### Definition of done
 
 ```bash
-pytest tests/ -q          # 734 passing
+pytest tests/ -q          # all passing; see §0 for the observed count
 ruff check src/ tests/
 python -m assurance kit check plant/kit.json
 uvicorn assurance.api.service:app
@@ -119,7 +177,7 @@ the same files in an afternoon."** Each row names that statement.
 | `watch` (016) | `assurance watch run` | The Art. 14 intake, drafted from the fleet — and **awareness never decided**. What it reports instead: *"this has been outstanding 39 hours and nobody has made the determination."* |
 | `bridge` | `assurance bridge` | Field 5 (Member States) assembled from serial numbers. `srp_prefill()` deliberately omits `notification_type` and `awareness_datetime`. |
 | `change` | `assurance change list` / `assurance change show` | **The queue nothing else in this codebase produces.** A `ChangeAssuranceCase` opened from a drift, an advisory or an intervention, carrying which safety function is affected and why, moved through re-verification, and closable only by a named human once the underlying evidence — not a status field — says it may be. See `deploy/assurance/CHANGE.md`. |
-| `api` | `uvicorn assurance.api.service:app` | 54 endpoints. Entitlements read on **every** request; 402 (not 403) when authenticated but unentitled, because the obstacle is payment. |
+| `api` | `uvicorn assurance.api.service:app` | 57 operations (`/openapi.json`); one ledger per account. Entitlements read on **every** request; 402 (not 403) when authenticated but unentitled, because the obstacle is payment. |
 
 ---
 
@@ -251,13 +309,13 @@ Ordered by proximity to cash, not by interest.
 7. **CLI test coverage.** `collect/cli.py`, `machine/cli.py`, `machinery/cli.py`,
    `report/cli.py` are at **0%**. Four command-line surfaces a customer touches,
    untested.
-8. **Dashboard integration.** `src/dashboard/` knows nothing about assurance. The
+8. **Dashboard integration.** *(Partly closed 2026-10-21: `/assurance` shows the fleet, the case queue, case detail/history and exports against the real API — see §0. Still missing: advisory inbox, a fleet-wide staleness view beyond the per-machine counts, re-verification evidence upload beyond pasting JSON.)* `src/dashboard/` knows nothing about assurance. The
    fleet table, the coverage view and the advisory inbox are the three screens
    that would make this sellable to a non-engineer — now joined by a fourth:
    the Active Assurance Cases queue (`GET /v1/change/cases`,
    `assurance change list`), which today only renders as a CLI table and
    JSON, not a page.
-8a. **Watch -> case wiring.** `assess_drift`/`assess_advisory`
+8a. ~~**Watch -> case wiring.**~~ **Closed 2026-10-21 — see §0 and CHANGE.md.** *(Original text follows.)* `assess_drift`/`assess_advisory`
     (`src/assurance/change/service.py`) take exactly the objects
     `assurance.watch.runner.run_watch` already produces, but the watch does
     not call them itself. Today a case is opened by running

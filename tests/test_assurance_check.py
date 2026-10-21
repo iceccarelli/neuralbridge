@@ -278,15 +278,27 @@ def store(client):
     return deps.get_accounts()
 
 
-@pytest.fixture
-def api_ledger(client):
-    from assurance.api import deps
-    return deps.get_register().ledger
+# One account per (store, tier). Accounts are no longer merged by email, and
+# every account has its own ledger, so a test that seeds a ledger and then
+# calls as an account must seed THAT account's ledger.
+_KEYED: dict = {}
 
 
 def keyed(store, tier):
-    account = store.upsert_account(email=f"{tier}-check@example.de", tier=tier)
-    return {"X-API-Key": store.issue_key(account.id)}
+    slot = (str(store.path), tier)
+    if slot not in _KEYED:
+        account = store.upsert_account(email=f"{tier}-check@example.de", tier=tier)
+        _KEYED[slot] = (account, store.issue_key(account.id))
+    return {"X-API-Key": _KEYED[slot][1]}
+
+
+@pytest.fixture
+def api_ledger(client, store):
+    """The cell account's own ledger (the one ``keyed(store, "cell")`` reads)."""
+    from assurance.api import deps
+    keyed(store, "cell")
+    account = _KEYED[(str(store.path), "cell")][0]
+    return deps._tenant_register_for(str(deps.tenant_ledger_path(account.id))).ledger
 
 
 class TestHttp:
