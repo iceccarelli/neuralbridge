@@ -56,7 +56,7 @@ from assurance.core.evidence import (
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -85,6 +85,7 @@ __all__ = [
     "MAX_MACHINES_PER_ACCOUNT",
     "MAX_NEW_MACHINES_PER_REPORT",
     "MachineResult",
+    "NOT_A_LOOK_REASON",
     "ReportResult",
     "ingest_report",
     "lock_path",
@@ -522,6 +523,21 @@ def _ingest_entry(
                            "already recorded.", stamp)
 
     relayed = entry.get("manifest_relayed") is True
+    if manifest is not None:
+        # Before staleness and before the relayed flag: no age makes a declaration
+        # a look at the machine. `configuration_hash` ignores `source` and
+        # `hash_source`, so equal hashes prove nothing about how they were obtained.
+        why_not = _not_a_look(manifest)
+        if why_not:
+            if key not in account.enrolled:
+                return _refuse(entry, key, NOT_A_LOOK_REASON, why_not + " A machine "
+                               "this account has not enrolled is not created from it.",
+                               stamp)
+            return _not_a_look_attempt(
+                ledger, entry=entry, key=key, detail=why_not,
+                missing=_not_read_items(manifest), watch_id=watch_id,
+                run_started_at=run_started_at, digest=digest, actor=actor,
+                observed_at=observed_at, stamp=stamp, manifest_age=manifest_age)
     if manifest is not None and manifest_age is not None:
         window = _freshness_window_hours(account.max_age_hours)
         # A relayed manifest is one the reporter says it sealed earlier for the
@@ -591,15 +607,28 @@ def _ingest_entry(
                 f"{observed_hash[:12]}, {len(manifest.items)} item(s). A baseline, "
                 "not a finding.")
         record_manifest(ledger, manifest, actor=actor)
-    elif baseline.configuration_hash() == observed_hash:
-        recorded = "observed"
-        note = f"unchanged at {observed_hash[:12]}"
     else:
-        recorded = "changed"
         try:
             divergence = compare(baseline, manifest)
         except ValueError as exc:  # pragma: no cover - same key, so cannot differ
             return _refuse(entry, key, "incomparable_manifest", str(exc), stamp)
+        recorded = "changed"
+        note = ""
+        if divergence.verdict == "matches":
+            recorded = "observed"
+            note = f"unchanged at {observed_hash[:12]}"
+        elif divergence.verdict == "unverifiable":
+            # Same configuration hash, but some of it could not be compared (a
+            # baseline item with no hash). Nothing was seen, which is not the same
+            # as nothing changed: an attempt, not an observation.
+            detail_text = ("the configuration hash is unchanged but the comparison "
+                           "is unverifiable: " + "; ".join(divergence.checks_skipped[:3]))
+            return _not_a_look_attempt(
+                ledger, entry=entry, key=key, detail=detail_text,
+                missing=divergence.uncompared, watch_id=watch_id,
+                run_started_at=run_started_at, digest=digest, actor=actor,
+                observed_at=observed_at, stamp=stamp, manifest_age=manifest_age)
+    if recorded == "changed":
         note = (f"configuration moved {baseline.configuration_hash()[:12]} → "
                 f"{observed_hash[:12]}: " + ", ".join(
                     f"{c.item_id} {c.kind.value}" for c in divergence.changes))
@@ -635,6 +664,62 @@ def _ingest_entry(
                        "comparison is what is recorded)"),
         counts_as_observation=True, manifest_age_hours=manifest_age,
         case_id=case_id, case_status=case_status, case_opened=case_opened)
+
+
+#: The reason a positive report is recorded as an incomplete attempt (or refused,
+#: for a machine this account has not enrolled) because its manifest is not a record
+#: of looking at the unit.
+NOT_A_LOOK_REASON = "manifest_not_a_look_at_the_machine"
+
+
+def _not_a_look(manifest: SafetyManifest) -> str:
+    """Why this manifest cannot be a positive observation of the machine; "" if it can.
+
+    A look is an ``as_found`` manifest whose every item was hashed off the unit
+    (:attr:`HashSource.describes_this_unit`). ``configuration_hash`` deliberately
+    ignores both ``source`` and ``hash_source``, so equal hashes say nothing about
+    either; this is the same rule ``Divergence.verdict`` applies before it will
+    say ``matches``.
+    """
+    reasons: list[str] = []
+    if manifest.source is not ManifestSource.AS_FOUND:
+        reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
+    not_read = _not_read_items(manifest)
+    if not_read:
+        reasons.append(
+            "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
+            "(supplied by a vendor, or declared)")
+    if not reasons:
+        return ""
+    return ("the manifest is not a record of looking at this machine: "
+            + "; ".join(reasons) + ". Equal hashes do not say what the unit holds.")
+
+
+def _not_read_items(manifest: SafetyManifest) -> list[str]:
+    return sorted(i.item_id for i in manifest.items if not i.hash_source.describes_this_unit)
+
+
+def _not_a_look_attempt(
+    ledger: EvidenceLedger, *, entry: Mapping[str, Any], key: str, detail: str,
+    missing: Sequence[str], watch_id: str, run_started_at: str, digest: str,
+    actor: Actor, observed_at: datetime, stamp: str, manifest_age: float | None,
+) -> MachineResult:
+    """Record an incomplete attempt: no observation, no baseline, no case."""
+    serial = str(entry.get("serial", ""))
+    status = str(entry.get("status", ""))
+    _seal_observation(
+        ledger, key=key, serial=serial, status="incomplete", reported=status,
+        observed_at=observed_at, configuration_hash="", complete=False,
+        missing=missing, detail=detail, watch_id=watch_id,
+        run_started_at=run_started_at, digest=digest, actor=actor,
+        manifest_age_hours=manifest_age)
+    return MachineResult(
+        serial=serial, machine_key=key, reported_status=status,
+        recorded_status="incomplete", outcome="recorded", observed_at=stamp,
+        reason=NOT_A_LOOK_REASON,
+        detail=detail + " Recorded as an incomplete attempt: it does not count as an "
+        "observation, no case was touched and the baseline did not move.",
+        counts_as_observation=False, manifest_age_hours=manifest_age)
 
 
 def _freshness_window_hours(declared: float | None) -> float:

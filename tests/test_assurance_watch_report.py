@@ -838,6 +838,158 @@ class TestTime:
 
 
 # =====================================================================
+# a manifest that is not a look at the machine is not an observation
+# =====================================================================
+
+def declared_copy(manifest: dict, *, source: str = "as_declared",
+                  hash_source: str = "supplied_by_vendor") -> dict:
+    """The same configuration, presented as something other than a look at the unit."""
+    out = {**manifest, "source": source}
+    out["items"] = [{**i, "hash_source": hash_source} for i in manifest["items"]]
+    return out
+
+
+def manifest_ids(acct, key=KEY_0412):
+    return [m.manifest_id for m in manifests_from_ledger(ledger_of(acct), key)]
+
+
+class TestAManifestThatIsNotALookIsNotAnObservation:
+    """Hash equality is not enough: ``configuration_hash`` ignores who looked and how."""
+
+    def _baseline(self, client, h, tmp_path):
+        t = now() - timedelta(hours=5)
+        post(client, h, report(good(make_manifest(tmp_path), at=t), started=t))
+
+    @pytest.mark.parametrize("variant", [
+        {},                                                 # declared + vendor-supplied
+        {"source": "as_found"},                             # looks found, hashes are the vendor's
+        {"hash_source": "read_from_machine"},               # hashes from the unit, but as_declared
+        {"source": "as_intended"},
+        {"source": "as_found", "hash_source": "declared"},  # nothing hashed at all
+    ], ids=["declared+vendor", "found+vendor", "declared+read", "intended+vendor",
+            "found+declared-hash"])
+    def test_an_unchanged_claim_on_a_non_look_is_incomplete_and_counts_for_nothing(
+            self, client, cell, tmp_path, variant):
+        acct, h = cell
+        self._baseline(client, h, tmp_path)
+        before_manifests = manifest_ids(acct)
+        before_cases = len(case_entries(ledger_of(acct)))
+        t = now() - timedelta(minutes=2)
+        entry = good(declared_copy(make_manifest(tmp_path), **variant), at=t)
+        if variant.get("hash_source") == "declared":
+            for i in entry["manifest"]["items"]:
+                i["content_hash"] = ""
+        m = post(client, h, report(entry, started=t, watch_id="W2")).json()["machines"][0]
+        assert m["outcome"] == "recorded"
+        assert m["recorded_status"] == "incomplete"
+        assert m["counts_as_observation"] is False
+        assert m["reason"] == "manifest_not_a_look_at_the_machine"
+        assert "unchanged at" not in m["detail"]
+        assert (m["case_id"], m["case_status"], m["case_opened"]) == ("", "", False)
+        ledger = ledger_of(acct)
+        body = [e.evidence().body for e in ledger.entries(kind="watch.observation")][-1]
+        assert body["status"] == "incomplete" and body["complete"] is False
+        assert body["reported_status"] == "unchanged" and body["configuration_hash"] == ""
+        assert manifest_ids(acct) == before_manifests        # the baseline did not move
+        assert len(case_entries(ledger)) == before_cases
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_attempt_status"] == "incomplete"
+        assert row["last_attempt_succeeded"] is False
+        assert row["last_successful_observation_at"] != iso(t)
+
+    def test_a_changed_claim_on_a_non_look_opens_no_case_and_moves_no_baseline(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        self._baseline(client, h, tmp_path)
+        before = manifest_ids(acct)
+        t = now() - timedelta(minutes=2)
+        entry = good(declared_copy(make_manifest(tmp_path, fw=b"firmware 3.9.0")), at=t,
+                     status="changed")
+        m = post(client, h, report(entry, started=t, watch_id="W2")).json()["machines"][0]
+        assert (m["recorded_status"], m["counts_as_observation"]) == ("incomplete", False)
+        assert m["case_id"] == ""
+        assert case_entries(ledger_of(acct)) == []
+        assert manifest_ids(acct) == before
+
+    @pytest.mark.parametrize("variant", [
+        {}, {"hash_source": "read_from_machine"}, {"source": "as_found"},
+    ], ids=["declared+vendor", "declared+read", "found+vendor"])
+    def test_a_non_look_cannot_enrol_an_unknown_machine(self, client, cell, tmp_path, variant):
+        acct, h = cell
+        t = now() - timedelta(minutes=2)
+        entry = good(declared_copy(make_manifest(tmp_path), **variant), at=t)
+        m = post(client, h, report(entry, started=t)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_not_a_look_at_the_machine")
+        assert m["counts_as_observation"] is False
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_non_look_wins_over_the_relayed_flag_and_over_staleness(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        self._baseline(client, h, tmp_path)
+        t = now() - timedelta(minutes=2)
+        old = declared_copy(make_manifest(tmp_path, when=now() - timedelta(days=60)))
+        relayed = {**good(old, at=t, keep_taken_at=True), "manifest_relayed": True}
+        m = post(client, h, report(relayed, started=t, watch_id="W2")).json()["machines"][0]
+        assert (m["recorded_status"], m["counts_as_observation"]) == ("incomplete", False)
+        t2 = now() - timedelta(minutes=1)
+        stale = good(old, at=t2, keep_taken_at=True)
+        m2 = post(client, h, report(stale, started=t2, watch_id="W3")).json()["machines"][0]
+        assert (m2["recorded_status"], m2["counts_as_observation"]) == ("incomplete", False)
+        assert m2["reason"] == "manifest_not_a_look_at_the_machine"
+
+    def test_the_real_collectors_report_is_unaffected(self, client, cell, tmp_path):
+        acct, h = cell
+        self._baseline(client, h, tmp_path)
+        t = now() - timedelta(minutes=2)
+        m = post(client, h, report(good(make_manifest(tmp_path), at=t), started=t,
+                                   watch_id="W2")).json()["machines"][0]
+        assert (m["recorded_status"], m["counts_as_observation"]) == ("observed", True)
+        t2 = now() - timedelta(minutes=1)
+        m = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                        status="changed"), started=t2,
+                                   watch_id="W3")).json()["machines"][0]
+        assert (m["recorded_status"], m["counts_as_observation"]) == ("changed", True)
+        assert m["case_id"]
+
+    def test_the_recorded_status_comes_from_the_divergence_verdict_not_hash_equality(
+            self, env, tmp_path, monkeypatch):
+        """If compare() cannot vouch for an equal hash, the look is not recorded as unchanged."""
+        from dataclasses import replace
+
+        from assurance.watch import ingest
+
+        ledger = EvidenceLedger(tmp_path / "verdict.db")
+        actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
+        t1, t2 = now() - timedelta(hours=3), now() - timedelta(minutes=2)
+        ingest_report(ledger, _plain(report(good(make_manifest(tmp_path), at=t1), started=t1)),
+                      actor=actor)
+        real = ingest.compare
+        monkeypatch.setattr(ingest, "compare", lambda b, o: replace(
+            real(b, o), uncompared=("ITM-PLC",)))
+        res = ingest_report(ledger, _plain(report(
+            good(make_manifest(tmp_path), at=t2), started=t2, watch_id="W2")),
+            actor=actor).results[0]
+        assert (res.recorded_status, res.counts_as_observation) == ("incomplete", False)
+        assert res.reason == "manifest_not_a_look_at_the_machine"
+        body = [e.evidence().body for e in ledger.entries(kind="watch.observation")][-1]
+        assert body["status"] == "incomplete" and body["complete"] is False
+
+    def test_the_library_function_records_the_same_thing(self, env, tmp_path):
+        ledger = EvidenceLedger(tmp_path / "nonlook.db")
+        actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
+        t1, t2 = now() - timedelta(hours=3), now() - timedelta(minutes=2)
+        ingest_report(ledger, _plain(report(good(make_manifest(tmp_path), at=t1), started=t1)),
+                      actor=actor)
+        n = len(manifests_from_ledger(ledger, KEY_0412))
+        res = ingest_report(ledger, _plain(report(
+            good(declared_copy(make_manifest(tmp_path)), at=t2), started=t2,
+            watch_id="W2")), actor=actor).results[0]
+        assert (res.recorded_status, res.counts_as_observation) == ("incomplete", False)
+        assert len(manifests_from_ledger(ledger, KEY_0412)) == n
+
+
+# =====================================================================
 # the tenant boundary
 # =====================================================================
 
