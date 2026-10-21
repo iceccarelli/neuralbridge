@@ -8,6 +8,8 @@ import {
   type CaseDetail,
   type CaseQueue,
   type Fleet,
+  type ObservationRow,
+  type Observations,
 } from '../lib/assuranceApi';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
@@ -17,6 +19,69 @@ function ageLabel(iso: string): string {
   if (Number.isNaN(t)) return 'unknown age';
   const days = Math.floor((Date.now() - t) / 86_400_000);
   return days <= 0 ? 'today' : `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+const STALE_WHY: Record<string, string> = {
+  never_reported: 'never reported',
+  never_successfully_observed: 'no successful observation has ever been reported',
+  older_than_cadence: 'last successful observation is older than the declared cadence',
+};
+
+function when(iso: string | null): string {
+  return iso ? `${ageLabel(iso)} (${iso})` : '';
+}
+
+// One machine's Watch columns. A failed or incomplete attempt is shown as failed,
+// never as an observation; a machine nobody reported is not shown as current.
+function ObservationCells({ row }: { row: ObservationRow | undefined }) {
+  if (!row || !row.reported) {
+    return (
+      <>
+        <td data-testid="obs-last-success">No Watch report received — run <code>assurance watch push</code></td>
+        <td data-testid="obs-last-attempt">—</td>
+        <td data-testid="obs-stale">
+          <strong className="aw-bad">Stale</strong> — never reported
+        </td>
+      </>
+    );
+  }
+  const failedLast = row.last_attempt_succeeded === false;
+  return (
+    <>
+      <td data-testid="obs-last-success" title={row.last_successful_observation_at ?? undefined}>
+        {row.last_successful_observation_at ? (
+          when(row.last_successful_observation_at)
+        ) : (
+          <span className="aw-bad">None — no successful observation has been reported</span>
+        )}
+      </td>
+      <td data-testid="obs-last-attempt" title={row.last_attempt_at ?? undefined}>
+        {failedLast ? (
+          <>
+            <strong className="aw-bad">FAILED — {row.last_attempt_status}</strong>{' '}
+            {row.last_attempt_at ? ageLabel(row.last_attempt_at) : ''}
+            {row.consecutive_failed_attempts > 1 ? `, ${row.consecutive_failed_attempts} attempts in a row` : ''}
+            <br />
+            <span className="aw-note">Not an observation: this machine is not shown as current.</span>
+          </>
+        ) : (
+          <>
+            {row.last_attempt_status} {row.last_attempt_at ? ageLabel(row.last_attempt_at) : ''}
+          </>
+        )}
+      </td>
+      <td data-testid="obs-stale">
+        {row.stale ? (
+          <>
+            <strong className="aw-bad">Stale</strong> — {STALE_WHY[row.stale_reason] ?? row.stale_reason} (cadence{' '}
+            {row.cadence_hours} h{row.cadence_declared ? '' : ', default'})
+          </>
+        ) : (
+          <>No — within {row.cadence_hours} h</>
+        )}
+      </td>
+    </>
+  );
 }
 
 function Refusal({ outcome, what }: { outcome: ApiOutcome<unknown>; what: string }) {
@@ -52,18 +117,21 @@ export default function AssuranceWorkspace() {
   const { key, setKey } = useSharedApiKey();
   const [fleet, setFleet] = useState<ApiOutcome<Fleet> | null>(null);
   const [queue, setQueue] = useState<ApiOutcome<CaseQueue> | null>(null);
+  const [obs, setObs] = useState<ApiOutcome<Observations> | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string>('');
   const [detail, setDetail] = useState<ApiOutcome<CaseDetail> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [f, q] = await Promise.all([
+    const [f, q, o] = await Promise.all([
       call<Fleet>(API_BASE, key, '/v1/fleet/machines'),
       call<CaseQueue>(API_BASE, key, '/v1/change/cases'),
+      call<Observations>(API_BASE, key, '/v1/fleet/observations'),
     ]);
     setFleet(f);
     setQueue(q);
+    setObs(o);
     setLoading(false);
   }, [key]);
 
@@ -129,6 +197,9 @@ export default function AssuranceWorkspace() {
                       <th>Machine</th>
                       <th>Site</th>
                       <th>Last sealed manifest</th>
+                      <th>Last successful observation</th>
+                      <th>Last attempt</th>
+                      <th>Stale?</th>
                       <th>Config</th>
                       <th>Evidence</th>
                       <th>Stale</th>
@@ -137,10 +208,17 @@ export default function AssuranceWorkspace() {
                   </thead>
                   <tbody>
                     {fleet.data.machines.map((m) => (
-                      <tr key={m.machine}>
+                      <tr key={m.machine} data-testid="fleet-row" data-machine={m.machine}>
                         <td>{m.machine}</td>
                         <td>{m.site || '—'}</td>
                         <td title={m.taken_at}>{ageLabel(m.taken_at)}</td>
+                        {obs?.kind === 'ok' ? (
+                          <ObservationCells row={obs.data.machines.find((r) => r.machine === m.machine)} />
+                        ) : (
+                          <td colSpan={3} data-testid="obs-unavailable">
+                            Observation status unavailable.
+                          </td>
+                        )}
                         <td>
                           <code>{m.configuration_hash.slice(0, 12)}</code>
                         </td>
@@ -153,10 +231,63 @@ export default function AssuranceWorkspace() {
                 </table>
               </div>
             )}
+            {obs?.kind === 'ok' &&
+              (() => {
+                const enrolled = new Set(fleet.data.machines.map((m) => m.machine));
+                const extra = obs.data.machines.filter((r) => !enrolled.has(r.machine));
+                if (extra.length === 0) return null;
+                return (
+                  <>
+                    <h3>Reported by Watch, no manifest in this ledger</h3>
+                    <p className="aw-note">
+                      These machines appear only in Watch reports, as attempts that did not produce a manifest here (for
+                      example a machine that could not be collected on its first run).
+                    </p>
+                    <div className="aw-scroll">
+                      <table className="aw-table" data-testid="obs-extra-table">
+                        <thead>
+                          <tr>
+                            <th>Machine</th>
+                            <th>Last successful observation</th>
+                            <th>Last attempt</th>
+                            <th>Stale?</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {extra.map((r) => (
+                            <tr key={r.machine} data-machine={r.machine}>
+                              <td>{r.machine}</td>
+                              <ObservationCells row={r} />
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
+            {fleet.data.machines.length > 0 && obs?.kind === 'ok' && !obs.data.reporting && (
+              <p className="console-empty-note" data-testid="obs-none">
+                No Watch report received — run <code>assurance watch push</code>. Until you do, this workspace only
+                knows the manifests that were recorded in it; it cannot say when any machine was last looked at.
+              </p>
+            )}
+            {obs?.kind === 'ok' && obs.data.reporting && (
+              <p data-testid="obs-summary">
+                {obs.data.summary.stale} stale · {obs.data.summary.latest_attempt_failed} whose latest attempt failed ·{' '}
+                {obs.data.summary.never_reported} never reported. Reported by you, not independently observed; each
+                machine is judged against the cadence your Watch declared with its last successful look (default{' '}
+                {obs.data.default_cadence_hours} h).
+              </p>
+            )}
+            {obs && obs.kind !== 'ok' && fleet.kind === 'ok' && <Refusal outcome={obs} what="Observations" />}
             <p className="aw-note">
               &ldquo;Last sealed manifest&rdquo; is the last configuration recorded in this ledger, not a live
-              observation: the hosted API does not run Watch. Watch runs in your kit or scheduler and a failed or missed
-              run is not recorded here, so an old date means the record is old, not that the machine is unchanged.
+              observation. The hosted API does not run Watch: Watch still runs in your kit or scheduler, and the
+              observation columns show only what you chose to report with <code>assurance watch push</code>. A look that
+              failed or was incomplete is shown as failed, never as unchanged, and a machine whose last successful
+              observation is older than your declared cadence, or that was never reported, is shown as stale. These
+              are your reports; the hosted service did not observe any machine.
             </p>
           </>
         )}

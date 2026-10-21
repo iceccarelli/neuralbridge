@@ -2,6 +2,13 @@
 
     run     one pass over every target: collect, compare, seal what moved
     status  what the last run found, without looking again
+    push    OPT-IN: report the latest run to your own hosted ledger
+
+``run`` and ``status`` never touch the network. ``push`` is the one command here
+that can, only when you give it an explicit ``--api-url`` and the name of an
+environment variable holding your key, and it lives in its own module
+(``assurance.watch.push``) which nothing else imports. ``--dry-run`` shows
+exactly what would be sent and sends nothing.
 
 ``run`` exits 0 when the fleet is quiet, 1 when something changed since the
 last pass, and 2 when the watch could not see part of the fleet — because
@@ -16,8 +23,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from assurance.core.errors import AssuranceError
 from assurance.evidence.ledger import EvidenceLedger
@@ -27,13 +36,32 @@ from assurance.watch.runner import last_run, run_watch
 __all__ = ["build_parser", "main"]
 
 
+class _Parser(argparse.ArgumentParser):
+    """An argument parser that never echoes a value back in an error.
+
+    ``watch push`` takes the NAME of an environment variable, never a key. An
+    operator who types ``--key asr_...`` anyway must be told no, not shown their
+    key again in a terminal, a CI log or a screenshot: argparse's own errors
+    quote the offending arguments, so they are replaced here.
+    """
+
+    def error(self, message: str) -> NoReturn:  # type: ignore[override]
+        if message.startswith("unrecognized arguments"):
+            message = ("unrecognized arguments (not echoed: `watch push` never "
+                       "accepts a key on the command line; use --key-env NAME)")
+        message = re.sub(r"(invalid .* value): .*$", r"\1", message)
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _Parser(
         prog="assurance watch",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
-    verbs = p.add_subparsers(dest="command", required=True)
+    verbs = p.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
     r = verbs.add_parser("run", help="one pass over every target")
     r.add_argument("config", type=Path)
@@ -47,6 +75,28 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("config", type=Path)
     s.add_argument("--ledger", required=True, type=Path)
     s.add_argument("--json", action="store_true")
+
+    h = verbs.add_parser(
+        "push", allow_abbrev=False, help="OPT-IN: report the latest sealed run to your hosted ledger",
+        description="Report what the latest sealed run saw to your own hosted "
+                    "ledger. Sends the SafetyManifest, the observation status and "
+                    "the run summary — never a raw file. Exit 0 reported, 1 "
+                    "refused or partial, 2 could not run (safe to run again).")
+    h.add_argument("config", type=Path)
+    h.add_argument("--ledger", required=True, type=Path)
+    h.add_argument("--api-url", required=True,
+                   help="the hosted API base URL, e.g. https://api.example.com")
+    h.add_argument("--key-env", required=True, metavar="ENVVAR",
+                   help="NAME of the environment variable holding your API key "
+                        "(the key is never accepted on the command line)")
+    h.add_argument("--dry-run", action="store_true",
+                   help="print exactly what would be sent; open no connection")
+    h.add_argument("--timeout", type=float, default=30.0)
+    h.add_argument("--retries", type=int, default=2,
+                   help="retries after a timeout or 5xx (the report is idempotent)")
+    h.add_argument("--retry-wait", type=float, default=1.0)
+    h.add_argument("--max-body-bytes", type=int, default=900_000,
+                   help="split the report into requests no larger than this")
 
     return p
 
@@ -189,9 +239,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return _exit_code(str(body.get("verdict", "degraded")))
 
 
+def _cmd_push(args: argparse.Namespace) -> int:
+    # Imported here and nowhere else: `watch run` and the kit never load it.
+    from assurance.watch.push import main_push
+
+    return main_push(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {"run": _cmd_run, "status": _cmd_status}
+    handlers = {"run": _cmd_run, "status": _cmd_status, "push": _cmd_push}
     try:
         return handlers[args.command](args)
     except FileNotFoundError as exc:
