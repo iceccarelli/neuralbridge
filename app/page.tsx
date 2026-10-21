@@ -132,7 +132,7 @@ const platformStatus = [
   { area: 'FastAPI backend', status: 'Supported' },
   { area: 'Connection management model', status: 'Supported' },
   { area: 'MCP tool listing / invocation', status: 'Supported' },
-  { area: 'Dashboard foundation', status: 'Supported' },
+  { area: 'Dashboard foundation (separate admin UI, not wired to the assurance API)', status: 'Evolving' },
   { area: 'Basic audit trail', status: 'Supported' },
   { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
   { area: 'Broad adapter ecosystem', status: 'Evolving' },
