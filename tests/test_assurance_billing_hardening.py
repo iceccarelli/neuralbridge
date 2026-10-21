@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from assurance.api import deps
 from assurance.billing import plans as plans_module
+from assurance.billing import stripe_gateway as deps_stripe
 from assurance.billing.accounts import (
     ACCOUNTS_SCHEMA_VERSION,
     PENDING_KEY_TTL,
@@ -367,12 +368,11 @@ class TestStaleAndOutOfOrder:
 
 
 class TestCheckoutValidation:
-    @pytest.mark.parametrize("tier", ["supplier", "free", "enterprise", "", None])
+    @pytest.mark.parametrize("tier", ["supplier", "free", "enterprise", ""])
     def test_only_purchasable_tiers_can_be_granted(self, client, store, tier):
-        event = checkout(tier=tier)
-        if tier is None:
-            del event["data"]["object"]["metadata"]["tier"]
-        resp = hook(client, event)
+        # A tier that is present and wrong is refused. (An ABSENT tier is not one
+        # of ours and is acknowledged: see TestReviewFixes.)
+        resp = hook(client, checkout(tier=tier))
         assert resp.status_code == 400
         assert resp.json()["detail"]["error"] == "invalid_tier"
         assert rows(store, "SELECT COUNT(*) FROM accounts")[0][0] == 0
@@ -551,7 +551,7 @@ class TestClientAddress:
     def test_the_fly_header_is_used_when_trusted(self, monkeypatch):
         monkeypatch.setenv("ASSURANCE_TRUST_FLY_PROXY", "1")
         assert deps._client_address(_fake_request(), "203.0.113.5") == "203.0.113.5"
-        assert deps._client_address(_fake_request(), "2001:db8::1") == "2001:db8::1"
+        assert deps._client_address(_fake_request(), "2001:db8::1") == "2001:db8::/64"
 
     @pytest.mark.parametrize("junk", [None, "", "  ", "1.2.3.4, evil", "a" * 80,
                                       "<script>", "1.2.3.4\nX: y"])
@@ -841,3 +841,96 @@ class TestNonAsciiHeaders:
         resp = client.post("/v1/billing/webhook", content=b"{}",
                            headers={"stripe-signature": header.encode("utf-8")})
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# adversarial-review round: findings 4-8 and the upgrade path
+# ---------------------------------------------------------------------------
+class TestReviewFixes:
+    def test_a_checkout_that_is_not_ours_is_acknowledged_not_retried(self, client):
+        # A Stripe account that sells something else posts sessions without our
+        # metadata. A 400 would make Stripe retry for days and risk disabling the
+        # endpoint that also carries our cancellations.
+        event = checkout()
+        del event["data"]["object"]["metadata"]["tier"]
+        resp = hook(client, event)
+        assert resp.status_code == 200
+        assert resp.json()["ignored"] == "no_neuralbridge_tier"
+        assert collect(client).status_code == 202            # no key was minted
+
+    def test_a_present_but_wrong_tier_is_still_refused(self, client):
+        assert hook(client, checkout(tier="supplier")).status_code == 400
+
+    def test_same_second_cancel_beats_active_in_either_arrival_order(self, client):
+        hook(client, checkout())
+        key = collect(client).json()["api_key"]
+        hook(client, subscription("active", event_id="e_a", created=2500))
+        hook(client, subscription("canceled", event_id="e_c", created=2500))
+        hook(client, subscription("active", event_id="e_a2", created=2500))
+        assert can_use_register(client, key) == 402
+
+    def test_a_flood_of_unknown_session_ids_does_not_take_the_write_lock(self, store):
+        import threading
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with store._txn():
+                held.set()
+                release.wait(5)
+
+        t = threading.Thread(target=hold)
+        t.start()
+        held.wait(5)
+        try:
+            # With the write lock held elsewhere, a guess must still answer at once.
+            assert store.claim_pending_key("cs_guess") is None
+        finally:
+            release.set()
+            t.join()
+
+    def test_an_active_subscriber_is_sent_to_the_portal_not_a_second_checkout(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setenv("ASSURANCE_PRICE_CELL", "price_cell_test")
+        hook(client, checkout())
+        key = collect(client).json()["api_key"]
+        resp = client.post("/v1/checkout", headers={"X-API-Key": key},
+                           json={"tier": "cell", "email": "m@sk.de"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["error"] == "already_subscribed"
+        assert "portal" in resp.json()["detail"]["remedy"]
+
+    def test_a_provider_error_is_not_echoed_to_an_anonymous_caller(self, client, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_PRICE_REGISTER", "price_secret_looking_id")
+
+        def boom(**_):
+            raise deps_stripe.StripeError("No such price: 'price_secret_looking_id'")
+
+        monkeypatch.setattr(deps_stripe, "create_checkout_session", boom)
+        resp = client.post("/v1/checkout", json={"tier": "register", "email": "a@b.de"})
+        assert resp.status_code == 503
+        assert "price_secret_looking_id" not in resp.text
+
+    def test_the_key_handover_is_never_cached(self, client):
+        hook(client, checkout())
+        resp = collect(client)
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == "no-store"
+
+    def test_ipv6_callers_share_one_bucket_per_64(self):
+        assert deps._bucket("2001:db8:1:2:aaaa:bbbb:cccc:dddd") == \
+            deps._bucket("2001:db8:1:2::1") == "2001:db8:1:2::/64"
+        assert deps._bucket("2001:db8:1:3::1") != deps._bucket("2001:db8:1:2::1")
+        assert deps._bucket("203.0.113.9") == "203.0.113.9"
+        assert deps._bucket("not-an-ip") == "not-an-ip"
+
+    def test_old_usage_rows_are_dropped(self, store):
+        db = sqlite3.connect(store.path)
+        db.execute("INSERT INTO usage (subject, scope, day, count) VALUES "
+                   "('ip:old','validate','2020-01-01',3)")
+        db.commit()
+        db.close()
+        store.consume("ip:new", "validate", 20, "free")
+        assert rows(store, "SELECT COUNT(*) FROM usage WHERE subject='ip:old'")[0][0] == 0
+        assert rows(store, "SELECT COUNT(*) FROM usage WHERE subject='ip:new'")[0][0] == 1
