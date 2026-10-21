@@ -378,6 +378,12 @@ class TestPflTablePinned:
         assert tier is AssuranceTier.VALIDATED
         assert "claim" in reason and "cannot be checked" in reason
 
+    @pytest.mark.parametrize("pin", ["", "0" * 64])
+    def test_a_claim_the_envelope_does_not_pin_is_community_and_says_why(self, pin):
+        tier, reason = limits().tier_for(pin)
+        assert tier is AssuranceTier.COMMUNITY
+        assert "does not pin" in reason
+
     def test_a_table_without_a_verification_claim_is_community(self):
         table = limits(verified_by="", verified_on="")
         tier, reason = table.tier_for(table.content_hash())
