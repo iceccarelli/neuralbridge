@@ -172,11 +172,15 @@ class StopPerformance:
     basis: FigureBasis
 
     def __post_init__(self) -> None:
+        # Strictly positive: no real machine reacts in zero time or stops in zero
+        # distance, and a zero here shortens the computed separation toward zero
+        # while reading as a perfect measurement. Refuse it rather than believe it.
         _num(self.reaction_time_s, "StopPerformance.reaction_time_s",
-             maximum=DURATION_MAX_S)
-        _num(self.stop_time_s, "StopPerformance.stop_time_s", maximum=DURATION_MAX_S)
+             maximum=DURATION_MAX_S, positive=True)
+        _num(self.stop_time_s, "StopPerformance.stop_time_s", maximum=DURATION_MAX_S,
+             positive=True)
         _num(self.stop_distance_mm, "StopPerformance.stop_distance_mm",
-             maximum=DISTANCE_MAX_MM)
+             maximum=DISTANCE_MAX_MM, positive=True)
         if _num(self.measured_at_speed_mm_s, "StopPerformance.measured_at_speed_mm_s",
                 maximum=SPEED_MAX_MM_S) <= 0:
             raise EnvelopeError(
@@ -224,11 +228,13 @@ class StopPerformance:
                                 "measured_at_speed_mm_s", "basis"})
         return cls(
             reaction_time_s=_num(_require(d, "reaction_time_s", "stop"),
-                                 "reaction_time_s", maximum=DURATION_MAX_S),
+                                 "reaction_time_s", maximum=DURATION_MAX_S,
+                                 positive=True),
             stop_time_s=_num(_require(d, "stop_time_s", "stop"), "stop_time_s",
-                             maximum=DURATION_MAX_S),
+                             maximum=DURATION_MAX_S, positive=True),
             stop_distance_mm=_num(_require(d, "stop_distance_mm", "stop"),
-                                  "stop_distance_mm", maximum=DISTANCE_MAX_MM),
+                                  "stop_distance_mm", maximum=DISTANCE_MAX_MM,
+                                  positive=True),
             measured_at_speed_mm_s=_num(
                 _require(d, "measured_at_speed_mm_s", "stop"),
                 "measured_at_speed_mm_s", maximum=SPEED_MAX_MM_S),
@@ -254,6 +260,24 @@ class SensingUncertainty:
              maximum=DISTANCE_MAX_MM)
         _num(self.robot_position_mm, "SensingUncertainty.robot_position_mm",
              maximum=DISTANCE_MAX_MM)
+
+    @property
+    def has_zero_figure(self) -> bool:
+        return self.human_position_mm == 0 or self.robot_position_mm == 0
+
+    @property
+    def tier_ceiling(self) -> AssuranceTier:
+        """The basis's ceiling, except that a zero figure is never a measurement.
+
+        Zd and Zr are accepted at zero (a caller may genuinely fold the
+        uncertainty into another term), but an instrument always has a nonzero
+        error, so a ``measured`` basis over a zero cannot be what it says. The
+        figure is capped at the weakest tier instead of refused, because refusing
+        would stop an honest datasheet-level declaration from being verified at all.
+        """
+        if self.has_zero_figure:
+            return AssuranceTier.PROFILE
+        return self.basis.tier_ceiling
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -356,8 +380,11 @@ class SafetyEnvelope:
     #: not compute C; it takes the figure the manufacturer declares, and it
     #: carries no ``FigureBasis`` for it, so a weak C does not lower the tier.
     intrusion_distance_mm: float
-    #: vh where the sensing system does not report a closing speed.
-    human_approach_speed_mm_s: float = DEFAULT_HUMAN_APPROACH_SPEED_MM_S
+    #: vh where the sensing system does not report a closing speed. ``None`` means
+    #: the envelope declared none and :data:`DEFAULT_HUMAN_APPROACH_SPEED_MM_S` is
+    #: adopted; the verifier reports that as ``default``, never as ``declared``.
+    #: Read the figure used through :attr:`approach_speed_mm_s`.
+    human_approach_speed_mm_s: float | None = None
     #: Content hash of the power-and-force limits table this envelope is
     #: declared against. Empty means the product makes no PFL claim.
     pfl_limits_hash: str = ""
@@ -372,11 +399,24 @@ class SafetyEnvelope:
                 "about the unit in front of the auditor."
             )
         _num(self.intrusion_distance_mm, "intrusion_distance_mm",
-             maximum=DISTANCE_MAX_MM)
-        _num(self.human_approach_speed_mm_s, "human_approach_speed_mm_s",
-             maximum=SPEED_MAX_MM_S, positive=True)
+             maximum=DISTANCE_MAX_MM, positive=True)
+        if self.human_approach_speed_mm_s is not None:
+            _num(self.human_approach_speed_mm_s, "human_approach_speed_mm_s",
+                 maximum=SPEED_MAX_MM_S, positive=True)
         for mode, speed in self.max_tcp_speed_mm_s.items():
             _num(speed, f"max_tcp_speed_mm_s[{mode}]", maximum=SPEED_MAX_MM_S)
+
+    @property
+    def approach_speed_mm_s(self) -> float:
+        """The closing speed the separation sum uses when the trace records none."""
+        if self.human_approach_speed_mm_s is None:
+            return DEFAULT_HUMAN_APPROACH_SPEED_MM_S
+        return self.human_approach_speed_mm_s
+
+    @property
+    def approach_speed_declared(self) -> bool:
+        """Whether the manufacturer stated the approach speed, or it is the default."""
+        return self.human_approach_speed_mm_s is not None
 
     @property
     def claims_pfl(self) -> bool:
@@ -390,7 +430,7 @@ class SafetyEnvelope:
         VALIDATED evidence however good the trace is, because the number the
         verdict rests on was never measured on this machine.
         """
-        return min(self.stop.basis.tier_ceiling, self.uncertainty.basis.tier_ceiling)
+        return min(self.stop.basis.tier_ceiling, self.uncertainty.tier_ceiling)
 
     def speed_limit_for(self, mode: OperatingMode) -> float | None:
         return self.max_tcp_speed_mm_s.get(mode)
@@ -454,10 +494,13 @@ class SafetyEnvelope:
                 _require(d, "uncertainty", "envelope")),
             intrusion_distance_mm=_num(
                 _require(d, "intrusion_distance_mm", "envelope"),
-                "intrusion_distance_mm", maximum=DISTANCE_MAX_MM),
-            human_approach_speed_mm_s=_num(
-                d.get("human_approach_speed_mm_s", DEFAULT_HUMAN_APPROACH_SPEED_MM_S),
-                "human_approach_speed_mm_s", maximum=SPEED_MAX_MM_S, positive=True),
+                "intrusion_distance_mm", maximum=DISTANCE_MAX_MM, positive=True),
+            # Absent or null means "not declared": the default is adopted and
+            # reported as a default, not mistaken for the manufacturer's figure.
+            human_approach_speed_mm_s=(
+                None if d.get("human_approach_speed_mm_s") is None
+                else _num(d["human_approach_speed_mm_s"], "human_approach_speed_mm_s",
+                          maximum=SPEED_MAX_MM_S, positive=True)),
             pfl_limits_hash=str(d.get("pfl_limits_hash", "")),
             declared_by=declared,
             notes=str(d.get("notes", "")),

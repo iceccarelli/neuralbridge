@@ -495,8 +495,14 @@ class TestVerifyNeverPassesOnMissingData:
         assert r.check("pfl_contact").outcome is not CheckOutcome.NOT_APPLICABLE
         assert r.verdict is not Verdict.PASS
 
-    def test_the_declared_approach_speed_is_stated_when_it_was_used(self):
+    def test_the_default_approach_speed_is_stated_when_it_was_used(self):
         r = verify(envelope(), trace([sample(i) for i in range(5)]))
+        assert any("DEFAULT approach speed" in c for c in r.checks_skipped)
+        assert not any("declared approach speed" in c for c in r.checks_skipped)
+
+    def test_a_declared_approach_speed_is_stated_when_it_was_used(self):
+        r = verify(envelope(human_approach_speed_mm_s=1600.0),
+                   trace([sample(i) for i in range(5)]))
         assert any("declared approach speed" in c for c in r.checks_skipped)
 
     def test_every_non_finite_input_is_refused_before_verify_can_see_it(self):
@@ -576,4 +582,4 @@ class TestLimitsVerificationDate:
             LimitsTable.from_dict(limits_dict(verified_on="last week"))
 
     def test_a_past_date_is_accepted(self):
-        assert LimitsTable.from_dict(limits_dict(verified_on="2026-04-01")).is_verified
+        assert LimitsTable.from_dict(limits_dict(verified_on="2026-04-01")).claims_verification

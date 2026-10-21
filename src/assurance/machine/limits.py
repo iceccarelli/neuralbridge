@@ -16,7 +16,9 @@ recorded rather than assumed.
 
 Transient contact limits are taken as a multiple of the quasi-static values;
 the multiplier is declared in the file rather than hardcoded, because it is
-exactly the kind of constant that changes between editions.
+exactly the kind of constant that changes between editions. No check currently
+uses it: ``verify`` holds every contact sample to the quasi-static limit, which
+is the conservative choice, and says so in the bundle.
 """
 
 from __future__ import annotations
@@ -127,29 +129,75 @@ class LimitsTable:
                 )
 
     @property
-    def is_verified(self) -> bool:
+    def claims_verification(self) -> bool:
+        """Whether the file *says* somebody checked it. Free text, not evidence.
+
+        ``verified_by`` and ``verified_on`` are written by whoever wrote the table.
+        Nothing here can check that the person exists, that they held a licensed
+        copy, or that they compared anything. It is an unverified claim about a
+        verification, and it is recorded as one.
+        """
         return bool(self.verified_by and self.verified_on)
 
     @property
     def tier_ceiling(self) -> AssuranceTier:
-        """An unverified transcription cannot support a VALIDATED claim."""
-        return AssuranceTier.VALIDATED if self.is_verified else AssuranceTier.COMMUNITY
+        """What the table alone can support: never more than COMMUNITY.
+
+        A free-text claim cannot lift a table to VALIDATED by itself. Use
+        :meth:`tier_for` with the hash the envelope pins to see the one
+        combination that can.
+        """
+        return AssuranceTier.COMMUNITY
+
+    def tier_for(self, pinned_hash: str) -> tuple[AssuranceTier, str]:
+        """The ceiling this table gives a verification, and the sentence explaining it.
+
+        VALIDATED needs both a verification claim *and* an envelope that pins
+        exactly this table's content hash, so the claim is part of what the
+        manufacturer committed to and a later edit shows. That is attribution, not
+        independent verification, and the reason says so.
+        """
+        pinned = bool(pinned_hash) and pinned_hash == self.content_hash()
+        if self.claims_verification and pinned:
+            return AssuranceTier.VALIDATED, (
+                f"the limits table names {self.verified_by} as having checked it "
+                f"against a licensed copy on {self.verified_on}, and the envelope "
+                "pins this exact table. That is the table author's own claim and "
+                "cannot be checked here; it is accepted as attribution, not as "
+                "verification."
+            )
+        if not self.claims_verification:
+            return AssuranceTier.COMMUNITY, (
+                "the limits table carries no verified_by / verified_on claim, so it "
+                "is an unverified transcription and caps the tier at community."
+            )
+        return AssuranceTier.COMMUNITY, (
+            "the limits table claims to have been verified, but the envelope does not "
+            "pin this table's hash, so the claim is free text with nothing tying it "
+            "to the declared product and caps the tier at community."
+        )
 
     @property
     def provenance_caveat(self) -> str:
         """The sentence that goes into the bundle's ``checks_skipped``."""
-        if self.is_verified:
+        unused = (
+            " The transient_multiplier in the file is not used by any check: every "
+            "contact sample is held to the quasi-static limits."
+        )
+        if self.claims_verification:
             return (
                 f"body-region limits are from {self.edition}, transcribed by "
-                f"{self.transcribed_by} and checked against a licensed copy by "
-                f"{self.verified_by} on {self.verified_on}. The transcription was "
-                "checked; the suitability of this edition for this product was not."
+                f"{self.transcribed_by}. The file claims (verified_by: "
+                f"{self.verified_by}, verified_on: {self.verified_on}) that they were "
+                "checked against a licensed copy; that claim is free text and cannot "
+                "be checked here. The suitability of this edition for this product "
+                "was not assessed." + unused
             )
         return (
             f"body-region limits are an UNVERIFIED transcription of {self.edition} by "
             f"{self.transcribed_by or 'an unnamed party'}. Nobody has checked them "
             "against a licensed copy of the standard. Every pass below rests on "
-            "numbers that have not been confirmed."
+            "numbers that have not been confirmed." + unused
         )
 
     def limit_for(self, region: str) -> BodyRegionLimit:
