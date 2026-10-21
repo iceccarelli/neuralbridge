@@ -47,6 +47,7 @@ nav:
     - Bridge: assurance/bridge.md
     - Deploying the register: assurance/deploy.md
   - Pricing: pricing.md
+  - Claims registry: claims-registry.md
   - Platform status: platform.md
 markdown_extensions:
   - pymdownx.highlight:

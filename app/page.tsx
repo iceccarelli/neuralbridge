@@ -49,7 +49,7 @@ const products = [
     badge: '€390/mo',
     badgeClass: 'paid',
     name: 'Article 14 Register',
-    body: 'The CRA register for one manufacturer: unlimited cases, both deadline clocks computed correctly, hash-chained ledger with verifiable export, 25 product families.',
+    body: 'The CRA register for one manufacturer: both deadline clocks computed correctly, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-register',
@@ -58,7 +58,7 @@ const products = [
     badge: '€1,290/mo',
     badgeClass: 'paid',
     name: 'Cell',
-    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
+    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-cell',
@@ -132,7 +132,7 @@ const platformStatus = [
   { area: 'FastAPI backend', status: 'Supported' },
   { area: 'Connection management model', status: 'Supported' },
   { area: 'MCP tool listing / invocation', status: 'Supported' },
-  { area: 'Dashboard foundation', status: 'Supported' },
+  { area: 'Dashboard foundation (separate admin UI, not wired to the assurance API)', status: 'Evolving' },
   { area: 'Basic audit trail', status: 'Supported' },
   { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
   { area: 'Broad adapter ecosystem', status: 'Evolving' },
@@ -443,7 +443,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>Article 14 register (unlimited cases, both clocks)</td>
+                  <td>Article 14 register (both clocks; cases are not metered)</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>
@@ -473,6 +473,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
+                  <td>Change-assurance cases (<code>/v1/change/*</code>; closure is a named human decision)</td>
+                  <td>—</td>
+                  <td>—</td>
+                  <td className="check">✓</td>
+                </tr>
+                <tr>
                   <td>Counter-signed head attestation</td>
                   <td>—</td>
                   <td>—</td>
@@ -492,6 +498,11 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a>{' '}
             and <a href="/docs/assurance/deploy">the deploy guide</a> for the exact
             remaining steps.
+          </p>
+          <p className="pricing-note">
+            The prices (&euro;390 and &euro;1,290 a month) are launch hypotheses. They have not been validated
+            with paying customers, and nothing on this page claims otherwise. Watch (the scheduled drift check)
+            runs in your own kit or cron &mdash; the hosted API serves cases, it does not run a scheduler for you.
           </p>
         </div>
       </section>

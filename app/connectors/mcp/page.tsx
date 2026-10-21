@@ -5,7 +5,7 @@ import { ROUTES, TIER_LABEL } from '../../lib/routes';
 import RotatingImage from '../../components/RotatingImage';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
-const MCP_TOOLS = new Set(['GET /v1/plans', 'POST /v1/spec/validate', 'POST /v1/machine/verify', 'GET /v1/cases']);
+const MCP_TOOLS = new Set(['GET /v1/plans', 'POST /v1/spec/validate', 'POST /v1/machine/verify', 'GET /v1/cases', 'GET /v1/change/cases', 'GET /v1/change/cases/{case_id}']);
 
 export const metadata: Metadata = {
   title: 'MCP connector | Industrial Autonomous Assurance',
@@ -27,7 +27,7 @@ export default function McpConnectorPage() {
           <span className="kicker">FOR AGENTS THAT SPEAK MCP, NOT JUST HTTP</span>
           <h1 style={{ maxWidth: '22ch' }}>An installable MCP server for the Assurance API</h1>
           <p className="hero-lead" style={{ maxWidth: '68ch' }}>
-            <code>assurance-mcp</code> ships in this repository — four tools, each a real <code>httpx</code> call to
+            <code>assurance-mcp</code> ships in this repository — six tools, each a real <code>httpx</code> call to
             a running deployment, no local simulation. With no API URL configured, every tool returns the same
             honest "not configured" error this whole site uses, never a faked response.
           </p>
@@ -135,13 +135,13 @@ neuralbridge-ai-mcp`}</pre>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Assurance MCP tool set</span>
-            <h2>Four tools — two free, two paid on purpose</h2>
+            <h2>Six tools — two free, four paid on purpose</h2>
             <p>
               Deliberately small rather than one tool per route: <code>plans</code> and{' '}
               <code>spec_validate</code> need no key at all, and <code>machine_verify</code> /{' '}
-              <code>register_cases</code> exist specifically to prove the fail-closed behavior — called on the
+              <code>register_cases</code> / <code>change_cases</code> / <code>change_case</code> exist specifically to prove the fail-closed behavior — called on the
               wrong plan, they return the API's real structured 401/402, not an error from this server. The full
-              route table below is what a future, larger tool set would cover; the four highlighted rows are what
+              route table below is what a future, larger tool set would cover; the highlighted rows are what
               ships in <code>assurance-mcp</code> today.
             </p>
           </div>

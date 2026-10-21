@@ -7,7 +7,7 @@ name = "neuralbridge-middleware"
 version = "0.1.1"
 description = "Universal Enterprise Middleware for Agentic AI Integration — securely connect ANY AI agent to ANY system with YAML configuration, CRA compliance, and zero-trust security."
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
     {name = "NeuralBridge Contributors"}
@@ -21,7 +21,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
