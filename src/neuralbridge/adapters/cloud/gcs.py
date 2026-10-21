@@ -32,7 +32,7 @@ and retrieving object metadata.
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 from typing import Any
 
 import structlog
@@ -211,12 +211,12 @@ class GCSAdapter(BaseAdapter):
             {
                 "name": "documents/report-2024-q1.pdf",
                 "size": 1024 * 768,
-                "updated": datetime.datetime.now(datetime.UTC).isoformat(),
+                "updated": dt.datetime.now(dt.UTC).isoformat(),
             },
             {
                 "name": "images/logo.png",
                 "size": 1024 * 55,
-                "updated": datetime.datetime.now(datetime.UTC).isoformat(),
+                "updated": dt.datetime.now(dt.UTC).isoformat(),
             },
         ]
         return AdapterResponse(success=True, data=mock_objects)
@@ -295,8 +295,8 @@ class GCSAdapter(BaseAdapter):
             "bucket": bucket_name,
             "size": 12345,
             "content_type": "image/png",
-            "created": (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)).isoformat(),
-            "updated": datetime.datetime.now(datetime.UTC).isoformat(),
+            "created": (dt.datetime.now(dt.UTC) - dt.timedelta(days=1)).isoformat(),
+            "updated": dt.datetime.now(dt.UTC).isoformat(),
             "storage_class": "STANDARD",
         }
         return AdapterResponse(success=True, data=mock_metadata)
