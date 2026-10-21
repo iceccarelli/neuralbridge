@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ test.describe('Assurance workspace', () => {
     seed = JSON.parse(readFileSync(seedPath!, 'utf8'));
   });
 
-  async function enter(page, key: string) {
+  async function enter(page: Page, key: string) {
     await page.goto('/assurance');
     await page.getByLabel('API key').fill(key);
     await page.getByRole('button', { name: 'Refresh' }).click();

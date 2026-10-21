@@ -39,7 +39,7 @@ export interface Plan {
 export const CASES_NOT_METERED = 'Cases are not metered — no per-case cap or charge';
 
 const AI_PAID =
-  '/ai control plane: unlimited reads, propose-and-approve WRITEs, bind additional connections, full audit trail';
+  '/ai control plane: unlimited reads, propose-and-approve WRITEs, bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions';
 
 export const FALLBACK_PLANS: Plan[] = [
   {
