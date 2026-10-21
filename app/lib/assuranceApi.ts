@@ -38,14 +38,15 @@ export type ObservationRow = {
   age_hours: number | null;
   stale: boolean;
   stale_reason: '' | 'never_reported' | 'never_successfully_observed' | 'older_than_cadence';
+  cadence_hours: number;
+  cadence_declared: boolean;
   consecutive_failed_attempts: number;
   open_case_ids: string[];
 };
 
 export type Observations = {
   as_of: string;
-  cadence_hours: number;
-  cadence_declared: boolean;
+  default_cadence_hours: number;
   reporting: boolean;
   machines: ObservationRow[];
   summary: { machines: number; never_reported: number; latest_attempt_failed: number; stale: number };

@@ -27,13 +27,14 @@ from assurance.machinery.record import MANIFEST_KIND
 
 __all__ = [
     "DEFAULT_CADENCE_HOURS",
+    "MAX_CADENCE_HOURS",
+    "MIN_CADENCE_HOURS",
     "OBSERVATION_KIND",
     "REPORT_KIND",
     "FAILED_STATUSES",
     "fleet_observations",
     "observation_succeeded",
     "observed_at_of",
-    "declared_cadence",
 ]
 
 OBSERVATION_KIND = "watch.observation"
@@ -42,6 +43,11 @@ REPORT_KIND = "watch.report"
 #: Used when no report has declared a cadence. The same default the Watch
 #: configuration uses (``WatchConfig.max_age_hours``).
 DEFAULT_CADENCE_HOURS = 168.0
+#: The range a report may declare. A cadence is how long a machine may go
+#: unobserved before it reads stale, so a large one is a way to hide staleness:
+#: it is capped at 30 days, and floored at an hour.
+MIN_CADENCE_HOURS = 1.0
+MAX_CADENCE_HOURS = 720.0
 #: Statuses that mean the look did not happen, or did not finish.
 FAILED_STATUSES = frozenset({"uncollectable", "incomplete"})
 
@@ -59,38 +65,46 @@ def observation_succeeded(body: dict[str, Any]) -> bool:
 
 
 def observed_at_of(body: dict[str, Any], fallback: str) -> datetime | None:
-    """When the look happened: the run's own clock, else the ledger append time."""
+    """When the look happened: the run's own clock, never later than the ledger's.
+
+    ``fallback`` is the ledger's append time. A record stamped later than the
+    moment it was written (a reporter's fast clock, or a lie) is read as written:
+    otherwise a success dated a minute ahead would outrank a real failure that
+    follows it.
+    """
     try:
-        return parse_utc(str(body.get("observed_at") or fallback))
+        stated = parse_utc(str(body.get("observed_at") or fallback))
+        written = parse_utc(str(fallback))
     except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
         return None
+    return min(stated, written)
 
 
-def declared_cadence(ledger: EvidenceLedger) -> tuple[float, bool, str]:
-    """``(hours, declared, run_started_at)`` for this ledger's account.
+def _cadence_of(body: dict[str, Any]) -> float | None:
+    value = body.get("cadence_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if MIN_CADENCE_HOURS <= value <= MAX_CADENCE_HOURS else None
 
-    Taken from the report with the latest ``run_started_at`` that declared one,
-    so a delayed or replayed older report cannot move it. ``declared`` is False
-    when nothing was ever declared and the default is being applied.
+
+def _machine_cadence(seen: list[_Seen]) -> tuple[float, bool]:
+    """The cadence that judges one machine, and whether any watch declared one.
+
+    Each watch's cadence is the one it declared with its own latest successful
+    look of this machine; when several watches have reported the machine the
+    shortest wins. A failed look declares nothing, so a report can never
+    lengthen the cadence of a machine it did not successfully observe.
     """
-    best: tuple[datetime, int, float, str] | None = None
-    for entry in ledger.entries(kind=REPORT_KIND):
-        evidence = entry.evidence()
-        if not evidence.verify():
-            continue
-        hours = evidence.body.get("max_age_hours")
-        if not isinstance(hours, (int, float)) or isinstance(hours, bool) or hours <= 0:
-            continue
-        try:
-            started = parse_utc(str(evidence.body.get("run_started_at", "")))
-        except (ValueError, TypeError):
-            continue
-        candidate = (started, entry.seq, float(hours), format_utc(started))
-        if best is None or candidate[:2] > best[:2]:
-            best = candidate
-    if best is None:
-        return DEFAULT_CADENCE_HOURS, False, ""
-    return best[2], True, best[3]
+    latest: dict[str, _Seen] = {}
+    for s in seen:                       # oldest first
+        if s.succeeded:
+            latest[s.watch_id] = s
+    if not latest:
+        return DEFAULT_CADENCE_HOURS, False
+    declared = [s.cadence for s in latest.values() if s.cadence is not None]
+    values = [s.cadence if s.cadence is not None else DEFAULT_CADENCE_HOURS
+              for s in latest.values()]
+    return min(values), bool(declared)
 
 
 @dataclass(frozen=True)
@@ -100,6 +114,9 @@ class _Seen:
     complete: bool
     detail: str
     succeeded: bool
+    watch_id: str = ""
+    #: The cadence the reporting watch declared with this look, or None.
+    cadence: float | None = None
 
 
 def fleet_observations(
@@ -107,7 +124,6 @@ def fleet_observations(
 ) -> dict[str, Any]:
     """Per machine: last successful look, last attempt, staleness, open cases."""
     as_of = now or utc_now()
-    cadence, declared, declared_at = declared_cadence(ledger)
 
     by_machine: dict[str, list[_Seen]] = {}
     for entry in ledger.entries(kind=OBSERVATION_KIND):
@@ -124,6 +140,8 @@ def fleet_observations(
             complete=body.get("complete", True) is not False,
             detail=str(body.get("detail", "")),
             succeeded=observation_succeeded(body),
+            watch_id=str(body.get("watch_id", "")),
+            cadence=_cadence_of(body) if observation_succeeded(body) else None,
         ))
 
     enrolled = {e.subject for e in ledger.entries(kind=MANIFEST_KIND) if e.subject}
@@ -147,6 +165,7 @@ def fleet_observations(
                 break
             failed_run += 1
 
+        cadence, declared = _machine_cadence(seen)
         age_hours = None
         if last_ok is not None:
             age_hours = round(max(0.0, (as_of - last_ok.at).total_seconds() / 3600), 2)
@@ -171,15 +190,15 @@ def fleet_observations(
             "age_hours": age_hours,
             "stale": stale,
             "stale_reason": reason,
+            "cadence_hours": cadence,
+            "cadence_declared": declared,
             "consecutive_failed_attempts": failed_run,
             "open_case_ids": sorted(open_cases.get(key, [])),
         })
 
     return {
         "as_of": format_utc(as_of),
-        "cadence_hours": cadence,
-        "cadence_declared": declared,
-        "cadence_declared_by_run": declared_at,
+        "default_cadence_hours": DEFAULT_CADENCE_HOURS,
         "reporting": bool(by_machine),
         "machines": machines,
         "summary": {
@@ -190,13 +209,16 @@ def fleet_observations(
             "stale": sum(1 for m in machines if m["stale"]),
         },
         "limitations": [
-            "These are observations the account holder chose to report; the hosted "
-            "service cannot collect from a machine and did not watch any of them.",
+            "Reported by the customer, not independently observed: the hosted "
+            "service cannot collect from a machine and did not watch any of them. "
+            "Both the dates and the cadence are declared by the reporting client, "
+            "which could replay an old manifest as if it were looked at now.",
             "A date here is when the customer's own Watch says it looked, as "
             "reported. It is not independently verified.",
             "A machine is stale when its last successful observation is older than "
-            "the cadence the customer declared in a report"
-            + ("" if declared else " (none declared yet: the default is applied)")
-            + ". A machine that was never reported is stale by definition.",
+            "the cadence declared with it (the shortest, when more than one watch "
+            "reported it; 168 h when none declared one). A cadence is taken only "
+            "from a successful look of that machine. A machine never reported is "
+            "stale by definition.",
         ],
     }

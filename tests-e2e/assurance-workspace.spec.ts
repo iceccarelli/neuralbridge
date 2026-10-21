@@ -103,6 +103,7 @@ test.describe('Assurance workspace', () => {
 
     await expect(page.getByTestId('obs-summary')).toContainText('1 stale');
     await expect(page.getByTestId('obs-summary')).toContainText('2 whose latest attempt failed');
+    await expect(page.getByTestId('obs-summary')).toContainText('not independently observed');
 
     // The drift the push carried opened exactly one case, through the same assess_drift.
     await expect(page.getByTestId('case-table')).toContainText(seed.case_e);

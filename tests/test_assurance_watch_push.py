@@ -59,8 +59,8 @@ def now() -> datetime:
 
 # -- the local plant -------------------------------------------------------------
 
-@pytest.fixture()
-def plant(tmp_path):
+@pytest.fixture(name="plant")
+def _plant(tmp_path):
     root = tmp_path / "plant"
     root.mkdir()
     (root / "plan.json").write_text(json.dumps(plan_dict()))
@@ -74,13 +74,13 @@ def plant(tmp_path):
     return root
 
 
-@pytest.fixture()
-def config(plant):
+@pytest.fixture(name="config")
+def _config(plant):
     return WatchConfig.from_json(plant / "watch.json")
 
 
-@pytest.fixture()
-def local(plant):
+@pytest.fixture(name="local")
+def _local(plant):
     return EvidenceLedger(plant / "register.db")
 
 
@@ -392,6 +392,7 @@ class TestDryRun:
 class TestNothingPrivateLeaves:
     def test_no_raw_file_no_local_path_and_no_failure_reason_is_in_the_bodies(
             self, plant, local, config, client, hosted_key, monkeypatch, capsys):
+        run_watch(config, local, now=now() - timedelta(days=2))
         shutil.rmtree(plant / "0501")
         run_watch(config, local, now=now() - timedelta(hours=1))
         rec = use(monkeypatch, Recorder(client))
@@ -403,7 +404,8 @@ class TestNothingPrivateLeaves:
         assert "firmware 3.8.2" not in sent
         assert "No such file" not in sent and "is not a directory" not in sent
         bodies = [json.loads(c) for _, c, _ in rec.requests]
-        blind = next(m for b in bodies for m in b["machines"] if m["serial"] == "0501")
+        blind = next(m for b in bodies for m in b["machines"]
+                     if m["serial"] == "0501" and m["status"] == "uncollectable")
         assert blind["status"] == "uncollectable" and blind["manifest"] is None
         assert blind["detail"] == "could not be collected; the reason is in the local ledger"
         # What is sent for a collected machine is its manifest: ids, hashes, versions.
@@ -434,7 +436,8 @@ class TestWhatArrives:
         code, out, _ = cli(capsys, plant, hosted_key)
         assert code == 0 and "3 recorded" in out
         data = observations(client, cell[1])
-        assert data["cadence_hours"] == 168 and data["cadence_declared"] is True
+        assert all(m["cadence_hours"] == 168 and m["cadence_declared"] is True
+                   for m in data["machines"])
         assert [m["stale"] for m in data["machines"]] == [False, False, False]
         assert all(m["last_attempt_succeeded"] for m in data["machines"])
         assert client.get("/v1/change/cases", headers=cell[1]).json()["cases"] == []
@@ -457,15 +460,16 @@ class TestWhatArrives:
         good = machine_row(client, cell[1], KEY_0412)
         assert good["stale"] is False and good["last_attempt_succeeded"] is True
 
-    def test_a_machine_blind_from_its_first_run_has_no_last_success_to_show(
+    def test_a_machine_blind_from_its_first_run_is_refused_and_says_why_not_shown_as_a_ghost(
             self, plant, local, config, client, cell, hosted_key, monkeypatch, capsys):
         shutil.rmtree(plant / "0602")
         run_watch(config, local, now=now() - timedelta(hours=1))
         use(monkeypatch, Recorder(client))
-        cli(capsys, plant, hosted_key)
-        row = machine_row(client, cell[1], "Grimaldi/AR-7#0602")
-        assert row["last_successful_observation_at"] is None
-        assert row["stale"] is True and row["stale_reason"] == "never_successfully_observed"
+        code, out, _ = cli(capsys, plant, hosted_key)
+        # The hosted ledger has never seen a manifest for it: a failure alone cannot create it.
+        assert code == 1 and "unenrolled_machine" in out
+        assert [m["machine"] for m in observations(client, cell[1])["machines"]] == [
+            KEY_0412, KEY_0501]
 
     def test_a_drift_opens_exactly_one_case_and_pushing_again_opens_none(
             self, plant, local, config, client, cell, hosted_key, monkeypatch, capsys):

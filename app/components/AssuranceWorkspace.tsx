@@ -33,7 +33,7 @@ function when(iso: string | null): string {
 
 // One machine's Watch columns. A failed or incomplete attempt is shown as failed,
 // never as an observation; a machine nobody reported is not shown as current.
-function ObservationCells({ row, obs }: { row: ObservationRow | undefined; obs: Observations }) {
+function ObservationCells({ row }: { row: ObservationRow | undefined }) {
   if (!row || !row.reported) {
     return (
       <>
@@ -74,10 +74,10 @@ function ObservationCells({ row, obs }: { row: ObservationRow | undefined; obs: 
         {row.stale ? (
           <>
             <strong className="aw-bad">Stale</strong> — {STALE_WHY[row.stale_reason] ?? row.stale_reason} (cadence{' '}
-            {obs.cadence_hours} h{obs.cadence_declared ? '' : ', default'})
+            {row.cadence_hours} h{row.cadence_declared ? '' : ', default'})
           </>
         ) : (
-          <>No — within {obs.cadence_hours} h</>
+          <>No — within {row.cadence_hours} h</>
         )}
       </td>
     </>
@@ -213,7 +213,7 @@ export default function AssuranceWorkspace() {
                         <td>{m.site || '—'}</td>
                         <td title={m.taken_at}>{ageLabel(m.taken_at)}</td>
                         {obs?.kind === 'ok' ? (
-                          <ObservationCells row={obs.data.machines.find((r) => r.machine === m.machine)} obs={obs.data} />
+                          <ObservationCells row={obs.data.machines.find((r) => r.machine === m.machine)} />
                         ) : (
                           <td colSpan={3} data-testid="obs-unavailable">
                             Observation status unavailable.
@@ -257,7 +257,7 @@ export default function AssuranceWorkspace() {
                           {extra.map((r) => (
                             <tr key={r.machine} data-machine={r.machine}>
                               <td>{r.machine}</td>
-                              <ObservationCells row={r} obs={obs.data} />
+                              <ObservationCells row={r} />
                             </tr>
                           ))}
                         </tbody>
@@ -275,8 +275,9 @@ export default function AssuranceWorkspace() {
             {obs?.kind === 'ok' && obs.data.reporting && (
               <p data-testid="obs-summary">
                 {obs.data.summary.stale} stale · {obs.data.summary.latest_attempt_failed} whose latest attempt failed ·{' '}
-                {obs.data.summary.never_reported} never reported (cadence {obs.data.cadence_hours} h
-                {obs.data.cadence_declared ? ', declared in your last report' : ', the default: none declared yet'}).
+                {obs.data.summary.never_reported} never reported. Reported by you, not independently observed; each
+                machine is judged against the cadence your Watch declared with its last successful look (default{' '}
+                {obs.data.default_cadence_hours} h).
               </p>
             )}
             {obs && obs.kind !== 'ok' && fleet.kind === 'ok' && <Refusal outcome={obs} what="Observations" />}

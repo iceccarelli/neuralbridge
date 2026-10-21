@@ -30,6 +30,7 @@ from assurance.billing.accounts import Principal
 from assurance.core.evidence import Actor
 from assurance.core.identity import parse_utc, utc_now
 from assurance.watch.ingest import FUTURE_SKEW, ingest_report
+from assurance.watch.observations import MAX_CADENCE_HOURS, MIN_CADENCE_HOURS
 
 __all__ = ["MAX_MACHINES_PER_REPORT", "watch_router"]
 
@@ -76,8 +77,11 @@ class WatchReportIn(BaseModel):
 
     watch_id: str = Field(min_length=1, max_length=200)
     run_started_at: str = Field(min_length=10, max_length=40)
-    #: The cadence the customer's Watch declares. Staleness is judged against it.
-    max_age_hours: float | None = Field(default=None, gt=0, le=24 * 366)
+    #: The cadence the customer's Watch declares (1 to 720 hours). Staleness of the
+    #: machines it reports as successfully observed is judged against it; a report
+    #: with no successful look declares nothing.
+    max_age_hours: float | None = Field(
+        default=None, ge=MIN_CADENCE_HOURS, le=MAX_CADENCE_HOURS)
     verdict: Literal["quiet", "findings", "degraded"] | None = None
     #: Set by ``watch push`` when it split a large fleet over several requests.
     batch_index: int | None = Field(default=None, ge=1, le=10_000)
@@ -114,7 +118,7 @@ def _actor(principal: Principal) -> Actor:
     "/report",
     summary="Report what your Watch saw, to your own ledger",
 )
-async def post_report(
+def post_report(
     body: WatchReportIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -123,6 +127,9 @@ async def post_report(
     The response says, per machine, whether the entry was ``recorded``,
     ``already_recorded`` (a retry: nothing was written) or ``refused`` and why,
     which case a drift opened or found, and what this does not establish.
+
+    A plain ``def`` on purpose: FastAPI runs it in the threadpool, so a large report
+    from one tenant cannot hold the event loop and stall every other caller.
     """
     now = utc_now()
     started = parse_utc(body.run_started_at)

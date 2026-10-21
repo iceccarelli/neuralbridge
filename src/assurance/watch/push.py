@@ -290,13 +290,38 @@ def check_url(api_url: str) -> str:
     return api_url.strip().rstrip("/")
 
 
-def read_key(env_name: str) -> str:
+_SECRET_PREFIXES = ("asr_", "sk_", "sk-", "pk_", "rk_", "whsec_", "ghp_", "gho_", "xoxb-", "xoxp-")
+_TOKEN = re.compile(r"[A-Za-z0-9_\-]+")
+
+
+def looks_secret(value: str) -> bool:
+    """Whether a user-supplied string is shaped like a credential.
+
+    Used to decide what must never be echoed in an error message: a known key
+    prefix, or one long unbroken token mixing letters and digits (a path has a
+    separator or an extension; an environment variable name is upper case).
+    """
+    v = (value or "").strip()
+    if not v:
+        return False
+    if v.lower().startswith(_SECRET_PREFIXES):
+        return True
+    return (len(v) >= 24 and _TOKEN.fullmatch(v) is not None
+            and any(c.isdigit() for c in v) and any(c.isalpha() for c in v)
+            and not v.isupper())
+
+
+def check_env_name(env_name: str) -> None:
     # Never echo the name when it looks like a key: an operator who pasted the
     # key where the NAME belongs must not see it printed back.
     if (not _ENV_NAME.match(env_name or "") or len(env_name) > 64
-            or env_name.lower().startswith(("asr_", "sk_", "sk-"))):
+            or looks_secret(env_name)):
         raise PushError("--key-env must be the NAME of an environment variable "
                         "(letters, digits, underscore), not the key itself.")
+
+
+def read_key(env_name: str) -> str:
+    check_env_name(env_name)
     value = os.environ.get(env_name, "").strip()
     if not value:
         raise PushError(f"environment variable {env_name} is not set or is empty.")
@@ -502,10 +527,24 @@ def main_push(args: Any, *, client: Any = None, sleep: Callable[[float], None] =
     """The ``watch push`` command. ``client`` is injectable for tests only."""
     ledger_path = Path(args.ledger)
     key = ""
+    # Whatever the operator typed into an option that looks like a credential is
+    # never printed back: a key pasted into the wrong option is named by option.
+    options = {"--config": str(args.config), "--ledger": str(args.ledger),
+               "--key-env": str(args.key_env), "--api-url": str(args.api_url)}
+    secrets = {opt: v for opt, v in options.items() if looks_secret(v)}
+
+    def say(message: str) -> None:
+        message = _scrub(message, key)
+        for opt, value in secrets.items():
+            message = message.replace(value, f"<the value given to {opt}>")
+        print(f"error: {message}", file=sys.stderr)
+
     if not ledger_path.is_file():
-        print(f"error: ledger {ledger_path} does not exist.", file=sys.stderr)
+        say("the file given as --ledger does not exist." if "--ledger" in secrets
+            else f"ledger {ledger_path} does not exist.")
         return 2
     try:
+        check_env_name(args.key_env)
         config = WatchConfig.from_json(args.config)
         ledger = EvidenceLedger(ledger_path)
         if args.dry_run:
@@ -518,5 +557,5 @@ def main_push(args: Any, *, client: Any = None, sleep: Callable[[float], None] =
                         retries=args.retries, wait=args.retry_wait,
                         max_body_bytes=args.max_body_bytes, sleep=sleep)
     except (PushError, AssuranceError, ValueError, OSError) as exc:
-        print(f"error: {_scrub(str(exc), key)}", file=sys.stderr)
+        say(str(exc))
         return 2

@@ -385,7 +385,7 @@ would show nothing unless somebody posted manifests by hand. `watch push` is the
 explicit, opt-in way to change that:
 
 ```bash
-export NB_ASSURANCE_KEY=...        # your Cell-plan key; never a command-line argument
+read -rs NB_ASSURANCE_KEY && export NB_ASSURANCE_KEY   # paste your Cell-plan key; it stays out of shell history
 assurance watch run  watch.json --ledger register.db      # offline, as always
 assurance watch push watch.json --ledger register.db \
     --api-url https://<your-api-host> --key-env NB_ASSURANCE_KEY
@@ -416,7 +416,7 @@ and no other.
 From the latest sealed run in your local ledger:
 
 * the watch id, the run's start time and verdict, and the `max_age_hours`
-  cadence from your configuration;
+  cadence from your configuration (accepted range 1 to 720 hours);
 * per machine: serial, machine key, status — `unchanged`, `changed`,
   `uncollectable` or `incomplete` — when it was observed, whether the collection
   was complete, a one-line detail, and the ids of plan items an incomplete look
@@ -476,8 +476,24 @@ with no or an invalid key, 402 when authenticated but not entitled) writes to
   and no second record. An entry **older** than what is recorded for that machine
   is ignored (`superseded_by_newer_observation`), so a delayed report cannot
   rewind the record; a *different* observation at an instant already recorded is
-  refused. An `observed_at` more than five minutes ahead of the server's clock is
-  refused.
+  refused. An `observed_at` more than 60 seconds ahead of the server's clock is
+  refused, and one inside that margin is read as no later than the moment it was
+  written, so it cannot outrank a real failure that follows it. Entries are
+  applied in order of the instant they name, whatever offset they are spelled in.
+* **A failure never creates a machine.** A failed look is recorded only against a
+  machine the account has already enrolled (a successful look with a manifest):
+  it carries the full `manufacturer/model#serial` key, or a bare serial that
+  matches exactly one enrolled key. Otherwise it is refused
+  (`unenrolled_machine`, `ambiguous_serial`), so a typo cannot leave a ghost row
+  while the real machine reads current. A machine blind from its very first run
+  is therefore not shown until one look succeeds, and `watch push` exits 1 saying
+  so.
+* **Bounded.** An account tracks at most 1000 machines and a report may introduce
+  at most 200 new ones. The route runs in the threadpool, and ingest into one
+  ledger is serialised across threads and processes by an advisory file lock
+  beside the ledger (POSIX), so overlapping retries from several workers still
+  write once. The assurance image runs one worker by design; the repository's
+  root `Dockerfile` serves `neuralbridge.main`, not this API.
 
 The response says, per machine, `recorded` / `already_recorded` / `refused` and
 why, which case a drift opened or found, and a `limitations` list.
@@ -486,10 +502,14 @@ why, which case a drift opened or found, and a `limitations` list.
 
 `GET /v1/fleet/observations` (Cell): per machine, the last **successful**
 observation, the last attempt and its status, how old the last success is,
-`consecutive_failed_attempts`, open case ids, and `stale`. A machine is stale
-when its last *successful* observation is older than the cadence your latest
-report declared (`max_age_hours`; 168 if none), or when it has never been
-reported — an enrolled machine nobody reported is stale, not current. An account
+`consecutive_failed_attempts`, open case ids, `cadence_hours` and `stale`. A
+machine is stale when its last *successful* observation is older than its
+cadence, or when it has never been reported — an enrolled machine nobody
+reported is stale, not current. The cadence is **per machine**: the one declared
+with the latest successful look of that machine by each watch that reported it,
+the shortest if several did, and 168 h if none declared one. A cadence comes only
+from a successful look of the machine it applies to; a report of failures, or of
+other machines, can never lengthen it. An account
 that has never pushed sees "No Watch report received", not a green list.
 
 One behaviour change in the local watch, made so both sides agree: an
@@ -500,6 +520,11 @@ look for `stale_observations`. It never was an observation of the whole machine.
 
 * The hosted service **cannot tell a true report from a false one**. These are
   observations reported by the holder of your key; it did not watch any machine.
+  The workspace shows them as *reported by the customer, not independently
+  observed*. Both `observed_at` and the cadence are declared by the client: a
+  client could replay an old manifest with `observed_at` set to now and make a
+  machine look freshly looked at. That is a stated limit of an opt-in reporting
+  channel, not a proof of observation.
 * It is as good as the export and the plan, exactly as the local watch is.
 * A machine omitted from a report is not reported as anything; its silence shows
   as staleness once the cadence has passed.
