@@ -58,12 +58,14 @@ SRC = str(Path(__file__).resolve().parents[1] / "src")
 KEY = "Grimaldi/AR-7#0501"         # the machine whose firmware changes
 OTHER = "Grimaldi/AR-7#0412"
 PERSON = "v.grimaldi"
-#: The moment the verification run started: now, at import. It is after every
-#: synthetic collection moment in this scenario (they are all in the past), so the
-#: run describes the machine as it is after the change, and it is not in the
-#: future: a run dated after the moment it is filed is treated as suspect and
-#: cannot clear a case (a future date must not outrun a real change).
-TRACE_START = datetime.now(UTC).replace(microsecond=0)
+def run_started() -> datetime:
+    """When the verification run started: now, which is after this world's change was
+    observed (the watch ran earlier in the same world) and not after the moment the
+    run is filed. A run dated after it is filed is treated as suspect and cannot clear a
+    case, so a fixed future date would be refused; a fixed past date would predate the
+    observation. Each world therefore dates its own run, so verification hashes are not
+    comparable across worlds; what is compared is each world's own link to its own hash."""
+    return datetime.now(UTC)
 ADVISORY_ID = "ROBO-2026-03"
 
 
@@ -279,7 +281,7 @@ class LibraryDriver(Driver):
         return self._do(advance, cid, actor=_person(who))
 
     def verify(self, who):
-        bundle = build_bundle(envelope(), trace(TRACE_START), actor=Actor(
+        bundle = build_bundle(envelope(), trace(run_started()), actor=Actor(
             who, "verification engineer", kind="person"), ledger=self.ledger, subject=KEY)
         return bundle.content_hash
 
@@ -361,7 +363,7 @@ class CliDriver(Driver):
     def verify(self, who):
         env, tr = self.plant.root / "envelope.json", self.plant.root / "trace.json"
         env.write_text(json.dumps(envelope_dict()), encoding="utf-8")
-        tr.write_text(json.dumps(trace_dict(TRACE_START)), encoding="utf-8")
+        tr.write_text(json.dumps(trace_dict(run_started())), encoding="utf-8")
         r = run_cli("machine", "verify", "--envelope", env, "--trace", tr, "--actor", who,
                     "--ledger", self.ledger_path, "--subject", KEY, "--json",
                     cwd=self.plant.root)
@@ -440,7 +442,7 @@ class ApiDriver(Driver):
 
     def verify(self, who):
         r = self.http.post("/v1/machine/verify", json={
-            "envelope": envelope_dict(), "trace": trace_dict(TRACE_START), "actor": who,
+            "envelope": envelope_dict(), "trace": trace_dict(run_started()), "actor": who,
             "subject": KEY})
         assert r.status_code == 200, r.text
         return str(r.json()["content_hash"])
