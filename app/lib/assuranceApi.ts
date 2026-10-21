@@ -156,6 +156,9 @@ export type Me = {
   keys?: { prefix?: string; label?: string; created_at?: string; revoked_at?: string | null; [k: string]: unknown }[];
   warning?: string;
   note?: string;
+  // True for an account whose subscription ended but that has paid before: the server still
+  // lets it read, verify and export the evidence it already holds (new records are closed).
+  evidence_readout?: boolean;
 };
 
 // POST /v1/fleet/advisory — assess_impact(...).to_dict()

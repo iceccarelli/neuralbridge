@@ -24,6 +24,16 @@ function limitValue(v: number | boolean | null): string {
   return String(v);
 }
 
+// A plan's `verifiable_export: false` is what the plan includes going forward. For an account
+// whose subscription ended, GET /v1/me carries `evidence_readout`: the server still lets it
+// export the evidence it already holds. The page shows that flag; it does not work it out.
+function limitText(key: string, v: number | boolean | null, evidenceReadout: boolean): string {
+  if (key === 'verifiable_export' && v === false && evidenceReadout) {
+    return 'available for the evidence you already hold (read, verify and export only)';
+  }
+  return limitValue(v);
+}
+
 // What GET /v1/me says about this key: the plan the server enforces, what it includes, what
 // has been used today, and the key prefixes on the account. Nothing here is computed on the
 // page, and a key is never shown back.
@@ -66,13 +76,19 @@ export default function PlanPanel({ apiKey, me }: { apiKey: string; me: Panel<Me
             ))}
           </ul>
           <h3>Limits the server enforces</h3>
-          <ul>
+          <ul data-testid="plan-limits">
             {Object.entries(m.plan.limits).map(([k, v]) => (
-              <li key={k}>
-                {LIMIT_LABELS[k] ?? k}: {limitValue(v)}
+              <li key={k} data-testid={`plan-limit-${k}`}>
+                {LIMIT_LABELS[k] ?? k}: {limitText(k, v, m.evidence_readout === true)}
               </li>
             ))}
           </ul>
+          {m.evidence_readout === true && (
+            <p className="aw-note" data-testid="plan-readout-note">
+              Your subscription has ended. The server still lets you read, verify and export the evidence you
+              already hold; new records and operational views are closed.
+            </p>
+          )}
           <h3>Used today</h3>
           <p data-testid="plan-usage">
             {Object.keys(m.usage_today).length === 0
