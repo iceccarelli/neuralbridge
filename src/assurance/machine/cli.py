@@ -27,7 +27,7 @@ from pathlib import Path
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle, verify_bundle
+from assurance.machine.bundle import build_bundle, check_bundle
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.ssm import separation_required
@@ -147,17 +147,27 @@ def _cmd_check(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope) if args.envelope else None
     trace = Trace.from_json(args.trace) if args.trace else None
     limits = LimitsTable.from_json(args.limits) if args.limits else None
-    ok, problems = verify_bundle(args.bundle, envelope=envelope, trace=trace,
-                                 limits=limits)
+    result = check_bundle(args.bundle, envelope=envelope, trace=trace, limits=limits)
     if args.json:
-        print(json.dumps({"ok": ok, "problems": problems}, indent=2))
+        print(json.dumps({"ok": result.ok, "level": result.level,
+                          "reproduced": result.reproduced,
+                          "problems": result.notes}, indent=2))
     else:
-        print(f"{args.bundle}: {'OK' if ok else 'REJECTED'}")
-        for p in problems:
+        if not result.ok:
+            verdict = "REJECTED"
+        elif result.reproduced:
+            verdict = "OK, REPRODUCED from the supplied envelope and trace"
+        else:
+            verdict = ("OK, NOT REPRODUCED: no inconsistency found, but the engine was "
+                       "not re-run on the original envelope and trace")
+        print(f"{args.bundle}: {verdict}")
+        for p in result.notes:
             print(f"  - {p}")
-        if ok and envelope is None:
-            print("  Supply --envelope and --trace to check the claim, not just the seal.")
-    return 0 if ok else 1
+        if result.ok and not result.reproduced:
+            print("  A seal is not a signature. Supply --envelope and --trace (and "
+                  "--limits if the bundle used a table) to check the claim, not just "
+                  "the seal.")
+    return 0 if result.ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
