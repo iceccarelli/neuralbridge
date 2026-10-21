@@ -54,6 +54,7 @@ that can forget a ``WHERE account_id = ?``.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -410,10 +411,33 @@ def quota_refusal(
     )
 
 
-def _quota_remedy(limit: int) -> str:
+def _quota_remedy(limit: int, *, tier: str = "free", scope: str = "validate") -> str:
+    """What to do about a spent daily allowance, true for this plan and this route.
+
+    Pay-as-you-go bills only the scopes in ``METERED_SCOPES``; a daily guard such
+    as ``evidence_verify`` is never billed, so it is not offered as a way past one,
+    and an account already on the ``payg`` plan is never told to choose it.
+    """
+    plans = "GET /v1/plans, then POST /v1/checkout"
+    if scope not in METERED_SCOPES:
+        text = (
+            f"This route is not billed per call, so pay-as-you-go does not extend it: "
+            f"its daily guard is {limit} calls per day, per caller, and it renews at "
+            f"resets_at. A Register or Cell plan has no daily cap on it ({plans})."
+        )
+        if tier == "payg":
+            text = ("Your account is on pay-as-you-go, and " + text[0].lower() + text[1:])
+        return text
+    if tier == "payg":
+        return (
+            f"Your account is on the pay-as-you-go plan, but billing is not active for it "
+            f"right now (it needs an active subscription bound to a Stripe customer, on a "
+            f"deployment where pay-as-you-go is configured), so the {limit} calls per day "
+            "are a hard cap. See GET /v1/usage; the allowance renews at resets_at."
+        )
     text = (
         f"The free allowance is {limit} calls per day, per caller. A paid plan removes "
-        "the cap: see GET /v1/plans, then POST /v1/checkout."
+        f"the cap: see {plans}."
     )
     if payg_available():
         text += (
@@ -436,7 +460,7 @@ def spend(principal: Principal, scope: str, limit: int | None, accounts: Account
     except QuotaExceededError as exc:
         raise quota_refusal(
             error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
-            tier=exc.tier, remedy=_quota_remedy(exc.limit),
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         ) from exc
 
 
@@ -468,7 +492,7 @@ def _metering_refusal(exc: Exception, principal: Principal) -> HTTPException:
     if isinstance(exc, QuotaExceededError):
         return quota_refusal(
             error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
-            tier=exc.tier, remedy=_quota_remedy(exc.limit),
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         )
     assert isinstance(exc, IdempotencyConflictError)
     return HTTPException(
@@ -500,6 +524,9 @@ class MeterTicket:
     key: str
     #: True when the client supplied the key (so a retry can be deduplicated).
     client_key: bool
+    #: Hash of the request this ticket was issued for. A client key is bound to
+    #: it: the same key on a different request is a 409, never a free replay.
+    fingerprint: str = ""
 
     @property
     def limit(self) -> int | None:
@@ -517,11 +544,12 @@ class MeterTicket:
             account = self._account()
             if account is not None:
                 self.accounts.check_usage(
-                    account.id, self.scope, 1, self.key if self.client_key else None)
+                    account.id, self.scope, 1, self.key if self.client_key else None,
+                    fingerprint=self.fingerprint)
             else:
                 self.accounts.check_quota(
                     self.principal.subject, self.scope, limit, self.principal.tier)
-        except (QuotaExceededError, SpendLimitError) as exc:
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
             raise _metering_refusal(exc, self.principal) from exc
 
     def commit(self, response: Response | None = None) -> None:
@@ -534,7 +562,8 @@ class MeterTicket:
             if limit is None:
                 pass
             elif account is not None:
-                record = self.accounts.record_usage(account.id, self.scope, 1, self.key)
+                record = self.accounts.record_usage(
+                    account.id, self.scope, 1, self.key, fingerprint=self.fingerprint)
                 event_id, billable = record.event_id, record.billable_quantity
             else:
                 self.accounts.consume(
@@ -554,6 +583,29 @@ class MeterTicket:
             response.headers["X-Assurance-Billable-Units"] = str(billable)
 
 
+async def request_fingerprint(request: Request, scope: str) -> str:
+    """A hash of what a metered request asks for: scope, route, query, body.
+
+    The JSON body is canonicalised (sorted keys, no insignificant whitespace),
+    so a client that re-serialises the same document still replays; a body that
+    is not JSON is hashed as the bytes it is. The body is cached by Starlette,
+    so reading it here does not consume it for the route.
+    """
+    raw = await request.body()
+    try:
+        canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True).encode() if raw else b""
+    except ValueError:
+        canonical = raw
+    digest = hashlib.sha256()
+    for part in (scope, request.method, request.url.path,
+                 "&".join(sorted(f"{k}={v}" for k, v in request.query_params.multi_items()))):
+        digest.update(part.encode())
+        digest.update(b"\x00")
+    digest.update(canonical)
+    return digest.hexdigest()
+
+
 def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
     """Dependency for a route that does metered work: ``Annotated[MeterTicket, Metered("x")]``.
 
@@ -568,6 +620,7 @@ def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
     async def dependency(
         principal: Annotated[Principal, Depends(current_principal)],
         accounts: Annotated[AccountStore, Depends(get_accounts)],
+        request: Request,
         idempotency_key: Annotated[str | None, Header()] = None,
     ) -> MeterTicket:
         if idempotency_key is not None and not valid_idempotency_key(idempotency_key):
@@ -583,6 +636,8 @@ def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
             principal=principal, scope=scope, accounts=accounts,
             key=idempotency_key if idempotency_key is not None else f"auto:{uuid.uuid4().hex}",
             client_key=idempotency_key is not None,
+            fingerprint=(await request_fingerprint(request, scope)
+                         if idempotency_key is not None else ""),
         )
         ticket.precheck()
         return ticket

@@ -23,6 +23,7 @@ type Seed = {
   key_e: string;
   key_g: string;
   key_past_due: string;
+  key_lapsed: string;
   case_id: string;
   machines: string[];
   d_machine: string;
@@ -390,6 +391,33 @@ test.describe('Assurance workspace', () => {
     await expect(plan.getByTestId('plan-warning')).toContainText(me.warning.slice(0, 50), { timeout: 15_000 });
     await expect(plan.getByTestId('plan-status')).toContainText('past_due');
     await expect(page.getByTestId('fleet-table').or(page.getByText(/No machine is enrolled/))).toBeVisible();
+  });
+
+  test('a lapsed customer is not told "export: not included" while the server lets them export', async ({
+    page,
+    request,
+  }) => {
+    const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': seed.key_lapsed } })).json();
+    // The truth is the server's: the plan no longer includes export, the account may still read out its evidence.
+    expect(me.plan.limits.verifiable_export).toBe(false);
+    expect(me.evidence_readout).toBe(true);
+    await enter(page, seed.key_lapsed);
+    const plan = page.locator('section#aw-plan');
+    await expect(plan.getByTestId('plan-status')).toContainText('cancelled', { timeout: 15_000 });
+    const line = plan.getByTestId('plan-limit-verifiable_export');
+    await expect(line).toContainText('available for the evidence you already hold');
+    await expect(line).not.toContainText('not included');
+    await expect(plan.getByTestId('plan-readout-note')).toBeVisible();
+    // Everything else the plan no longer includes is still shown as not included.
+    await expect(plan.getByTestId('plan-limit-register_access')).toContainText('not included');
+  });
+
+  test('a paying customer sees no readout note and keeps the plan\'s own export line', async ({ page }) => {
+    await enter(page, seed.key_a);
+    const plan = page.locator('section#aw-plan');
+    await expect(plan.getByTestId('plan-name')).toBeVisible({ timeout: 15_000 });
+    await expect(plan.getByTestId('plan-readout-note')).toHaveCount(0);
+    await expect(plan.getByTestId('plan-limit-verifiable_export')).toHaveText(/export: included$/);
   });
 
   test('a Register plan shows its own plan and usage while the Cell views are refused', async ({ page }) => {

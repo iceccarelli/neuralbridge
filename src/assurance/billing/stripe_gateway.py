@@ -32,6 +32,7 @@ __all__ = [
     "create_checkout_session",
     "create_billing_portal_session",
     "create_meter_event",
+    "is_configuration_error",
     "is_definitive_rejection",
     "list_meter_event_summaries",
     "list_invoices",
@@ -66,10 +67,14 @@ class StripeError(RuntimeError):
     for a call that never reached Stripe.
     """
 
-    def __init__(self, message: str = "", *, status: int | None = None, code: str = "") -> None:
+    def __init__(
+        self, message: str = "", *, status: int | None = None, code: str = "", param: str = "",
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
+        #: The request parameter Stripe blames (``event_name``), when it names one.
+        self.param = param
 
 
 class SignatureError(StripeError):
@@ -94,23 +99,6 @@ def webhook_configured() -> bool:
     return bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
 
 
-def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
-    response = httpx.post(
-        f"{API}{path}",
-        # A mapping: httpx treats a list of tuples as raw request content and
-        # fails to send it (found when the metering calls were first tested
-        # through a real httpx transport). Our form keys are unique.
-        data=dict(form),
-        auth=(_secret_key(), ""),
-        timeout=20.0,
-        headers={"Stripe-Version": "2024-06-20"},
-    )
-    if response.status_code >= 400:
-        detail = response.json().get("error", {}).get("message", response.text)
-        raise StripeError(f"Stripe {response.status_code}: {detail}")
-    return response.json()
-
-
 _SECRET_LOOKING = re.compile(r"\b(?:sk|rk|pk|whsec)_[A-Za-z0-9_*]+")
 _STRIPE_ID = re.compile(r"[A-Za-z0-9_]{1,255}")
 
@@ -128,7 +116,7 @@ def _scrub(text: str) -> str:
 
 
 def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, Any]:
-    """A read-only Stripe call. Same auth, version and timeout as :func:`_post`."""
+    """A read-only Stripe call. Same auth, version, timeout and errors as :func:`_post`."""
     try:
         response = httpx.get(
             f"{API}{path}",
@@ -140,6 +128,35 @@ def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, An
     except httpx.HTTPError as exc:
         # The class name only: a transport error's text can carry the URL.
         raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    return _unwrap(response)
+
+
+def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
+    """A write call (Checkout, portal).
+
+    A transport error and Stripe's 4xx text are handled exactly as in
+    :func:`_get`: a scrubbed :class:`StripeError`, never a raw ``httpx``
+    exception (which the routes would turn into a 500).
+    """
+    try:
+        response = httpx.post(
+            f"{API}{path}",
+            # A mapping: httpx treats a list of tuples as raw request content and
+            # fails to send it (found when the metering calls were first tested
+            # through a real httpx transport). Our form keys are unique.
+            data=dict(form),
+            auth=(_secret_key(), ""),
+            timeout=20.0,
+            headers={"Stripe-Version": "2024-06-20"},
+        )
+    except httpx.HTTPError as exc:
+        # The class name only: a transport error's text can carry the URL.
+        raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    return _unwrap(response)
+
+
+def _unwrap(response: httpx.Response) -> dict[str, Any]:
+    """The JSON object of a successful reply, or a scrubbed :class:`StripeError`."""
     try:
         body = response.json()
     except ValueError:
@@ -152,6 +169,7 @@ def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, An
             f"Stripe {response.status_code}: {_scrub(str(detail))}",
             status=response.status_code,
             code=str(error.get("code") or ""),
+            param=str(error.get("param") or ""),
         )
     if not isinstance(body, dict):
         raise StripeError(f"Stripe {response.status_code}: response was not a JSON object")
@@ -190,21 +208,46 @@ def _call(
         raise StripeError(
             f"Stripe {status}: {_scrub(str(error.get('message') or f'HTTP {status}'))}",
             status=status, code=str(error.get("code") or ""),
+            param=str(error.get("param") or ""),
         )
     if not isinstance(body, dict):
         raise StripeError(f"Stripe {status}: response was not a JSON object", status=status)
     return body
 
 
+def is_configuration_error(exc: StripeError) -> bool:
+    """Is this refusal about OUR setup rather than about the event sent?
+
+    A 401/403 (the key was rotated, revoked or lacks the permission), a 404 (the
+    meter path is wrong) or a 400 that blames the meter or its ``event_name``
+    would be returned for *every* event until an operator fixes the
+    configuration. Treating one as a verdict on the event would throw away
+    revenue that is perfectly billable, so callers abort the run and leave the
+    rows as they were.
+    """
+    if exc.status in (401, 403, 404):
+        return True
+    if exc.status == 400:
+        text = f"{exc} {exc.param}".lower()
+        return exc.param == "event_name" or "event_name" in text or "meter" in text
+    return False
+
+
 def is_definitive_rejection(exc: StripeError) -> bool:
-    """Did Stripe look at the request and refuse it for good?
+    """Did Stripe look at *this event* and refuse it for good?
 
     A 4xx other than 408 (timeout), 409 (a request with this idempotency key is
-    in flight) and 429 (slow down) will fail the same way every time. Anything
-    else - a 5xx, a timeout, no answer at all - may have been received, and the
-    caller must retry with the *same* identifier rather than conclude anything.
+    in flight) and 429 (slow down) will fail the same way every time - unless it
+    is a :func:`configuration error <is_configuration_error>`, which says nothing
+    about the event. Anything else - a 5xx, a timeout, no answer at all - may
+    have been received, and the caller must retry with the *same* identifier
+    rather than conclude anything.
     """
-    return exc.status is not None and 400 <= exc.status < 500 and exc.status not in (408, 409, 429)
+    return (
+        exc.status is not None and 400 <= exc.status < 500
+        and exc.status not in (408, 409, 429)
+        and not is_configuration_error(exc)
+    )
 
 
 def create_meter_event(

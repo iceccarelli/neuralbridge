@@ -28,7 +28,7 @@ import hashlib
 import secrets
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -193,6 +193,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     billable_quantity INTEGER NOT NULL DEFAULT 0
                         CHECK (billable_quantity >= 0 AND billable_quantity <= quantity),
     idempotency_key   TEXT NOT NULL,
+    fingerprint       TEXT NOT NULL DEFAULT '',
     occurred_at       TEXT NOT NULL,
     source            TEXT NOT NULL DEFAULT 'api',
     billed_state      TEXT NOT NULL
@@ -400,24 +401,32 @@ class AccountStore:
         the race anyway is the outcome we wanted, not an error.
         """
         additions = (
-            ("last_event_at", "INTEGER NOT NULL DEFAULT 0"),
-            ("past_due_since", "INTEGER NOT NULL DEFAULT 0"),
-            ("spend_limit_units", "INTEGER NOT NULL DEFAULT 0"),
-            ("budget_alert_pct", "INTEGER NOT NULL DEFAULT 80"),
+            ("accounts", "last_event_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("accounts", "past_due_since", "INTEGER NOT NULL DEFAULT 0"),
+            ("accounts", "spend_limit_units", "INTEGER NOT NULL DEFAULT 0"),
+            ("accounts", "budget_alert_pct", "INTEGER NOT NULL DEFAULT 80"),
+            # What request an Idempotency-Key was first used for ('' = unknown,
+            # a row an older build wrote: the key alone decides, as it did).
+            ("usage_events", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
         )
+
+        def present(table: str) -> set[str]:
+            return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+
         # Nothing to add (the normal case): no write lock, so opening an
         # up-to-date database never queues behind a writer.
-        if all(name in {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
-               for name, _ in additions):
+        # A table that does not exist yet is created, whole, by the schema script.
+        if all(name in present(table) or not present(table)
+               for table, name, _ in additions):
             return
         db.execute("BEGIN IMMEDIATE")
         try:
-            columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
-            for name, definition in additions:
-                if name in columns:
+            for table, name, definition in additions:
+                columns = present(table)
+                if not columns or name in columns:
                     continue
                 try:
-                    db.execute(f"ALTER TABLE accounts ADD COLUMN {name} {definition}")
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
@@ -1201,6 +1210,7 @@ class AccountStore:
         *,
         source: str = "api",
         now: datetime | None = None,
+        fingerprint: str = "",
     ) -> UsageRecord:
         """Count successful metered work, atomically with the quota check.
 
@@ -1217,6 +1227,13 @@ class AccountStore:
         ``ValueError`` for an unmetered scope, a non-positive quantity or a
         malformed key; ``LookupError`` for an unknown account.
 
+        ``fingerprint`` binds the key to the request it was first used for (the
+        API passes a hash of scope, route and canonical body). The same key with
+        another fingerprint is an :class:`IdempotencyConflictError`: a key names
+        one operation, not a licence to send anything. An empty fingerprint on
+        either side (a direct caller, or a row an older build wrote) compares
+        on scope and quantity alone, as before.
+
         A plan that does not meter the scope (Register and Cell have no daily
         cap) records nothing and returns ``recorded=False``.
         """
@@ -1231,7 +1248,8 @@ class AccountStore:
                 (account_id, idempotency_key),
             ).fetchone()
             if previous is not None:
-                if (previous["scope"], previous["quantity"]) != (scope, quantity):
+                if (previous["scope"], previous["quantity"]) != (scope, quantity) \
+                        or self._fingerprint_differs(previous, fingerprint):
                     raise IdempotencyConflictError(
                         idempotency_key, previous["scope"], previous["quantity"])
                 return UsageRecord(
@@ -1265,25 +1283,33 @@ class AccountStore:
             state = "pending" if billable else "included"
             db.execute(
                 "INSERT INTO usage_events (event_id, account_id, scope, quantity, "
-                "billable_quantity, idempotency_key, occurred_at, source, billed_state) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "billable_quantity, idempotency_key, fingerprint, occurred_at, source, "
+                "billed_state) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (event_id, account_id, scope, quantity, billable, idempotency_key,
-                 format_utc(moment), source, state),
+                 fingerprint, format_utc(moment), source, state),
             )
             return UsageRecord(event_id=event_id, scope=scope, quantity=quantity,
                                billable_quantity=billable, billed_state=state,
                                duplicate=False)
 
+    @staticmethod
+    def _fingerprint_differs(previous: sqlite3.Row, fingerprint: str) -> bool:
+        stored = previous["fingerprint"] if "fingerprint" in previous.keys() else ""
+        return bool(stored) and bool(fingerprint) and stored != fingerprint
+
     def check_usage(
         self, account_id: str, scope: str, quantity: int = 1,
         idempotency_key: str | None = None, *, now: datetime | None = None,
+        fingerprint: str = "",
     ) -> None:
         """Would :meth:`record_usage` refuse this? Read-only; takes no write lock.
 
         A cheap early refusal, so a caller who is certainly over their limit
         costs the service no computation. It is advisory: the decision that
         counts is the one :meth:`record_usage` makes inside its transaction. A
-        retry of work already recorded under ``idempotency_key`` always passes.
+        retry of work already recorded under ``idempotency_key`` always passes;
+        the same key with a different ``fingerprint`` raises
+        :class:`IdempotencyConflictError` before any work is done.
         """
         self._check_request(scope, quantity, idempotency_key)
         moment = now or utc_now()
@@ -1296,10 +1322,15 @@ class AccountStore:
             allowance = allowance_for(account.plan, scope)
             if allowance is None:
                 return
-            if idempotency_key is not None and db.execute(
-                "SELECT 1 FROM usage_events WHERE account_id=? AND idempotency_key=?",
+            previous = None if idempotency_key is None else db.execute(
+                "SELECT * FROM usage_events WHERE account_id=? AND idempotency_key=?",
                 (account_id, idempotency_key),
-            ).fetchone():
+            ).fetchone()
+            if previous is not None:
+                if (previous["scope"], previous["quantity"]) != (scope, quantity) \
+                        or self._fingerprint_differs(previous, fingerprint):
+                    raise IdempotencyConflictError(
+                        idempotency_key or "", previous["scope"], previous["quantity"])
                 return
             self._usage_decision(db, account, scope, quantity, moment, allowance)
         finally:
@@ -1484,6 +1515,61 @@ class AccountStore:
                 "WHERE event_id=? AND billed_state='sending'",
                 (error[:300], event_id),
             ).rowcount > 0
+
+    def release_usage_events(self, event_ids: Sequence[str], error: str) -> int:
+        """Give claimed events back after a run-level failure (bad key, wrong meter).
+
+        ``sending`` -> ``pending`` with the claim undone (one attempt fewer; the
+        first-attempt stamp cleared if this claim was the only attempt), so the
+        dedupe window of a row that really was sent earlier is not extended and
+        a row never sent does not start its clock. Returns how many moved.
+        """
+        moved = 0
+        with self._txn() as db:
+            for event_id in event_ids:
+                moved += db.execute(
+                    "UPDATE usage_events SET billed_state='pending', "
+                    "attempts=MAX(attempts-1, 0), "
+                    "first_attempt_at=CASE WHEN attempts<=1 THEN '' ELSE first_attempt_at END, "
+                    "last_attempt_at=CASE WHEN attempts<=1 THEN '' ELSE last_attempt_at END, "
+                    "last_error=? WHERE event_id=? AND billed_state='sending'",
+                    (error[:300], event_id),
+                ).rowcount
+        return moved
+
+    def requeue_rejected_usage(self, event_ids: Sequence[str] | None = None) -> list[str]:
+        """Operator action: put ``rejected`` events back to ``pending``. Returns their ids.
+
+        Nothing calls this automatically. A rejection was Stripe refusing the
+        event itself, or (before configuration errors were told apart) a rotated
+        key or wrong meter name; either way a person decides it is worth another
+        try. The attempt history is cleared so the dedupe window starts afresh -
+        safe because a refused event was never accepted - and the usual age limit
+        still applies when the row is next claimed. ``event_ids=None`` means
+        every rejected event.
+        """
+        wanted = None if event_ids is None else set(event_ids)
+        moved: list[str] = []
+        with self._txn() as db:
+            for row in db.execute(
+                "SELECT event_id, last_error FROM usage_events "
+                "WHERE billed_state='rejected' ORDER BY rowid"
+            ).fetchall():
+                if wanted is not None and row["event_id"] not in wanted:
+                    continue
+                db.execute(
+                    "UPDATE usage_events SET billed_state='pending', attempts=0, "
+                    "first_attempt_at='', last_attempt_at='', last_error=? "
+                    "WHERE event_id=? AND billed_state='rejected'",
+                    (("requeued by operator; was: " + row["last_error"])[:300], row["event_id"]),
+                )
+                moved.append(row["event_id"])
+        return moved
+
+    def rejected_usage_event_ids(self) -> list[str]:
+        """The ids ``requeue_rejected_usage()`` would move. Read-only."""
+        return [r["event_id"] for r in self._read_events(
+            "SELECT event_id FROM usage_events WHERE billed_state='rejected' ORDER BY rowid", ())]
 
     def note_usage_error(self, event_id: str, error: str) -> None:
         """A send failed without a verdict (timeout, 5xx). The row stays ``sending``."""

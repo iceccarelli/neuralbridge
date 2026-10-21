@@ -43,7 +43,12 @@ from . import stripe_gateway
 from .accounts import AccountStore, _parse_stamp
 from .metering import month_bounds
 from .plans import payg_available
-from .stripe_gateway import StripeError, Transport, is_definitive_rejection
+from .stripe_gateway import (
+    StripeError,
+    Transport,
+    is_configuration_error,
+    is_definitive_rejection,
+)
 
 __all__ = [
     "NOTICE",
@@ -126,6 +131,10 @@ class ReportResult:
     #: Acknowledged with a different identifier: not marked, retried.
     mismatched: int = 0
     pending_seen: int = 0
+    #: Claimed rows given back to ``pending`` because the run was aborted.
+    released: int = 0
+    #: Why the run stopped early (our key or meter configuration; key-scrubbed). "" = it did not.
+    aborted: str = ""
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +143,7 @@ class ReportResult:
             "billed": self.billed, "retry_later": self.retry_later,
             "rejected": self.rejected, "ambiguous": self.ambiguous,
             "mismatched": self.mismatched, "pending_seen": self.pending_seen,
+            "released": self.released, "aborted": self.aborted,
             "errors": self.errors,
         }
 
@@ -169,7 +179,8 @@ def report_usage(
             1 for e in accounts.usage_events_all() if e["billed_state"] in ("pending", "sending"))
         return result
 
-    for event in accounts.claim_usage_events(now=moment, limit=batch):
+    claimed = accounts.claim_usage_events(now=moment, limit=batch)
+    for index, event in enumerate(claimed):
         result.claimed += 1
         event_id = event["event_id"]
         customer = event["stripe_customer_id"]
@@ -184,7 +195,18 @@ def report_usage(
                 timestamp=int(_parse_stamp(event["occurred_at"]).timestamp()),
             )
         except StripeError as exc:
-            message = str(exc)
+            message = stripe_gateway._scrub(str(exc))
+            if is_configuration_error(exc):
+                # Every event would fail the same way until the operator fixes
+                # the key or the meter name: stop, hand back what was claimed
+                # (including this row), reject nothing.
+                result.aborted = (
+                    f"run aborted, nothing rejected: {message} - check STRIPE_SECRET_KEY "
+                    "(rotated or restricted?) and ASSURANCE_PAYG_METER_EVENT")
+                result.released = accounts.release_usage_events(
+                    [e["event_id"] for e in claimed[index:]], result.aborted)
+                result.errors.append(f"{event_id}: {message}")
+                break
             if is_definitive_rejection(exc):
                 accounts.mark_usage_rejected(event_id, message)
                 result.rejected += 1
@@ -439,7 +461,8 @@ def reconcile_usage(
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None, *, gateway: MeterGateway | None = None,
          now: datetime | None = None) -> int:
-    """``python -m assurance.billing.payg report [--dry-run] [--json]``.
+    """``python -m assurance.billing.payg report [--dry-run] [--json]``, or
+    ``... requeue (--all-rejected | --event-id ID) [--dry-run]``.
 
     Reads ``ASSURANCE_ACCOUNTS`` and (for a real run) ``STRIPE_SECRET_KEY``
     from the environment. Exit 0 all reported, 1 something failed or needs a
@@ -453,9 +476,15 @@ def main(argv: list[str] | None = None, *, gateway: MeterGateway | None = None,
     parser = argparse.ArgumentParser(
         prog="python -m assurance.billing.payg",
         description="Send unreported pay-as-you-go usage to Stripe. " + NOTICE)
-    parser.add_argument("command", choices=["report"])
+    parser.add_argument("command", choices=["report", "requeue"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--all-rejected", action="store_true",
+        help="requeue: put every rejected event back to pending (a person decides)")
+    parser.add_argument(
+        "--event-id", action="append", default=[], metavar="ID",
+        help="requeue: only this rejected event (repeatable)")
     args = parser.parse_args(argv)
 
     def emit(payload: dict[str, Any], code: int) -> int:
@@ -463,6 +492,25 @@ def main(argv: list[str] | None = None, *, gateway: MeterGateway | None = None,
             f"{k}: {v}" for k, v in payload.items())
         sys.stdout.write(text + "\n")
         return code
+
+    if args.command == "requeue":
+        # A deliberate operator action, and it never talks to Stripe. Nothing
+        # requeues a rejected event by itself.
+        if not (args.all_rejected or args.event_id):
+            return emit({"notice": NOTICE, "error": "name what to requeue: "
+                         "--all-rejected or --event-id ID (rejected events are never "
+                         "retried automatically)."}, 2)
+        path = os.environ.get("ASSURANCE_ACCOUNTS", "accounts.db")
+        if not Path(path).is_file():
+            return emit({"notice": NOTICE, "error": "ASSURANCE_ACCOUNTS does not point at an "
+                         "existing account store."}, 2)
+        store = AccountStore(path)
+        wanted = None if args.all_rejected else args.event_id
+        matched = [e for e in store.rejected_usage_event_ids()
+                   if wanted is None or e in wanted]
+        moved = [] if args.dry_run else store.requeue_rejected_usage(matched)
+        return emit({"notice": NOTICE, "dry_run": args.dry_run, "matched": matched,
+                     "requeued": len(moved)}, 0)
 
     if gateway is None:
         if not stripe_gateway.stripe_configured():
@@ -476,8 +524,8 @@ def main(argv: list[str] | None = None, *, gateway: MeterGateway | None = None,
         result = report_usage(AccountStore(path), gateway, now=now, dry_run=args.dry_run)
     except ReportError as exc:
         return emit({"notice": NOTICE, "error": str(exc)}, 2)
-    code = 1 if (result.retry_later or result.rejected or result.ambiguous
-                 or result.mismatched) else 0
+    code = 2 if result.aborted else 1 if (
+        result.retry_later or result.rejected or result.ambiguous or result.mismatched) else 0
     return emit(result.to_dict(), code)
 
 

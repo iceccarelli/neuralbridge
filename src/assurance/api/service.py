@@ -118,6 +118,17 @@ def create_app(**kwargs: Any) -> FastAPI:
         # allowed to send it, or the preflight refuses the request outright.
         allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key",
                        "x-issuer-public-key"],
+        # A browser can read only the CORS-safelisted response headers unless the
+        # server lists the rest. app/lib/assuranceApi.ts reads retry-after, and the
+        # quota/usage headers are for the browser client too. Named, no wildcard;
+        # tests/test_assurance_cors_expose.py fails if a route emits an
+        # X-Assurance-* header that is not listed here.
+        expose_headers=[
+            "Retry-After", "WWW-Authenticate",
+            "X-Assurance-Tier", "X-Assurance-Quota-Limit", "X-Assurance-Quota-Remaining",
+            "X-Assurance-Usage-Event", "X-Assurance-Billable-Units",
+            "X-Assurance-Access", "X-Assurance-Submittable",
+        ],
         allow_credentials=False,
     )
 
