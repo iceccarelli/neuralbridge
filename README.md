@@ -24,7 +24,7 @@ Two regulations turned that from a quality problem into a legal one:
 
 Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
 process. Software of ours satisfies neither for you. What a hash-chained record
-of what is on each machine, what was verified against it, and when can do is let
+of what is on each machine, which checks were run against it, and when can do is let
 a manufacturer evidence its own process, and show a reviewer which records
 stopped describing the machine.
 
@@ -106,10 +106,12 @@ software does not do.
 | **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
 | **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
-Verification is free at every tier and always will be: the audience for a piece
-of evidence is a regulator, an insurer or a customer's customer, none of whom
-will ever hold an API key here. Evidence only a paying customer can check is
-worth nothing.
+Re-checking someone else's evidence needs no account and no key: 20 a day per
+address, and no daily cap on Register and Cell (`POST /v1/evidence/verify`
+spends a unit of the same daily allowance as the Article 14 validator; the cap is
+an anti-abuse limit, not a price). The audience for a piece of evidence is a
+regulator, an insurer or a customer's customer, and evidence only a paying
+customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
@@ -148,7 +150,7 @@ src/dashboard/        Vite/React admin UI (not wired to the assurance API)
 ```
 
 ```bash
-pytest tests/ -q        # 671 tests
+python -m pytest tests/ -q --no-cov   # a green run has 0 skipped (see CLAUDE.md)
 ruff check src/
 ```
 

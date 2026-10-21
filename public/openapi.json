@@ -840,6 +840,11 @@
             ],
             "title": "Manifest"
           },
+          "manifest_relayed": {
+            "default": false,
+            "title": "Manifest Relayed",
+            "type": "boolean"
+          },
           "missing_items": {
             "items": {
               "maxLength": 200,
@@ -5067,7 +5072,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "The public key this service counter-signs with. Free, forever.",
+        "summary": "The public key this service counter-signs with. No account needed.",
         "tags": [
           "attestation"
         ]

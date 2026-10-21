@@ -141,7 +141,7 @@ export default function SolutionPage({ params }: { params: { slug: string } }) {
         <div className="shell final-cta-inner">
           <div>
             <h2>{solution.headline}</h2>
-            <p>Re-checking evidence is not metered at any tier. Start there.</p>
+            <p>Re-checking evidence needs no account: 20 a day per address, with no daily cap on Register and Cell. Start there.</p>
           </div>
           <div className="hero-actions">
             <a

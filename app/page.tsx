@@ -392,11 +392,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Pricing</span>
-            <h2>Three tiers. Re-checking someone else&apos;s evidence is free at every one.</h2>
+            <h2>Three tiers. Re-checking someone else&apos;s evidence needs no account.</h2>
             <p>
               Assurance tiers are computed from the weakest input, never passed in. If it is not gated in code, it is
               not on this page — <code>GET /v1/plans</code> returns this same table, generated from the
-              entitlements the software enforces.
+              entitlements the software enforces. Re-checking evidence is allowed 20 a day per address without an
+              account; Register and Cell have no daily cap on it.
             </p>
           </div>
 
