@@ -99,14 +99,17 @@ def overage_allowed(account: Account) -> bool:
     """May this account run past its daily allowance and be billed for it?
 
     Every condition is checked on every request, never cached on the account:
-    the plan has ``metered_overage``, the account is entitled right now (a
-    cancelled subscription is on the free plan and fails here), it is bound to a
-    Stripe customer (so there is someone to bill), and the deployment has
-    pay-as-you-go configured. Whether a *limit* has room is a separate check.
+    the plan has ``metered_overage``, the account is ``active`` right now (a
+    cancelled subscription is on the free plan, and ``past_due`` stops billing),
+    it is bound to a Stripe customer (so there is someone to bill), and the
+    deployment has pay-as-you-go configured. Whether a *limit* has room is a separate check.
     """
     return (
         account.plan.metered_overage
         and account.tier == "payg"
+        # ``active`` only: a ``past_due`` account is still entitled to what it
+        # has, but must not keep running up a bill while its card is failing.
+        and account.status == "active"
         and bool(account.stripe_customer_id)
         and payg_available()
     )

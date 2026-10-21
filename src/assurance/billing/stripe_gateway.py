@@ -17,6 +17,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,8 +27,13 @@ __all__ = [
     "StripeError",
     "SignatureError",
     "stripe_configured",
+    "METER_API_VERSION",
+    "Transport",
     "create_checkout_session",
     "create_billing_portal_session",
+    "create_meter_event",
+    "is_definitive_rejection",
+    "list_meter_event_summaries",
     "list_invoices",
     "list_subscriptions",
     "retrieve_subscription",
@@ -36,6 +42,20 @@ __all__ = [
 
 API = "https://api.stripe.com/v1"
 _TOLERANCE_SECONDS = 300
+
+#: Billing Meters (``/v1/billing/meter_events``) are generally available from
+#: the 2024-09-30.acacia API version; the older ``2024-06-20`` this module pins
+#: for everything else predates them. Sent per request on meter calls only.
+#: **From Stripe's published contract as remembered, never exercised against
+#: Stripe** - the first run in test mode is what confirms it.
+METER_API_VERSION = "2024-09-30.acacia"
+
+#: How a request reaches Stripe, injectable so every meter call can be tested
+#: against a fake: ``transport(method, path, form, headers) -> (status, body)``.
+#: A transport that cannot reach Stripe raises :class:`StripeError` (no status).
+Transport = Callable[
+    [str, str, Sequence[tuple[str, str]], Mapping[str, str]], tuple[int, Any]
+]
 
 
 class StripeError(RuntimeError):
@@ -77,7 +97,10 @@ def webhook_configured() -> bool:
 def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
     response = httpx.post(
         f"{API}{path}",
-        data=form,
+        # A mapping: httpx treats a list of tuples as raw request content and
+        # fails to send it (found when the metering calls were first tested
+        # through a real httpx transport). Our form keys are unique.
+        data=dict(form),
         auth=(_secret_key(), ""),
         timeout=20.0,
         headers={"Stripe-Version": "2024-06-20"},
@@ -133,6 +156,125 @@ def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, An
     if not isinstance(body, dict):
         raise StripeError(f"Stripe {response.status_code}: response was not a JSON object")
     return body
+
+
+def _httpx_transport(
+    method: str, path: str, form: Sequence[tuple[str, str]], headers: Mapping[str, str]
+) -> tuple[int, Any]:
+    """The real transport: plain HTTP with the configured secret key."""
+    try:
+        response = httpx.request(
+            method, f"{API}{path}",
+            data=dict(form) if method == "POST" else None,
+            params=dict(form) if method == "GET" and form else None,
+            auth=(_secret_key(), ""), timeout=20.0, headers=dict(headers),
+        )
+    except httpx.HTTPError as exc:
+        # The class name only: a transport error's text can carry the URL.
+        raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = None
+    return response.status_code, body
+
+
+def _call(
+    method: str, path: str, form: Sequence[tuple[str, str]], headers: Mapping[str, str],
+    transport: Transport | None,
+) -> dict[str, Any]:
+    status, body = (transport or _httpx_transport)(method, path, form, headers)
+    if status >= 400:
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        error = error if isinstance(error, dict) else {}
+        raise StripeError(
+            f"Stripe {status}: {_scrub(str(error.get('message') or f'HTTP {status}'))}",
+            status=status, code=str(error.get("code") or ""),
+        )
+    if not isinstance(body, dict):
+        raise StripeError(f"Stripe {status}: response was not a JSON object", status=status)
+    return body
+
+
+def is_definitive_rejection(exc: StripeError) -> bool:
+    """Did Stripe look at the request and refuse it for good?
+
+    A 4xx other than 408 (timeout), 409 (a request with this idempotency key is
+    in flight) and 429 (slow down) will fail the same way every time. Anything
+    else - a 5xx, a timeout, no answer at all - may have been received, and the
+    caller must retry with the *same* identifier rather than conclude anything.
+    """
+    return exc.status is not None and 400 <= exc.status < 500 and exc.status not in (408, 409, 429)
+
+
+def create_meter_event(
+    *,
+    event_name: str,
+    customer_id: str,
+    value: int,
+    identifier: str,
+    timestamp: int,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Report ``value`` units of usage for one Stripe customer: ``POST /v1/billing/meter_events``.
+
+    ``identifier`` is the idempotency handle: Stripe enforces uniqueness of a
+    meter event identifier within a rolling window of at least 24 hours, so a
+    retry with the same identifier is never counted twice. The same value is
+    sent as the ``Idempotency-Key`` header, so a retry whose first response was
+    lost is replayed rather than re-executed. ``timestamp`` is unix seconds of
+    when the usage *happened* (Stripe accepts up to 35 days back, and not more
+    than a few minutes ahead). The customer is named in
+    ``payload[stripe_customer_id]`` and the amount in ``payload[value]``, the
+    default keys of a Billing Meter configured for ``sum`` aggregation.
+
+    Acknowledgement is the HTTP 2xx and the returned object: Stripe validates
+    the event asynchronously afterwards (a bad customer, say, surfaces later as a
+    ``v1.billing.meter.error_report_triggered`` event, not here), which is why
+    ``billing/reconcile.py`` also compares totals with the meter's summaries.
+
+    **Exercised against a fake transport only.**
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise StripeError("a meter event value must be a positive integer")
+    if not _STRIPE_ID.fullmatch(customer_id or ""):
+        raise StripeError("not a Stripe customer id", status=400, code="invalid_id")
+    if not identifier or len(identifier) > 100:
+        raise StripeError("a meter event identifier must be 1-100 characters")
+    form = [
+        ("event_name", event_name),
+        ("payload[stripe_customer_id]", customer_id),
+        ("payload[value]", str(value)),
+        ("identifier", identifier),
+        ("timestamp", str(int(timestamp))),
+    ]
+    headers = {"Stripe-Version": METER_API_VERSION, "Idempotency-Key": identifier}
+    return _call("POST", "/billing/meter_events", form, headers, transport)
+
+
+def list_meter_event_summaries(
+    *,
+    meter_id: str,
+    customer_id: str,
+    start_time: int,
+    end_time: int,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """What Stripe has aggregated for one customer on one meter: ``GET .../event_summaries``.
+
+    Read-only. ``start_time`` and ``end_time`` are unix seconds and must fall on
+    minute boundaries (Stripe requires it); the caller sums ``aggregated_value``
+    across the returned summaries. **Exercised against a fake transport only.**
+    """
+    if not _STRIPE_ID.fullmatch(meter_id or "") or not _STRIPE_ID.fullmatch(customer_id or ""):
+        raise StripeError("not a Stripe id", status=400, code="invalid_id")
+    form = [
+        ("customer", customer_id),
+        ("start_time", str(int(start_time) // 60 * 60)),
+        ("end_time", str(-(-int(end_time) // 60) * 60)),
+    ]
+    return _call("GET", f"/billing/meters/{meter_id}/event_summaries", form,
+                 {"Stripe-Version": METER_API_VERSION}, transport)
 
 
 def list_subscriptions(
@@ -202,17 +344,21 @@ def create_checkout_session(
     success_url: str,
     cancel_url: str,
     tier: str,
+    metered: bool = False,
 ) -> CheckoutSession:
     """A subscription checkout for one manufacturer.
 
     ``tier`` travels in metadata so the webhook can grant the right entitlement
     without having to map prices back to plans a second time, in a place where
     a mismatch would silently over- or under-grant.
+
+    ``metered`` is a usage-based price (pay-as-you-go): Stripe takes no quantity
+    for those - the amount is whatever the meter reports - and rejects one.
     """
     form: list[tuple[str, str]] = [
         ("mode", "subscription"),
         ("line_items[0][price]", price_id),
-        ("line_items[0][quantity]", "1"),
+        *([] if metered else [("line_items[0][quantity]", "1")]),
         ("customer_email", email),
         ("success_url", success_url),
         ("cancel_url", cancel_url),

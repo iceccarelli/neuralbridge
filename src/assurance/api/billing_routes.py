@@ -46,7 +46,7 @@ from ..billing.accounts import (
     hash_key,
 )
 from ..billing.metering import MAX_SPEND_LIMIT_UNITS, parse_period, usage_report
-from ..billing.plans import PLANS, public_catalogue
+from ..billing.plans import PLANS, payg_available, public_catalogue
 from ..billing.subscription_state import PURCHASABLE_TIERS, map_subscription
 from ..core.identity import utc_now
 from .deps import current_principal, get_accounts, marketing_url, public_url
@@ -63,7 +63,7 @@ _PURCHASABLE_TIERS = PURCHASABLE_TIERS
 class CheckoutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tier: str = Field(pattern="^(register|cell)$")
+    tier: str = Field(pattern="^(register|cell|payg)$")
     # A plain pattern rather than EmailStr: correctness here is Stripe's job,
     # and pulling in email-validator to reject "a@b" would be a dependency
     # bought for nothing.
@@ -109,6 +109,17 @@ def post_checkout(
             },
         )
     plan = PLANS[body.tier]
+    if body.tier == "payg" and not payg_available():
+        # Off unless fully configured (a metered price, a meter, a test-mode
+        # key): a subscription that cannot be metered must not be sold.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "payg_not_available",
+                "detail": "Pay-as-you-go is not enabled on this deployment. Checkout is "
+                          "disabled rather than selling a subscription that cannot be metered.",
+            },
+        )
     if not plan.purchasable:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -130,6 +141,7 @@ def post_checkout(
             success_url=f"{market}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{market}/#pricing",
             tier=plan.tier,
+            metered=plan.metered_overage,
         )
     except stripe.StripeError as exc:
         raise HTTPException(

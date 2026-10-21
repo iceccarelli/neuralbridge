@@ -51,6 +51,9 @@ __all__ = [
     "ENTITLED_STATUSES",
     "MAX_ACTIVE_KEYS",
     "PENDING_KEY_TTL",
+    "USAGE_LEASE",
+    "USAGE_MAX_AGE",
+    "USAGE_RESEND_WINDOW",
     "Account",
     "AccountStore",
     "IdempotencyConflictError",
@@ -92,6 +95,18 @@ _ORPHAN_RETENTION = timedelta(days=7)
 #: Events inside the free allowance are kept this long; billable ones are never
 #: dropped by this store.
 _INCLUDED_RETENTION = timedelta(days=62)
+
+#: A ``sending`` event may be claimed again after this long without an outcome.
+USAGE_LEASE = timedelta(minutes=10)
+#: Re-sending the same identifier is safe only while the provider still dedupes
+#: on it. Stripe's guarantee is "at least 24 hours"; stay well inside it.
+USAGE_RESEND_WINDOW = timedelta(hours=20)
+#: The provider refuses usage timestamped more than 35 days back.
+USAGE_MAX_AGE = timedelta(days=34)
+
+
+def _parse_stamp(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -833,7 +848,7 @@ class AccountStore:
         ``not_stripe_account`` or ``invalid_target``.
         """
         if new_status not in {"active", "past_due", "cancelled"} or new_tier not in {
-            "free", "register", "cell"
+            "free", "register", "cell", "payg"
         }:
             return "invalid_target"
         with self._txn() as db:
@@ -1387,6 +1402,128 @@ class AccountStore:
             (account_id, account_id),
         )
         return {r["billed_state"]: r["b"] for r in rows}
+
+    # -- the outbox: billable events on their way to the provider ----------
+    def claim_usage_events(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 200,
+        lease: timedelta = USAGE_LEASE,
+        resend_window: timedelta = USAGE_RESEND_WINDOW,
+        max_age: timedelta = USAGE_MAX_AGE,
+    ) -> list[dict[str, Any]]:
+        """Take billable events that have not been acknowledged, once, for sending.
+
+        One write transaction picks the rows and marks them ``sending`` (with the
+        attempt time) before anything touches the network, so two reporters never
+        send the same row at the same moment and a crash leaves a visible
+        ``sending`` row rather than a lost or double-sent one. A row is claimable
+        if it is ``pending``, or ``sending`` with a lease older than ``lease``
+        (its sender died or is hopelessly slow). Re-sending is safe only while
+        the provider still dedupes on the identifier: past ``resend_window`` from
+        the *first* attempt - or, for a never-sent row, past ``max_age`` from when
+        the usage happened (the provider refuses timestamps older than that) - the
+        row becomes ``ambiguous`` and is **not** sent; reconciliation decides.
+        """
+        moment = now or utc_now()
+        stamp = format_utc(moment)
+        with self._txn() as db:
+            rows = db.execute(
+                "SELECT e.*, a.stripe_customer_id AS customer FROM usage_events e "
+                "LEFT JOIN accounts a ON a.id = e.account_id "
+                "WHERE e.billable_quantity > 0 AND (e.billed_state = 'pending' OR "
+                "(e.billed_state = 'sending' AND e.last_attempt_at <= ?)) "
+                "ORDER BY e.rowid LIMIT ?",
+                (format_utc(moment - lease), max(1, int(limit))),
+            ).fetchall()
+            claimed: list[dict[str, Any]] = []
+            for row in rows:
+                first = row["first_attempt_at"]
+                too_old = (
+                    _parse_stamp(first) < moment - resend_window if first
+                    else _parse_stamp(row["occurred_at"]) < moment - max_age
+                )
+                if too_old:
+                    db.execute(
+                        "UPDATE usage_events SET billed_state='ambiguous', last_error=? "
+                        "WHERE event_id=? AND billed_state IN ('pending','sending')",
+                        ("not re-sent: past the window in which the provider dedupes "
+                         "on the identifier" if first else
+                         "not sent: older than the provider accepts", row["event_id"]),
+                    )
+                    continue
+                db.execute(
+                    "UPDATE usage_events SET billed_state='sending', "
+                    "first_attempt_at=CASE WHEN first_attempt_at='' THEN ? ELSE first_attempt_at END, "
+                    "last_attempt_at=?, attempts=attempts+1 WHERE event_id=?",
+                    (stamp, stamp, row["event_id"]),
+                )
+                claimed.append({
+                    "event_id": row["event_id"], "account_id": row["account_id"],
+                    "scope": row["scope"], "billable_quantity": row["billable_quantity"],
+                    "occurred_at": row["occurred_at"], "stripe_customer_id": row["customer"] or "",
+                    "attempts": row["attempts"] + 1,
+                })
+            return claimed
+
+    def mark_usage_billed(self, event_id: str, provider_event_id: str) -> bool:
+        """Record the provider's acknowledgement. Only a ``sending`` row can become ``billed``."""
+        with self._txn() as db:
+            return db.execute(
+                "UPDATE usage_events SET billed_state='billed', provider_event_id=?, "
+                "last_error='' WHERE event_id=? AND billed_state='sending'",
+                (provider_event_id, event_id),
+            ).rowcount > 0
+
+    def mark_usage_rejected(self, event_id: str, error: str) -> bool:
+        """The provider refused the event for good. Never retried automatically."""
+        with self._txn() as db:
+            return db.execute(
+                "UPDATE usage_events SET billed_state='rejected', last_error=? "
+                "WHERE event_id=? AND billed_state='sending'",
+                (error[:300], event_id),
+            ).rowcount > 0
+
+    def note_usage_error(self, event_id: str, error: str) -> None:
+        """A send failed without a verdict (timeout, 5xx). The row stays ``sending``."""
+        with self._txn() as db:
+            db.execute(
+                "UPDATE usage_events SET last_error=? WHERE event_id=? AND billed_state='sending'",
+                (error[:300], event_id),
+            )
+
+    def resolve_ambiguous_usage(self, event_id: str, *, billed: bool, note: str) -> bool:
+        """Settle an ``ambiguous`` event with evidence the caller holds (reconciliation).
+
+        ``billed=True``: the provider's totals prove it was received. ``False``:
+        they prove it was not, so it goes back to ``pending`` to be sent once.
+        """
+        with self._txn() as db:
+            if billed:
+                cur = db.execute(
+                    "UPDATE usage_events SET billed_state='billed', provider_event_id=event_id, "
+                    "last_error=? WHERE event_id=? AND billed_state='ambiguous'",
+                    (note[:300], event_id),
+                )
+            else:
+                cur = db.execute(
+                    "UPDATE usage_events SET billed_state='pending', first_attempt_at='', "
+                    "last_attempt_at='', last_error=? WHERE event_id=? AND billed_state='ambiguous'",
+                    (note[:300], event_id),
+                )
+            return cur.rowcount > 0
+
+    def usage_events_all(self, *, start: str = "", end: str = "9999") -> list[dict[str, Any]]:
+        """Every billable event in ``[start, end)``, every account. For reconciliation only."""
+        rows = self._read_events(
+            "SELECT e.*, a.stripe_customer_id AS customer, a.spend_limit_units AS spend_limit "
+            "FROM usage_events e LEFT JOIN accounts a ON a.id = e.account_id "
+            "WHERE e.billable_quantity > 0 AND e.occurred_at >= ? AND e.occurred_at < ? "
+            "ORDER BY e.rowid",
+            (start, end),
+        )
+        return [dict(r) for r in rows]
 
     def usage_today(self, subject: str) -> dict[str, int]:
         # The UTC day, not the server's local day: a quota that rolls over at
