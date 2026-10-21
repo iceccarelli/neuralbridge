@@ -401,7 +401,14 @@ class TestServiceMetadata:
         body = client.get("/healthz").json()
         assert body["status"] == "ok"
         assert body["auth_mode"] == "api_key"
-        assert body["chain_verified"] is True
+        # healthz is unauthenticated and polled: it confirms the stores open and
+        # says nothing about the host. Chain verification is O(n) and lives at
+        # the authenticated GET /v1/ledger/verify (tests/test_assurance_billing_hardening.py).
+        assert body["ledger_ok"] is True
+        assert body["accounts_ok"] is True
+        assert body["ledger_records"] == 0
+        assert "chain_verified" not in body
+        assert "ledger" not in body
         assert body["applicable_since"] == "2026-09-11"
 
     def test_openapi_is_served(self, client):

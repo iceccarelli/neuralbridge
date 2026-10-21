@@ -29,7 +29,8 @@ ENV PYTHONPATH=/app \
     ASSURANCE_HOST=0.0.0.0 \
     ASSURANCE_PORT=8080 \
     ASSURANCE_LEDGER=/data/art14-register.db \
-    ASSURANCE_ACCOUNTS=/data/accounts.db
+    ASSURANCE_ACCOUNTS=/data/accounts.db \
+    ASSURANCE_TENANT_LEDGERS=/data/tenants
 
 EXPOSE 8080
 
@@ -38,4 +39,10 @@ EXPOSE 8080
 # evidence chain, which is the precise failure this package was written to
 # prevent. Scale by making the machine bigger, or move the stores to Postgres
 # first.
+#
+# Deliberately NOT `--proxy-headers --forwarded-allow-ips='*'`: that would make
+# uvicorn trust X-Forwarded-For from any peer that can reach the port, and
+# the free-tier quota is keyed on the caller's address. Behind Fly's proxy the
+# application reads the proxy-set `Fly-Client-IP` header itself, and only when
+# ASSURANCE_TRUST_FLY_PROXY=1 (see deploy/assurance/README.md).
 CMD ["uvicorn", "assurance.api.service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
