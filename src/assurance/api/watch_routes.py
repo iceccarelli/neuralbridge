@@ -64,6 +64,13 @@ class MachineReportIn(BaseModel):
     #: Present for ``unchanged`` / ``changed``; refused on a failed look.
     manifest: dict[str, Any] | None = None
     detail: str = Field(default="", max_length=2000)
+    #: The manifest is one the reporter sealed earlier for the configuration this
+    #: look re-confirmed, so it may be older than the look (``watch push`` sets it
+    #: for an unchanged machine). Without it, a manifest taken longer before the
+    #: look than the cadence window is recorded as ``manifest_stale`` and does not
+    #: count as an observation. Its age is recorded and shown either way. A reporter
+    #: can set it for any manifest: it is the reporter's statement, not a check.
+    manifest_relayed: bool = False
     #: Plan items a ``incomplete`` look did not find or read.
     missing_items: list[Annotated[str, Field(max_length=200)]] = Field(
         default_factory=list, max_length=500)

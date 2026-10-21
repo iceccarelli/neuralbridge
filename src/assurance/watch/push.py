@@ -52,7 +52,7 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.record import manifests_from_ledger
 from assurance.watch.config import WatchConfig
 from assurance.watch.observations import (
-    FAILED_STATUSES,
+    NOT_A_LOOK_STATUSES,
     OBSERVATION_KIND,
     observation_succeeded,
     observed_at_of,
@@ -118,6 +118,20 @@ def _manifest_for(
     return pool[-1].to_dict() if pool else None
 
 
+#: How far before a look its manifest may be taken and still be that look's own
+#: collection (the same tolerance ``_manifest_for`` allows after it). Older than
+#: this, the manifest is a sealed earlier one for an unchanged configuration.
+_OWN_COLLECTION_TOLERANCE = timedelta(minutes=5)
+
+
+def _relayed(manifest: Mapping[str, Any], observed_at: Any) -> bool:
+    try:
+        taken = parse_utc(str(manifest.get("taken_at", "")))
+    except (ValueError, TypeError):
+        return False
+    return observed_at - taken > _OWN_COLLECTION_TOLERANCE
+
+
 def _local_observations(ledger: EvidenceLedger, key: str) -> list[tuple[Any, dict[str, Any]]]:
     out = []
     for entry in ledger.entries(subject=key, kind=OBSERVATION_KIND):
@@ -174,6 +188,7 @@ def _entries_for(
                     "status": _wire_status(str(body.get("status", ""))),
                     "observed_at": str(body.get("observed_at")),
                     "collection_complete": True, "manifest": manifest,
+                    "manifest_relayed": _relayed(manifest, at),
                     "detail": str(body.get("detail", ""))[:2000],
                     "missing_items": [],
                 })
@@ -190,6 +205,7 @@ def _entries_for(
     entries.append({
         "serial": serial, "machine_key": key, "status": _wire_status(status),
         "observed_at": stamp, "collection_complete": True, "manifest": manifest,
+        "manifest_relayed": _relayed(manifest, started),
         "detail": str(outcome.get("detail", ""))[:2000], "missing_items": [],
     })
     return entries
@@ -465,7 +481,7 @@ def run_push(
                     "nothing written")
             else:
                 totals.recorded += 1
-                if recorded in FAILED_STATUSES:
+                if recorded in NOT_A_LOOK_STATUSES:
                     totals.failed_recorded += 1
                     totals.lines.append(
                         f"  [FAILED  ] {label} {recorded}: recorded as a failed "
