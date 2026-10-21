@@ -31,4 +31,8 @@ for i in $(seq 1 60); do
 done
 # Account E's fleet arrives through the real `assurance watch push`, over HTTP.
 PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work" --report "http://127.0.0.1:$API_PORT"
-PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test tests-e2e/assurance-workspace.spec.ts "$@"
+# Workspace, advisories, checkout hand-off, the API client's outcomes, and the site's internal links.
+PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test \
+  tests-e2e/assurance-workspace.spec.ts tests-e2e/assurance-advisories.spec.ts \
+  tests-e2e/assurance-checkout.spec.ts tests-e2e/assurance-outcomes.spec.ts \
+  tests-e2e/site-links.spec.ts "$@"

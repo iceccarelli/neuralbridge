@@ -21,6 +21,8 @@ type Seed = {
   key_register: string;
   key_d: string;
   key_e: string;
+  key_g: string;
+  key_past_due: string;
   case_id: string;
   machines: string[];
   d_machine: string;
@@ -241,5 +243,181 @@ test.describe('Assurance workspace', () => {
     await enter(page, 'asr_not_a_real_key');
     await expect(page.getByRole('alert').first()).toContainText(/key/i, { timeout: 15_000 });
     await expect(page.getByTestId('fleet-table')).toHaveCount(0);
+  });
+
+  // ------------------------------------------------------------------------------------
+  // Honest states
+  // ------------------------------------------------------------------------------------
+
+  test('every refusal names which one it is and passes the server\'s remedy through', async ({ page }) => {
+    await enter(page, 'asr_not_a_real_key');
+    const fleet = page.locator('section#aw-fleet');
+    await expect(fleet.getByRole('alert')).toContainText('Not signed in (401)', { timeout: 15_000 });
+    await expect(fleet.getByRole('alert')).toContainText(/valid key/i);
+    // The plan panel is a different request: it is refused on its own terms, the page is not blanked.
+    await expect(page.locator('section#aw-plan').getByRole('alert')).toContainText('Not signed in (401)');
+
+    await page.getByLabel('API key').fill(seed.key_register);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    const alert = fleet.getByRole('alert');
+    await expect(alert).toContainText('Not included in your plan (402)', { timeout: 15_000 });
+    await expect(alert).toContainText(/register/i);
+    // The server's own remedy text, not a paraphrase.
+    await expect(alert).toContainText('Machine safety verification is included from the Cell plan upward');
+    await expect(page.locator('section#aw-cases').getByRole('alert')).toContainText('(402)');
+  });
+
+  test('one panel failing does not blank the others, and a failed panel is never an empty one', async ({ page }) => {
+    // Cut the network for ONE real request. Everything else is the real API.
+    await page.route('**/v1/fleet/observations', (route) => route.abort('connectionrefused'));
+    await enter(page, seed.key_a);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('case-table')).toContainText(seed.case_id);
+    await expect(page.getByTestId('obs-unavailable').first()).toContainText('unavailable');
+    await expect(page.locator('section#aw-fleet').getByRole('alert')).toContainText('API unreachable');
+    await expect(page.locator('section#aw-fleet').getByRole('alert')).toContainText(/not an empty result|nothing was learned/i);
+    // The plan panel still shows the plan.
+    await expect(page.locator('section#aw-plan').getByTestId('plan-name')).toBeVisible();
+
+    // Cases failing at the network level while the fleet loads: the fleet is still there.
+    await page.unroute('**/v1/fleet/observations');
+    await page.route('**/v1/change/cases', (route) => route.abort('connectionrefused'));
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect(page.locator('section#aw-cases').getByRole('alert')).toContainText('API unreachable', { timeout: 15_000 });
+    await expect(page.getByTestId('fleet-table')).toBeVisible();
+    await expect(page.getByTestId('case-table')).toHaveCount(0);
+    await expect(page.locator('section#aw-cases')).not.toContainText('No cases.');
+  });
+
+  test('a loading panel is a skeleton, never an empty-state sentence', async ({ page }) => {
+    // Real responses, held back for a moment: the empty fleet of account B must not flash
+    // "No machine is enrolled" while it is still being fetched.
+    await page.route('**/v1/fleet/machines', async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    await enter(page, seed.key_b);
+    const fleet = page.locator('section#aw-fleet');
+    await expect(fleet.getByTestId('panel-skeleton')).toBeVisible();
+    await expect(fleet.getByTestId('panel-skeleton')).toHaveAttribute('aria-busy', 'true');
+    await expect(fleet).not.toContainText('No machine is enrolled');
+    await expect(fleet).not.toContainText('0 machine(s)');
+    await expect(fleet).toContainText('No machine is enrolled', { timeout: 15_000 });
+    await expect(fleet.getByTestId('panel-skeleton')).toHaveCount(0);
+  });
+
+  test('data says when it was received, and says it may be out of date once it has aged', async ({ page }) => {
+    await page.clock.install();
+    await enter(page, seed.key_a);
+    await page.clock.runFor(1000);
+    const fleet = page.locator('section#aw-fleet');
+    await expect(fleet.getByTestId('panel-asof')).toContainText(/as of \d{1,2}:\d{2}/i, { timeout: 15_000 });
+    await expect(fleet.getByTestId('panel-asof')).toHaveAttribute('data-stale', 'false');
+    await page.clock.fastForward('10:00');
+    await expect(fleet.getByTestId('panel-asof')).toHaveAttribute('data-stale', 'true');
+    await expect(fleet.getByTestId('panel-asof')).toContainText(/may be out of date/i);
+    // Reload makes it fresh again.
+    await fleet.getByRole('button', { name: 'Reload' }).click();
+    await page.clock.runFor(1000);
+    await expect(fleet.getByTestId('panel-asof')).toHaveAttribute('data-stale', 'false', { timeout: 15_000 });
+  });
+
+  test('a stale panel keeps its last data only after a transport failure, and labels it', async ({ page }) => {
+    await enter(page, seed.key_a);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    await page.route('**/v1/fleet/machines', (route) => route.abort('connectionrefused'));
+    await page.locator('section#aw-fleet').getByRole('button', { name: 'Reload' }).click();
+    const fleet = page.locator('section#aw-fleet');
+    await expect(fleet.getByRole('alert')).toContainText('API unreachable', { timeout: 10_000 });
+    await expect(fleet.getByTestId('fleet-table')).toBeVisible();
+    await expect(fleet).toContainText(/last data received/i);
+
+    // An authorisation failure must NOT leave the previous data on screen.
+    await page.unroute('**/v1/fleet/machines');
+    await page.getByLabel('API key').fill('asr_not_a_real_key');
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect(fleet.getByRole('alert')).toContainText('(401)', { timeout: 10_000 });
+    await expect(fleet.getByTestId('fleet-table')).toHaveCount(0);
+  });
+
+  test('a case id that is not in your ledger is a 404, and offers no export', async ({ page }) => {
+    await page.goto(`/assurance?case=${encodeURIComponent(seed.case_id)}`);
+    await page.getByLabel('API key').fill(seed.key_b);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    const detail = page.locator('section#aw-case');
+    await expect(detail.getByRole('alert')).toContainText('Not found (404)', { timeout: 15_000 });
+    await expect(detail.getByRole('alert')).toContainText(/another account.*does not exist|only your own ledger/i);
+    await expect(page.getByRole('button', { name: /Download this case/ })).toHaveCount(0);
+  });
+
+  // ------------------------------------------------------------------------------------
+  // Plan and usage
+  // ------------------------------------------------------------------------------------
+
+  test('the plan panel is what GET /v1/me says: plan, what it includes, usage today and key prefixes', async ({
+    page,
+    request,
+  }) => {
+    const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': seed.key_g } })).json();
+    await enter(page, seed.key_g);
+    const plan = page.locator('section#aw-plan');
+    await expect(plan.getByTestId('plan-name')).toContainText(me.plan.name, { timeout: 15_000 });
+    await expect(plan.getByTestId('plan-tier')).toContainText(me.tier);
+    await expect(plan.getByTestId('plan-status')).toContainText(me.account.status);
+    for (const line of me.plan.includes) await expect(plan.getByTestId('plan-includes')).toContainText(line.slice(0, 40));
+    await expect(plan.getByTestId('plan-usage')).toBeVisible();
+    await expect(plan.getByTestId('plan-keys')).toContainText(me.keys[0].prefix);
+    // A key is never printed back: only its prefix.
+    await expect(page.locator('body')).not.toContainText(seed.key_g);
+    await expect(plan.getByTestId('plan-warning')).toHaveCount(0);
+  });
+
+  test('a past-due account is told so, in the server\'s words, and keeps its views', async ({ page, request }) => {
+    const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': seed.key_past_due } })).json();
+    expect(me.warning).toBeTruthy();
+    await enter(page, seed.key_past_due);
+    const plan = page.locator('section#aw-plan');
+    await expect(plan.getByTestId('plan-warning')).toContainText(me.warning.slice(0, 50), { timeout: 15_000 });
+    await expect(plan.getByTestId('plan-status')).toContainText('past_due');
+    await expect(page.getByTestId('fleet-table').or(page.getByText(/No machine is enrolled/))).toBeVisible();
+  });
+
+  test('a Register plan shows its own plan and usage while the Cell views are refused', async ({ page }) => {
+    await enter(page, seed.key_register);
+    const plan = page.locator('section#aw-plan');
+    await expect(plan.getByTestId('plan-tier')).toContainText('register', { timeout: 15_000 });
+    await expect(page.locator('section#aw-fleet').getByRole('alert')).toContainText('(402)');
+  });
+
+  // ------------------------------------------------------------------------------------
+  // Case detail: who and when
+  // ------------------------------------------------------------------------------------
+
+  test('every history item says when and who, and the requirement lists are there', async ({ page }) => {
+    await enter(page, seed.key_a);
+    await page.getByRole('button', { name: seed.case_id }).click();
+    const detail = page.getByTestId('case-detail');
+    await expect(detail.getByTestId('required-reverifications')).toBeVisible({ timeout: 15_000 });
+    const rows = detail.getByTestId('history-row');
+    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+    const n = await rows.count();
+    expect(n).toBeGreaterThan(1);
+    for (let i = 0; i < n; i++) {
+      await expect(rows.nth(i).getByTestId('history-when')).toContainText(/\d{4}-\d{2}-\d{2}/);
+      await expect(rows.nth(i).getByTestId('history-who')).not.toBeEmpty();
+      await expect(rows.nth(i).getByTestId('history-who')).not.toContainText(/unknown|—/);
+    }
+    // The claim an earlier test made as v.grimaldi is attributed to that person, not to the account.
+    await expect(detail.getByTestId('case-history')).toContainText('v.grimaldi');
+    await expect(detail.getByTestId('history-row').filter({ hasText: 'claimed by v.grimaldi' }).getByTestId('history-who')).toContainText('v.grimaldi');
+  });
+
+  test('the export can be sent to the verifier page, which is a link, not a claim', async ({ page }) => {
+    await enter(page, seed.key_a);
+    await page.getByRole('button', { name: seed.case_id }).click();
+    const link = page.getByTestId('case-detail').getByRole('link', { name: 'Verify this export' });
+    await expect(link).toBeVisible({ timeout: 15_000 });
+    await expect(link).toHaveAttribute('href', '/verify');
+    await expect(page.getByTestId('case-detail')).toContainText(/not .*proof|does not show .*ledger as held|internally consistent/i);
   });
 });
