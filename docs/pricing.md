@@ -26,9 +26,13 @@ instance returns this same table, generated from the entitlements
 
 These prices are launch hypotheses; they have not been validated with paying customers.
 
-Verification stays free at every tier, forever — the audience for a piece of
-evidence is a regulator, an insurer, or a customer's customer, none of whom
-should ever need to hold an API key here.
+Re-checking someone else's evidence needs no account and no API key — the
+audience for a piece of evidence is a regulator, an insurer, or a customer's
+customer, none of whom should need one here. `POST /v1/evidence/verify` is
+metered only as an anti-abuse allowance: 20 a day per address without an
+account (the same 20 a day on a Validator account); Register and Cell have no
+daily cap on it. Nothing here promises that stays so — `GET /v1/plans` is what
+the software enforces.
 
 See the live, purchasable version of this table at
 [neuralbridge.io/#pricing](https://neuralbridge.io/#pricing) — clicking Buy

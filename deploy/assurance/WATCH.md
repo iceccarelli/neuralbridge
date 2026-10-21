@@ -492,7 +492,9 @@ with no or an invalid key, 402 when authenticated but not entitled) writes to
   at most 200 new ones. The route runs in the threadpool, and ingest into one
   ledger is serialised across threads and processes by an advisory file lock
   beside the ledger (POSIX), so overlapping retries from several workers still
-  write once. The assurance image runs one worker by design; the repository's
+  write once. The wait for that lock is bounded (30 s, per ledger): past it the
+  route answers `503 ingest_busy` with `Retry-After: 5` and has written nothing,
+  and `watch push` retries 5xx. The assurance image runs one worker by design; the repository's
   root `Dockerfile` serves `neuralbridge.main`, not this API.
 
 The response says, per machine, `recorded` / `already_recorded` / `refused` and
@@ -512,6 +514,17 @@ from a successful look of the machine it applies to; a report of failures, or of
 other machines, can never lengthen it. An account
 that has never pushed sees "No Watch report received", not a green list.
 
+A positive look must also rest on a manifest that is not older than that same
+window at the moment of the look (`observed_at` minus the manifest's `taken_at`;
+the declared cadence, 168 h if none). Older, it is recorded as `manifest_stale`:
+an attempt that does not count, opens no case and does not move the baseline, and
+for a machine the account has not enrolled it is refused rather than creating
+one. The row shows `last_attempt_manifest_age_hours` and
+`last_successful_manifest_age_hours`. `watch push` sends the manifest sealed when
+an unchanged machine's configuration last changed, so it marks that entry
+`manifest_relayed: true`: the look counts, and the age and the mark are recorded
+and shown (`last_successful_manifest_relayed`) instead of judged.
+
 One behaviour change in the local watch, made so both sides agree: an
 `incomplete` look (the plan named items it did not find) no longer counts as a
 look for `stale_observations`. It never was an observation of the whole machine.
@@ -522,9 +535,11 @@ look for `stale_observations`. It never was an observation of the whole machine.
   observations reported by the holder of your key; it did not watch any machine.
   The workspace shows them as *reported by the customer, not independently
   observed*. Both `observed_at` and the cadence are declared by the client: a
-  client could replay an old manifest with `observed_at` set to now and make a
-  machine look freshly looked at. That is a stated limit of an opt-in reporting
-  channel, not a proof of observation.
+  client could replay an old manifest with `observed_at` set to now and
+  `manifest_relayed: true` and make a machine look freshly looked at. The
+  staleness check above catches an old manifest sent as new by mistake, and the
+  age stays visible, but it cannot catch that. It is a stated limit of an opt-in
+  reporting channel, not a proof of observation.
 * It is as good as the export and the plan, exactly as the local watch is.
 * A machine omitted from a report is not reported as anything; its silence shows
   as staleness once the cadence has passed.

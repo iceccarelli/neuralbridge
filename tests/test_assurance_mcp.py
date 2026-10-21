@@ -87,7 +87,7 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
     assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
-                         "change_cases", "change_case", "change_claim",
+                         "change_cases", "change_case", "change_export", "change_claim",
                          "change_advance", "change_reverify"}
 
 
@@ -162,20 +162,23 @@ async def test_change_case_surfaces_a_real_404_not_a_fake_success(mcp_env: str) 
 
 @pytest.mark.asyncio
 async def test_change_write_tools_relay_the_real_api_refusals(mcp_env: str) -> None:
-    """Each write tool is one real POST. An unknown case is the API's own 409 —
-    which differs from the 404 the read tools get for the same id."""
+    """Each write tool is one real POST. An unknown case is the API's own 404 —
+    the same one the read tools get for the same id."""
     from assurance.mcp.server import change_advance, change_claim, change_reverify
 
     claimed = await change_claim("case-doesnotexist", owner="v.grimaldi", actor="v.grimaldi")
-    assert claimed["status"] == 409
-    assert "no case" in claimed["body"]["detail"]
+    assert claimed["status"] == 404
+    assert claimed["body"]["detail"] == {"error": "case_not_found",
+                                         "case_id": "case-doesnotexist"}
 
     advanced = await change_advance("case-doesnotexist", actor="v.grimaldi")
-    assert advanced["status"] == 409
+    assert advanced["status"] == 404
 
     bad = await change_reverify("case-doesnotexist", manifest={"nonsense": True},
-                                verification_content_hash="a" * 64)
+                                verification_content_hash="a" * 64, actor="v.grimaldi")
     assert bad["status"] == 422                      # the manifest is rejected first
+    blank = await change_advance("case-doesnotexist", actor="")
+    assert blank["status"] == 422                    # an actor is required
 
 
 @pytest.mark.asyncio

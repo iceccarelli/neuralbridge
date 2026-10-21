@@ -112,7 +112,7 @@ def collect(client, session="cs_1"):
 
 
 def can_use_register(client, key):
-    return client.get("/v1/cases", headers={"X-API-Key": key}).status_code
+    return client.get("/v1/register", headers={"X-API-Key": key}).status_code
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +465,13 @@ def _limit_attribute(key: str) -> str:
 
 
 def _consumers(attribute: str) -> list[str]:
-    """Source files, outside plans.py, that read ``<something>plan.<attribute>``."""
+    """Source files, outside plans.py, that read ``<something>plan.<attribute>``.
+
+    A metered allowance (``validations_per_day`` ...) is read generically:
+    ``billing/metering.py:allowance_for`` does ``getattr(plan, METERED_SCOPES[scope])``.
+    That counts as a consumer of every attribute ``METERED_SCOPES`` names, and
+    only while ``allowance_for`` is really called by the metering paths.
+    """
     pattern = re.compile(rf"\bplan\.{re.escape(attribute)}\b")
     found = []
     for source in SRC.rglob("*.py"):
@@ -473,6 +479,14 @@ def _consumers(attribute: str) -> list[str]:
             continue
         if pattern.search(source.read_text(encoding="utf-8")):
             found.append(str(source.relative_to(SRC)))
+    if attribute in plans_module.METERED_SCOPES.values():
+        metering = (SRC / "assurance" / "billing" / "metering.py").read_text(encoding="utf-8")
+        callers = [
+            name for name in ("assurance/api/deps.py", "assurance/billing/accounts.py")
+            if "allowance_for(" in (SRC / name).read_text(encoding="utf-8")
+        ]
+        if "getattr(plan, attribute)" in metering and callers:
+            found.append("assurance/billing/metering.py (allowance_for)")
     return found
 
 

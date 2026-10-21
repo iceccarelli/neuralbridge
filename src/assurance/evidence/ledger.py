@@ -32,16 +32,17 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.errors import LedgerIntegrityError
+from ..core.errors import LedgerConflictError, LedgerIntegrityError
 from ..core.evidence import Evidence
 from ..core.identity import content_hash_of, format_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
+from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "EvidenceLedger", "LedgerEntry"]
 
@@ -166,21 +167,38 @@ class EvidenceLedger:
         with self._lock:
             db = self._connect()
             try:
+                # Outside the rollback guard: when BEGIN itself fails (the file
+                # is locked) there is no transaction, and a ROLLBACK would raise
+                # "cannot rollback - no transaction is active" over the real error.
                 db.execute("BEGIN IMMEDIATE")
-                yield db
-                db.execute("COMMIT")
-            except Exception:
-                db.execute("ROLLBACK")
-                raise
+                try:
+                    yield db
+                    db.execute("COMMIT")
+                except Exception:
+                    if db.in_transaction:
+                        db.execute("ROLLBACK")
+                    raise
             finally:
                 db.close()
 
     # -- writing ----------------------------------------------------------
-    def append(self, evidence: Evidence, subject: str = "") -> LedgerEntry:
+    def append(
+        self, evidence: Evidence, subject: str = "", *,
+        expect_subject_head: int | None = None,
+        expect_kinds: Sequence[str] | None = None,
+    ) -> LedgerEntry:
         """Append a sealed evidence object and return its link.
 
         The object must already be sealed. Sealing on the caller's behalf would
         mean this ledger could record content the caller never saw.
+
+        ``expect_subject_head`` makes the append a compare-and-swap for a
+        read-modify-append: the ``seq`` of the newest entry under ``subject`` (of
+        ``expect_kinds`` when given; ``0`` for none) that the caller's decision was
+        based on. It is checked **inside** the write transaction, so no other writer
+        can slip between the check and the insert; if the subject has moved on,
+        :class:`~assurance.core.errors.LedgerConflictError` is raised and nothing is
+        written. Without it the append is unconditional, as before.
         """
         if not evidence.is_sealed:
             raise LedgerIntegrityError(
@@ -197,6 +215,18 @@ class EvidenceLedger:
         at = format_utc(utc_now())
 
         with self._write_txn() as db:
+            if expect_subject_head is not None:
+                sql = "SELECT COALESCE(MAX(seq), 0) FROM chain WHERE subject = ?"
+                args: list[Any] = [subject]
+                if expect_kinds:
+                    sql += f" AND kind IN ({','.join('?' * len(expect_kinds))})"
+                    args.extend(expect_kinds)
+                current = int(db.execute(sql, args).fetchone()[0])
+                if current != expect_subject_head:
+                    raise LedgerConflictError(
+                        f"{subject or 'the ledger'} changed since it was read: its newest "
+                        f"entry is seq {current}, not seq {expect_subject_head}. "
+                        "Nothing was written.")
             tail = db.execute("SELECT seq, link_hash FROM chain ORDER BY seq DESC LIMIT 1").fetchone()
             prev_hash = tail["link_hash"] if tail else GENESIS
             seq = (tail["seq"] + 1) if tail else 1
@@ -287,43 +317,136 @@ class EvidenceLedger:
             db.close()
 
     # -- integrity --------------------------------------------------------
+    @staticmethod
+    def _check_entry(entry: LedgerEntry, prev: str, expected_seq: int) -> list[str]:
+        """Everything wrong with one record, given the link and sequence it must follow."""
+        problems: list[str] = []
+        if entry.seq != expected_seq:
+            problems.append(
+                f"seq {entry.seq}: gap in the chain, expected {expected_seq} "
+                "— a record was removed"
+            )
+        if entry.prev_hash != prev:
+            problems.append(
+                f"seq {entry.seq}: prev_hash {entry.prev_hash[:12]} does not match the "
+                f"preceding link {prev[:12]} — the chain was re-ordered or spliced"
+            )
+        if entry.link_hash != entry.expected_link_hash():
+            problems.append(
+                f"seq {entry.seq}: link_hash does not match its own content "
+                "— the record was edited in place"
+            )
+        try:
+            if not entry.evidence().verify():
+                problems.append(
+                    f"seq {entry.seq}: payload does not match content_hash "
+                    f"{entry.content_hash[:12]} — the evidence body was edited"
+                )
+        except Exception as exc:
+            problems.append(f"seq {entry.seq}: payload is unreadable ({exc})")
+        return problems
+
+    def verify_full(self) -> tuple[list[str], int, str]:
+        """Walk the whole chain: ``(problems, head_seq, head_link_hash)``.
+
+        The head is the last record the walk itself read, so a record appended
+        while it ran is not claimed as verified.
+        """
+        problems: list[str] = []
+        prev, expected_seq = GENESIS, 1
+        head_seq = 0
+        try:
+            entries = self.entries()
+        except sqlite3.DatabaseError as exc:
+            if isinstance(exc, sqlite3.OperationalError):
+                raise  # busy/locked/unreadable path: transient or environmental, not a finding
+            # The file opens but its pages are damaged (SQLITE_CORRUPT / NOTADB). A
+            # verifier that crashes on the very thing it exists to find is no verifier.
+            return ([f"the ledger's storage is damaged and cannot be read ({exc}) "
+                     "— restore from a backup and run "
+                     "`python -m assurance.evidence.restore_check verify`"], 0, GENESIS)
+        for entry in entries:
+            problems.extend(self._check_entry(entry, prev, expected_seq))
+            expected_seq = entry.seq + 1
+            prev, head_seq = entry.link_hash, entry.seq
+        return problems, head_seq, prev
+
     def verify_chain(self) -> tuple[bool, list[str]]:
         """Walk the chain and report every break.
 
         Returns ``(ok, problems)``. Problems name the sequence number, because
         "the ledger is broken" is not an actionable statement.
+
+        Always a full walk. It also settles what :meth:`verify_cached` believes:
+        a clean walk becomes the new verified head, a failing one forgets it, so a
+        cache can never hold a pass that a full walk has since contradicted.
         """
-        problems: list[str] = []
-        prev = GENESIS
-        expected_seq = 1
-        for entry in self.entries():
-            if entry.seq != expected_seq:
-                problems.append(
-                    f"seq {entry.seq}: gap in the chain, expected {expected_seq} "
-                    "— a record was removed"
-                )
-                expected_seq = entry.seq
-            if entry.prev_hash != prev:
-                problems.append(
-                    f"seq {entry.seq}: prev_hash {entry.prev_hash[:12]} does not match the "
-                    f"preceding link {prev[:12]} — the chain was re-ordered or spliced"
-                )
-            if entry.link_hash != entry.expected_link_hash():
-                problems.append(
-                    f"seq {entry.seq}: link_hash does not match its own content "
-                    "— the record was edited in place"
-                )
-            try:
-                if not entry.evidence().verify():
-                    problems.append(
-                        f"seq {entry.seq}: payload does not match content_hash "
-                        f"{entry.content_hash[:12]} — the evidence body was edited"
-                    )
-            except Exception as exc:
-                problems.append(f"seq {entry.seq}: payload is unreadable ({exc})")
-            prev = entry.link_hash
-            expected_seq += 1
+        problems, head_seq, head_link = self.verify_full()
+        key = chain_cache.identity(self.path)
+        if problems:
+            chain_cache.drop(key)
+        else:
+            chain_cache.remember(key, head_seq, head_link, chain_cache.now())
         return (not problems, problems)
+
+    def _verify_since(self, seq: int, link_hash: str) -> tuple[list[str], int, str]:
+        """Check the remembered head and everything appended after it, in one snapshot."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            problems: list[str] = []
+            head_seq, head_link = seq, link_hash
+            if seq > 0:
+                row = db.execute("SELECT * FROM chain WHERE seq = ?", (seq,)).fetchone()
+                if row is None:
+                    return ([f"seq {seq}: the record that was the verified head is gone "
+                             "— the chain was truncated, or the ledger was replaced"],
+                            seq, link_hash)
+                head = self._row_to_entry(row)
+                if head.link_hash != link_hash:
+                    problems.append(
+                        f"seq {seq}: the record at the verified head has changed "
+                        f"({head.link_hash[:12]} where {link_hash[:12]} was verified) "
+                        "— the chain was rewound and rewritten, or the ledger was replaced")
+                problems.extend(self._check_entry(head, head.prev_hash, seq))
+                if problems:
+                    return problems, seq, link_hash
+            prev, expected = link_hash, seq + 1
+            for row in db.execute("SELECT * FROM chain WHERE seq > ? ORDER BY seq", (seq,)):
+                entry = self._row_to_entry(row)
+                problems.extend(self._check_entry(entry, prev, expected))
+                expected = entry.seq + 1
+                prev, head_seq, head_link = entry.link_hash, entry.seq, entry.link_hash
+            return problems, head_seq, head_link
+        finally:
+            db.close()
+
+    def verify_cached(self) -> tuple[bool, list[str]]:
+        """Does the chain still verify, at O(new records) cost? ``(ok, problems)``.
+
+        A full walk the first time in this process, whenever the last full walk
+        is older than ``ASSURANCE_CHAIN_RECHECK_SECONDS`` (default 60; ``0`` =
+        always), and whenever the file is not the one last verified. Otherwise the
+        remembered head is re-read and re-checked and every record appended since is
+        verified completely. An edit to an *old* record is therefore seen by the
+        next full walk, not by every call; see :mod:`assurance.evidence.chain_cache`
+        for the trade-off and what still needs a signed head attestation.
+        """
+        key = chain_cache.identity(self.path)
+        known = chain_cache.lookup(key)
+        now = chain_cache.now()
+        interval = chain_cache.recheck_seconds()
+        if known is None or interval <= 0 or now - known.full_pass_at >= interval:
+            problems, head_seq, head_link = self.verify_full()
+            started = now
+        else:
+            problems, head_seq, head_link = self._verify_since(known.seq, known.link_hash)
+            started = known.full_pass_at
+        if problems:
+            chain_cache.drop(key)
+            return False, problems
+        chain_cache.remember(key, head_seq, head_link, started)
+        return True, []
 
     def head_attestation(self) -> dict[str, Any]:
         """The value to sign or publish so the chain cannot be silently rewound.

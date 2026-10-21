@@ -12,7 +12,7 @@ is actionable.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
@@ -31,13 +31,14 @@ from ..security.art14.model import (
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
 from .deps import (
+    Metered,
+    MeterTicket,
     auth_mode,
-    current_principal,
     get_accounts,
     get_register,
+    require_evidence_readout,
     require_register,
     shared_register,
-    spend,
 )
 from .schemas import (
     ActorIn,
@@ -55,10 +56,18 @@ from .schemas import (
     ValidationOut,
 )
 
-__all__ = ["router", "public_router"]
+__all__ = ["router", "evidence_router", "free_router", "public_router"]
 
 #: The register. Every route here needs a plan that includes it.
 router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_register)])
+
+#: Reading, verifying and exporting your own evidence. The same door as the
+#: register for a customer who is paying, and still open to one whose
+#: subscription has ended (``plans.EVIDENCE_READOUT_AFTER_LAPSE``): evidence is
+#: not held hostage to a payment, while every write above stays closed.
+evidence_router = APIRouter(
+    prefix="/v1", tags=["article 14"], dependencies=[Depends(require_evidence_readout)]
+)
 
 #: The free surface: the field specification and the dry-run validator. A
 #: prospect must be able to get value here without signing up for anything,
@@ -311,12 +320,12 @@ def post_user_notification(
 # =====================================================================
 # reading
 # =====================================================================
-@router.get("/cases", response_model=list[str], summary="List case ids")
+@evidence_router.get("/cases", response_model=list[str], summary="List case ids")
 def get_cases(register: Art14Register = Depends(get_register)) -> list[str]:
     return register.case_ids()
 
 
-@router.get("/cases/{case_id}", response_model=CaseOut, summary="One case, with deadlines")
+@evidence_router.get("/cases/{case_id}", response_model=CaseOut, summary="One case, with deadlines")
 def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> CaseOut:
     case = register.case(case_id)
     if case.signal is None and case.awareness is None:
@@ -326,7 +335,7 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     return CaseOut(**case.to_dict())
 
 
-@router.get(
+@evidence_router.get(
     "/cases/{case_id}/export",
     response_model=dict,
     summary="A verifiable evidence bundle for one case",
@@ -334,16 +343,18 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
 def get_case_export(
     case_id: str,
     register: Art14Register = Depends(get_register),
-    principal: Principal = Depends(require_register),
+    principal: Principal = Depends(require_evidence_readout),
 ) -> dict[str, Any]:
     """Refuses if the chain does not verify.
 
     An export is the moment records leave the system and start being relied on.
-    Gated on the plan's ``export`` entitlement as well as on the register
-    itself, so the ``verifiable_export`` limit on ``GET /v1/plans`` is a
-    statement about code that runs.
+    For a paying account it is gated on the plan's ``export`` entitlement as
+    well as on the register itself, so the ``verifiable_export`` limit on
+    ``GET /v1/plans`` is a statement about code that runs. A customer whose
+    subscription has ended still gets it (``require_evidence_readout``): their
+    evidence is not held hostage to a payment.
     """
-    if not principal.plan.export:
+    if principal.plan.register and not principal.plan.export:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={
@@ -355,9 +366,17 @@ def get_case_export(
             },
         )
     try:
-        return register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(subject=case_id)
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
+    if not bundle["entries"]:
+        # A well-formed, chain-verified bundle with nothing in it is what an id that
+        # names nothing exports. It would read as a clean record of a case.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "case_not_found", "case_id": case_id},
+        )
+    return bundle
 
 
 @router.get("/register", response_model=dict, summary="Readiness across every case")
@@ -370,7 +389,7 @@ def get_breaches(register: Art14Register = Depends(get_register)) -> list[dict[s
     return register.breaches()
 
 
-@router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
+@evidence_router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
 def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
     ok, problems = register.ledger.verify_chain()
     return {
@@ -405,24 +424,20 @@ def get_fields(
 def post_validate(
     body: ValidateIn,
     response: Response,
-    principal: Principal = Depends(current_principal),
-    accounts: AccountStore = Depends(get_accounts),
+    meter: Annotated[MeterTicket, Metered("validate")],
 ) -> ValidationOut:
     """The free tier, and the demo that sells the register behind it.
 
-    Nothing is recorded. A prospect can paste a draft filing and immediately
-    see which of the 39 fields are missing, which exceed a character limit,
-    and which listed territories are not EU Member States.
+    Nothing is recorded about the filing. A prospect can paste a draft filing
+    and immediately see which of the 39 fields are missing, which exceed a
+    character limit, and which listed territories are not EU Member States.
+    The call is counted (see ``billing/metering.py``) once the answer is
+    complete; a draft that is not submittable is a successful answer.
     """
-    limit = principal.plan.validations_per_day
-    spend(principal, "validate", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("validate", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
     validation = validate_payload(body.payload, Track(body.track), Stage(body.stage))
-    return ValidationOut(**validation.to_dict())
+    out = ValidationOut(**validation.to_dict())
+    meter.commit(response)
+    return out
 
 
 # =====================================================================

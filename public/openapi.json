@@ -34,6 +34,24 @@
         "title": "ActorIn",
         "type": "object"
       },
+      "AdvanceIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor"
+        ],
+        "title": "AdvanceIn",
+        "type": "object"
+      },
       "AdvisoryCheckIn": {
         "additionalProperties": false,
         "properties": {
@@ -265,6 +283,19 @@
             ],
             "title": "Envelope"
           },
+          "limits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the body-region limits table the bundle was verified against, if its envelope names one; without it a power-and-force bundle cannot be replayed and is reported as integrity-only",
+            "title": "Limits"
+          },
           "trace": {
             "anyOf": [
               {
@@ -320,7 +351,7 @@
             "type": "string"
           },
           "tier": {
-            "pattern": "^(register|cell)$",
+            "pattern": "^(register|cell|payg)$",
             "title": "Tier",
             "type": "string"
           }
@@ -355,6 +386,31 @@
         "title": "CheckoutOut",
         "type": "object"
       },
+      "ClaimIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "owner": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner",
+          "actor"
+        ],
+        "title": "ClaimIn",
+        "type": "object"
+      },
       "CoverageIn": {
         "additionalProperties": false,
         "properties": {
@@ -368,6 +424,37 @@
           "manifest"
         ],
         "title": "CoverageIn",
+        "type": "object"
+      },
+      "DecisionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "disposition": {
+            "pattern": "^(closed|rejected|deferred)$",
+            "title": "Disposition",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "disposition",
+          "reason",
+          "actor"
+        ],
+        "title": "DecisionIn",
         "type": "object"
       },
       "DeclarationCheckIn": {
@@ -483,6 +570,33 @@
         "title": "DiffIn",
         "type": "object"
       },
+      "DriftIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "baseline": {
+            "additionalProperties": true,
+            "title": "Baseline",
+            "type": "object"
+          },
+          "observed": {
+            "additionalProperties": true,
+            "title": "Observed",
+            "type": "object"
+          }
+        },
+        "required": [
+          "baseline",
+          "observed"
+        ],
+        "title": "DriftIn",
+        "type": "object"
+      },
       "FilingIn": {
         "additionalProperties": false,
         "description": "A submission to the reporting platform.\n\n``payload`` is keyed by platform field *name*. ``GET /v1/spec/fields``\nreturns the names, the stage at which each is required, and the length\nlimits.",
@@ -565,6 +679,34 @@
         "title": "FilingOut",
         "type": "object"
       },
+      "FleetMachineCheckIn": {
+        "additionalProperties": false,
+        "properties": {
+          "advisory": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advisory"
+          },
+          "machine_key": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Machine Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machine_key"
+        ],
+        "title": "FleetMachineCheckIn",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -576,6 +718,34 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InterventionAssessIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "intervention_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Intervention Id",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          }
+        },
+        "required": [
+          "manifest",
+          "intervention_id"
+        ],
+        "title": "InterventionAssessIn",
         "type": "object"
       },
       "InterventionIn": {
@@ -603,6 +773,130 @@
           "intervention"
         ],
         "title": "InterventionIn",
+        "type": "object"
+      },
+      "KeyIssueIn": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "title": "KeyIssueIn",
+        "type": "object"
+      },
+      "KeyRevokeIn": {
+        "additionalProperties": false,
+        "properties": {
+          "key_prefix": {
+            "default": "",
+            "pattern": "^(asr_[A-Za-z0-9_-]{6})?$",
+            "title": "Key Prefix",
+            "type": "string"
+          }
+        },
+        "title": "KeyRevokeIn",
+        "type": "object"
+      },
+      "MachineCheckIn": {
+        "additionalProperties": false,
+        "properties": {
+          "advisory": {
+            "additionalProperties": true,
+            "title": "Advisory",
+            "type": "object"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          }
+        },
+        "required": [
+          "manifest",
+          "advisory"
+        ],
+        "title": "MachineCheckIn",
+        "type": "object"
+      },
+      "MachineReportIn": {
+        "additionalProperties": false,
+        "properties": {
+          "collection_complete": {
+            "title": "Collection Complete",
+            "type": "boolean"
+          },
+          "detail": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Detail",
+            "type": "string"
+          },
+          "machine_key": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Machine Key",
+            "type": "string"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest"
+          },
+          "manifest_relayed": {
+            "default": false,
+            "title": "Manifest Relayed",
+            "type": "boolean"
+          },
+          "missing_items": {
+            "items": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Missing Items",
+            "type": "array"
+          },
+          "observed_at": {
+            "maxLength": 40,
+            "minLength": 10,
+            "title": "Observed At",
+            "type": "string"
+          },
+          "serial": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Serial",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "unchanged",
+              "changed",
+              "uncollectable",
+              "incomplete"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "status",
+          "observed_at",
+          "collection_complete"
+        ],
+        "title": "MachineReportIn",
         "type": "object"
       },
       "ManifestIn": {
@@ -742,6 +1036,94 @@
           "outstanding"
         ],
         "title": "RecordedOut",
+        "type": "object"
+      },
+      "ResolveDecisionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "decision": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Decision",
+            "type": "string"
+          },
+          "resolution": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Resolution",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "resolution",
+          "actor"
+        ],
+        "title": "ResolveDecisionIn",
+        "type": "object"
+      },
+      "ResumeIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "actor"
+        ],
+        "title": "ResumeIn",
+        "type": "object"
+      },
+      "ReverificationIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "verification_content_hash": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Verification Content Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest",
+          "verification_content_hash",
+          "actor"
+        ],
+        "title": "ReverificationIn",
         "type": "object"
       },
       "SeparationIn": {
@@ -912,6 +1294,39 @@
         "title": "TriageIn",
         "type": "object"
       },
+      "UsageLimitsIn": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_alert_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Alert Pct"
+          },
+          "spend_limit_units": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend Limit Units"
+          }
+        },
+        "title": "UsageLimitsIn",
+        "type": "object"
+      },
       "UserNotificationIn": {
         "additionalProperties": false,
         "description": "The Article 14(8) notification to users.\n\nThe trigger is becoming aware, not the availability of a fix. Guidance\n\u00a7\u00a7219-221: this is not an obligation to publish.",
@@ -1077,6 +1492,126 @@
         "title": "ValidationOut",
         "type": "object"
       },
+      "WaiveIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "the named person taking this step",
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Actor",
+            "type": "string"
+          },
+          "entry": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Entry",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry",
+          "reason",
+          "actor"
+        ],
+        "title": "WaiveIn",
+        "type": "object"
+      },
+      "WatchReportIn": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_count": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Count"
+          },
+          "batch_index": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Index"
+          },
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/MachineReportIn"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Machines",
+            "type": "array"
+          },
+          "max_age_hours": {
+            "anyOf": [
+              {
+                "maximum": 720.0,
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Age Hours"
+          },
+          "run_started_at": {
+            "maxLength": 40,
+            "minLength": 10,
+            "title": "Run Started At",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "quiet",
+                  "findings",
+                  "degraded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "watch_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Watch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "watch_id",
+          "run_started_at",
+          "machines"
+        ],
+        "title": "WatchReportIn",
+        "type": "object"
+      },
       "assurance__api__attest_routes__VerifyIn": {
         "additionalProperties": false,
         "properties": {
@@ -1100,6 +1635,27 @@
           "attestations"
         ],
         "title": "VerifyIn",
+        "type": "object"
+      },
+      "assurance__api__change_routes__AdvisoryIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "advisory": {
+            "additionalProperties": true,
+            "title": "Advisory",
+            "type": "object"
+          }
+        },
+        "required": [
+          "advisory"
+        ],
+        "title": "AdvisoryIn",
         "type": "object"
       },
       "assurance__api__fleet_routes__AdvisoryIn": {
@@ -1155,6 +1711,13 @@
             "description": "append the sealed bundle to the evidence ledger",
             "title": "Seal",
             "type": "boolean"
+          },
+          "subject": {
+            "default": "",
+            "description": "file the sealed bundle under this ledger subject. Give the machine's key (manufacturer/model#serial) for the verification to count as evidence for that unit in coverage, re-verification and the passport; omitted, it is filed under product@version, a product line",
+            "maxLength": 400,
+            "title": "Subject",
+            "type": "string"
           },
           "trace": {
             "additionalProperties": true,
@@ -1212,7 +1775,7 @@
     },
     "/healthz": {
       "get": {
-        "description": "Reports what is actually true, including an unauthenticated deployment.",
+        "description": "Reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -1253,6 +1816,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -1329,6 +1908,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -1391,6 +1986,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -1448,6 +2059,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -1517,6 +2144,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -1559,7 +2202,7 @@
     },
     "/v1/cases/{case_id}/export": {
       "get": {
-        "description": "Refuses if the chain does not verify.\n\nAn export is the moment records leave the system and start being relied on.",
+        "description": "Refuses if the chain does not verify.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
         "operationId": "get_case_export_v1_cases__case_id__export_get",
         "parameters": [
           {
@@ -1585,6 +2228,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -1646,6 +2305,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -1716,6 +2391,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -1785,6 +2476,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -1852,6 +2559,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -1923,6 +2646,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -1963,9 +2702,1340 @@
         ]
       }
     },
+    "/v1/change/assess/advisory": {
+      "post": {
+        "operationId": "assess_advisory_route_v1_change_assess_advisory_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/assurance__api__change_routes__AdvisoryIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Advisory Route V1 Change Assess Advisory Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Turn a fleet impact report into a case",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/assess/drift": {
+      "post": {
+        "operationId": "assess_drift_route_v1_change_assess_drift_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DriftIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Drift Route V1 Change Assess Drift Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Turn a manifest divergence into a case",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/assess/intervention": {
+      "post": {
+        "description": "The same call ``assurance change assess-intervention`` makes.\n\nThe intervention is looked up in the caller's own ledger by id; its\nverifications and interventions come from that ledger and not from the body.",
+        "operationId": "assess_intervention_route_v1_change_assess_intervention_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterventionAssessIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Intervention Route V1 Change Assess Intervention Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Did a recorded intervention invalidate evidence?",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases": {
+      "get": {
+        "operationId": "list_cases_v1_change_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Cases V1 Change Cases Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The Active Assurance Cases queue",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}": {
+      "get": {
+        "operationId": "get_case_v1_change_cases__case_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Case V1 Change Cases  Case Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One case in full",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/advance": {
+      "post": {
+        "operationId": "advance_case_route_v1_change_cases__case_id__advance_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdvanceIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Advance Case Route V1 Change Cases  Case Id  Advance Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move to the next required stop",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/claim": {
+      "post": {
+        "operationId": "claim_case_route_v1_change_cases__case_id__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Claim Case Route V1 Change Cases  Case Id  Claim Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "OPEN -> IN_REVIEW",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/decision": {
+      "post": {
+        "operationId": "decide_case_route_v1_change_cases__case_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Decide Case Route V1 Change Cases  Case Id  Decision Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close, reject or defer \u2014 a human decision",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/export": {
+      "get": {
+        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.",
+        "operationId": "export_case_v1_change_cases__case_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Case V1 Change Cases  Case Id  Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A verifiable evidence bundle for one case",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/replay": {
+      "get": {
+        "operationId": "replay_case_v1_change_cases__case_id__replay_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Replay Case V1 Change Cases  Case Id  Replay Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebuild the case from the ledger alone and check every step",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/resolve-decision": {
+      "post": {
+        "operationId": "resolve_decision_route_v1_change_cases__case_id__resolve_decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDecisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Decision Route V1 Change Cases  Case Id  Resolve Decision Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer one of the case's open human questions \u2014 a human decision",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/resume": {
+      "post": {
+        "operationId": "resume_case_route_v1_change_cases__case_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resume Case Route V1 Change Cases  Case Id  Resume Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "DEFERRED -> IN_REVIEW \u2014 a human decision",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/reverification": {
+      "post": {
+        "operationId": "reverify_case_route_v1_change_cases__case_id__reverification_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReverificationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reverify Case Route V1 Change Cases  Case Id  Reverification Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Supply fresh verification evidence",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/cases/{case_id}/waive-reverification": {
+      "post": {
+        "description": "The only way to close an entry nothing verified. It reads ``waived``,\nnever ``current``, in the case and in every export.",
+        "operationId": "waive_reverification_route_v1_change_cases__case_id__waive_reverification_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaiveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Waive Reverification Route V1 Change Cases  Case Id  Waive Reverification Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close one re-verification entry WITHOUT evidence \u2014 a human decision",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/check/fleet-machine": {
+      "post": {
+        "description": "The paid product: this machine's own evidence, and the fleet fan-out.\n\nRequires the Cell plan (the same gate as machine safety verification and\nthe machinery passport) because it reads the ledger: the machine must\nalready be enrolled via ``POST /v1/machinery/manifest``.",
+        "operationId": "check_fleet_machine_v1_check_fleet_machine_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FleetMachineCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Check Fleet Machine V1 Check Fleet Machine Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Machine Assurance Check \u2014 an enrolled machine, its ledger history",
+        "tags": [
+          "check"
+        ]
+      }
+    },
+    "/v1/check/machine": {
+      "post": {
+        "description": "What changed, does it match this machine, what should happen next.\n\nThis is the free entry point: no ledger is read, so the result cannot say\nwhether standing safety evidence is still valid \u2014 only whether the change\nmatches what you told it is on the machine. ``checks_skipped`` says so.",
+        "operationId": "check_machine_v1_check_machine_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MachineCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Check Machine V1 Check Machine Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Machine Assurance Check \u2014 one manifest, one advisory, no account",
+        "tags": [
+          "check"
+        ]
+      }
+    },
     "/v1/checkout": {
       "post": {
         "operationId": "post_checkout_v1_checkout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2049,6 +4119,92 @@
         ]
       }
     },
+    "/v1/evidence/verify": {
+      "post": {
+        "description": "The body is the raw JSON file itself (not wrapped in anything).\n\nSend ``Content-Type: application/json``. Nothing is stored. The body is read\ninto memory, checked and dropped; the only record is the ordinary access log\nline (method, path, status). The answer separates facts established\n(`verified`), what is taken on trust (`assumptions`) and every limit\n(`not_checked`); there is no bare \"valid\".",
+        "operationId": "verify_evidence_v1_evidence_verify_post",
+        "parameters": [
+          {
+            "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+            "in": "header",
+            "name": "x-issuer-public-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+              "title": "X-Issuer-Public-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Verify Evidence V1 Evidence Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check an evidence file you were handed. Free, anonymous, stores nothing.",
+        "tags": [
+          "free"
+        ]
+      }
+    },
     "/v1/fleet/advisory": {
       "post": {
         "description": "The fan-out: one advisory, every enrolled machine, down to safety functions.\n\nA machine whose coverage was already stale is reported, and is not counted\nas newly in question \u2014 an advisory does not make it worse, and mixing the two\nhides the machines that were fine until this morning.",
@@ -2068,6 +4224,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2113,9 +4285,25 @@
     },
     "/v1/fleet/advisory/check": {
       "post": {
-        "description": "One advisory, one manifest, no account.\n\nThe match basis is always reported. ``hash`` settles it; ``version`` rests on\na label, and this system has already shown a label can be wrong;\n``hash_mismatch`` means the machine's own label and artefact disagree against\nthe supplier's published figures, which is neither affected nor clear.",
+        "description": "One advisory, one manifest, no account.\n\nThe match basis is always reported. ``hash`` settles it; ``version`` rests on\na label, and this system has already shown a label can be wrong;\n``hash_mismatch`` means the machine's own label and artefact disagree against\nthe supplier's published figures, which is neither affected nor clear.\nCounted once the answer is complete (``billing/metering.py``).",
         "operationId": "advisory_check_v1_fleet_advisory_check_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -2130,6 +4318,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2193,6 +4397,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -2253,6 +4473,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2315,6 +4551,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -2342,6 +4594,74 @@
           }
         },
         "summary": "Every enrolled machine, worst coverage first",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
+    "/v1/fleet/observations": {
+      "get": {
+        "description": "Per machine: last successful observation, last attempt, staleness, open cases.\n\nReads the ``watch.observation`` records in the caller's own ledger, which\nare there only because the account holder reported them\n(``POST /v1/watch/report``). A failed attempt is never a positive one, and\na machine is stale once its last *successful* observation is older than the\ncadence the customer declared. Nothing is derived here that Watch did not\nalready record.",
+        "operationId": "observations_v1_fleet_observations_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Observations V1 Fleet Observations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "When was each machine last looked at, and did the last attempt work?",
         "tags": [
           "fleet"
         ]
@@ -2387,6 +4707,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -2417,6 +4753,242 @@
         ]
       }
     },
+    "/v1/keys": {
+      "get": {
+        "description": "Prefixes, labels and dates. Never a key and never a hash.",
+        "operationId": "get_keys_v1_keys_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Keys V1 Keys Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List your API keys",
+        "tags": [
+          "billing"
+        ]
+      },
+      "post": {
+        "description": "For rotation: issue the new key, move your systems over, revoke the old.",
+        "operationId": "post_key_v1_keys_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/KeyIssueIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Key V1 Keys Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue an additional API key for your account",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/keys/revoke": {
+      "post": {
+        "description": "Revoke the key you present, or another of your own by ``key_prefix``.\n\nA prefix that belongs to a different account is reported exactly like one\nthat does not exist.",
+        "operationId": "post_key_revoke_v1_keys_revoke_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/KeyRevokeIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Key Revoke V1 Keys Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke one of your API keys; it stops working immediately",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/v1/ledger/attest": {
       "post": {
         "description": "Sign three numbers, refuse the three cases that would be a lie.\n\nThe refusals return 409, not 422: a shorter ledger is not a malformed\nrequest, it is the finding. The body of the refusal is the sentence to put\nin front of whoever runs the database.",
@@ -2436,6 +5008,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2497,7 +5085,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "The public key this service counter-signs with. Free, forever.",
+        "summary": "The public key this service counter-signs with. No account needed.",
         "tags": [
           "attestation"
         ]
@@ -2521,6 +5109,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2573,6 +5177,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2635,6 +5255,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -2669,7 +5305,7 @@
     },
     "/v1/machine/bundle/check": {
       "post": {
-        "description": "Check somebody else's bundle without trusting them or us.\n\nDeliberately outside every paywall. If a bundle can only be checked by\nsomeone with a subscription, it is a vendor certificate rather than\nevidence, and the customer's auditor is right to ignore it.",
+        "description": "Check somebody else's bundle without trusting them or us.\n\nDeliberately outside every paywall. If a bundle can only be checked by\nsomeone with a subscription, it is a vendor certificate rather than\nevidence, and the customer's auditor is right to ignore it.\n\n``ok`` means no inconsistency was found. ``level`` says how far the check got:\n``integrity_only`` (seal and coherence, the engine was not re-run on the\noriginals, so nothing shows the machine behaved as recorded), ``reproduced``\n(the original envelope, trace and, if needed, limits table were supplied and\nre-running the engine reproduced every sealed field) or ``rejected``. Each flag\nunder ``checked`` is true only if that check ran and passed. A seal is not a\nsignature.\n\nThe checking is CPU work, so it runs in a worker thread and cannot stall the\nevent loop; the request size cap is unchanged.",
         "operationId": "check_bundle_v1_machine_bundle_check_post",
         "parameters": [
           {
@@ -2686,6 +5322,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2731,9 +5383,25 @@
     },
     "/v1/machine/separation": {
       "post": {
-        "description": "S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.\n\nTwo things this returns that a spreadsheet usually gets wrong: Sh runs over\nthe reaction time as well as the stop time, and Ss is flagged when the\nrequested speed is above the speed the stopping distance was measured at.",
+        "description": "S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.\n\nTwo things this returns that a spreadsheet usually gets wrong: Sh runs over\nthe reaction time as well as the stop time, and Ss is flagged when the\nrequested speed is above the speed the stopping distance was measured at.\nCounted once the answer is complete (``billing/metering.py``).",
         "operationId": "separation_v1_machine_separation_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -2748,6 +5416,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2811,6 +5495,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -2873,6 +5573,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -2917,9 +5633,25 @@
     },
     "/v1/machinery/diff": {
       "post": {
-        "description": "Compare an as-declared baseline against what was found on the machine.\n\nA version string changing while the artefact stays byte-identical is graded\nadministrative; a hash changing on an item that implements a safety function\nis the finding. An item carrying no hash is reported as uncomparable \u2014 never\nas unchanged.",
+        "description": "Compare an as-declared baseline against what was found on the machine.\n\nA version string changing while the artefact stays byte-identical is graded\nadministrative; a hash changing on an item that implements a safety function\nis the finding. An item carrying no hash is reported as uncomparable \u2014 never\nas unchanged. Counted once the answer is complete (``billing/metering.py``).",
         "operationId": "diff_v1_machinery_diff_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -2934,6 +5666,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -2997,6 +5745,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -3058,6 +5822,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -3118,6 +5898,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -3181,6 +5977,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "requestBody": {
@@ -3242,6 +6054,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -3318,6 +6146,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
           }
         ],
         "responses": {
@@ -3368,6 +6212,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -3459,9 +6319,25 @@
     },
     "/v1/spec/validate": {
       "post": {
-        "description": "The free tier, and the demo that sells the register behind it.\n\nNothing is recorded. A prospect can paste a draft filing and immediately\nsee which of the 39 fields are missing, which exceed a character limit,\nand which listed territories are not EU Member States.",
+        "description": "The free tier, and the demo that sells the register behind it.\n\nNothing is recorded about the filing. A prospect can paste a draft filing\nand immediately see which of the 39 fields are missing, which exceed a\ncharacter limit, and which listed territories are not EU Member States.\nThe call is counted (see ``billing/metering.py``) once the answer is\ncomplete; a draft that is not submittable is a successful answer.",
         "operationId": "post_validate_v1_spec_validate_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -3476,6 +6352,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -3519,6 +6411,7 @@
     },
     "/v1/supplier/advisory": {
       "post": {
+        "description": "Host an advisory you signed locally.\n\nThis checks structure and the feed's chain (sequence, predecessor hash, one\nsupplier per feed, no repeated advisory id) and refuses what it cannot parse.\nIt does not verify the signature: it holds no supplier key. Readers verify\nthe feed against a key fingerprint they obtained from you by another route.",
         "operationId": "post_advisory_v1_supplier_advisory_post",
         "parameters": [
           {
@@ -3535,6 +6428,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
@@ -3572,7 +6481,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Publish a signed advisory to your hosted feed (Supplier tier)",
+        "summary": "Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
         "tags": [
           "supplier"
         ]
@@ -3612,9 +6521,265 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Read a hosted supplier feed (free, no account, forever)",
+        "summary": "Read a hosted supplier feed (no account needed)",
         "tags": [
           "supplier"
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "description": "Your own metered usage: per-scope totals, allowance, remaining, pay-as-you-go\nstate and your recent events with their idempotency keys.\n\nEverything is read from the account store for the account the key belongs\nto. There is no parameter that names another account, and no total is ever\ntaken from the client. The operator and anonymous callers have no account\nusage (anonymous gets a 401).",
+        "operationId": "get_usage_v1_usage_get",
+        "parameters": [
+          {
+            "description": "'current' (this UTC month, default), 'today' or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "'current' (this UTC month, default), 'today' or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "description": "how many recent events",
+            "in": "query",
+            "name": "events",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "how many recent events",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Events",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Usage V1 Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What your account has used",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/usage/limits": {
+      "post": {
+        "description": "Your guard against a surprise bill, in billable units per UTC month.\n\nTakes effect on the next call. Lowering it below what you have used stops\nbilling at once. Setting a limit does not turn billing on: that needs the\npay-as-you-go plan (a free or lapsed account stays at its daily cap).",
+        "operationId": "post_usage_limits_v1_usage_limits_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Usage Limits V1 Usage Limits Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set your monthly spend limit and alert",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/watch/report": {
+      "post": {
+        "description": "Opt-in and idempotent. Records observations; derives no finding of its own.\n\nThe response says, per machine, whether the entry was ``recorded``,\n``already_recorded`` (a retry: nothing was written) or ``refused`` and why,\nwhich case a drift opened or found, and what this does not establish.\n\nA plain ``def`` on purpose: FastAPI runs it in the threadpool, so a large report\nfrom one tenant cannot hold the event loop and stall every other caller.",
+        "operationId": "post_report_v1_watch_report_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchReportIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Report V1 Watch Report Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report what your Watch saw, to your own ledger",
+        "tags": [
+          "watch"
         ]
       }
     }

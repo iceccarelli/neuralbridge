@@ -179,6 +179,120 @@ build never clears `past_due_since`, so after a rollback and a later roll-forwar
 an account can carry a stale value (the invoice evidence above is why that alone
 cannot cut anyone off).
 
+### Usage in the reconciliation report
+
+`python -m assurance.billing.reconcile` also prints a **usage** section when the
+store holds billable usage or pay-as-you-go is configured (`--usage` forces it;
+otherwise a deployment that does not use pay-as-you-go sees the report it always
+saw). It is read-only unless `--apply`, opens the store read-only on a dry run,
+reads Stripe before writing anything and refuses a live key for `--apply`
+without `--i-have-run-this-in-test-mode`, exactly like the rest. It lists, per
+account, the pay-as-you-go drift categories below and adds its own
+`usage.drift_count`; any usage drift makes the exit code 1, an unreadable
+Stripe makes it 2. See the "Pay as you go" section below.
+
+## Pay as you go (off by default)
+
+> **Verified against a fake Stripe transport only.** No request has ever been
+> made to Stripe for any of this, and nothing in the tests proves that Stripe
+> behaves as the fake does. Do the founder steps below in Stripe **test mode**
+> and read a dry run before believing any of it.
+
+**What exists.** A verification operation (draft validation, separation
+calculation, manifest diff, advisory check) beyond the free daily allowance can
+be billed, one unit per *successful* call, for an account on the `payg` tier
+that has set a monthly spend limit above zero. Cases, change cases, machine
+verification, attestation and every register write are never metered.
+
+**What is exposed.** `GET /v1/plans` lists the `payg` plan, and the pricing page
+renders it with a button, **only when all of these hold**:
+
+| Needed | Variable |
+|---|---|
+| a metered Stripe Price id | `ASSURANCE_PRICE_PAYG` |
+| the Billing Meter's event name | `ASSURANCE_PAYG_METER_EVENT` |
+| a test-mode Stripe key (a live key switches it off unless `ASSURANCE_PAYG_ALLOW_LIVE=1`) | `STRIPE_SECRET_KEY` |
+
+Unset or half-set, `payg` is not in `/v1/plans`, `POST /v1/checkout` answers 503
+`payg_not_available`, no account can be billed past its allowance, and the
+reporter refuses to send. Optional: `ASSURANCE_PAYG_METER_ID` (the `mtr_…` id)
+lets the reconciliation compare our totals with the meter's own.
+
+**What the founder must do in Stripe test mode before any of it works**
+(nothing here can be done from this repository):
+
+1. Create a Billing Meter: event name = the value you will put in
+   `ASSURANCE_PAYG_METER_EVENT`, `sum` aggregation, customer mapping on the
+   payload key `stripe_customer_id`, value on the payload key `value`.
+2. Create a **metered Price** attached to that meter, in the currency and at
+   the unit price you choose. This service never learns the price; it counts
+   units and Stripe multiplies. (Prices are the founder's to set.)
+3. Set `ASSURANCE_PRICE_PAYG` to that Price's id, `ASSURANCE_PAYG_METER_EVENT`
+   and, if you want the drift check, `ASSURANCE_PAYG_METER_ID`.
+4. Make sure the customer portal allows moving between the pay-as-you-go price
+   and the plans (an existing subscriber is sent to the portal, not to a second
+   checkout).
+5. **Schedule the reporter.** Nothing in the product runs it:
+
+   ```bash
+   fly ssh console -C "python -m assurance.billing.payg report --json"   # e.g. every 5 minutes
+   fly ssh console -C "python -m assurance.billing.reconcile --json"     # daily; alert on exit 1 or 2
+   ```
+
+   Until it runs, usage accumulates unreported (never lost, never double-sent);
+   the usage report shows `unreported_units` and the reconciliation flags
+   `stale_unreported` after 24 hours.
+
+   A rotated or restricted key (401/403), a wrong meter path (404) or a wrong
+   meter event name (400) aborts the run with exit 2 and leaves every row
+   `pending`: fix the configuration and the next run bills them. Only a refusal
+   of the event itself (an unknown customer, say) marks that one event
+   `rejected`, and nothing retries a rejected event by itself; once a person has
+   resolved the cause, `python -m assurance.billing.payg requeue --all-rejected`
+   (or `--event-id ID`, `--dry-run` to list) puts them back to `pending`.
+
+**How a unit is counted.** At one moment only: when the route has computed its
+whole answer, immediately before it returns. A 422, a refusal by the domain, or
+a crash before that records nothing, and so does a request refused for quota.
+The count and the quota check are one SQLite transaction
+(`AccountStore.record_usage`). Send an `Idempotency-Key` header and a retry is
+never counted or billed twice (the key is bound to the request: the same key
+with a different body is a 409 `idempotency_key_reused` and is not served);
+without one every call is its own unit. At the
+limit, or when the allowance is gone and billing is not on for the account, the
+API answers 429 with `Retry-After`, `resets_at` and a remedy, and records nothing.
+
+**How a unit is reported.** `usage_events` is the outbox. The reporter claims
+pending rows (marking them `sending`, before any network), sends each as one
+meter event whose `identifier` and `Idempotency-Key` are our event id, and marks
+it `billed` only when Stripe echoes that identifier. A crash anywhere leaves a
+row the next run picks up with the same identifier, which Stripe counts once.
+Stripe dedupes identifiers for "at least 24 hours"; we stop re-sending at 20 h:
+a row not proven received by then becomes `ambiguous` and is **not** sent again.
+`--apply` of the reconciliation settles an ambiguous row only when the meter's
+total proves which way it went (equals the billed units → re-queue; equals
+billed + ambiguous → mark billed).
+
+| Usage drift category | Meaning |
+|---|---|
+| `provider_has_fewer_than_billed` | the meter holds less than we marked billed (Stripe dropped events after acknowledging them: it validates asynchronously) |
+| `provider_has_more_than_sent` | the meter holds more than we ever sent (something else writes to it, or a double count) |
+| `stale_unreported` | billable events older than 24 h still unsent: the reporter is not running |
+| `needs_attention` | an event is `rejected` (Stripe refused it for good) or `ambiguous` |
+| `ack_mismatch` | marked billed without Stripe echoing the identifier |
+| `no_customer` | billable usage on an account with no Stripe customer |
+
+**Known gaps (none of these are guesses to be papered over).** The
+`Stripe-Version` for meter calls (`2024-09-30.acacia`), the exact response
+shape of a duplicate identifier, and the event-summaries endpoint are from
+Stripe's published contract as remembered, never exercised. The spend limit is
+in **units per UTC calendar month**, which need not line up with a Stripe invoice
+period; currency amounts are not enforced because the price lives in Stripe.
+A budget alert is a flag in `GET /v1/usage`; no email is sent. A `past_due`
+account is not billed further. Checkout for the `payg` tier sends a metered line
+item with no quantity; that, the webhook mapping and the portal switch are
+untested against Stripe.
+
 ## Connect the marketing site
 
 The Next.js site in `app/` reads `NEXT_PUBLIC_ASSURANCE_API_URL` at **build

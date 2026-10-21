@@ -23,8 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
-from assurance.billing.accounts import AccountStore, Principal
+from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
+from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.fleet.advisory import ComponentAdvisory, match_item
 from assurance.fleet.declaration import DeclarationOfConformity, check_declaration
@@ -105,8 +105,7 @@ def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
 async def advisory_check(
     body: AdvisoryCheckIn,
     response: Response,
-    principal: Annotated[Principal, Anyone],
-    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    meter: Annotated[MeterTicket, Metered("advisory_check")],
 ) -> dict[str, Any]:
     """One advisory, one manifest, no account.
 
@@ -114,15 +113,8 @@ async def advisory_check(
     a label, and this system has already shown a label can be wrong;
     ``hash_mismatch`` means the machine's own label and artefact disagree against
     the supplier's published figures, which is neither affected nor clear.
+    Counted once the answer is complete (``billing/metering.py``).
     """
-    limit = principal.plan.diffs_per_day
-    spend(principal, "advisory_check", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("advisory_check", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
-
     advisory = _advisory(body.advisory)
     manifest = _manifest(body.manifest)
 
@@ -158,7 +150,7 @@ async def advisory_check(
             "item(s) " + ", ".join(unhashed) + " carry no hash, so an affected "
             "component hiding in them would not be found.")
 
-    return {
+    result = {
         "advisory_id": advisory.advisory_id,
         "issued_by": advisory.issued_by,
         "severity": advisory.severity.value,
@@ -169,6 +161,8 @@ async def advisory_check(
         "remedy": advisory.remedy,
         "checks_skipped": skipped,
     }
+    meter.commit(response)
+    return result
 
 
 @fleet_router.get("/machines", summary="Every enrolled machine, worst coverage first")

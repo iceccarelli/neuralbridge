@@ -12,14 +12,23 @@ key.
 A supplier signs an advisory **locally**, the same way the CLI does (their
 private key never leaves their machine, same as ``assurance supplier
 publish``), and POSTs the resulting signed record here to be hosted. This
-service only validates structure and feed invariants — the same invariants
-``assurance.supplier.publish.publish()`` enforces — and appends it to a feed
-file that is public and unmetered to read, forever, because the value of a
+service only checks structure and the feed's chain invariants — the same
+invariants ``assurance.supplier.publish.publish()`` enforces — and appends it to
+a feed file that anyone can read without an account, because the value of a
 supplier's advisory is in how many integrators can find it, not in how few.
+
+It does **not** verify the signature: it holds no supplier's public key and
+must not be asked to vouch for one. A reader verifies the feed against a key
+whose fingerprint they obtained by a route that is not this feed
+(``assurance supplier verify``). Nothing in this module meters or charges for
+reading a feed.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -27,15 +36,27 @@ from pydantic import BaseModel, ConfigDict
 
 from assurance.api.deps import Supplying, supplier_feeds_dir
 from assurance.billing.accounts import Principal
+from assurance.core.errors import AssuranceError
+from assurance.core.identity import parse_utc
+from assurance.fleet.advisory import ComponentAdvisory
 from assurance.supplier.publish import (
+    FEED_FORMAT,
     AdvisoryFeed,
-    PublishError,
     SignedAdvisory,
 )
 
 __all__ = ["supplier_router"]
 
 supplier_router = APIRouter(prefix="/v1/supplier", tags=["supplier"])
+
+# A real advisory is a few KB. These are bounds, not product limits: the global
+# request cap (1 MiB) is far above what one record needs, and a feed is served
+# whole from memory, so the file it grows into has to be bounded too.
+MAX_RECORD_BYTES = 256 * 1024
+MAX_FEED_BYTES = 16 * 1024 * 1024
+#: An Ed25519 signature is 64 bytes. A shape check, not a verification.
+_SIGNATURE_BYTES = 64
+_PARSE_ERRORS = (AssuranceError, KeyError, TypeError, ValueError, AttributeError)
 
 
 class AdvisoryIn(BaseModel):
@@ -51,87 +72,151 @@ class AdvisoryIn(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+def _unprocessable(error: str, detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={"error": error, "detail": detail},
+    )
+
+
+def _check_shape(record: SignedAdvisory) -> None:
+    """Refuse a record no reader could parse. This is not a signature check."""
+    if record.format != FEED_FORMAT:
+        raise _unprocessable(
+            "malformed_advisory",
+            f"format is {record.format!r}; this service hosts {FEED_FORMAT!r}.")
+    if not record.key_fingerprint.strip():
+        raise _unprocessable("malformed_advisory", "key_fingerprint is empty.")
+    try:
+        parse_utc(record.published_at)
+    except ValueError as exc:
+        raise _unprocessable(
+            "malformed_advisory",
+            f"published_at {record.published_at!r} is not an ISO-8601 timestamp "
+            f"with a timezone ({exc}).") from exc
+    try:
+        parsed = ComponentAdvisory.from_dict(record.advisory)
+    except _PARSE_ERRORS as exc:
+        raise _unprocessable(
+            "malformed_advisory",
+            f"the advisory does not parse as a component advisory ({exc!r}).") from exc
+    if not parsed.advisory_id.strip():
+        raise _unprocessable("malformed_advisory", "advisory_id is empty.")
+
+
+def _check_signature_shape(signature: str) -> None:
+    try:
+        raw = base64.b64decode(signature.encode("ascii"), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise _unprocessable(
+            "malformed_signature", f"the signature is not base64 ({exc}).") from exc
+    if len(raw) != _SIGNATURE_BYTES:
+        raise _unprocessable(
+            "malformed_signature",
+            f"an Ed25519 signature decodes to {_SIGNATURE_BYTES} bytes; this one "
+            f"decodes to {len(raw)}.")
+
+
 @supplier_router.post(
     "/advisory",
     response_model=dict,
     status_code=status.HTTP_201_CREATED,
-    summary="Publish a signed advisory to your hosted feed (Supplier tier)",
+    summary="Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
 )
 def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) -> dict[str, Any]:
+    """Host an advisory you signed locally.
+
+    This checks structure and the feed's chain (sequence, predecessor hash, one
+    supplier per feed, no repeated advisory id) and refuses what it cannot parse.
+    It does not verify the signature: it holds no supplier key. Readers verify
+    the feed against a key fingerprint they obtained from you by another route.
+    """
     assert principal.account is not None  # Supplying guarantees this
     feed_path = supplier_feeds_dir() / f"{principal.account.id}.jsonl"
     feed = AdvisoryFeed(feed_path)
 
-    try:
-        record = SignedAdvisory.from_dict(body.model_dump())
-    except PublishError as exc:
+    payload = body.model_dump()
+    size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    if size > MAX_RECORD_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "malformed_advisory", "detail": str(exc)},
-        ) from exc
-    if not record.signature:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error": "unsigned_advisory",
-                "detail": "This record carries no signature. Sign it locally with "
-                "`assurance supplier publish` (or the same library call) before "
-                "sending it here — this service never holds a supplier's private key.",
-            },
+            status_code=413,
+            detail={"error": "advisory_too_large",
+                    "detail": f"this record is {size} bytes; the limit is {MAX_RECORD_BYTES}."},
         )
+    try:
+        record = SignedAdvisory.from_dict(payload)
+    except _PARSE_ERRORS as exc:
+        raise _unprocessable("malformed_advisory", str(exc) or repr(exc)) from exc
+    if not record.signature:
+        raise _unprocessable(
+            "unsigned_advisory",
+            "This record carries no signature. Sign it locally with "
+            "`assurance supplier publish` (or the same library call) before "
+            "sending it here — this service never holds a supplier's private key.",
+        )
+    _check_signature_shape(record.signature)
+    _check_shape(record)
 
-    history = feed.read()
-    if history:
-        previous = history[-1]
-        if previous.supplier.supplier_id != record.supplier.supplier_id:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "supplier_identity_mismatch",
-                    "detail": f"this account's feed already belongs to "
-                    f"{previous.supplier.supplier_id!r}; this record is signed as "
-                    f"{record.supplier.supplier_id!r}. One feed, one supplier.",
-                },
-            )
-        if record.sequence != previous.sequence + 1:
+    # Read, check and append are one step. Two POSTs for the same sequence must
+    # not both pass the check: an append-only chain cannot be un-forked.
+    with feed.locked():
+        history = feed.read()
+        if history:
+            previous = history[-1]
+            if previous.supplier.supplier_id != record.supplier.supplier_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "supplier_identity_mismatch",
+                        "detail": f"this account's feed already belongs to "
+                        f"{previous.supplier.supplier_id!r}; this record is signed as "
+                        f"{record.supplier.supplier_id!r}. One feed, one supplier.",
+                    },
+                )
+            if record.sequence != previous.sequence + 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "sequence_mismatch",
+                        "detail": f"expected sequence {previous.sequence + 1}, got "
+                        f"{record.sequence}. Read GET /v1/supplier/feed/{principal.account.id} "
+                        "and publish on top of its last record.",
+                    },
+                )
+            if record.previous != previous.content_hash():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "chain_mismatch",
+                        "detail": "this record's `previous` does not match the current "
+                        "feed head — it was built against a stale copy of the feed.",
+                    },
+                )
+            if any(h.advisory_id == record.advisory_id and not h.is_withdrawal
+                   for h in history):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "duplicate_advisory_id",
+                        "detail": f"{record.advisory_id} was already published at "
+                        f"sequence {next(h.sequence for h in history if h.advisory_id == record.advisory_id)}.",
+                    },
+                )
+        elif record.sequence != 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
                     "error": "sequence_mismatch",
-                    "detail": f"expected sequence {previous.sequence + 1}, got "
-                    f"{record.sequence}. Read GET /v1/supplier/feed/{principal.account.id} "
-                    "and publish on top of its last record.",
+                    "detail": f"this is a new feed; the first record must be sequence 1, got {record.sequence}.",
                 },
             )
-        if record.previous != previous.content_hash():
+        if feed_path.exists() and feed_path.stat().st_size >= MAX_FEED_BYTES:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "chain_mismatch",
-                    "detail": "this record's `previous` does not match the current "
-                    "feed head — it was built against a stale copy of the feed.",
-                },
+                status_code=413,
+                detail={"error": "feed_full",
+                        "detail": f"this feed has reached {MAX_FEED_BYTES} bytes."},
             )
-        if any(h.advisory_id == record.advisory_id and not h.is_withdrawal
-               for h in history):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "duplicate_advisory_id",
-                    "detail": f"{record.advisory_id} was already published at "
-                    f"sequence {next(h.sequence for h in history if h.advisory_id == record.advisory_id)}.",
-                },
-            )
-    elif record.sequence != 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error": "sequence_mismatch",
-                "detail": f"this is a new feed; the first record must be sequence 1, got {record.sequence}.",
-            },
-        )
-
-    feed.append(record)
+        feed.append(record)
     return {
         "sequence": record.sequence,
         "advisory_id": record.advisory_id,
@@ -141,7 +226,7 @@ def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) 
 
 @supplier_router.get(
     "/feed/{supplier_account_id}",
-    summary="Read a hosted supplier feed (free, no account, forever)",
+    summary="Read a hosted supplier feed (no account needed)",
 )
 def get_feed(supplier_account_id: str) -> Response:
     feed_path = supplier_feeds_dir() / f"{supplier_account_id}.jsonl"
@@ -150,4 +235,8 @@ def get_feed(supplier_account_id: str) -> Response:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No feed has been published under this id.",
         )
-    return Response(content=feed_path.read_text("utf-8"), media_type="application/x-ndjson")
+    return Response(
+        content=feed_path.read_text("utf-8"),
+        media_type="application/x-ndjson",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )

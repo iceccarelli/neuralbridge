@@ -29,7 +29,9 @@ What this does and, deliberately, does not do:
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -54,7 +56,7 @@ from assurance.core.evidence import (
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -64,18 +66,27 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import VerificationRecord
 from assurance.watch.observations import (
+    DEFAULT_CADENCE_HOURS,
     FAILED_STATUSES,
+    MANIFEST_STALE,
+    MAX_CADENCE_HOURS,
+    MIN_CADENCE_HOURS,
+    NOT_A_LOOK_STATUSES,
     OBSERVATION_KIND,
     REPORT_KIND,
+    last_complete_manifest,
     observed_at_of,
 )
 
 __all__ = [
     "FUTURE_SKEW",
     "LIMITATIONS",
+    "LOCK_DEADLINE",
+    "IngestBusyError",
     "MAX_MACHINES_PER_ACCOUNT",
     "MAX_NEW_MACHINES_PER_REPORT",
     "MachineResult",
+    "NOT_A_LOOK_REASON",
     "ReportResult",
     "ingest_report",
     "lock_path",
@@ -92,11 +103,29 @@ MAX_NEW_MACHINES_PER_REPORT = 200
 POSITIVE_STATUSES = frozenset({"unchanged", "changed"})
 REPORT_SCHEMA = "assurance.watch.report/1"
 
-#: Serialises the check-then-write sequence inside one process; the advisory file
-#: lock below extends it across processes (several workers, or a CLI on the same
-#: volume). The ledger is single-writer by design; this keeps two identical
-#: retries that overlap from both passing the "already recorded?" check.
-_INGEST_LOCK = threading.Lock()
+#: Longest one ingest waits for another into the same ledger, in seconds. A report
+#: runs in a request thread; an unbounded wait behind a stuck holder would use up
+#: the thread pool and take every other route down with it.
+LOCK_DEADLINE = 30.0
+
+
+class IngestBusyError(AssuranceError):
+    """Another ingest into this ledger held the lock for the whole wait."""
+
+
+#: Serialises the check-then-write sequence inside one process, **per ledger**: one
+#: tenant's slow report must not queue another tenant's. The advisory file lock below
+#: extends it across processes (several workers, or a CLI on the same volume). The
+#: ledger is single-writer by design; this keeps two identical retries that overlap
+#: from both passing the "already recorded?" check.
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock(ledger: EvidenceLedger) -> threading.Lock:
+    key = os.path.realpath(ledger.path)
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.Lock())
 
 
 def lock_path(ledger: EvidenceLedger) -> str:
@@ -106,18 +135,36 @@ def lock_path(ledger: EvidenceLedger) -> str:
 
 @contextmanager
 def _ingest_lock(ledger: EvidenceLedger) -> Iterator[None]:
-    with _INGEST_LOCK:
+    deadline = time.monotonic() + LOCK_DEADLINE
+    thread_lock = _thread_lock(ledger)
+    if not thread_lock.acquire(timeout=max(0.0, LOCK_DEADLINE)):
+        raise IngestBusyError(
+            "another report into this ledger is still being recorded; retry shortly")
+    try:
         try:
             import fcntl
         except ImportError:  # pragma: no cover - not POSIX: one process only
             yield
             return
         with open(lock_path(ledger), "a+") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            delay = 0.01
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise IngestBusyError(
+                            "another process is still recording a report into this "
+                            "ledger; retry shortly") from None
+                    time.sleep(delay)
+                    delay = min(delay * 2, 0.2)
             try:
                 yield
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        thread_lock.release()
 
 LIMITATIONS: tuple[str, ...] = (
     "These are observations reported by the holder of this account's key. The "
@@ -157,6 +204,9 @@ class MachineResult:
     observed_at: str = ""
     #: Whether this entry counts as a successful observation of the machine.
     counts_as_observation: bool = False
+    #: Hours between the manifest's ``taken_at`` and ``observed_at``; None for a
+    #: failed look, which carries no manifest.
+    manifest_age_hours: float | None = None
     case_id: str = ""
     case_status: str = ""
     case_opened: bool = False
@@ -173,6 +223,7 @@ class MachineResult:
             "detail": self.detail,
             "observed_at": self.observed_at,
             "counts_as_observation": self.counts_as_observation,
+            "manifest_age_hours": self.manifest_age_hours,
             "case_id": self.case_id,
             "case_status": self.case_status,
             "case_opened": self.case_opened,
@@ -212,7 +263,7 @@ class ReportResult:
                 "refused": count("refused"),
                 "failed_observations": sum(
                     1 for r in self.results
-                    if r.outcome == "recorded" and r.recorded_status in FAILED_STATUSES),
+                    if r.outcome == "recorded" and r.recorded_status in NOT_A_LOOK_STATUSES),
             },
             "machines": [r.to_dict() for r in self.results],
             "cases_opened": list(self.cases_opened),
@@ -264,6 +315,7 @@ def _seal_observation(
     observed_at: datetime, configuration_hash: str, complete: bool,
     missing: Sequence[str], detail: str, watch_id: str, run_started_at: str,
     digest: str, actor: Actor, cadence: float | None = None,
+    manifest_age_hours: float | None = None, manifest_relayed: bool = False,
 ) -> Evidence:
     """Seal a ``watch.observation`` in exactly the shape ``run_watch`` seals.
 
@@ -272,7 +324,7 @@ def _seal_observation(
     (``source``, ``reported_status``, ``report_digest`` ...) sit beside the
     runner's, so everything that reads an observation reads this one.
     """
-    failed = status in FAILED_STATUSES
+    failed = status in NOT_A_LOOK_STATUSES
     evidence = Evidence(
         kind=OBSERVATION_KIND,
         body={
@@ -294,6 +346,10 @@ def _seal_observation(
             # Declared by the reporting watch with a successful look, never with a
             # failed one: a report cannot lengthen what it did not observe.
             "cadence_hours": None if failed else cadence,
+            # How old the manifest behind this look was at the look, as the
+            # reporter's own two dates say. None when the look carried none.
+            "manifest_age_hours": manifest_age_hours,
+            "manifest_relayed": manifest_relayed,
         },
         actor=actor,
         origin=Origin(system="assurance.watch.ingest", reference=key,
@@ -405,6 +461,7 @@ def _ingest_entry(
                        f"status {status!r} with collection_complete=true.", stamp)
 
     manifest: SafetyManifest | None = None
+    manifest_age: float | None = None
     if positive:
         if not raw_manifest:
             return _refuse(entry, fallback_key, "manifest_required",
@@ -431,6 +488,8 @@ def _ingest_entry(
             return _refuse(entry, key, "manifest_taken_after_observation",
                            "the manifest claims to have been taken after the "
                            "observation it supports.", stamp)
+        manifest_age = round(
+            max(0.0, (observed_at - manifest.taken_at).total_seconds() / 3600), 2)
     else:
         if raw_manifest:
             return _refuse(entry, fallback_key, "manifest_not_accepted",
@@ -463,6 +522,48 @@ def _ingest_entry(
             return _refuse(entry, key, "conflicts_with_recorded_observation",
                            f"a different observation of {key} at {stamp} is "
                            "already recorded.", stamp)
+
+    relayed = entry.get("manifest_relayed") is True
+    if manifest is not None:
+        # Before staleness and before the relayed flag: no age makes a declaration
+        # a look at the machine. `configuration_hash` ignores `source` and
+        # `hash_source`, so equal hashes prove nothing about how they were obtained.
+        why_not = _not_a_look(manifest)
+        if why_not:
+            if key not in account.enrolled:
+                return _refuse(entry, key, NOT_A_LOOK_REASON, why_not + " A machine "
+                               "this account has not enrolled is not created from it.",
+                               stamp)
+            return _not_a_look_attempt(
+                ledger, entry=entry, key=key, detail=why_not,
+                missing=_not_read_items(manifest), watch_id=watch_id,
+                run_started_at=run_started_at, digest=digest, actor=actor,
+                observed_at=observed_at, stamp=stamp, manifest_age=manifest_age)
+    if manifest is not None and manifest_age is not None:
+        window = _freshness_window_hours(account.max_age_hours)
+        # A relayed manifest is one the reporter says it sealed earlier for the
+        # configuration this look re-confirmed (the `watch push` case: an
+        # unchanged machine's manifest is the one from when it last changed). Its
+        # age is recorded and shown, but it is not what makes the look stale.
+        if manifest_age > window and not relayed:
+            if key not in account.enrolled:
+                return _refuse(entry, key, "manifest_stale", _stale_detail(
+                    key, manifest, manifest_age, window) + " A machine this account "
+                    "has not enrolled is not created from it.", stamp)
+            _seal_observation(
+                ledger, key=key, serial=serial, status=MANIFEST_STALE, reported=status,
+                observed_at=observed_at, configuration_hash="", complete=False,
+                missing=[], detail=_stale_detail(key, manifest, manifest_age, window),
+                watch_id=watch_id, run_started_at=run_started_at, digest=digest,
+                actor=actor, manifest_age_hours=manifest_age)
+            return MachineResult(
+                serial=serial, machine_key=key, reported_status=status,
+                recorded_status=MANIFEST_STALE, outcome="recorded", observed_at=stamp,
+                reason="manifest_stale",
+                detail=_stale_detail(key, manifest, manifest_age, window)
+                + " Recorded as an attempt: it does not count as an observation, "
+                "no case was touched and the baseline did not move.",
+                counts_as_observation=False, manifest_age_hours=manifest_age)
 
     if key not in account.known:
         # Only a positive look (with its manifest) reaches here for a new machine.
@@ -497,7 +598,7 @@ def _ingest_entry(
     assert manifest is not None
     observed_hash = manifest.configuration_hash()
     history = manifests_from_ledger(ledger, key)
-    baseline = history[-1] if history else None
+    baseline = last_complete_manifest(history)
     case_id = ""
     case_status = ""
     case_opened = False
@@ -507,15 +608,28 @@ def _ingest_entry(
                 f"{observed_hash[:12]}, {len(manifest.items)} item(s). A baseline, "
                 "not a finding.")
         record_manifest(ledger, manifest, actor=actor)
-    elif baseline.configuration_hash() == observed_hash:
-        recorded = "observed"
-        note = f"unchanged at {observed_hash[:12]}"
     else:
-        recorded = "changed"
         try:
             divergence = compare(baseline, manifest)
         except ValueError as exc:  # pragma: no cover - same key, so cannot differ
             return _refuse(entry, key, "incomparable_manifest", str(exc), stamp)
+        recorded = "changed"
+        note = ""
+        if divergence.verdict == "matches":
+            recorded = "observed"
+            note = f"unchanged at {observed_hash[:12]}"
+        elif divergence.verdict == "unverifiable":
+            # Same configuration hash, but some of it could not be compared (a
+            # baseline item with no hash). Nothing was seen, which is not the same
+            # as nothing changed: an attempt, not an observation.
+            detail_text = ("the configuration hash is unchanged but the comparison "
+                           "is unverifiable: " + "; ".join(divergence.checks_skipped[:3]))
+            return _not_a_look_attempt(
+                ledger, entry=entry, key=key, detail=detail_text,
+                missing=divergence.uncompared, watch_id=watch_id,
+                run_started_at=run_started_at, digest=digest, actor=actor,
+                observed_at=observed_at, stamp=stamp, manifest_age=manifest_age)
+    if recorded == "changed":
         note = (f"configuration moved {baseline.configuration_hash()[:12]} → "
                 f"{observed_hash[:12]}: " + ", ".join(
                     f"{c.item_id} {c.kind.value}" for c in divergence.changes))
@@ -537,7 +651,8 @@ def _ingest_entry(
         ledger, key=key, serial=serial, status=recorded, reported=status,
         observed_at=observed_at, configuration_hash=observed_hash, complete=True,
         missing=(), detail=note, watch_id=watch_id, run_started_at=run_started_at,
-        digest=digest, actor=actor, cadence=account.max_age_hours)
+        digest=digest, actor=actor, cadence=account.max_age_hours,
+        manifest_age_hours=manifest_age, manifest_relayed=relayed)
     if key not in account.known:
         account.new += 1
     account.known.add(key)
@@ -548,8 +663,84 @@ def _ingest_entry(
         detail=note + ("" if recorded_matches(status, recorded) else
                        f" (the reporter said {status!r}; this ledger's own "
                        "comparison is what is recorded)"),
-        counts_as_observation=True, case_id=case_id, case_status=case_status,
-        case_opened=case_opened)
+        counts_as_observation=True, manifest_age_hours=manifest_age,
+        case_id=case_id, case_status=case_status, case_opened=case_opened)
+
+
+#: The reason a positive report is recorded as an incomplete attempt (or refused,
+#: for a machine this account has not enrolled) because its manifest is not a record
+#: of looking at the unit.
+NOT_A_LOOK_REASON = "manifest_not_a_look_at_the_machine"
+
+
+def _not_a_look(manifest: SafetyManifest) -> str:
+    """Why this manifest cannot be a positive observation of the machine; "" if it can.
+
+    A look is an ``as_found`` manifest whose every item was hashed off the unit
+    (:attr:`HashSource.describes_this_unit`). ``configuration_hash`` deliberately
+    ignores both ``source`` and ``hash_source``, so equal hashes say nothing about
+    either; this is the same rule ``Divergence.verdict`` applies before it will
+    say ``matches``.
+    """
+    reasons: list[str] = []
+    if manifest.source is not ManifestSource.AS_FOUND:
+        reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
+    not_read = _not_read_items(manifest)
+    if not_read:
+        reasons.append(
+            "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
+            "(supplied by a vendor, or declared)")
+    if not reasons:
+        return ""
+    return ("the manifest is not a record of looking at this machine: "
+            + "; ".join(reasons) + ". Equal hashes do not say what the unit holds.")
+
+
+def _not_read_items(manifest: SafetyManifest) -> list[str]:
+    return sorted(i.item_id for i in manifest.items if not i.hash_source.describes_this_unit)
+
+
+def _not_a_look_attempt(
+    ledger: EvidenceLedger, *, entry: Mapping[str, Any], key: str, detail: str,
+    missing: Sequence[str], watch_id: str, run_started_at: str, digest: str,
+    actor: Actor, observed_at: datetime, stamp: str, manifest_age: float | None,
+) -> MachineResult:
+    """Record an incomplete attempt: no observation, no baseline, no case."""
+    serial = str(entry.get("serial", ""))
+    status = str(entry.get("status", ""))
+    _seal_observation(
+        ledger, key=key, serial=serial, status="incomplete", reported=status,
+        observed_at=observed_at, configuration_hash="", complete=False,
+        missing=missing, detail=detail, watch_id=watch_id,
+        run_started_at=run_started_at, digest=digest, actor=actor,
+        manifest_age_hours=manifest_age)
+    return MachineResult(
+        serial=serial, machine_key=key, reported_status=status,
+        recorded_status="incomplete", outcome="recorded", observed_at=stamp,
+        reason=NOT_A_LOOK_REASON,
+        detail=detail + " Recorded as an incomplete attempt: it does not count as an "
+        "observation, no case was touched and the baseline did not move.",
+        counts_as_observation=False, manifest_age_hours=manifest_age)
+
+
+def _freshness_window_hours(declared: float | None) -> float:
+    """How old a manifest may be, at the look, and still describe the machine.
+
+    The same window ``fleet_observations`` uses to call a machine stale: the
+    cadence the report declared (1 to 720 h), else ``DEFAULT_CADENCE_HOURS``
+    (168 h, the Watch configuration's default ``max_age_hours``). A manifest
+    older than the interval a machine may go unobserved cannot be a look at it.
+    """
+    if declared is not None and MIN_CADENCE_HOURS <= declared <= MAX_CADENCE_HOURS:
+        return declared
+    return DEFAULT_CADENCE_HOURS
+
+
+def _stale_detail(key: str, manifest: SafetyManifest, age: float, window: float) -> str:
+    return (f"the manifest for {key} was taken {format_utc(manifest.taken_at)}, "
+            f"{age:g} h before the look it is offered for; the freshness window is "
+            f"{window:g} h. An old manifest presented as a current look is not "
+            "an observation.")
 
 
 def recorded_matches(reported: str, recorded: str) -> bool:

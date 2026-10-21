@@ -266,6 +266,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_export(args: argparse.Namespace) -> int:
     register = _register(args)
     bundle = register.ledger.export(subject=args.case_id)
+    if not bundle["entries"]:
+        print(f"error: no case {args.case_id!r}.", file=sys.stderr)
+        return 2
     text = json.dumps(bundle, indent=2, ensure_ascii=False)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")

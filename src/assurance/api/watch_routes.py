@@ -27,9 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from assurance.api.deps import Machine, get_register
 from assurance.billing.accounts import Principal
+from assurance.change.store import CaseStore
+from assurance.core.errors import LedgerIntegrityError
 from assurance.core.evidence import Actor
 from assurance.core.identity import parse_utc, utc_now
-from assurance.watch.ingest import FUTURE_SKEW, ingest_report
+from assurance.watch.ingest import FUTURE_SKEW, IngestBusyError, ingest_report
 from assurance.watch.observations import MAX_CADENCE_HOURS, MIN_CADENCE_HOURS
 
 __all__ = ["MAX_MACHINES_PER_REPORT", "watch_router"]
@@ -62,6 +64,13 @@ class MachineReportIn(BaseModel):
     #: Present for ``unchanged`` / ``changed``; refused on a failed look.
     manifest: dict[str, Any] | None = None
     detail: str = Field(default="", max_length=2000)
+    #: The manifest is one the reporter sealed earlier for the configuration this
+    #: look re-confirmed, so it may be older than the look (``watch push`` sets it
+    #: for an unchanged machine). Without it, a manifest taken longer before the
+    #: look than the cadence window is recorded as ``manifest_stale`` and does not
+    #: count as an observation. Its age is recorded and shown either way. A reporter
+    #: can set it for any manifest: it is the reporter's statement, not a check.
+    manifest_relayed: bool = False
     #: Plan items a ``incomplete`` look did not find or read.
     missing_items: list[Annotated[str, Field(max_length=200)]] = Field(
         default_factory=list, max_length=500)
@@ -137,7 +146,21 @@ def post_report(
         raise HTTPException(status_code=422, detail={
             "error": "run_started_at_in_future",
             "detail": "run_started_at is later than this server's clock allows."})
-    result = ingest_report(
-        register.ledger, body.model_dump(mode="json"),
-        actor=_actor(principal), now=now)
+    # An account whose chain does not verify records nothing: the same structured
+    # refusal the case routes give, before a single observation is appended.
+    # Incremental (see CaseStore.require_intact), so a 200-machine report pays for
+    # the records appended since the last request, not for the whole ledger.
+    try:
+        CaseStore(register.ledger).require_intact()
+        result = ingest_report(
+            register.ledger, body.model_dump(mode="json"),
+            actor=_actor(principal), now=now)
+    except LedgerIntegrityError as exc:
+        raise HTTPException(status_code=500, detail={
+            "error": "ledger_integrity", "detail": str(exc)}) from exc
+    except IngestBusyError as exc:
+        # Nothing was recorded; reports are idempotent, so the retry is safe.
+        raise HTTPException(
+            status_code=503, headers={"Retry-After": "5"},
+            detail={"error": "ingest_busy", "detail": str(exc)}) from exc
     return result.to_dict()

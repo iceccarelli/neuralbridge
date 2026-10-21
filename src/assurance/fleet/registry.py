@@ -18,11 +18,13 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
+from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.intervention import Intervention
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import MANIFEST_KIND
 from assurance.machinery.staleness import (
     Coverage,
@@ -115,15 +117,34 @@ class Fleet:
         """
         chain_ok, problems = ledger.verify_chain()
 
-        latest: dict[str, SafetyManifest] = {}
+        # Which manifest is "the machine"? What was found on it, most recently.
+        #
+        # * an ``as_intended`` manifest is a plan, not a fact, and never current;
+        # * an observation (``as_found``) outranks a declaration, so a baseline
+        #   filed after an observation does not make the machine look like its
+        #   paperwork;
+        # * within a kind, the later ``taken_at`` wins, then the later ledger
+        #   entry — and a ``taken_at`` later than the moment the manifest was
+        #   filed (plus a day for clocks) is not believed: it is dated by its
+        #   filing, so a future date cannot pin a manifest as current for ever.
+        best: dict[str, tuple[tuple[int, Any, int], SafetyManifest]] = {}
         for entry in ledger.entries(kind=MANIFEST_KIND):
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
             manifest = SafetyManifest.from_dict(evidence.body["manifest"])
-            # Later entries win: the ledger is append-only and ordered by seq,
-            # so the last sealed manifest for a machine is the current one.
-            latest[manifest.machine.key] = manifest
+            if manifest.source is ManifestSource.AS_INTENDED:
+                continue
+            filed = parse_utc(entry.at)
+            when = manifest.taken_at
+            if when > filed + timedelta(days=1):
+                when = filed
+            rank = (1 if manifest.source is ManifestSource.AS_FOUND else 0,
+                    when, entry.seq)
+            key = manifest.machine.key
+            if key not in best or rank > best[key][0]:
+                best[key] = (rank, manifest)
+        latest = {k: v[1] for k, v in best.items()}
 
         records: list[MachineRecord] = []
         for key, manifest in sorted(latest.items()):
@@ -172,9 +193,16 @@ class Fleet:
         }
 
     def table(self) -> str:
-        """Worst first, because that is the order somebody reads it in."""
+        """Worst first, because that is the order somebody reads it in.
+
+        A chain that does not verify is said first: a warning under the rows
+        would be read after the rows had already been believed.
+        """
+        warning = ("THE LEDGER CHAIN DOES NOT VERIFY — every row below is drawn from a "
+                   "store whose integrity is in question.\n\n"
+                   if not self.chain_verified else "")
         if not self.records:
-            return "no machines in this ledger."
+            return warning + "no machines in this ledger."
         rows = sorted(
             self.records,
             key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count,
@@ -194,7 +222,4 @@ class Fleet:
         out.append("")
         out.append(f"{s.machines} machine(s): {s.covered} covered, "
                    f"{s.with_gaps} with gaps")
-        if not self.chain_verified:
-            out.append("THE LEDGER CHAIN DOES NOT VERIFY — every row above is drawn "
-                       "from a store whose integrity is in question.")
-        return "\n".join(out)
+        return warning + "\n".join(out)

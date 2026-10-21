@@ -6,8 +6,8 @@ exist in one package.
 :mod:`assurance.machine` produces a verification: *on this run, the cell met its
 declared separation, speed and workspace limits.* :mod:`assurance.machinery`
 produces an intervention record: *on 14 March a technician replaced the safety
-controller firmware.* Separately, each is a file. Together they produce the
-sentence a plant manager has never been shown:
+controller firmware.* Separately, each is a file. Together they produce a
+sentence neither record can produce alone:
 
     SF-02 protective stop — STALE. Last verified 9 February by bundle a41c…;
     invalidated by INT-0007 on 14 March, which changed safety-controller
@@ -28,10 +28,11 @@ that declares no checks is reported as ``not_demonstrable`` — never as covered
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.bundle import BUNDLE_KIND
@@ -43,8 +44,26 @@ __all__ = [
     "CoverageReport",
     "FunctionCoverage",
     "VerificationRecord",
+    "VerificationRecordError",
     "assess_coverage",
 ]
+
+#: Stands in for "when the machine was in the state this verification describes"
+#: when that date cannot be used. It is the earliest instant there is, so every
+#: recorded change counts as having come after it: an unknowable date is never
+#: allowed to make a verification look newer than a change.
+_EARLIEST = datetime(1, 1, 1, tzinfo=UTC)
+
+#: How far past its own filing time a trace may claim to have started before it
+#: is not believed. A day absorbs clock skew and time zones; it does not absorb
+#: a run that "started" in 2099.
+_FUTURE_TOLERANCE = timedelta(days=1)
+
+_TIER_RANK = {"profile": 0, "community": 1, "validated": 2, "certified": 3}
+
+
+class VerificationRecordError(AssuranceError, ValueError):
+    """A verification record cannot be dated, so it cannot be joined to changes."""
 
 
 class Coverage(StrEnum):
@@ -90,6 +109,28 @@ class VerificationRecord:
     tier: str
     checks_verified: tuple[str, ...]
     checks_not_verified: tuple[str, ...] = ()
+    #: The subset of ``checks_not_verified`` whose outcome was ``not_applicable``
+    #: (the trace never entered that regime). Those say nothing for or against a
+    #: function. A record that does not say which are which — every manually
+    #: built one — has every non-verified check treated as failed.
+    checks_not_applicable: tuple[str, ...] = ()
+    #: True when ``effective_at`` could not be taken from the bundle: its trace
+    #: start was unreadable, or later than the moment it was filed. It is then the
+    #: earliest possible instant (see ``_EARLIEST``).
+    date_suspect: bool = False
+
+    def __post_init__(self) -> None:
+        if self.effective_at.tzinfo is None:
+            raise VerificationRecordError(
+                f"verification {self.content_hash[:12]} effective_at has no timezone; "
+                "comparing it with a change record would mean guessing one."
+            )
+
+    @property
+    def failed_checks(self) -> tuple[str, ...]:
+        """Checks that ran here and did not pass: not verified, and not merely n/a."""
+        n_a = set(self.checks_not_applicable)
+        return tuple(c for c in self.checks_not_verified if c not in n_a)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +143,8 @@ class VerificationRecord:
             "tier": self.tier,
             "checks_verified": list(self.checks_verified),
             "checks_not_verified": list(self.checks_not_verified),
+            "checks_not_applicable": list(self.checks_not_applicable),
+            "date_suspect": self.date_suspect,
         }
 
     @classmethod
@@ -120,16 +163,23 @@ class VerificationRecord:
             if not evidence.verify():
                 continue
             body = evidence.body
-            checks = body.get("checks") or []
+            checks = [c for c in (body.get("checks") or [])
+                      if isinstance(c, dict) and isinstance(c.get("name"), str)]
             verified = tuple(c["name"] for c in checks
                              if c.get("outcome") == "verified")
             others = tuple(c["name"] for c in checks
                            if c.get("outcome") != "verified")
-            raw = body.get("trace_started_at") or entry.at
+            not_applicable = tuple(c["name"] for c in checks
+                                   if c.get("outcome") == "not_applicable")
+            filed = parse_utc(entry.at)
+            suspect = False
             try:
-                effective = parse_utc(str(raw))
+                effective = parse_utc(str(body.get("trace_started_at")))
             except (ValueError, TypeError):
-                effective = parse_utc(entry.at)
+                effective, suspect = _EARLIEST, True
+            else:
+                if effective > filed + _FUTURE_TOLERANCE:
+                    effective, suspect = _EARLIEST, True
             out.append(cls(
                 content_hash=evidence.content_hash,
                 effective_at=effective,
@@ -140,6 +190,8 @@ class VerificationRecord:
                 tier=str(body.get("tier", "")),
                 checks_verified=verified,
                 checks_not_verified=others,
+                checks_not_applicable=not_applicable,
+                date_suspect=suspect,
             ))
         return out
 
@@ -273,10 +325,24 @@ def assess_coverage(
         (i for i in interventions if i.machine_key == machine_key),
         key=lambda i: i.occurred_at,
     )
-    verifs = sorted(verifications, key=lambda v: v.effective_at)
+    verifs = sorted(verifications, key=lambda v: (v.effective_at, v.ledger_seq))
 
     caveats: list[str] = []
     coverages: list[FunctionCoverage] = []
+    weak_tiers: dict[str, list[str]] = {}
+
+    def latest(check: str) -> tuple[VerificationRecord, bool] | None:
+        """The newest verification that ran ``check``, and whether it passed it.
+
+        A run in which the check was not applicable says nothing either way and
+        is skipped; a newer failing run ends the cover an older passing one gave.
+        """
+        for v in reversed(verifs):
+            if check in v.checks_verified:
+                return v, True
+            if check in v.failed_checks:
+                return v, False
+        return None
 
     for fn in sorted(manifest.functions, key=lambda f: f.function_id):
         checks = set(fn.verified_by)
@@ -295,36 +361,51 @@ def assess_coverage(
         # Interventions that disturb this function, by the functions they name.
         disturbing = [i for i in mine if checks & manifest.checks_for(set(i.affects_functions))]
 
-        # The most recent verification whose verified checks cover this function.
-        covering = [v for v in verifs if checks & set(v.checks_verified)]
-        attempted = [v for v in verifs
-                     if checks & (set(v.checks_verified) | set(v.checks_not_verified))]
+        # Cover needs EVERY check the function declares, each judged by the newest
+        # run that exercised it. One verified check of two is not cover, and a
+        # newer failing run is not erased by an older passing one.
+        state = {c: latest(c) for c in sorted(checks)}
+        failing = {c: e for c, e in state.items() if e is not None and not e[1]}
+        missing = sorted(c for c, e in state.items() if e is None)
 
-        if not covering:
-            if attempted:
-                last = attempted[-1]
-                coverages.append(FunctionCoverage(
-                    function_id=fn.function_id, description=fn.description,
-                    required_performance=fn.required_performance,
-                    coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
-                    last_verified_hash=last.content_hash,
-                    last_verified_at=format_utc(last.effective_at),
-                    detail=f"the most recent verification ({last.content_hash[:12]}, "
-                           f"{last.verdict}) ran the checks for this function and did "
-                           "not pass them. Coverage has never been established.",
-                ))
-            else:
-                coverages.append(FunctionCoverage(
-                    function_id=fn.function_id, description=fn.description,
-                    required_performance=fn.required_performance,
-                    coverage=Coverage.NEVER_VERIFIED, checks=tuple(sorted(checks)),
-                    detail="no verification in the ledger has ever run "
-                           + ", ".join(sorted(checks)) + " for this machine.",
-                ))
+        if failing:
+            last = max((e[0] for e in failing.values()),
+                       key=lambda v: (v.effective_at, v.ledger_seq))
+            coverages.append(FunctionCoverage(
+                function_id=fn.function_id, description=fn.description,
+                required_performance=fn.required_performance,
+                coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
+                last_verified_hash=last.content_hash,
+                last_verified_at=format_utc(last.effective_at),
+                detail=f"the most recent run of {', '.join(sorted(failing))} "
+                       f"({last.content_hash[:12]}, {last.verdict}) did not pass "
+                       "it. Coverage has never been established, or has ended.",
+            ))
             continue
 
-        last_good = covering[-1]
-        after = [i for i in disturbing if i.occurred_at > last_good.effective_at]
+        if missing:
+            have = sorted(c for c, e in state.items() if e is not None)
+            coverages.append(FunctionCoverage(
+                function_id=fn.function_id, description=fn.description,
+                required_performance=fn.required_performance,
+                coverage=Coverage.NEVER_VERIFIED, checks=tuple(sorted(checks)),
+                detail=("no verification in the ledger has ever run "
+                        + ", ".join(missing) + " for this machine"
+                        + (f" ({', '.join(have)} has been verified, which is not "
+                           "enough: the function needs all of its checks)."
+                           if have else ".")),
+            ))
+            continue
+
+        # Every check has been verified. The function is only as current as the
+        # oldest of the runs its checks rest on.
+        used = {e[0].content_hash: e[0] for e in state.values() if e is not None}
+        last_good = min(used.values(), key=lambda v: (v.effective_at, v.ledger_seq))
+        after = [i for i in disturbing if i.occurred_at >= last_good.effective_at]
+        tiers = {v.tier for v in used.values()}
+        weakest = min(tiers, key=lambda t: _TIER_RANK.get(t, 0))
+        if _TIER_RANK.get(weakest, 0) < _TIER_RANK["validated"] and not after:
+            weak_tiers.setdefault(weakest, []).append(fn.function_id)
 
         if not after:
             coverages.append(FunctionCoverage(
@@ -335,7 +416,7 @@ def assess_coverage(
                 last_verified_at=format_utc(last_good.effective_at),
                 detail=f"verified by {last_good.content_hash[:12]} on "
                        f"{format_utc(last_good.effective_at)[:10]} at tier "
-                       f"{last_good.tier}; no recorded intervention since has "
+                       f"{weakest}; no recorded intervention since has "
                        "touched an item implementing it.",
             ))
             continue
@@ -359,9 +440,26 @@ def assess_coverage(
                 f"which changed {breaker.item_id}"
                 + (f" and re-ran {breaker.revalidation.description!r} — but that "
                    f"revalidation is not in this ledger, so it was not counted."
-                   if revalidated else " and re-ran nothing with sealed evidence.")
+                   if revalidated and breaker.revalidation is not None
+                   else " and re-ran nothing with sealed evidence.")
             ),
         ))
+
+    for tier_name, fids in sorted(weak_tiers.items()):
+        caveats.append(
+            f"{', '.join(sorted(fids))} show as current on verification at tier "
+            f"{tier_name!r}, below 'validated': a simulated trace or a datasheet "
+            "figure is evidence about a model or a number, not about the hardware, "
+            "and current here does not mean demonstrated on the machine."
+        )
+    for v in verifs:
+        if v.date_suspect:
+            caveats.append(
+                f"verification {v.content_hash[:12]} cannot be dated by its trace "
+                "start (the start is unreadable, or later than the moment the bundle "
+                "was filed). It is treated as the earliest possible time, so every "
+                "recorded change counts as having come after it."
+            )
 
     # -- what this assessment could not see -------------------------------
     unrevalidated = tuple(

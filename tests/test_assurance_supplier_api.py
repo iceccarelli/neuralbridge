@@ -207,3 +207,161 @@ class TestOpenMode:
         record = _signed_record(env / "local-feed.jsonl")
         response = client.post("/v1/supplier/advisory", json=record.to_dict())
         assert response.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# concurrency, structure, and the read side's headers
+# ---------------------------------------------------------------------------
+class TestConcurrentPublish:
+    """The feed is append-only, so a fork cannot be repaired afterwards."""
+
+    def test_two_posts_for_the_same_sequence_cannot_both_land(self, client, store, env, monkeypatch):
+        import threading
+        import time
+
+        account = store.upsert_account(email="a@b.de", tier="supplier")
+        key = store.issue_key(account.id)
+        record = _signed_record(env / "local-feed.jsonl").to_dict()
+
+        # A slow disk: the read-check-append window is wide enough that, without
+        # a lock, every request reads an empty feed before any of them appends.
+        real_read = AdvisoryFeed.read
+
+        def slow_read(self):
+            result = real_read(self)
+            time.sleep(0.05)
+            return result
+
+        monkeypatch.setattr(AdvisoryFeed, "read", slow_read)
+
+        workers = 8
+        barrier = threading.Barrier(workers)
+        statuses: list[int] = []
+
+        def post() -> None:
+            barrier.wait()
+            statuses.append(client.post(
+                "/v1/supplier/advisory", json=record, headers={"X-API-Key": key},
+            ).status_code)
+
+        threads = [threading.Thread(target=post) for _ in range(workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sorted(statuses) == [201] + [409] * (workers - 1), statuses
+        lines = (env / "supplier-feeds" / f"{account.id}.jsonl").read_text().splitlines()
+        assert len(lines) == 1
+
+    def test_the_library_serialises_appenders_on_one_file(self, env, monkeypatch):
+        import threading
+        import time
+
+        path = env / "lib-feed.jsonl"
+        signing_key = SigningKey.generate()
+        real_read = AdvisoryFeed.read
+
+        def slow_read(self):
+            result = real_read(self)
+            time.sleep(0.03)
+            return result
+
+        monkeypatch.setattr(AdvisoryFeed, "read", slow_read)
+        errors: list[Exception] = []
+
+        def go(n: int) -> None:
+            try:
+                publish(_advisory(f"CTRL-2026-{n:02d}"), IDENTITY, signing_key, AdvisoryFeed(path))
+            except Exception as exc:  # noqa: BLE001 - collected for the assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=go, args=(n,)) for n in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        records = real_read(AdvisoryFeed(path))
+        assert [r.sequence for r in records] == [1, 2, 3, 4, 5, 6]
+        for earlier, later in zip(records, records[1:], strict=False):
+            assert later.previous == earlier.content_hash()
+
+
+class TestPublishedStructure:
+    def _post(self, client, store, body):
+        account = store.upsert_account(email="a@b.de", tier="supplier")
+        key = store.issue_key(account.id)
+        return client.post("/v1/supplier/advisory", json=body, headers={"X-API-Key": key})
+
+    def _body(self, env):
+        return _signed_record(env / "local-feed.jsonl").to_dict()
+
+    def test_an_advisory_that_does_not_parse_is_a_422(self, client, store, env):
+        body = self._body(env)
+        body["advisory"] = {"advisory_id": "X-1", "issued_by": "controlco"}
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "malformed_advisory"
+
+    def test_an_empty_advisory_id_is_a_422(self, client, store, env):
+        body = self._body(env)
+        body["advisory"]["advisory_id"] = ""
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "malformed_advisory"
+
+    def test_an_unparseable_published_at_is_a_422(self, client, store, env):
+        body = self._body(env)
+        body["published_at"] = "last tuesday"
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "malformed_advisory"
+
+    def test_a_signature_that_is_not_base64_is_a_422(self, client, store, env):
+        body = self._body(env)
+        body["signature"] = "not base64 !!!"
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "malformed_signature"
+
+    def test_a_signature_of_the_wrong_length_is_a_422(self, client, store, env):
+        import base64
+
+        body = self._body(env)
+        body["signature"] = base64.b64encode(b"short").decode()
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "malformed_signature"
+
+    def test_a_record_with_structurally_wrong_fields_is_a_422_not_a_500(self, client, store, env):
+        body = self._body(env)
+        body["sequence"] = "one"
+        response = self._post(client, store, body)
+        assert response.status_code == 422
+
+    def test_an_oversized_record_is_a_413(self, client, store, env):
+        body = self._body(env)
+        body["advisory"]["summary"] = "x" * (300 * 1024)
+        response = self._post(client, store, body)
+        assert response.status_code == 413
+        assert response.json()["detail"]["error"] == "advisory_too_large"
+
+    def test_the_endpoint_does_not_claim_to_verify_the_signature(self):
+        from assurance.api.service import app
+
+        op = app.openapi()["paths"]["/v1/supplier/advisory"]["post"]
+        text = (op["summary"] + " " + op.get("description", "")).lower()
+        assert "readers verify" in text
+        assert "does not verify" in text
+
+
+class TestReadHeaders:
+    def test_the_feed_is_served_with_nosniff(self, client, store, env):
+        account = store.upsert_account(email="a@b.de", tier="supplier")
+        key = store.issue_key(account.id)
+        record = _signed_record(env / "local-feed.jsonl")
+        client.post("/v1/supplier/advisory", json=record.to_dict(), headers={"X-API-Key": key})
+        response = client.get(f"/v1/supplier/feed/{account.id}")
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["content-type"].startswith("application/x-ndjson")

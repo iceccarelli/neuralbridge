@@ -27,7 +27,7 @@ from pathlib import Path
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle, verify_bundle
+from assurance.machine.bundle import build_bundle, check_bundle
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.ssm import separation_required
@@ -64,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--role", default="verification engineer")
     ver.add_argument("--ledger", type=Path, default=None,
                      help="append the sealed bundle to this evidence ledger")
+    ver.add_argument("--subject", default="",
+                     help="file the bundle in the ledger under this subject. Give the "
+                          "machine's key (manufacturer/model#serial) for it to count as "
+                          "evidence for that unit; default is product@version")
     ver.add_argument("--out", type=Path, default=None, help="write the bundle here")
     ver.add_argument("--json", action="store_true")
 
@@ -71,6 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("bundle", type=Path)
     chk.add_argument("--envelope", type=Path, default=None)
     chk.add_argument("--trace", type=Path, default=None)
+    chk.add_argument("--limits", type=Path, default=None,
+                     help="the body-region limits table the bundle was verified "
+                          "against, if it used one")
     chk.add_argument("--json", action="store_true")
 
     return p
@@ -115,7 +122,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     bundle = build_bundle(
         envelope, trace,
         actor=Actor(identifier=args.actor, role=args.role, kind="person"),
-        limits=limits, ledger=ledger,
+        limits=limits, ledger=ledger, subject=args.subject,
     )
     if args.out:
         bundle.write(args.out)
@@ -139,16 +146,28 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 def _cmd_check(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope) if args.envelope else None
     trace = Trace.from_json(args.trace) if args.trace else None
-    ok, problems = verify_bundle(args.bundle, envelope=envelope, trace=trace)
+    limits = LimitsTable.from_json(args.limits) if args.limits else None
+    result = check_bundle(args.bundle, envelope=envelope, trace=trace, limits=limits)
     if args.json:
-        print(json.dumps({"ok": ok, "problems": problems}, indent=2))
+        print(json.dumps({"ok": result.ok, "level": result.level,
+                          "reproduced": result.reproduced,
+                          "problems": result.notes}, indent=2))
     else:
-        print(f"{args.bundle}: {'OK' if ok else 'REJECTED'}")
-        for p in problems:
+        if not result.ok:
+            verdict = "REJECTED"
+        elif result.reproduced:
+            verdict = "OK, REPRODUCED from the supplied envelope and trace"
+        else:
+            verdict = ("OK, NOT REPRODUCED: no inconsistency found, but the engine was "
+                       "not re-run on the original envelope and trace")
+        print(f"{args.bundle}: {verdict}")
+        for p in result.notes:
             print(f"  - {p}")
-        if ok and envelope is None:
-            print("  Supply --envelope and --trace to check the claim, not just the seal.")
-    return 0 if ok else 1
+        if result.ok and not result.reproduced:
+            print("  A seal is not a signature. Supply --envelope and --trace (and "
+                  "--limits if the bundle used a table) to check the claim, not just "
+                  "the seal.")
+    return 0 if result.ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except AssuranceError as exc:
+    except (AssuranceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
