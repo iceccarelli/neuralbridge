@@ -16,13 +16,16 @@ counts", shared with the runner's own staleness test.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from assurance.change.service import INCOMPLETE_COLLECTION_MARK
 from assurance.change.store import CaseStore
 from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import MANIFEST_KIND
 
 __all__ = [
@@ -35,6 +38,7 @@ __all__ = [
     "MANIFEST_STALE",
     "NOT_A_LOOK_STATUSES",
     "fleet_observations",
+    "last_complete_manifest",
     "observation_succeeded",
     "observed_at_of",
 ]
@@ -58,6 +62,20 @@ FAILED_STATUSES = frozenset({"uncollectable", "incomplete"})
 MANIFEST_STALE = "manifest_stale"
 #: Every recorded status that is not a successful look of the machine.
 NOT_A_LOOK_STATUSES = FAILED_STATUSES | {MANIFEST_STALE}
+
+
+def last_complete_manifest(history: Sequence[SafetyManifest]) -> SafetyManifest | None:
+    """The newest manifest that is a whole configuration, oldest-first ``history``.
+
+    A manifest the watch marked ``[collection incomplete: ...]`` lacks items its
+    plan names. It is a partial look, not a configuration the machine was in, so it
+    can never be the baseline a later look is compared with: judged against one, a
+    machine that merely came back whole reads as ``ITM-... added``.
+    """
+    for manifest in reversed(history):
+        if INCOMPLETE_COLLECTION_MARK not in manifest.notes:
+            return manifest
+    return None
 
 
 def observation_succeeded(body: dict[str, Any]) -> bool:

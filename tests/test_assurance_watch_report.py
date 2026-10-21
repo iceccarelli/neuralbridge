@@ -975,6 +975,27 @@ class TestAManifestThatIsNotALookIsNotAnObservation:
         body = [e.evidence().body for e in ledger.entries(kind="watch.observation")][-1]
         assert body["status"] == "incomplete" and body["complete"] is False
 
+    def test_a_partial_manifest_in_the_ledger_is_never_the_baseline(self, env, tmp_path):
+        from dataclasses import replace
+
+        from assurance.machinery.manifest import SafetyManifest
+
+        ledger = EvidenceLedger(tmp_path / "partial.db")
+        actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
+        t1, t2 = now() - timedelta(hours=3), now() - timedelta(minutes=2)
+        first = ingest_report(ledger, _plain(report(good(make_manifest(tmp_path), at=t1),
+                                                    started=t1)), actor=actor)
+        assert first.results[0].recorded_status == "first_seen"
+        whole = SafetyManifest.from_dict(make_manifest(tmp_path))
+        partial = replace(whole, manifest_id="PARTIAL", items=whole.items[:-1],
+                          notes="[collection incomplete: x not collected]")
+        record_manifest(ledger, partial)
+        res = ingest_report(ledger, _plain(report(
+            good(make_manifest(tmp_path), at=t2), started=t2, watch_id="W2")),
+            actor=actor).results[0]
+        assert (res.recorded_status, res.counts_as_observation) == ("observed", True)
+        assert res.case_id == ""
+
     def test_the_library_function_records_the_same_thing(self, env, tmp_path):
         ledger = EvidenceLedger(tmp_path / "nonlook.db")
         actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
