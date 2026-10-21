@@ -58,7 +58,7 @@ a pricing page than almost anywhere else on the site.
 The tokens above are wired into the components most people interact with
 first — buttons, tiles, solution cards, pricing cards, and the global focus
 ring. Older, lower-traffic parts of `globals.css` (mega-nav internals,
-search overlay, cookie consent, feedback widget) still carry hand-rolled
+search overlay, cookie consent) still carry hand-rolled
 `border-radius`/`box-shadow` values from earlier stages. Migrating those to
 the tokens is real, low-risk follow-up work — do it opportunistically
 whenever you're already touching one of those selectors, rather than as a

@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import Header from './Header';
 import CookieConsent from './components/CookieConsent';
 import CookiePreferencesLink from './components/CookiePreferencesLink';
-import Feedback from './components/Feedback';
 import { DOCS, REPO } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
 import './globals.css';
@@ -14,17 +13,17 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: 'Industrial Autonomous Assurance | CRA Article 14 & Machinery Regulation evidence',
   description:
-    'Evidence infrastructure for machines whose software can hurt someone. A hash-chained record of what is on each machine, what was verified, and when — built for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230). Free Validator tier, paid Register and Cell plans.',
+    'Evidence infrastructure for machines whose software can hurt someone. A hash-chained record of what is on each machine, which checks were run against it, and when — built for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230). Free Validator tier, paid Register and Cell plans.',
   keywords: [
     'CRA Article 14',
-    'Cyber Resilience Act compliance',
+    'Cyber Resilience Act evidence',
     'Machinery Regulation 2023/1230',
     'Annex III 1.1.9',
     'ISO/TS 15066',
     'Declaration of Conformity evidence',
     'hash-chained ledger',
     'industrial safety attestation',
-    'robot cell compliance',
+    'robot cell safety evidence',
     'safety software manifest',
   ],
   authors: [{ name: 'Vincenzo Grimaldi', url: 'https://github.com/iceccarelli' }],
@@ -33,7 +32,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/', languages: { 'x-default': '/' } },
   openGraph: {
     title: 'Industrial Autonomous Assurance',
-    description: 'A hash-chained record of what is on each machine, what was verified, and when. CRA Art. 14 and Machinery Regulation Annex III 1.1.9, satisfied from evidence instead of a spreadsheet.',
+    description: 'A hash-chained record of what is on each machine, which checks were run against it, and when. Evidence for CRA Art. 14 and Machinery Regulation Annex III 1.1.9 processes, kept in a record instead of a spreadsheet.',
     url: `${SITE_URL}/`,
     siteName: 'Industrial Autonomous Assurance',
     locale: 'en_GB',
@@ -42,7 +41,7 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: 'Industrial Autonomous Assurance',
-    description: 'Evidence infrastructure for machines whose software can hurt someone. Free to verify, always.',
+    description: 'Evidence infrastructure for machines whose software can hurt someone. Re-checking someone else’s evidence is free.',
   },
 };
 
@@ -122,7 +121,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
           <section className="footer-cta">
             <div className="shell footer-cta-inner">
-              <span>Verify one Declaration for free — no account, no upload.</span>
+              <span>Re-check a Declaration, evidence bundle or passport for free — no account.</span>
               <a className="btn btn-primary" href="/#pricing">Start free</a>
             </div>
           </section>
@@ -132,8 +131,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h4>Industrial Autonomous Assurance</h4>
                 <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
-                  Evidence infrastructure for machines whose software can hurt someone. Verification is free at
-                  every tier, always.
+                  Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
+                  else&apos;s evidence is free at every tier.
                 </p>
               </div>
 
@@ -143,6 +142,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/#products">Validator (free)</a></li>
                   <li><a href="/#pricing">Register — &euro;390/mo</a></li>
                   <li><a href="/#pricing">Cell — &euro;1,290/mo</a></li>
+                  <li><a href="/assurance">Workspace (your key)</a></li>
                   <li><a href={`${REPO}/tree/main/src/assurance/api`} target="_blank" rel="noreferrer">Assurance API</a></li>
                 </ul>
               </div>
@@ -157,7 +157,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Compliance &amp; trust</h4>
+                <h4>Regulation &amp; evidence</h4>
                 <ul>
                   <li><a href="/docs">CRA Article 14</a></li>
                   <li><a href="/docs/assurance/machinery">Machinery Reg. Annex III 1.1.9</a></li>
@@ -203,7 +203,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         </div>
 
         <CookieConsent />
-        <Feedback />
 
         <script
           type="application/ld+json"

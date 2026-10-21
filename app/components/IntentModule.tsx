@@ -14,9 +14,9 @@ interface Intent {
   source: string;
 }
 
-// Every "output" block below is a real terminal capture from this
-// session's own verification of the shipped engines — not a mockup, not
-// stock content. Re-run the command in `source` yourself to reproduce it.
+// Each "output" block is what the shipped command printed when run on this
+// repository's synthetic example files (examples/), pasted here. It can drift
+// as the code changes: re-run the command in `source` to reproduce it.
 const INTENTS: Intent[] = [
   {
     key: 'manufacturing',
@@ -93,7 +93,7 @@ MCP tool listing / invocation                 Supported
 Small set of working adapters (PostgreSQL,
 REST)                                         Supported
 Broad adapter ecosystem                       Evolving
-Full enterprise compliance posture            Evolving`,
+Enterprise certifications (none held)       Not claimed`,
   },
 ];
 
