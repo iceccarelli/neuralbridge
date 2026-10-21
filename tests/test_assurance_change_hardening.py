@@ -17,11 +17,13 @@ from assurance.change import (
     CaseStore,
     advance,
     decide,
+    reconstruct_case,
     resolve_decision,
     resume,
     reverify,
     waive_reverification,
 )
+from assurance.change.service import _open_or_update
 from assurance.change.store import ChainBrokenError
 from assurance.evidence import chain_cache
 from assurance.evidence.ledger import EvidenceLedger
@@ -34,6 +36,7 @@ from assurance.machine.envelope import (
     Workspace,
 )
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
+from assurance.machinery.manifest import MachineIdentity
 from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
@@ -44,6 +47,8 @@ from .test_assurance_change import (
     MACHINE,
     REVIEWER,
     drive,
+    item,
+    manifest,
 )
 
 
@@ -194,6 +199,152 @@ def seal_bundle(ledger, *, provenance, when=LATER):
                                      mode=OperatingMode.SSM, separation=2200.0)
                               for i in range(10)))
     return build_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
+
+
+# =====================================================================
+# 4. The drift route's baseline is the ledger's; a fresh look cannot shrink work
+# =====================================================================
+
+@pytest.fixture
+def cell_api(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from assurance.api import deps
+    from assurance.api.service import create_app
+
+    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "l.db"))
+    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "a.db"))
+    monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
+    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
+    deps._register_for.cache_clear()
+    deps._accounts_for.cache_clear()
+    with TestClient(create_app()) as c:
+        accounts = deps.get_accounts()
+        account = accounts.upsert_account(email="cell-baseline@example.de", tier="cell")
+        yield c, {"X-API-Key": accounts.issue_key(account.id)}
+    deps._register_for.cache_clear()
+    deps._accounts_for.cache_clear()
+
+
+def seal(client, headers, m):
+    r = client.post("/v1/machinery/manifest", json={"manifest": m.to_dict()}, headers=headers)
+    assert r.status_code == 200, r.text
+
+
+def assess(client, headers, baseline, observed):
+    r = client.post("/v1/change/assess/drift", headers=headers, json={
+        "baseline": baseline.to_dict(), "observed": observed.to_dict()})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+class TestAssessDriftUsesTheLedgersBaseline:
+    A = manifest(manifest_id="BASE")
+    B = manifest(item(content_hash="d" * 64), manifest_id="NOW")
+
+    def test_a_sealed_baseline_wins_over_the_one_in_the_body(self, cell_api):
+        client, headers = cell_api
+        seal(client, headers, self.A)
+        # A caller who says "the baseline is what I observed" would suppress the case.
+        body = assess(client, headers, baseline=self.B, observed=self.B)
+        assert body["opened"] is True
+        assert body["case"]["before_hash"] == self.A.configuration_hash()
+        assert body["baseline_source"] == "ledger"
+        assert body["baseline_configuration"] == self.A.configuration_hash()
+        assert body["request_baseline_ignored"] is True
+
+    def test_a_made_up_baseline_does_not_shape_the_changed_items(self, cell_api):
+        client, headers = cell_api
+        seal(client, headers, self.A)
+        invented = manifest(item(content_hash="e" * 64), manifest_id="INVENTED")
+        body = assess(client, headers, baseline=invented, observed=self.B)
+        assert body["case"]["before_hash"] == self.A.configuration_hash()
+
+    def test_with_nothing_sealed_the_body_baseline_is_used_and_the_response_says_so(
+            self, cell_api):
+        client, headers = cell_api
+        body = assess(client, headers, baseline=self.A, observed=self.B)
+        assert body["opened"] is True
+        assert body["case"]["before_hash"] == self.A.configuration_hash()
+        assert body["baseline_source"] == "request"
+        assert body["request_baseline_ignored"] is False
+
+    def test_the_observed_configuration_is_never_its_own_baseline(self, cell_api):
+        client, headers = cell_api
+        seal(client, headers, self.A)
+        seal(client, headers, self.B)            # a watch already sealed what it saw
+        body = assess(client, headers, baseline=self.B, observed=self.B)
+        assert body["opened"] is True
+        assert body["case"]["before_hash"] == self.A.configuration_hash()
+        assert body["baseline_source"] == "ledger"
+
+    def test_another_machines_manifest_is_not_this_machines_baseline(self, cell_api):
+        client, headers = cell_api
+        other = MachineIdentity(manufacturer="Grimaldi", model="AR-7", serial="0999")
+        seal(client, headers, manifest(manifest_id="OTHER", machine=other))
+        body = assess(client, headers, baseline=self.A, observed=self.B)
+        assert body["baseline_source"] == "request"
+
+
+class TestAFreshLookCannotShrinkTheWorkList:
+    def _in_review_with_everything(self, ledger, store):
+        case, _ = drive(ledger, store, CaseStatus.IN_REVIEW)
+        return store.update(
+            replace(case, required_actions=(*case.required_actions, "Do the thing."),
+                    human_decisions_required=("Is this in scope?",)),
+            actor=BOT, detail="seeded")
+
+    def test_a_look_that_names_less_work_leaves_the_outstanding_work_alone(
+            self, ledger, store):
+        case = self._in_review_with_everything(ledger, store)
+        assert case.required_reverifications
+        shrunk = replace(case, status=CaseStatus.OPEN, required_reverifications=(),
+                         required_actions=(), human_decisions_required=())
+        result = _open_or_update(store, shrunk, actor=BOT, detail="a later look")
+        assert result.required_reverifications == case.required_reverifications
+        assert result.required_actions == case.required_actions
+        assert result.human_decisions_required == case.human_decisions_required
+        assert reconstruct_case(ledger, case.case_id).ok
+
+    def test_work_a_later_look_adds_is_still_added(self, ledger, store):
+        case = self._in_review_with_everything(ledger, store)
+        wider = replace(case, status=CaseStatus.OPEN,
+                        required_reverifications=(*case.required_reverifications, "SF-09"),
+                        required_actions=(*case.required_actions, "Also do this."),
+                        human_decisions_required=(*case.human_decisions_required, "New?"))
+        result = _open_or_update(store, wider, actor=BOT, detail="a later look")
+        assert result.required_reverifications == (*case.required_reverifications, "SF-09")
+        assert result.required_actions == (*case.required_actions, "Also do this.")
+        assert result.human_decisions_required == (*case.human_decisions_required, "New?")
+
+    def test_an_answered_question_is_not_asked_again(self, ledger, store):
+        case = self._in_review_with_everything(ledger, store)
+        answered = resolve_decision(store, case.case_id, decision="Is this in scope?",
+                                    resolution="yes", actor=REVIEWER)
+        again = replace(answered, status=CaseStatus.OPEN,
+                        human_decisions_required=("Is this in scope?",))
+        result = _open_or_update(store, again, actor=BOT, detail="a later look")
+        assert result.human_decisions_required == ()
+
+    @pytest.mark.parametrize("field", ["required_reverifications", "required_actions",
+                                       "human_decisions_required"])
+    def test_replay_flags_an_update_that_quietly_drops_outstanding_work(
+            self, ledger, store, field):
+        case = self._in_review_with_everything(ledger, store)
+        assert getattr(case, field)
+        store.update(replace(case, **{field: ()}), actor=BOT, detail="forged shrink")
+        replay = reconstruct_case(ledger, case.case_id)
+        assert not replay.ok
+        assert any("removed" in p for p in replay.violations)
+
+    def test_a_persons_waiver_or_answer_before_any_work_still_replays_clean(
+            self, ledger, store):
+        case = self._in_review_with_everything(ledger, store)
+        waive_reverification(store, case.case_id, entry=case.required_reverifications[0],
+                             reason="accepted", actor=REVIEWER)
+        resolve_decision(store, case.case_id, decision="Is this in scope?",
+                         resolution="yes", actor=REVIEWER)
+        assert reconstruct_case(ledger, case.case_id).ok
 
 
 class TestTheCitedBundleMustCoverEveryCheck:

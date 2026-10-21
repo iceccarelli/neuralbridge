@@ -291,8 +291,18 @@ def _merge(
         # Links the case earned itself (a prior closure it follows) survive.
         kept = tuple(r for r in existing.linked_evidence
                      if r.get("note", "").startswith("prior closure by"))
-        return replace(base, human_decisions_required=fresh_decisions,
-                       linked_evidence=_links_union(new.linked_evidence, kept))
+        # The facts are replaced; the work is not. A later look may name more, but
+        # it never names less than what is already outstanding: dropping a
+        # re-verification, an action or a question takes a re-verification or a
+        # person's recorded waiver or answer, not a repeat observation.
+        return replace(
+            base,
+            required_reverifications=_union(existing.required_reverifications,
+                                            new.required_reverifications),
+            required_actions=_union(existing.required_actions, new.required_actions),
+            human_decisions_required=_union(existing.human_decisions_required,
+                                            fresh_decisions),
+            linked_evidence=_links_union(new.linked_evidence, kept))
 
     items = list(existing.changed_items)
     known = {_key(i) for i in items}
