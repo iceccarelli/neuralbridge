@@ -247,18 +247,21 @@ class AccountStore:
         # sqlite3's context manager commits; it does not close.
         db = self._connect()
         try:
-            retry_locked(lambda: db.executescript(_SCHEMA))
-            retry_locked(lambda: db.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(ACCOUNTS_SCHEMA_VERSION),),
-            ))
+            retry_locked(lambda: db.executescript(_SCHEMA), db=db)
             row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if row is None:
+                retry_locked(lambda: db.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(ACCOUNTS_SCHEMA_VERSION),),
+                ), db=db)
+                row = db.execute(
+                    "SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
                 raise RuntimeError(
                     f"{self.path} was written by accounts schema {row[0]}; this build "
                     f"speaks {ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
                 )
-            retry_locked(lambda: self._migrate(db))
+            retry_locked(lambda: self._migrate(db), db=db)
         finally:
             db.close()
 
@@ -276,6 +279,11 @@ class AccountStore:
             ("last_event_at", "INTEGER NOT NULL DEFAULT 0"),
             ("past_due_since", "INTEGER NOT NULL DEFAULT 0"),
         )
+        # Nothing to add (the normal case): no write lock, so opening an
+        # up-to-date database never queues behind a writer.
+        if all(name in {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+               for name, _ in additions):
+            return
         db.execute("BEGIN IMMEDIATE")
         try:
             columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}

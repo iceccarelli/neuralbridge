@@ -122,16 +122,22 @@ class EvidenceLedger:
         db = self._connect()
         try:
             # Several first opens can race (a new tenant's first parallel
-            # requests). The schema script is idempotent, and the version row is
-            # written with INSERT OR IGNORE, so whoever loses simply reads the
-            # winner's row. Busy errors wait; they are not failures.
-            retry_locked(lambda: db.executescript(_SCHEMA))
-            retry_locked(lambda: db.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(LEDGER_SCHEMA_VERSION),),
-            ))
+            # requests). The schema script is idempotent and takes no write lock
+            # on an existing file. The version row is READ first: a plain open of
+            # an existing ledger must not queue behind a writer. Only when it is
+            # missing is it written, with INSERT OR IGNORE so the loser of a race
+            # reads the winner's row. Busy errors wait (boundedly); they are not
+            # failures.
+            retry_locked(lambda: db.executescript(_SCHEMA), db=db)
             row = db.execute(
                 "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            if row is None:
+                retry_locked(lambda: db.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(LEDGER_SCHEMA_VERSION),),
+                ), db=db)
+                row = db.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
             if int(row[0]) != LEDGER_SCHEMA_VERSION:
                 raise LedgerIntegrityError(
                     f"{self.path} was written by ledger schema {row[0]}, this build speaks "
