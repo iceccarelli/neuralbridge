@@ -83,7 +83,7 @@ const APPLICATIONS: Application[] = [
       { method: 'POST', path: '/v1/machine/bundle/check' },
       { method: 'POST', path: '/v1/ledger/attest/verify' },
     ],
-    plan: 'Free, forever',
+    plan: 'Free (not metered in code)',
     href: '/solutions/insurer-auditor',
   },
 ];

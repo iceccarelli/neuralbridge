@@ -94,7 +94,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Watch',
-    body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
+    body: 'Scheduled drift checks. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved". Runs in your kit or cron; the hosted API does not run it.',
     href: `/docs/assurance/watch`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-watch',
@@ -121,7 +121,7 @@ const products = [
     badge: 'API',
     badgeClass: 'source',
     name: 'Assurance API',
-    body: 'FastAPI surface for billing and entitlements. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
+    body: 'FastAPI surface: plans and entitlements, the Article 14 register, machine verification, fleet and change assurance, Watch reports and hosted supplier feeds. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
     href: `${SRC}/api`,
     cta: 'View source',
     imageKey: 'card-api-assurance',
@@ -136,7 +136,7 @@ const platformStatus = [
   { area: 'Basic audit trail (in memory by default; cleared on restart)', status: 'Evolving' },
   { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
   { area: 'Broad adapter ecosystem', status: 'Evolving' },
-  { area: 'Full enterprise compliance posture', status: 'Evolving' },
+  { area: 'Enterprise certifications and compliance attestations (none held)', status: 'Not claimed' },
 ];
 
 export default function IndustrialAutonomousAssuranceSite() {
@@ -147,11 +147,12 @@ export default function IndustrialAutonomousAssuranceSite() {
         <div className="shell hero-grid">
           <div>
             <span className="kicker">Evidence infrastructure for machines whose software can hurt someone</span>
-            <h1>A hash-chained record of what is on each machine, what was verified, and when.</h1>
+            <h1>A hash-chained record of what is on each machine, which checks were run against it, and when.</h1>
             <p className="hero-lead">
               CRA Article 14 gives you 24 hours to file after an actively exploited vulnerability. Machinery
-              Regulation Annex III 1.1.9 requires you to identify safety-relevant software and record evidence of
-              intervention. Neither is satisfiable from a spreadsheet. This is built from the record instead.
+              Regulation Annex III 1.1.9 requires the machine to identify safety-relevant software and record
+              evidence of intervention. Software does not satisfy either for you. What a hash-chained record can do
+              is let you evidence your own process, and show a reviewer which records stopped describing the machine.
             </p>
             <div className="hero-actions">
               <a className="btn btn-primary" href="#advisory-check">A change or advisory just landed — check it free</a>
@@ -273,8 +274,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Start here</span>
-            <h2>Find your proof in one click.</h2>
-            <p>Every answer below is a real terminal capture from this exact codebase &mdash; not a mockup.</p>
+            <h2>Find your answer in one click.</h2>
+            <p>
+              Each output below is what the shipped command printed on this repository&apos;s synthetic example
+              files (machine names and hashes are fixtures, not a customer&apos;s). Re-run the command shown to
+              reproduce it.
+            </p>
           </div>
           <IntentModule />
         </div>
@@ -382,7 +387,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Pricing</span>
-            <h2>Three tiers. Verification is free at every one, always.</h2>
+            <h2>Three tiers. Re-checking someone else&apos;s evidence is free at every one.</h2>
             <p>
               Assurance tiers are computed from the weakest input, never passed in. If it is not gated in code, it is
               not on this page — <code>GET /v1/plans</code> returns this same table, generated from the
@@ -559,8 +564,11 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       <section className="final-cta" id="connect">
         <div className="shell final-cta-inner">
           <div>
-            <h2>Verify one Declaration for free. See what your paperwork stopped describing.</h2>
-            <p>No account, no upload, no procurement cycle to start. The Validator tier runs on your machine today.</p>
+            <h2>Re-check one Declaration for free. See what your paperwork stopped describing.</h2>
+            <p>
+              The free checks need no account. The offline kit needs no account, key or upload and opens no sockets.
+              The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.
+            </p>
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href={QUICKSTART}>

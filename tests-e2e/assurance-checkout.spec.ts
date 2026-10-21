@@ -64,7 +64,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     await expect(page.getByLabel('API key')).toHaveValue(key);
     // A brand-new account: the workspace loads with its key and says honestly that nothing is enrolled.
     await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('p.playground-error')).toHaveCount(0);
+    await expect(page.locator('.aw-alert')).toHaveCount(0);
     await expect(page.locator('section#aw-plan').getByTestId('plan-name')).toContainText(me.plan.name);
 
     // The key was handed over once: the same session cannot be collected again.
@@ -112,7 +112,8 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     await page.goto(`/checkout/success?session_id=${sid}`);
     const msg = page.getByTestId('checkout-nokey');
     await expect(msg).toBeVisible({ timeout: 60_000 });
-    await expect(msg).toContainText(/already collected|shown once/i);
+    await expect(msg).toContainText(/already collected/i);
+    await expect(msg).toContainText(/shown once/i);
     await expect(msg).toContainText(/webhook/i);
     await expect(msg).toContainText(sid);
     await expect(page.getByTestId('issued-key')).toHaveCount(0);

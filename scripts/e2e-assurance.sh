@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 WORK="${WORK:-$(mktemp -d)}"
 API_PORT="${API_PORT:-8001}"; WEB_PORT="${WEB_PORT:-3000}"
-export ASSURANCE_LEDGER="$WORK/operator.db" ASSURANCE_ACCOUNTS="$WORK/accounts.db"
+export ASSURANCE_LEDGER="$WORK/operator.db" ASSURANCE_ACCOUNTS="$WORK/accounts.db" ASSURANCE_SUPPLIER_FEEDS="$WORK/supplier-feeds"
 export ASSURANCE_API_KEYS="$(python -c 'import secrets;print(secrets.token_hex(16))')"
 export ASSURANCE_ALLOWED_ORIGINS="http://127.0.0.1:$WEB_PORT,http://localhost:$WEB_PORT"
 export NEXT_PUBLIC_ASSURANCE_API_URL="http://127.0.0.1:$API_PORT"
@@ -32,7 +32,8 @@ done
 # Account E's fleet arrives through the real `assurance watch push`, over HTTP.
 PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work" --report "http://127.0.0.1:$API_PORT"
 # Workspace, advisories, checkout hand-off, the API client's outcomes, and the site's internal links.
-PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test \
+# One worker: the specs share one API, one set of seeded accounts and one dev server.
+PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test --workers=1 \
   tests-e2e/assurance-workspace.spec.ts tests-e2e/assurance-advisories.spec.ts \
-  tests-e2e/assurance-checkout.spec.ts tests-e2e/assurance-outcomes.spec.ts \
+  tests-e2e/assurance-checkout.spec.ts tests-e2e/assurance-outcomes.spec.ts tests-e2e/assurance-lifecycle.spec.ts \
   tests-e2e/site-links.spec.ts "$@"

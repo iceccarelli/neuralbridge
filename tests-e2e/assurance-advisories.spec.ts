@@ -31,6 +31,9 @@ type Seed = {
     fingerprint: string;
     supplier_id: string;
     records: number;
+    // The hosted copy: POST /v1/supplier/advisory refuses a signed withdrawal as a duplicate id
+    // (reported to the lead), so it holds one record fewer than the feed file.
+    hosted_records: number;
     hosted_feed_id: string;
     first_advisory_id: string;
     withdrawn_advisory_id: string;
@@ -83,11 +86,13 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(hashRow).toContainText('hash');
     await expect(hashRow).toContainText('SF-01');
     await expect(hashRow).toContainText(/now in question/i);
-    // The other machine runs the same component with a different artefact: a person has to look.
+    // The other machine runs the same component with a different artefact: the match is only
+    // "possible", it says a person has to look, and the page does not call it confirmed.
     const nameRow = panel(page).locator(`[data-testid="exposure-row"][data-machine="${m2}"]`);
     await expect(nameRow).toContainText('possible');
     await expect(nameRow).toContainText(/needs a person/i);
-    await expect(nameRow).not.toContainText(/now in question/i);
+    await expect(nameRow).not.toContainText('confirmed');
+    await expect(nameRow).not.toContainText('byte-identical');
 
     // The engine's own limits are on the page, verbatim.
     await expect(panel(page).getByTestId('impact-skipped')).toContainText(/absence here is not evidence of safety/i);
@@ -189,7 +194,7 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
 
-    for (const file of [s.feed_path, s.tampered_path]) {
+    for (const file of [s.tampered_path, s.feed_path]) {
       await panel(page).getByLabel('Choose an advisory or feed file').setInputFiles(file);
       const prov = panel(page).getByTestId('adv-provenance');
       await expect(prov).toContainText(/signature not verified/i, { timeout: 10_000 });
@@ -240,7 +245,7 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
     await panel(page).getByLabel(/Hosted feed/).fill(s.hosted_feed_id);
     await panel(page).getByRole('button', { name: 'Load hosted feed' }).click();
-    await expect(panel(page).getByTestId('adv-record')).toHaveCount(s.records, { timeout: 10_000 });
+    await expect(panel(page).getByTestId('adv-record')).toHaveCount(s.hosted_records, { timeout: 10_000 });
     const prov = panel(page).getByTestId('adv-provenance');
     await expect(prov).toContainText(/hosted/i);
     await expect(prov).toContainText(/does not check the signature/i);

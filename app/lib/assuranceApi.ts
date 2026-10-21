@@ -69,7 +69,16 @@ export type CaseRow = {
 
 export type CaseQueue = {
   cases: CaseRow[];
-  summary: { open: number; safety_relevant: number; awaiting_reverification: number; ready_to_close: number };
+  summary: {
+    open: number;
+    safety_relevant: number;
+    awaiting_reverification: number;
+    ready_to_close: number;
+    // Counted apart from `open`: a deferral is "not today", not "settled". `degraded` is an
+    // open case that names no machine (for example one raised from an incomplete collection).
+    deferred: number;
+    degraded: number;
+  };
 };
 
 // The case's own history carries what happened and when. WHO is not a field of
@@ -98,6 +107,17 @@ export type CaseDetail = {
   history: HistoryItem[];
   opened_at?: string;
   updated_at?: string;
+  resolved_decisions?: { decision?: string; resolution?: string; by?: string; at?: string }[];
+};
+
+// GET /v1/change/cases/{id}/replay — the case rebuilt from the ledger alone. ok=false is HTTP 200.
+export type Replay = { case_id: string; ok: boolean; entries: number; violations: string[]; case: unknown };
+
+// POST /v1/change/assess/intervention
+export type AssessInterventionResult = {
+  opened: boolean;
+  case: { case_id: string; status: string; history?: HistoryItem[] } | null;
+  intervention_id: string;
 };
 
 // GET /v1/cases/{id}/export — the evidence bundle. `actor` on an entry is the
@@ -211,7 +231,7 @@ export type ApiOutcome<T> =
   // The request never produced an HTTP answer.
   | { kind: 'unreachable'; message: string }
   // Anything else, including 5xx.
-  | { kind: 'error'; status: number; message: string };
+  | { kind: 'error'; status: number; code: string; message: string };
 
 export type Detail = { code: string; message: string; remedy: string; extra: Record<string, unknown> };
 
@@ -323,7 +343,7 @@ export function classify(status: number, body: unknown, retryAfter = ''): ApiOut
     case 429:
       return { kind: 'ratelimited', status, message: d.message, remedy: d.remedy, retryAfter };
     default:
-      return { kind: 'error', status, message: d.message };
+      return { kind: 'error', status, code: d.code, message: d.message };
   }
 }
 
@@ -365,7 +385,7 @@ export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'o
       return {
         kind: outcome.kind,
         heading: 'Not found (404)',
-        text: `${outcome.message || 'Nothing by that id.'} Only your own ledger is searched; an id that belongs to another account reads exactly like one that does not exist.`,
+        text: outcome.message || 'Nothing by that id.',
         remedy: '',
       };
     case 'conflict':
@@ -406,6 +426,15 @@ export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'o
         remedy: 'This is not an empty result: nothing was learned. Check your connection and try Reload.',
       };
     case 'error':
+      if (outcome.code === 'ledger_integrity') {
+        return {
+          kind: outcome.kind,
+          heading: 'THE LEDGER CHAIN DOES NOT VERIFY (500)',
+          text: `The server refused to build this because your ledger's hash chain fails verification: ${outcome.message}`,
+          remedy:
+            'Nothing was exported. Do not rely on anything drawn from this ledger until the break is explained; this is not an empty result.',
+        };
+      }
       return {
         kind: outcome.kind,
         heading: outcome.status >= 500 ? `Server error (${outcome.status})` : `Request failed (${outcome.status})`,
