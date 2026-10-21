@@ -1,6 +1,6 @@
 # NeuralBridge — Development Dependencies
 -r base.txt
-ruff>=0.3.0
+ruff>=0.3.0,<0.18
 mypy>=1.8.0
 types-PyYAML>=6.0.0
 types-PyMySQL>=1.1.0
