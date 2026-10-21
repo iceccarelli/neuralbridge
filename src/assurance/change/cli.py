@@ -13,6 +13,8 @@
     decide             the human decision: close, reject, or defer
     resume             a named person takes a deferred case back up
     replay             rebuild a case from the ledger alone and check every step
+    export             write the case's verifiable evidence bundle (check it with
+                       ``assurance evidence verify``)
 
 A person is someone named with ``--actor``; a command with no ``--actor`` runs
 as automation, and automation can claim, advance and reverify but cannot
@@ -20,8 +22,14 @@ decide, resume or resolve. ``assurance watch run`` already opens and updates
 cases itself; these commands are for the people who work them.
 
 Exit codes: 0 fine, 1 a case needs attention (list/show only) or a transition
-was refused, 2 the command
-could not run — the same convention every other domain in this CLI uses.
+was refused, 2 the command could not run — which includes a case id the ledger
+does not hold, on every verb (the HTTP API answers 404 for the same id). The
+same convention every other domain in this CLI uses.
+
+``list`` prints the work queue — open cases, and a count of deferred ones — and
+exits 1 while any case is open. ``list --json`` prints the document
+``GET /v1/change/cases`` returns (``cases`` and ``summary``), every case or those
+with ``--status``.
 
 Nothing here invents a fact. ``assess-drift`` and ``assess-advisory`` read the
 exact objects :mod:`assurance.machinery.divergence` and
@@ -37,14 +45,15 @@ import json
 import sys
 from pathlib import Path
 
-from assurance.change.model import CaseStatus
+from assurance.change.model import CaseStatus, queue_summary
 from assurance.change.replay import reconstruct_case
 from assurance.change.service import (
+    CaseNotFoundError,
     CaseTransitionError,
     advance,
     assess_advisory,
     assess_drift,
-    assess_intervention,
+    assess_recorded_intervention,
     claim,
     decide,
     resolve_decision,
@@ -52,7 +61,7 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CaseStore
+from assurance.change.store import CASE_KINDS, CaseStore
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
@@ -171,6 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("case_id")
     rp.add_argument("--json", action="store_true")
 
+    ex = verbs.add_parser("export",
+                          help="write one case's verifiable evidence bundle")
+    ledger_arg(ex)
+    ex.add_argument("case_id")
+    ex.add_argument("--out", type=Path, default=None,
+                    help="write the bundle here (default: print it)")
+
     return p
 
 
@@ -219,18 +235,9 @@ def _cmd_assess_advisory(args: argparse.Namespace) -> int:
 
 def _cmd_assess_intervention(args: argparse.Namespace) -> int:
     manifest = _manifest(args.manifest)
-    ledger = EvidenceLedger(args.ledger)
-    key = manifest.machine.key
-    interventions = interventions_from_ledger(ledger, key)
-    chosen = next((i for i in interventions
-                   if i.intervention_id == args.intervention_id), None)
-    if chosen is None:
-        raise AssuranceError(
-            f"no intervention {args.intervention_id!r} is sealed for {key}. "
-            "Record it first with `assurance machinery record-change`.")
-    verifications = VerificationRecord.from_ledger(ledger, subject=key)
-    case = assess_intervention(_store(args.ledger), chosen, manifest, verifications,
-                               interventions, actor=_actor(args.actor, "watch"))
+    chosen, case = assess_recorded_intervention(
+        _store(args.ledger), manifest, args.intervention_id,
+        actor=_actor(args.actor, "watch"))
     if case is None:
         print(f"{chosen.intervention_id} invalidated no verified function: "
               "no case opened.")
@@ -243,20 +250,17 @@ def _cmd_assess_intervention(args: argparse.Namespace) -> int:
 def _cmd_list(args: argparse.Namespace) -> int:
     status = CaseStatus(args.status) if args.status else None
     cases = _store(args.ledger).list(status=status)
-    if args.json:
-        print(json.dumps([c.to_dict() for c in cases], indent=2))
-        return 1 if any(c.is_open for c in cases) else 0
-
+    summary = queue_summary(cases)
     open_cases = [c for c in cases if c.is_open]
-    safety = [c for c in open_cases if c.change_severity == "safety_relevant"]
-    awaiting_reverif = [c for c in open_cases if c.status is CaseStatus.AWAITING_REVERIFICATION]
-    degraded = [c for c in open_cases if not c.machines]
-    ready = [c for c in open_cases if c.status is CaseStatus.READY_TO_CLOSE]
-    deferred = [c for c in cases if c.status is CaseStatus.DEFERRED]
-    print(f"{len(open_cases)} open  {len(safety)} safety-relevant  "
-          f"{len(awaiting_reverif)} awaiting re-verification  "
-          f"{len(degraded)} degraded  {len(ready)} ready for human closure  "
-          f"{len(deferred)} deferred (not closed)")
+    if args.json:
+        # The document GET /v1/change/cases returns.
+        print(json.dumps({"cases": [c.row() for c in cases], "summary": summary}, indent=2))
+        return 1 if open_cases else 0
+
+    print(f"{summary['open']} open  {summary['safety_relevant']} safety-relevant  "
+          f"{summary['awaiting_reverification']} awaiting re-verification  "
+          f"{summary['degraded']} degraded  {summary['ready_to_close']} ready for human "
+          f"closure  {summary['deferred']} deferred (not closed)")
     print()
     header = (f"{'CASE':<20} {'MACHINE':<22} {'STATUS':<24} {'OWNER':<16} "
              f"{'AGE':<5} NEXT ACTION")
@@ -272,8 +276,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     case = _store(args.ledger).get(args.case_id)
     if case is None:
-        print(f"no case {args.case_id!r}.", file=sys.stderr)
-        return 2
+        raise CaseNotFoundError(args.case_id)
     if args.json:
         print(json.dumps(case.to_dict(), indent=2))
     else:
@@ -313,7 +316,7 @@ def _cmd_resolve_decision(args: argparse.Namespace) -> int:
     store = _store(args.ledger)
     case = store.get(args.case_id)
     if case is None:
-        raise CaseTransitionError(f"no case {args.case_id!r}.")
+        raise CaseNotFoundError(args.case_id)
     if not 1 <= args.number <= len(case.human_decisions_required):
         raise CaseTransitionError(
             f"{args.case_id} has {len(case.human_decisions_required)} open human "
@@ -341,11 +344,29 @@ def _cmd_resume(args: argparse.Namespace) -> int:
 
 def _cmd_replay(args: argparse.Namespace) -> int:
     replay = reconstruct_case(EvidenceLedger(args.ledger), args.case_id)
+    if replay.entries == 0:
+        raise CaseNotFoundError(args.case_id)
     if args.json:
         print(json.dumps(replay.to_dict(), indent=2))
     else:
         print(replay.summary())
     return 0 if replay.ok else 1
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    # The ledger refuses to export a chain that does not verify (a
+    # LedgerIntegrityError, an AssuranceError: exit 2, nothing written).
+    bundle = EvidenceLedger(args.ledger).export(subject=args.case_id)
+    if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
+        raise CaseNotFoundError(args.case_id)
+    text = json.dumps(bundle, indent=2, ensure_ascii=False)
+    if args.out:
+        Path(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"exported {len(bundle['entries'])} record(s) of {args.case_id} to {args.out}")
+        print(f"  check it anywhere, offline: assurance evidence verify {args.out}")
+    else:
+        print(text)
+    return 0
 
 
 def _cmd_decide(args: argparse.Namespace) -> int:
@@ -364,10 +385,13 @@ def main(argv: list[str] | None = None) -> int:
         "advance": _cmd_advance, "reverify": _cmd_reverify, "decide": _cmd_decide,
         "resolve-decision": _cmd_resolve_decision, "resume": _cmd_resume,
         "waive-reverification": _cmd_waive,
-        "replay": _cmd_replay,
+        "replay": _cmd_replay, "export": _cmd_export,
     }
     try:
         return handlers[args.command](args)
+    except CaseNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     except CaseTransitionError as exc:
         print(f"finding: {exc}", file=sys.stderr)
         return 1

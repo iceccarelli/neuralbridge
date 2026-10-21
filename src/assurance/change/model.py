@@ -24,6 +24,7 @@ never a table that can be edited in place.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -34,6 +35,7 @@ __all__ = [
     "CaseStatus",
     "ChangeAssuranceCase",
     "TriggerType",
+    "queue_summary",
 ]
 
 
@@ -402,3 +404,23 @@ class ChangeAssuranceCase:
             updated_at=str(d.get("updated_at", "")),
             history=tuple(dict(h) for h in d.get("history", ())),
         )
+
+
+def queue_summary(cases: Sequence[ChangeAssuranceCase]) -> dict[str, int]:
+    """The counts on top of the Active Assurance Cases queue.
+
+    One definition for the API and the command line, so the two cannot count
+    differently. ``open`` is every case a person still has to work (not closed,
+    rejected or deferred); ``deferred`` is counted on its own, because a deferral
+    is "not today", not "settled".
+    """
+    open_cases = [c for c in cases if c.is_open]
+    return {
+        "open": len(open_cases),
+        "safety_relevant": sum(1 for c in open_cases if c.change_severity == "safety_relevant"),
+        "awaiting_reverification": sum(
+            1 for c in open_cases if c.status is CaseStatus.AWAITING_REVERIFICATION),
+        "ready_to_close": sum(1 for c in open_cases if c.status is CaseStatus.READY_TO_CLOSE),
+        "degraded": sum(1 for c in open_cases if not c.machines),
+        "deferred": sum(1 for c in cases if c.status is CaseStatus.DEFERRED),
+    }

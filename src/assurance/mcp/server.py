@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -68,14 +69,26 @@ _NOT_CONFIGURED = {
 }
 
 
-async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+def _case_path(case_id: str, suffix: str = "") -> str:
+    """``/v1/change/cases/{case_id}{suffix}`` with the id as ONE path segment.
+
+    An agent chooses ``case_id``. Percent-encoding it means a value such as
+    ``x/resume`` or ``x?`` can only ever name a (nonexistent) case; it can never
+    steer the call onto another route.
+    """
+    return f"/v1/change/cases/{quote(case_id, safe='')}{suffix}"
+
+
+async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = None,
+                params: dict[str, str] | None = None) -> dict[str, Any]:
     base = _api_url()
     if base is None:
         return dict(_NOT_CONFIGURED)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.request(method, f"{base}{path}", headers=_headers(), json=json_body)
+            response = await client.request(method, f"{base}{path}", headers=_headers(),
+                                            json=json_body, params=params)
     except httpx.RequestError as exc:
         return {
             "error": "could_not_reach_api",
@@ -149,8 +162,7 @@ async def change_cases(status: str = "") -> dict[str, Any]:
         status: optional filter — one of open, in_review, awaiting_action,
             awaiting_reverification, ready_to_close, closed, rejected, deferred.
     """
-    path = "/v1/change/cases" + (f"?status={status}" if status else "")
-    return await _call("GET", path)
+    return await _call("GET", "/v1/change/cases", params={"status": status} if status else None)
 
 
 @mcp.tool()
@@ -161,51 +173,66 @@ async def change_case(case_id: str) -> dict[str, Any]:
 
     Cell-tier only.
     """
-    return await _call("GET", f"/v1/change/cases/{case_id}")
+    return await _call("GET", _case_path(case_id))
+
+
+@mcp.tool()
+async def change_export(case_id: str) -> dict[str, Any]:
+    """GET /v1/change/cases/{case_id}/export — the case's verifiable evidence bundle:
+    every ledger entry of the case, hash-chained. Read-only. Cell-tier only.
+
+    The ``body`` is what ``assurance evidence verify`` checks offline. It proves the
+    bundle is internally consistent; it does not prove it is the operator's ledger.
+    """
+    return await _call("GET", _case_path(case_id, "/export"))
 
 
 # Write parity for the change queue — claim, advance, reverify. Deliberately NOT
-# `decide`: closing, rejecting, deferring, resuming and resolving a case are
-# decisions only a named person may make, and this server is the surface an
-# agent drives. An agent can read the queue, take a case up, move it to the
-# next stop its own required work names and submit a re-verification for the
-# engine to judge; it cannot decide. Those stay on the CLI and the HTTP API.
+# `decide`, `resume`, `resolve-decision` or `waive-reverification`: closing,
+# rejecting, deferring, resuming a case, answering its open human question and
+# waiving a re-verification are decisions only a named person may make, and this
+# server is the surface an agent drives. An agent can read the queue, take a case
+# up, move it to the next stop its own required work names and submit a
+# re-verification for the engine to judge; it cannot decide. Those stay on the
+# CLI and the HTTP API. tests/test_interfaces_mcp.py proves it from the outside.
 
 @mcp.tool()
-async def change_claim(case_id: str, owner: str, actor: str = "") -> dict[str, Any]:
+async def change_claim(case_id: str, owner: str, actor: str) -> dict[str, Any]:
     """POST /v1/change/cases/{case_id}/claim — OPEN -> IN_REVIEW; a named owner takes the case.
 
-    Cell-tier only. A case in any other state is a real 409, and an unknown
-    case id is a 409 too (the read tools return 404 for the same id).
+    Cell-tier only. ``actor`` is the named person this step is taken for; the API
+    refuses a blank one (422). A case in any other state is a real 409, and an
+    unknown case id is a 404, the same as the read tools return for it.
     """
-    return await _call("POST", f"/v1/change/cases/{case_id}/claim",
+    return await _call("POST", _case_path(case_id, "/claim"),
                        json_body={"owner": owner, "actor": actor})
 
 
 @mcp.tool()
-async def change_advance(case_id: str, actor: str = "") -> dict[str, Any]:
+async def change_advance(case_id: str, actor: str) -> dict[str, Any]:
     """POST /v1/change/cases/{case_id}/advance — move to the next stop the case's own
     required work names. It never reaches ready_to_close while a re-verification or a
     human decision is outstanding, and it never marks anything done by itself.
 
-    Cell-tier only.
+    Cell-tier only. ``actor`` is the named person this step is taken for.
     """
-    return await _call("POST", f"/v1/change/cases/{case_id}/advance",
+    return await _call("POST", _case_path(case_id, "/advance"),
                        json_body={"actor": actor})
 
 
 @mcp.tool()
 async def change_reverify(
-    case_id: str, manifest: dict[str, Any], verification_content_hash: str, actor: str = "",
+    case_id: str, manifest: dict[str, Any], verification_content_hash: str, actor: str,
 ) -> dict[str, Any]:
     """POST /v1/change/cases/{case_id}/reverification — submit the machine's current
     manifest and the content hash of a sealed verification bundle; the coverage engine,
     not the caller, decides which functions are current again.
 
     Cell-tier only. There is deliberately no tool here to close, reject, defer or
-    resume a case: those need a named person.
+    resume a case, to answer its open questions or to waive a re-verification: those
+    need a named person, on the CLI or the HTTP API.
     """
-    return await _call("POST", f"/v1/change/cases/{case_id}/reverification",
+    return await _call("POST", _case_path(case_id, "/reverification"),
                        json_body={"manifest": manifest, "actor": actor,
                                   "verification_content_hash": verification_content_hash})
 
