@@ -29,4 +29,6 @@ for i in $(seq 1 60); do
   curl -fs "http://127.0.0.1:$API_PORT/v1/plans" >/dev/null && curl -fs "http://127.0.0.1:$WEB_PORT/assurance" >/dev/null && break
   sleep 2
 done
+# Account E's fleet arrives through the real `assurance watch push`, over HTTP.
+PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work" --report "http://127.0.0.1:$API_PORT"
 PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test tests-e2e/assurance-workspace.spec.ts "$@"
