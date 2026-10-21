@@ -79,7 +79,7 @@ class SeparationBreakdown:
     stopping_basis: str
     #: The closing speed used, and whether it was measured or declared.
     human_speed_mm_s: float
-    human_speed_source: str         # "sensed" | "declared"
+    human_speed_source: str         # "sensed" | "declared" | "default"
     robot_speed_mm_s: float
 
     @property
@@ -134,16 +134,17 @@ def separation_required(
     """Compute S(t0) for one instant.
 
     ``human_speed_mm_s`` is the closing speed the sensing system reported. When
-    it is ``None`` the envelope's declared approach speed is used and the
-    breakdown says so, because a declared 1600 mm/s standing in for a sensed
-    closing speed is an assumption a reviewer is entitled to see.
+    it is ``None`` the envelope's approach speed is used and the breakdown says
+    which kind it is: ``declared`` if the manufacturer stated one, ``default`` if
+    the package's 1600 mm/s was adopted because none was. Either standing in for a
+    sensed closing speed is an assumption a reviewer is entitled to see.
     """
     robot_speed_mm_s = number(robot_speed_mm_s, "robot_speed_mm_s",
                               maximum=SPEED_MAX_MM_S)
 
     if human_speed_mm_s is None:
-        vh = envelope.human_approach_speed_mm_s
-        vh_source = "declared"
+        vh = envelope.approach_speed_mm_s
+        vh_source = "declared" if envelope.approach_speed_declared else "default"
     else:
         vh = number(human_speed_mm_s, "human_speed_mm_s", maximum=SPEED_MAX_MM_S)
         vh_source = "sensed"
