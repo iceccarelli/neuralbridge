@@ -116,7 +116,8 @@ def create_app(**kwargs: Any) -> FastAPI:
         # have succeeded. Found while building the Console guided flow.
         # idempotency-key: a browser client that retries a metered call must be
         # allowed to send it, or the preflight refuses the request outright.
-        allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key"],
+        allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key",
+                       "x-issuer-public-key"],
         allow_credentials=False,
     )
 
