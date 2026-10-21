@@ -147,6 +147,20 @@ def ledger_of(acct) -> EvidenceLedger:
     return EvidenceLedger(deps.tenant_ledger_path(acct.id))
 
 
+def enroll_manifest(acct, base, serial="0412", model=None):
+    """A machine the account already knows: a manifest in its own ledger.
+
+    A failed look is only ever recorded against an enrolled machine, so tests of
+    failures begin from one.
+    """
+    from assurance.machinery.manifest import SafetyManifest
+
+    raw = make_manifest(base, serial)
+    if model:
+        raw["machine"]["model"] = model
+    record_manifest(ledger_of(acct), SafetyManifest.from_dict(raw))
+
+
 def post(client, headers, body):
     return client.post("/v1/watch/report", headers=headers, json=body)
 
@@ -197,9 +211,14 @@ class TestAccess:
         assert r.json()["detail"]["error"] == "request_too_large"
         assert len(ledger_of(acct)) == 0
 
-    def test_a_fleet_of_200_machines_fits_under_the_default_cap(self, client, cell):
+    def test_a_fleet_of_200_machines_fits_under_the_default_cap(self, client, cell, tmp_path):
         acct, h = cell
         t = now() - timedelta(hours=1)
+        from assurance.machinery.manifest import SafetyManifest
+        base = make_manifest(tmp_path, "0000")
+        for n in range(200):
+            raw = {**base, "machine": {**base["machine"], "serial": f"{n:04d}"}}
+            record_manifest(ledger_of(acct), SafetyManifest.from_dict(raw))
         machines = [failed(f"{n:04d}", at=t, detail="could not be collected: no export folder")
                     for n in range(200)]
         raw = json.dumps(report(*machines, max_age_hours=168))
@@ -251,8 +270,9 @@ class TestAccess:
 # =====================================================================
 
 class TestFailureIsExplicit:
-    def test_uncollectable_is_recorded_as_exactly_that(self, client, cell):
+    def test_uncollectable_is_recorded_as_exactly_that(self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0501")
         r = post(client, h, report(failed("0501", at=now() - timedelta(minutes=3))))
         m = r.json()["machines"][0]
         assert (m["outcome"], m["recorded_status"]) == ("recorded", "uncollectable")
@@ -266,8 +286,9 @@ class TestFailureIsExplicit:
         assert row["stale"] is True and row["stale_reason"] == "never_successfully_observed"
         assert row["consecutive_failed_attempts"] == 1
 
-    def test_incomplete_is_recorded_as_incomplete_and_is_not_a_look(self, client, cell):
+    def test_incomplete_is_recorded_as_incomplete_and_is_not_a_look(self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0501")
         post(client, h, report(failed("0501", at=now() - timedelta(minutes=3), status="incomplete")))
         row = machine_row(client, h, KEY_0501)
         assert row["last_attempt_status"] == "incomplete"
@@ -306,6 +327,7 @@ class TestFailureIsExplicit:
 
     def test_consecutive_failures_count_and_a_success_resets_them(self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
         for hours in (50, 40, 30):
             post(client, h, report(failed("0412", at=now() - timedelta(hours=hours))))
         assert machine_row(client, h, KEY_0412)["consecutive_failed_attempts"] == 3
@@ -411,8 +433,8 @@ class TestStale:
                                good(make_manifest(tmp_path, "0501"), at=now() - timedelta(hours=10)),
                                started=t, max_age_hours=24))
         data = observations(client, h)
-        assert data["cadence_hours"] == 24 and data["cadence_declared"] is True
         rows = {m["machine"]: m for m in data["machines"]}
+        assert rows[KEY_0412]["cadence_hours"] == 24 and rows[KEY_0412]["cadence_declared"] is True
         assert rows[KEY_0412]["stale"] is True
         assert rows[KEY_0412]["age_hours"] == pytest.approx(30, abs=0.1)
         assert rows[KEY_0501]["stale"] is False and rows[KEY_0501]["stale_reason"] == ""
@@ -423,17 +445,21 @@ class TestStale:
         post(client, h, report(good(make_manifest(tmp_path, "0412"), at=now() - timedelta(hours=100))))
         post(client, h, report(good(make_manifest(tmp_path, "0501"), at=now() - timedelta(hours=200))))
         data = observations(client, h)
-        assert data["cadence_hours"] == 168 and data["cadence_declared"] is False
+        assert data["default_cadence_hours"] == 168
         rows = {m["machine"]: m for m in data["machines"]}
+        assert all(r["cadence_hours"] == 168 and r["cadence_declared"] is False for r in rows.values())
         assert rows[KEY_0412]["stale"] is False and rows[KEY_0501]["stale"] is True
 
-    def test_an_older_report_cannot_move_the_declared_cadence(self, client, cell, tmp_path):
+    def test_a_late_older_report_cannot_move_a_machines_cadence(self, client, cell, tmp_path):
         acct, h = cell
         new = now() - timedelta(hours=2)
-        post(client, h, report(failed("0412", at=new), started=new, max_age_hours=24))
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=new), started=new,
+                               max_age_hours=24))
         old = now() - timedelta(days=3)
-        post(client, h, report(failed("0501", at=old), started=old, max_age_hours=720))
-        assert observations(client, h)["cadence_hours"] == 24
+        late = post(client, h, report(good(make_manifest(tmp_path, "0412"), at=old), started=old,
+                                      max_age_hours=720)).json()
+        assert late["machines"][0]["reason"] == "superseded_by_newer_observation"
+        assert machine_row(client, h, KEY_0412)["cadence_hours"] == 24
 
     def test_an_enrolled_machine_nobody_ever_reported_is_stale_and_says_so(
             self, client, cell, tmp_path):
@@ -542,7 +568,8 @@ class TestRetryAndOrder:
             self, client, cell, tmp_path):
         acct, h = cell
         t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
-        post(client, h, report(good(make_manifest(tmp_path), at=t1), started=t1))
+        post(client, h, report(good(make_manifest(tmp_path), at=t1),
+                               good(make_manifest(tmp_path, "0501"), at=t1), started=t1))
         moved = report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2, status="changed"),
                        failed("0501", at=t2), started=t2, max_age_hours=100)
         first = post(client, h, moved).json()
@@ -563,6 +590,7 @@ class TestRetryAndOrder:
     def test_a_retry_that_spells_the_same_instant_differently_is_still_a_retry(
             self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
         t = now() - timedelta(hours=2)
         entry = failed("0412", at=t)
         post(client, h, report(entry, started=t))
@@ -587,6 +615,7 @@ class TestRetryAndOrder:
 
     def test_a_different_observation_at_a_recorded_instant_conflicts(self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
         t = now() - timedelta(hours=2)
         post(client, h, report(failed("0412", at=t, detail="no folder")))
         m = post(client, h, report(failed("0412", at=t, detail="a different story")))\
@@ -641,7 +670,7 @@ class TestRetryAndOrder:
         ledger = EvidenceLedger(tmp_path / "race.db")
         actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
         body = _plain(report(good(make_manifest(tmp_path), at=now() - timedelta(hours=1)),
-                             failed("0501", at=now() - timedelta(hours=1))))
+                             good(make_manifest(tmp_path, "0501"), at=now() - timedelta(hours=1))))
         results = []
 
         def go():
@@ -676,7 +705,8 @@ class TestTime:
 
     def test_a_small_clock_skew_is_tolerated(self, client, cell, tmp_path):
         acct, h = cell
-        entry = failed("0412", at=now() + timedelta(minutes=2))
+        enroll_manifest(acct, tmp_path, "0412")
+        entry = failed("0412", at=now() + timedelta(seconds=30))
         assert post(client, h, report(entry)).json()["machines"][0]["outcome"] == "recorded"
 
     def test_a_manifest_taken_after_its_observation_is_refused(self, client, cell, tmp_path):
@@ -688,6 +718,7 @@ class TestTime:
 
     def test_a_future_entry_does_not_poison_the_rest_of_the_report(self, client, cell, tmp_path):
         acct, h = cell
+        enroll_manifest(acct, tmp_path, "0501")
         r = post(client, h, report(failed("0412", at=now() + timedelta(days=1)),
                                    failed("0501", at=now() - timedelta(minutes=1)))).json()
         assert [m["outcome"] for m in r["machines"]] == ["refused", "recorded"]
@@ -703,6 +734,7 @@ class TestTenancy:
         a, ha = account(accounts, "cell", "a@example.de")
         b, hb = account(accounts, "cell", "b@example.de")
         t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        enroll_manifest(a, tmp_path, "0501")
         post(client, ha, report(good(make_manifest(tmp_path), at=t1), started=t1))
         post(client, ha, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
                                      status="changed"), failed("0501", at=t2), started=t2))
@@ -725,6 +757,7 @@ class TestTenancy:
 
         # B names A's machine. The key is per tenant ledger, so this is B's own
         # row about B's own claim and cannot touch A's record.
+        enroll_manifest(b, tmp_path, "0412")
         r = post(client, hb, report(failed("0412", at=now() - timedelta(minutes=1)))).json()
         assert r["machines"][0]["outcome"] == "recorded"
         assert len(ledger_of(a)) == a_len and ledger_of(a).head_attestation() == a_head

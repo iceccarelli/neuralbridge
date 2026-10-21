@@ -30,9 +30,10 @@ What this does and, deliberately, does not do:
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from assurance.change.model import TriggerType
@@ -55,6 +56,7 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
+    MANIFEST_KIND,
     interventions_from_ledger,
     manifests_from_ledger,
     record_divergence,
@@ -71,21 +73,51 @@ from assurance.watch.observations import (
 __all__ = [
     "FUTURE_SKEW",
     "LIMITATIONS",
+    "MAX_MACHINES_PER_ACCOUNT",
+    "MAX_NEW_MACHINES_PER_REPORT",
     "MachineResult",
     "ReportResult",
     "ingest_report",
+    "lock_path",
 ]
 
 #: How far ahead of this server's clock a timestamp may claim to be. A plant
-#: clock a few minutes fast is ordinary; an observation from tomorrow is not.
-FUTURE_SKEW = timedelta(minutes=5)
+#: clock a few seconds fast is ordinary; anything further ahead is refused, and
+#: whatever is accepted is read as no later than the moment it was written
+#: (``observations.observed_at_of``), so it cannot outrank a real later failure.
+FUTURE_SKEW = timedelta(seconds=60)
+#: Bounds on what one account's ledger can be made to track through this route.
+MAX_MACHINES_PER_ACCOUNT = 1000
+MAX_NEW_MACHINES_PER_REPORT = 200
 POSITIVE_STATUSES = frozenset({"unchanged", "changed"})
 REPORT_SCHEMA = "assurance.watch.report/1"
 
-#: Serialises the check-then-write sequence inside one process. The ledger is
-#: single-writer by design; this keeps two identical retries that overlap from
-#: both passing the "already recorded?" check.
+#: Serialises the check-then-write sequence inside one process; the advisory file
+#: lock below extends it across processes (several workers, or a CLI on the same
+#: volume). The ledger is single-writer by design; this keeps two identical
+#: retries that overlap from both passing the "already recorded?" check.
 _INGEST_LOCK = threading.Lock()
+
+
+def lock_path(ledger: EvidenceLedger) -> str:
+    """The file whose advisory lock serialises ingest into this ledger."""
+    return str(ledger.path) + ".ingest.lock"
+
+
+@contextmanager
+def _ingest_lock(ledger: EvidenceLedger) -> Iterator[None]:
+    with _INGEST_LOCK:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - not POSIX: one process only
+            yield
+            return
+        with open(lock_path(ledger), "a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 LIMITATIONS: tuple[str, ...] = (
     "These are observations reported by the holder of this account's key. The "
@@ -207,6 +239,14 @@ def entry_digest(watch_id: str, entry: Mapping[str, Any], observed_at: datetime)
     })
 
 
+def _instant(entry: Mapping[str, Any]) -> datetime:
+    """When the entry says it was observed, as an instant (text order is not time order)."""
+    try:
+        return parse_utc(str(entry.get("observed_at", "")))
+    except (ValueError, TypeError):
+        return datetime.max.replace(tzinfo=UTC)
+
+
 def report_digest(report: Mapping[str, Any]) -> str:
     return content_hash_of(dict(report))
 
@@ -223,7 +263,7 @@ def _seal_observation(
     ledger: EvidenceLedger, *, key: str, serial: str, status: str, reported: str,
     observed_at: datetime, configuration_hash: str, complete: bool,
     missing: Sequence[str], detail: str, watch_id: str, run_started_at: str,
-    digest: str, actor: Actor,
+    digest: str, actor: Actor, cadence: float | None = None,
 ) -> Evidence:
     """Seal a ``watch.observation`` in exactly the shape ``run_watch`` seals.
 
@@ -251,6 +291,9 @@ def _seal_observation(
             "run_started_at": run_started_at,
             "reported_status": reported,
             "report_digest": digest,
+            # Declared by the reporting watch with a successful look, never with a
+            # failed one: a report cannot lengthen what it did not observe.
+            "cadence_hours": None if failed else cadence,
         },
         actor=actor,
         origin=Origin(system="assurance.watch.ingest", reference=key,
@@ -283,12 +326,52 @@ def _held_observations(ledger: EvidenceLedger, key: str) -> list[tuple[datetime,
     return out
 
 
+@dataclass
+class _Account:
+    """What this ledger already knows, kept current as a report is applied."""
+
+    enrolled: set[str]          # machines with a manifest
+    known: set[str]             # machines with a manifest or an observation
+    max_age_hours: float | None
+    new: int = 0
+
+    def resolve_failed(self, serial: str, declared_key: str) -> tuple[str, str, str]:
+        """``(key, reason, detail)``: the enrolled machine a failed look belongs to.
+
+        A failure may only be recorded against a machine this account has
+        enrolled: it names the full ``mfr/model#serial`` key, or a bare serial
+        that matches exactly one enrolled key. It never creates a machine.
+        """
+        if declared_key and "#" in declared_key:
+            if declared_key in self.enrolled:
+                return declared_key, "", ""
+            return "", "unenrolled_machine", (
+                f"{declared_key!r} is not a machine this account has enrolled (a "
+                "failed look cannot create one, and a typo in the key would "
+                "otherwise record the failure against nothing). Check the key.")
+        if declared_key and declared_key != serial:
+            return "", "machine_unidentified", (
+                "machine_key must be the full manufacturer/model#serial key, or "
+                "empty so the serial can be resolved.")
+        matches = sorted(k for k in self.enrolled if k.rpartition("#")[2] == serial)
+        if len(matches) == 1:
+            return matches[0], "", ""
+        if not matches:
+            return "", "unenrolled_machine", (
+                f"no machine with serial {serial!r} is enrolled in this account, so "
+                "a failed look cannot be attributed to one. It is recorded once a "
+                "look of that machine has succeeded.")
+        return "", "ambiguous_serial", (
+            f"serial {serial!r} matches {len(matches)} enrolled machines; send the "
+            "full manufacturer/model#serial key.")
+
+
 # -- one entry --------------------------------------------------------------
 
 
 def _ingest_entry(
     ledger: EvidenceLedger, store: CaseStore, entry: Mapping[str, Any], *,
-    watch_id: str, run_started_at: str, actor: Actor, now: datetime,
+    watch_id: str, run_started_at: str, actor: Actor, now: datetime, account: _Account,
 ) -> MachineResult:
     serial = str(entry.get("serial", ""))
     status = str(entry.get("status", ""))
@@ -353,14 +436,13 @@ def _ingest_entry(
             return _refuse(entry, fallback_key, "manifest_not_accepted",
                            f"a {status!r} observation did not observe the machine "
                            "and cannot supply a manifest.", stamp)
-        key = declared_key or serial
-        if not key:
-            return _refuse(entry, "", "machine_unidentified",
-                           "an entry needs a serial or a machine_key.", stamp)
         if declared_key and "#" in declared_key and not declared_key.endswith("#" + serial):
-            return _refuse(entry, key, "serial_mismatch",
+            return _refuse(entry, declared_key, "serial_mismatch",
                            f"machine_key {declared_key!r} does not end in the "
                            f"serial {serial!r}.", stamp)
+        key, reason, why = account.resolve_failed(serial, declared_key)
+        if reason:
+            return _refuse(entry, fallback_key, reason, why, stamp)
 
     digest = entry_digest(watch_id, entry, observed_at)
     held = _held_observations(ledger, key)
@@ -381,6 +463,17 @@ def _ingest_entry(
             return _refuse(entry, key, "conflicts_with_recorded_observation",
                            f"a different observation of {key} at {stamp} is "
                            "already recorded.", stamp)
+
+    if key not in account.known:
+        # Only a positive look (with its manifest) reaches here for a new machine.
+        if len(account.known) >= MAX_MACHINES_PER_ACCOUNT:
+            return _refuse(entry, key, "account_machine_limit",
+                           f"this account already tracks {len(account.known)} "
+                           "machines, the most one account may.", stamp)
+        if account.new >= MAX_NEW_MACHINES_PER_REPORT:
+            return _refuse(entry, key, "too_many_new_machines",
+                           f"a report may introduce at most {MAX_NEW_MACHINES_PER_REPORT} "
+                           "machines the account has not reported before.", stamp)
 
     missing = [str(m) for m in entry.get("missing_items", ())]
     detail = str(entry.get("detail", ""))
@@ -444,7 +537,11 @@ def _ingest_entry(
         ledger, key=key, serial=serial, status=recorded, reported=status,
         observed_at=observed_at, configuration_hash=observed_hash, complete=True,
         missing=(), detail=note, watch_id=watch_id, run_started_at=run_started_at,
-        digest=digest, actor=actor)
+        digest=digest, actor=actor, cadence=account.max_age_hours)
+    if key not in account.known:
+        account.new += 1
+    account.known.add(key)
+    account.enrolled.add(key)
     return MachineResult(
         serial=serial, machine_key=key, reported_status=status,
         recorded_status=recorded, outcome="recorded", observed_at=stamp,
@@ -488,21 +585,25 @@ def ingest_report(
     entries = list(report["machines"])
     # Oldest first, so an earlier good look and a later failed one arrive in the
     # order they happened and the later one is not rejected as "older".
-    order = sorted(range(len(entries)),
-                   key=lambda i: (str(entries[i].get("observed_at", "")), i))
+    order = sorted(range(len(entries)), key=lambda i: (_instant(entries[i]), i))
+    max_age = report.get("max_age_hours")
 
-    with _INGEST_LOCK:
+    with _ingest_lock(ledger):
         store = CaseStore(ledger)
+        enrolled = {e.subject for e in ledger.entries(kind=MANIFEST_KIND) if e.subject}
+        observed = {e.subject for e in ledger.entries(kind=OBSERVATION_KIND) if e.subject}
+        account = _Account(enrolled=set(enrolled), known=enrolled | observed,
+                           max_age_hours=float(max_age) if max_age else None)
         results: dict[int, MachineResult] = {}
         for i in order:
             results[i] = _ingest_entry(
                 ledger, store, entries[i], watch_id=watch_id,
-                run_started_at=run_started_at, actor=actor, now=clock)
+                run_started_at=run_started_at, actor=actor, now=clock, account=account)
 
         recorded = [i for i in order if results[i].outcome == "recorded"]
         report_recorded = False
         if recorded:
-            max_age = report.get("max_age_hours")
+            had_success = any(results[i].counts_as_observation for i in recorded)
             evidence = Evidence(
                 kind=REPORT_KIND,
                 body={
@@ -510,7 +611,7 @@ def ingest_report(
                     "watch_id": watch_id,
                     "run_started_at": run_started_at,
                     "received_at": format_utc(clock),
-                    "max_age_hours": float(max_age) if max_age else None,
+                    "max_age_hours": float(max_age) if max_age and had_success else None,
                     "verdict": report.get("verdict") or "",
                     "batch_index": report.get("batch_index"),
                     "batch_count": report.get("batch_count"),
