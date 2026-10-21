@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from neuralbridge.ai import orchestrator
@@ -138,15 +138,17 @@ async def bind_connection(
     )
 
 
-@router.delete("/connections/{connection_id}", summary="Unbind one of your connections — Register/Cell")
+@router.delete("/connections/{connection_id}", summary="Unbind one of your connections")
 async def unbind_connection(
     connection_id: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
     store: AiStore = Depends(get_ai_store),
-    scope: Scope = Depends(_paid_scope),
+    scope: Scope = Depends(_scope),
 ) -> dict[str, str]:
-    """Owner-only. Someone else's id, a missing id, and the shared seeded
-    demo (for non-operators) all answer the same 404."""
+    """Owner-only, and deliberately **not** behind the paid gate: removing a
+    connection shrinks exposure, so an account whose plan lapsed can still
+    unbind what it bound. Someone else's id, a missing id, the shared seeded
+    demo (for non-operators) and any anonymous caller all answer the same 404."""
     if not await delete_connection(registry, store, scope, connection_id):
         raise HTTPException(status_code=404, detail=f"Connection '{connection_id}' not found.")
     return {"deleted": connection_id}
@@ -249,7 +251,7 @@ _FREE_AUDIT_LIMIT = 3
 
 @router.get("/audit", summary="Recent audit events for your account (limited on the free tier)")
 async def audit(
-    limit: int = 25,
+    limit: int = Query(25, ge=1, le=500, description="Max entries (1-500)."),
     principal: Principal = Depends(current_principal),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> list[dict[str, Any]]:

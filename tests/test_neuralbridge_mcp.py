@@ -295,3 +295,26 @@ async def test_mcp_tools_cannot_cross_the_tenant_boundary(running_api: str, monk
     monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_a)
     approved = await ai_approve(plan_id=plan_id)
     assert approved["status"] == 200 and approved["body"]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_plan_id_cannot_rewrite_the_request_path(running_api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without percent-encoding, ``plan_id = "<id>/deny?"`` turns an ``ai_approve``
+    call into ``POST /ai/plan/<id>/deny`` — an action the caller did not ask for."""
+    from neuralbridge.mcp.server import ai_approve, ai_plan_write
+
+    key_a, _ = _mint_two_account_keys()
+    a_id = _bind_over_http(running_api, key_a, "MCP-QUOTE-DB")
+    monkeypatch.setenv("NEURALBRIDGE_API_URL", running_api)
+    monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_a)
+    monkeypatch.setenv("NEURALBRIDGE_AI_ACTOR", "mcp-quote")
+    planned = await ai_plan_write(
+        connection_id=a_id, operation="execute_sql", params={"sql": "UPDATE mcp_test_customers SET name=name"}
+    )
+    plan_id = planned["body"]["plan"]["id"]
+
+    result = await ai_approve(plan_id=f"{plan_id}/deny?")
+    assert result["status"] == 404
+
+    status = httpx.get(f"{running_api}/ai/plan/{plan_id}", headers={"X-API-Key": key_a}, timeout=10.0).json()
+    assert status["status"] == "pending_approval"
