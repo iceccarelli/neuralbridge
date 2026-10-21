@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -84,14 +85,28 @@ _NOT_CONFIGURED = {
 }
 
 
-async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _call(
+    method: str,
+    path: str,
+    *,
+    json_body: dict[str, Any] | None = None,
+    query: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One HTTP call to the /ai API with the configured ``X-API-Key`` — the
+    API derives the tenant from that key, so these tools inherit exactly the
+    boundary a direct caller has (a connection/plan owned by another account
+    is a 404 here too). Path segments are percent-encoded and query values go
+    through ``params`` so a tool argument can never rewrite the request path
+    or inject extra query parameters."""
     base = _api_url()
     if base is None:
         return dict(_NOT_CONFIGURED)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.request(method, f"{base}{path}", headers=_headers(), json=json_body)
+            response = await client.request(
+                method, f"{base}{path}", headers=_headers(), json=json_body, params=query
+            )
     except httpx.RequestError as exc:
         return {
             "error": "could_not_reach_api",
@@ -109,7 +124,7 @@ async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = No
 
 @mcp.tool()
 async def ai_list_connections() -> dict[str, Any]:
-    """GET /ai/connections — real connections, never invented. Free, rate-limit exempt."""
+    """GET /ai/connections — your connections (plus the shared demo), never invented. Free, rate-limit exempt."""
     return await _call("GET", "/ai/connections")
 
 
@@ -120,7 +135,7 @@ async def ai_capabilities(connection_id: str) -> dict[str, Any]:
     Args:
         connection_id: id from ai_list_connections.
     """
-    return await _call("GET", f"/ai/capabilities?connection_id={connection_id}")
+    return await _call("GET", "/ai/capabilities", query={"connection_id": connection_id})
 
 
 @mcp.tool()
@@ -154,24 +169,24 @@ async def ai_approve(plan_id: str) -> dict[str, Any]:
 
     Register/Cell only, same 402 shape as ai_plan_write when under-entitled.
     """
-    return await _call("POST", f"/ai/plan/{plan_id}/approve")
+    return await _call("POST", f"/ai/plan/{quote(plan_id, safe='')}/approve")
 
 
 @mcp.tool()
 async def ai_deny(plan_id: str, reason: str = "denied by agent") -> dict[str, Any]:
     """POST /ai/plan/{plan_id}/deny — deny a pending plan. Nothing executes."""
-    return await _call("POST", f"/ai/plan/{plan_id}/deny?reason={reason}")
+    return await _call("POST", f"/ai/plan/{quote(plan_id, safe='')}/deny", query={"reason": reason})
 
 
 @mcp.tool()
 async def ai_audit(limit: int = 25) -> dict[str, Any]:
-    """GET /ai/audit — recent audit events for the configured actor.
+    """GET /ai/audit — recent audit events for the account that owns the configured API key.
 
     Limited to the last 3 on the free tier (matching /ai/audit's own
     documented free-vs-paid behaviour); the full trail up to `limit` on
     Register/Cell.
     """
-    return await _call("GET", f"/ai/audit?limit={limit}")
+    return await _call("GET", "/ai/audit", query={"limit": limit})
 
 
 def main() -> None:
