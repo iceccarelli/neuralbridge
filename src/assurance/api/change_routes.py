@@ -52,8 +52,17 @@ def _bad(exc: Exception, what: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"error": f"invalid_{what}", "detail": str(exc)})
 
 
-def _actor(name: str, role: str) -> Actor:
-    return Actor(identifier=name or "operator", role=role,
+def _actor(name: str, role: str, principal: Principal) -> Actor:
+    """The recorded actor: the declared person, bound to the authenticated account.
+
+    ``identifier`` is the name the caller says acted. ``role`` carries the
+    authenticated account that asserted it, taken from the principal and never
+    from the request body, so the ledger shows both who the account says acted
+    and which account vouched for it. An empty name (allowed only on the
+    ``assess/*`` routes) is recorded as automation, not as a person.
+    """
+    account = principal.account.id if principal.account else "open-mode"
+    return Actor(identifier=name or "operator", role=f"{role} via account {account}",
                 kind="person" if name else "automation")
 
 
@@ -76,13 +85,15 @@ class ClaimIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     owner: str = Field(min_length=1, max_length=200)
-    actor: str = Field(default="", max_length=200)
+    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
+                       description="the named person taking this step")
 
 
 class AdvanceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    actor: str = Field(default="", max_length=200)
+    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
+                       description="the named person taking this step")
 
 
 class ReverificationIn(BaseModel):
@@ -90,7 +101,8 @@ class ReverificationIn(BaseModel):
 
     manifest: dict[str, Any]
     verification_content_hash: str = Field(min_length=1, max_length=128)
-    actor: str = Field(default="", max_length=200)
+    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
+                       description="the named person taking this step")
 
 
 class DecisionIn(BaseModel):
@@ -98,7 +110,8 @@ class DecisionIn(BaseModel):
 
     disposition: str = Field(pattern="^(closed|rejected|deferred)$")
     reason: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(default="", max_length=200)
+    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
+                       description="the named person taking this step")
 
 
 def _not_found(case_id: str) -> HTTPException:
@@ -125,7 +138,7 @@ async def assess_drift_route(
     interventions = interventions_from_ledger(register.ledger, key)
     store = CaseStore(register.ledger)
     case = assess_drift(store, divergence, observed, verifications, interventions,
-                        actor=_actor(body.actor, "watch"))
+                        actor=_actor(body.actor, "watch", principal))
     return {"opened": case is not None, "case": case.to_dict() if case else None,
            "verdict": divergence.verdict}
 
@@ -142,7 +155,7 @@ async def assess_advisory_route(
     fleet = Fleet.from_ledger(register.ledger)
     report = assess_impact(advisory, fleet)
     store = CaseStore(register.ledger)
-    case = assess_advisory(store, report, actor=_actor(body.actor, "fleet"))
+    case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal))
     return {"opened": case is not None, "case": case.to_dict() if case else None,
            "verdict": report.verdict}
 
@@ -189,7 +202,7 @@ async def claim_case_route(
 ) -> dict[str, Any]:
     try:
         case = claim(CaseStore(register.ledger), case_id, owner=body.owner,
-                    actor=_actor(body.actor, "reviewer"))
+                    actor=_actor(body.actor, "reviewer", principal))
     except CaseTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return case.to_dict()
@@ -201,7 +214,8 @@ async def advance_case_route(
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     try:
-        case = advance(CaseStore(register.ledger), case_id, actor=_actor(body.actor, "reviewer"))
+        case = advance(CaseStore(register.ledger), case_id,
+                       actor=_actor(body.actor, "reviewer", principal))
     except CaseTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return case.to_dict()
@@ -222,7 +236,7 @@ async def reverify_case_route(
     try:
         case = reverify(CaseStore(register.ledger), case_id, manifest, verifications,
                         interventions, verification_content_hash=body.verification_content_hash,
-                        actor=_actor(body.actor, "verification engineer"))
+                        actor=_actor(body.actor, "verification engineer", principal))
     except CaseTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return case.to_dict()
@@ -235,7 +249,7 @@ async def decide_case_route(
 ) -> dict[str, Any]:
     try:
         case = decide(CaseStore(register.ledger), case_id, disposition=body.disposition,
-                     reason=body.reason, actor=_actor(body.actor, "reviewer"))
+                     reason=body.reason, actor=_actor(body.actor, "reviewer", principal))
     except CaseTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return case.to_dict()

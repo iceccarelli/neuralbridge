@@ -20,6 +20,10 @@ __all__ = ["Tier", "Plan", "PLANS", "plan_for", "plan_for_price", "public_catalo
 
 Tier = str  # "free" | "register" | "cell" | "supplier"
 
+#: The one sentence every public surface uses about case volume. Kept identical
+#: to CASES_NOT_METERED in app/lib/plans.ts (tests/test_assurance_plans_parity.py).
+CASES_NOT_METERED = "Cases are not metered — no per-case cap or charge"
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -161,8 +165,8 @@ PLANS: dict[Tier, Plan] = {
         ai_control_plane=True,
         included=(
             "Everything in Validator, without the daily cap",
-            "Cases are not metered: no per-case cap or charge. Awareness records "
-            "with the reasoning that defends them",
+            CASES_NOT_METERED,
+            "Awareness records with the reasoning that defends them",
             "Both final-report clocks computed correctly, and the platform's counter "
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
@@ -206,9 +210,9 @@ PLANS: dict[Tier, Plan] = {
             "puts in question",
             "Declarations of Conformity bound to a configuration hash, so a "
             "declaration can be shown to have stopped describing the machine",
-            "Change-assurance cases: POST/GET /v1/change/* — open, claim, "
-            "re-verify and close a ChangeAssuranceCase; closure is a named human "
-            "decision",
+            CASES_NOT_METERED,
+            "Change-assurance cases: open, claim, re-verify and close a "
+            "ChangeAssuranceCase over /v1/change/*; closure is a named human decision",
             "Counter-signed head attestation: POST /v1/ledger/attest signs the "
             "head of your ledger with a key you do not hold, so a rewind "
             "contradicts a signed statement. Your ledger is never uploaded — "
