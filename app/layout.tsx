@@ -87,7 +87,7 @@ const registerProductData = {
   name: 'Register',
   brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
   description:
-    'The Article 14 register: unlimited cases, both regulatory clocks, and a hash-chained ledger with verifiable export.',
+    'The Article 14 register: both regulatory clocks and a hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
   offers: {
     '@type': 'Offer',
     price: '390',
@@ -102,7 +102,7 @@ const cellProductData = {
   name: 'Cell',
   brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
   description:
-    'Machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
+    'Machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation.',
   offers: {
     '@type': 'Offer',
     price: '1290',

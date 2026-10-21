@@ -51,6 +51,12 @@ const items: ChecklistItem[] = [
     action: 'In the Vercel dashboard, delete the old "v0 Human-like Neural Interface" project or redirect it to https://neuralbridge.io. See DEPLOY_NOW.md §5.',
   },
   {
+    label: 'Prices validated with paying customers',
+    done: false,
+    detail: 'The listed prices (€390/month Register, €1,290/month Cell) are launch hypotheses. No customer has paid them, and no copy on this site should read as if they had.',
+    action: 'Not something a build can confirm — it is complete only when a customer has actually paid through the live checkout.',
+  },
+  {
     label: 'Smoke test passed on the live site',
     done: false,
     detail: 'Cannot be checked from a static build — run it against the deployed site after the steps above.',

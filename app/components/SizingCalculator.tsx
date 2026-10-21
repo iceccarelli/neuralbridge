@@ -3,57 +3,50 @@
 import { useMemo, useState } from 'react';
 import { SALES } from '../lib/links';
 
-// Mirrors the entitlement flags actually enforced in
-// src/assurance/billing/plans.py — not a marketing guess. If that file
-// changes these numbers, this calculator drifts and should be updated
-// alongside it (no separate source of truth to keep in sync automatically
-// yet; see the pricing note below the plan cards for why).
-const REGISTER_LIMITS = { productFamilies: 25, casesPerDay: 50 };
+// Which tier covers what you need — derived only from which capabilities each
+// plan gates in src/assurance/billing/plans.py (register, export,
+// machine_verification, signed_attestation, ...). There is no volume cap to
+// size against: cases are not metered on any tier, so this asks what you need
+// to do, never "how many".
 
-type NeedKey = 'machine' | 'annex3' | 'fleet' | 'attest';
+type NeedKey = 'machine' | 'annex3' | 'fleet' | 'change' | 'attest';
 
 const NEEDS: { key: NeedKey; label: string }[] = [
   { key: 'machine', label: 'Machine safety verification (ISO/TS 15066 checks against a safety envelope)' },
   { key: 'annex3', label: 'Machinery Annex III manifests and passports' },
   { key: 'fleet', label: 'Fleet advisory fan-out across enrolled machines' },
+  { key: 'change', label: 'Change-assurance cases (open, claim, re-verify, close over /v1/change/*)' },
   { key: 'attest', label: 'Counter-signed head attestation' },
 ];
 
 type Recommendation = { tier: 'Validator' | 'Register' | 'Cell'; reason: string };
 
-function recommend(productFamilies: number, casesPerDay: number, needs: Set<NeedKey>): Recommendation {
+function recommend(needsRegister: boolean, needs: Set<NeedKey>): Recommendation {
   if (needs.size > 0) {
     return {
       tier: 'Cell',
-      reason: `Cell is the only tier that includes ${Array.from(needs).length === 1 ? 'this' : 'these'} capabilit${needs.size === 1 ? 'y' : 'ies'} — none of it is gated into Register.`,
+      reason: `Cell is the only tier that includes ${needs.size === 1 ? 'this' : 'these'} capabilit${needs.size === 1 ? 'y' : 'ies'} — none of it is gated into Register.`,
     };
   }
-  if (productFamilies > REGISTER_LIMITS.productFamilies || casesPerDay > REGISTER_LIMITS.casesPerDay) {
-    return {
-      tier: 'Cell',
-      reason: `Register caps at ${REGISTER_LIMITS.productFamilies} product families and ${REGISTER_LIMITS.casesPerDay} cases/day; Cell is uncapped on both.`,
-    };
-  }
-  if (productFamilies > 0 || casesPerDay > 0) {
+  if (needsRegister) {
     return {
       tier: 'Register',
-      reason: `${productFamilies} product famil${productFamilies === 1 ? 'y' : 'ies'} and up to ${casesPerDay} case(s)/day fit inside Register's ${REGISTER_LIMITS.productFamilies}-family, ${REGISTER_LIMITS.casesPerDay}-case/day ceiling.`,
+      reason: 'Register keeps the Article 14 register for one manufacturer: both deadline clocks and a hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
     };
   }
   return {
     tier: 'Validator',
-    reason: 'No register access needed yet — Validator covers Article 14 draft validation and the calculators, free, with a 20/day cap.',
+    reason: 'No register needed yet — Validator covers Article 14 draft validation and the calculators, free, with a 20/day cap on validations.',
   };
 }
 
 export default function SizingCalculator() {
-  const [productFamilies, setProductFamilies] = useState(1);
-  const [casesPerDay, setCasesPerDay] = useState(1);
+  const [needsRegister, setNeedsRegister] = useState(true);
   const [needs, setNeeds] = useState<Set<NeedKey>>(new Set());
 
   const result = useMemo(
-    () => recommend(productFamilies, casesPerDay, needs),
-    [productFamilies, casesPerDay, needs],
+    () => recommend(needsRegister, needs),
+    [needsRegister, needs],
   );
 
   const toggleNeed = (key: NeedKey) => {
@@ -67,30 +60,17 @@ export default function SizingCalculator() {
 
   return (
     <div className="calc-panel">
-      <div className="calc-panel-title">Which tier fits? Answer three questions.</div>
-      <div className="calc-grid">
-        <label className="calc-field">
-          <span>Product families you manage</span>
-          <input
-            type="number"
-            min={0}
-            value={productFamilies}
-            onChange={(e) => setProductFamilies(Math.max(0, Number(e.target.value) || 0))}
-          />
-        </label>
-        <label className="calc-field">
-          <span>Article 14 cases per day, at peak</span>
-          <input
-            type="number"
-            min={0}
-            value={casesPerDay}
-            onChange={(e) => setCasesPerDay(Math.max(0, Number(e.target.value) || 0))}
-          />
+      <div className="calc-panel-title">Which tier fits? Tick what you need.</div>
+      <div className="calc-needs">
+        <span className="calc-needs-label">Do you need to keep an Article 14 register?</span>
+        <label className="calc-checkbox">
+          <input type="checkbox" checked={needsRegister} onChange={() => setNeedsRegister((v) => !v)} />
+          Yes — open and track Article 14 cases with both deadline clocks and an exportable ledger
         </label>
       </div>
 
       <div className="calc-needs">
-        <span className="calc-needs-label">Do you need any of these?</span>
+        <span className="calc-needs-label">Do you also need any of these?</span>
         {NEEDS.map((n) => (
           <label className="calc-checkbox" key={n.key}>
             <input type="checkbox" checked={needs.has(n.key)} onChange={() => toggleNeed(n.key)} />
@@ -110,9 +90,10 @@ export default function SizingCalculator() {
         </div>
       </div>
       <p className="calc-footnote">
-        Computed from the same limits <code>src/assurance/billing/plans.py</code> enforces — 25 product families and
-        50 cases/day on Register, machine verification / Annex III / fleet advisory / attestation gated to Cell only.
-        Not a lead-gen guess.
+        Derived from which capabilities each plan gates in <code>src/assurance/billing/plans.py</code> (see{' '}
+        <code>docs/claims-registry.md</code>): the register on Register and Cell; machine verification, Annex III,
+        fleet advisory, change-assurance cases and attestation on Cell only. There is no volume to size — cases
+        are not metered. Prices are launch hypotheses, not validated with paying customers.
       </p>
     </div>
   );
