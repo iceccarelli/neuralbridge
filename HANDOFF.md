@@ -26,9 +26,14 @@ Two regulations turned that from a quality problem into a legal one:
 | **Reg. (EU) 2024/2847** CRA Art. 14 | Applies since **11 Sep 2026**. Actively exploited vulnerability → **24 hours** to file an early warning naming the Member States of availability. Art. 69(3) extends to products placed on market before 11 Dec 2027. |
 | **Reg. (EU) 2023/1230** Machinery Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify safety-relevant software and record evidence of intervention. |
 
-Neither is satisfiable from a spreadsheet. Both are satisfiable from a
+Annex III 1.1.9 is a *design requirement on the machine*; Art. 14 requires a
+*reporting process*. Neither is made satisfied by software of ours. What a
 hash-chained record of what is on each machine, what was verified against it,
-and when.
+and when can do is let a manufacturer **evidence** its process — and show a
+reviewer which records stopped applying. (Corrected 2026-10-21: an earlier
+version said both were "satisfiable from" the ledger, which overstated it. The
+ENISA Single Reporting Platform also has no API at launch, so Art. 14 output
+here is a prefill the person keys in, not a submission.)
 
 **Objective chain:** CUSTOMER VALUE → PAID TRANSACTION → REPEATABILITY →
 PRODUCT → RECURRING REVENUE → SCALE.
