@@ -47,7 +47,7 @@ from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import compare
 from assurance.machinery.manifest import SafetyManifest
-from assurance.machinery.record import interventions_from_ledger
+from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
 __all__ = ["change_router"]
@@ -213,12 +213,21 @@ async def assess_drift_route(
         observed = SafetyManifest.from_dict(body.observed)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "manifest") from exc
+    key = observed.machine.key
+    # The baseline is what this account's ledger says the machine was, not what
+    # the request says: a caller who names the observed state as the baseline
+    # would suppress the case, and one who names an invented state would shape
+    # what the case says changed. The request's baseline is used only when the
+    # ledger has none, and the response says which it was.
+    sealed = _sealed_baseline(register.ledger, observed)
+    source = "ledger" if sealed is not None else "request"
+    used = sealed if sealed is not None else baseline
     try:
-        divergence = compare(baseline, observed)
+        divergence = compare(used, observed)
     except ValueError as exc:
         raise _bad(exc, "comparison") from exc
 
-    key = observed.machine.key
+
     verifications = VerificationRecord.from_ledger(register.ledger, subject=key)
     interventions = interventions_from_ledger(register.ledger, key)
     store = CaseStore(register.ledger)
@@ -228,7 +237,26 @@ async def assess_drift_route(
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
-           "verdict": divergence.verdict}
+            "verdict": divergence.verdict,
+            "baseline_source": source,
+            "baseline_configuration": used.configuration_hash(),
+            "request_baseline_ignored": sealed is not None
+            and baseline.configuration_hash() != sealed.configuration_hash()}
+
+
+def _sealed_baseline(ledger: Any, observed: SafetyManifest) -> SafetyManifest | None:
+    """The newest manifest sealed for this machine in a *different* configuration.
+
+    The same rule the watch ingest applies (compare against what the ledger last
+    held), except that a manifest equal to the observed configuration is not a
+    baseline for it: a watch may already have sealed what it saw, and the change
+    is from the configuration before that.
+    """
+    observed_hash = observed.configuration_hash()
+    for sealed in reversed(manifests_from_ledger(ledger, observed.machine.key)):
+        if sealed.configuration_hash() != observed_hash:
+            return sealed
+    return None
 
 
 @change_router.post("/assess/advisory", summary="Turn a fleet impact report into a case")

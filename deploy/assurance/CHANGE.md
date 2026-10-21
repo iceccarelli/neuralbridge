@@ -99,7 +99,7 @@ decided by the case's state, in `assurance.change.service._open_or_update`:
 | Existing case | A repeat observation of the same trigger | Ledger |
 |---|---|---|
 | none | open it | 1 `opened` entry |
-| `open`, or `in_review` with nothing re-verified | replace the facts and work list with the fresh reading (no progress to protect) | an `updated` entry **only if something differs** |
+| `open`, or `in_review` with nothing re-verified | replace the **facts** with the fresh reading; the **work** (re-verifications, actions, questions) can only grow, a repeat look never drops what is outstanding | an `updated` entry **only if something differs** |
 | `awaiting_action` and later (`awaiting_reverification`, `ready_to_close`) | **additive only**: new machines, new functions, new questions are added; a function already tracked is never re-inflated; if the addition makes `ready_to_close` untrue the case steps back | an `updated` entry only if something was added |
 | `closed` | nothing — **unless** it genuinely recurred (below) | nothing, or 1 `reopened` entry |
 | `rejected` | nothing for an identical trigger. A different trigger id (a different configuration, a different advisory) is a different case and opens normally. An **advisory** that now exposes a machine the rejection did not name reopens it, exactly as for `closed` | nothing, or 1 `reopened` entry |
@@ -184,11 +184,17 @@ caller:
   or — for an advisory, which has no observation time — **the case's own
   opening time**, stamped by the case and never supplied by a caller. A bundle
   that already existed when the change was found cannot be evidence about it;
-- that bundle passed **every** check the function declares; and
+- **that one bundle** passed **every** check the function declares (a newer
+  bundle for one check plus an older one for another does not clear it);
+- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). A
+  simulation trace is `community` and a datasheet figure `profile`: they are
+  about a model or a number, not the machine, so they never clear an entry. It
+  stays required, reads `below_validated:<tier>` in `evidence_current`, the case
+  records why in `checks_skipped`, and only a person's waiver closes it; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,
-`no_new_evidence`, …) in `evidence_current`. A function the manifest no longer
+`no_new_evidence`, `below_validated:<tier>`, …) in `evidence_current`. A function the manifest no longer
 declares stays required.
 
 **Every function an advisory reaches needs evidence** — not only those that were
@@ -225,8 +231,8 @@ any entry that: does not verify; makes a move its kind of entry cannot make
 (e.g. `open -> closed`); records `ready_to_close`/`closed` with work outstanding;
 rewrote the case's history rather than appending; altered a prior closure;
 removed required work on an entry that cannot remove it (only a
-`reverification`, a person's recorded resolution or waiver, a fresh reading
-before any work started, or a reopening can); is a `reverification` that cites
+`reverification`, a person's recorded resolution or waiver, or a reopening can;
+a repeat observation never can); is a `reverification` that cites
 no `supports` evidence, or evidence that is not a sealed verification, was
 sealed before the case's current cycle, or is for a machine the case does not
 concern; is sealed as a different kind than the ledger files it under;
@@ -267,6 +273,18 @@ cache. The cache is per process. A chain rebuilt to be self-consistent is caught
 by neither kind of pass; that is what a signed head attestation
 (`assurance attest`) is for.
 
+Two guards sit on top of that. **Human decisions never use the cached check:**
+`decide` (close / reject / defer), `resume`, `resolve-decision` and
+`waive-reverification` walk the whole chain before they seal, so an in-place edit
+inside the window is refused at the moment a person is about to rely on the case.
+And **a case write is a compare-and-swap**: `CaseStore.get` remembers the
+ledger position of the newest entry of the case, and the append is refused
+(`CaseConflictError`, HTTP 409 `case_conflict`, CLI `finding:`, nothing written)
+inside the ledger's own write transaction if another writer has appended to that
+case since, so a close can never land on top of a move made after the person
+read the case. Machine-driven writers (assess, watch ingest, advisory
+withdrawal) re-read and recompute instead; people are told and decide again.
+
 ## Surfaces
 
 ```
@@ -276,6 +294,9 @@ assurance change assess-drift | assess-advisory | assess-intervention
                  replay | export
 
 POST /v1/change/assess/drift                       {baseline, observed, actor?}
+        # the baseline is the newest manifest the account's ledger holds for the
+        # machine in another configuration; the body's is used only if none is
+        # sealed. The response says which (baseline_source: ledger | request).
 POST /v1/change/assess/advisory                    {advisory, actor?}
 POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
 GET  /v1/change/cases[?status=]                    {cases: [row], summary}
