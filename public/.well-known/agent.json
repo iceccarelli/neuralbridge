@@ -28,10 +28,11 @@
   },
   "pricing": {
     "currency": "EUR",
+    "price_note": "Register and Cell prices are launch hypotheses, not validated with paying customers, and not a quote. Purchase works only where the operator has deployed the hosted API.",
     "tiers": [
-      { "name": "Validator", "price": 0, "period": "forever", "self_serve": true },
-      { "name": "Register", "price": 390, "period": "month", "self_serve": true },
-      { "name": "Cell", "price": 1290, "period": "month", "self_serve": true },
+      { "name": "Validator", "price": 0, "period": null, "self_serve": true, "note": "No card. Daily allowances apply (for example 20 evidence re-checks a day per address without an account); GET /v1/plans is what the software enforces." },
+      { "name": "Register", "price": 390, "period": "month", "self_serve": true, "price_status": "unvalidated_list_price" },
+      { "name": "Cell", "price": 1290, "period": "month", "self_serve": true, "price_status": "unvalidated_list_price" },
       { "name": "Supplier", "price": null, "period": "month", "self_serve": false, "note": "Sales-assigned pricing, no self-serve price yet." }
     ]
   },

@@ -731,7 +731,7 @@ async def require_attestation(
             "Counter-signed head attestation is included from the Cell "
             "plan upward. Verifying an attestation "
             "(POST /v1/ledger/attest/verify) and fetching the public key "
-            "(GET /v1/ledger/attest/key) are free and always will be: an "
+            "(GET /v1/ledger/attest/key) need no plan: an "
             "attestation only a paying customer can check is worth "
             "nothing. GET /v1/plans, then POST /v1/checkout.",
         )
@@ -747,7 +747,7 @@ async def require_supplier(
     manufacturer. There is no self-serve Stripe price for this tier yet — see
     ADR-0001 — so today the only way in is a sales-assigned account tier.
     Reading a feed (GET /v1/supplier/feed/{id}) is deliberately outside this
-    gate and needs no account, same reasoning as every other free-forever
+    gate and needs no account, same reasoning as every other no-account
     verification route: the audience for a supplier's advisory is every
     integrator who might be affected, not a paying subscriber.
     """

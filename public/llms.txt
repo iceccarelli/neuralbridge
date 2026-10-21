@@ -15,7 +15,7 @@ hash-chained ledger for audit trails. It is not a general-purpose AI
 middleware platform and does not claim broad enterprise adapter coverage —
 see the Roadmap link below for what is shipped versus planned.
 
-## Pricing (three tiers; re-checking someone else's evidence is not metered)
+## Pricing (three tiers; re-checking someone else's evidence needs no account: 20 a day per address)
 
 - **Validator** — Free, no card, no account required. Declaration/manifest/
   attestation verification, Article 14 draft validation and calculators,

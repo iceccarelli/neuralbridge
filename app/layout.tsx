@@ -58,6 +58,12 @@ const organizationData = {
   sameAs: [REPO],
 };
 
+// Prices are launch hypotheses, not validated with paying customers, and no public
+// deployment is selling anything yet. Say so inside the markup that states them.
+// tests/test_site_copy_parity.py pins the numbers to billing/plans.py.
+const LIST_PRICE_NOTE =
+  'Unvalidated launch list price, not a quote. Purchase works only where the operator has deployed the hosted API.';
+
 const structuredData = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
@@ -66,12 +72,12 @@ const structuredData = {
   applicationCategory: 'BusinessApplication',
   operatingSystem: 'Cross-platform',
   offers: [
-    { '@type': 'Offer', name: 'Validator', price: '0', priceCurrency: 'EUR' },
-    { '@type': 'Offer', name: 'Register', price: '390', priceCurrency: 'EUR' },
-    { '@type': 'Offer', name: 'Cell', price: '1290', priceCurrency: 'EUR' },
+    { '@type': 'Offer', name: 'Validator', price: '0', priceCurrency: 'EUR', description: 'No card. Daily allowances apply; GET /v1/plans is what the software enforces.' },
+    { '@type': 'Offer', name: 'Register', price: '390', priceCurrency: 'EUR', description: LIST_PRICE_NOTE },
+    { '@type': 'Offer', name: 'Cell', price: '1290', priceCurrency: 'EUR', description: LIST_PRICE_NOTE },
   ],
   description:
-    'Evidence infrastructure for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230): a hash-chained record of what is on each machine, what was verified against it, and when.',
+    'Evidence infrastructure for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230): a hash-chained record of what is on each machine, which checks were run against it, and when.',
   creator: {
     '@type': 'Person',
     name: 'Vincenzo Grimaldi',
@@ -91,6 +97,7 @@ const registerProductData = {
     '@type': 'Offer',
     price: '390',
     priceCurrency: 'EUR',
+    description: LIST_PRICE_NOTE,
     url: `${SITE_URL}/#pricing`,
   },
 };
@@ -106,6 +113,7 @@ const cellProductData = {
     '@type': 'Offer',
     price: '1290',
     priceCurrency: 'EUR',
+    description: LIST_PRICE_NOTE,
     url: `${SITE_URL}/#pricing`,
   },
 };
@@ -132,7 +140,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <h4>Industrial Autonomous Assurance</h4>
                 <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
                   Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
-                  else&apos;s evidence is free at every tier.
+                  else&apos;s evidence needs no account (20 a day per address).
                 </p>
               </div>
 

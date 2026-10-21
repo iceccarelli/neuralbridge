@@ -59,7 +59,7 @@ the kind of drift the rest of this codebase refuses to allow.
 - `GET /v1/supplier/feed/{account_id}` — free, no account, forever. Serves
   the raw NDJSON feed. The audience for a supplier's advisory is every
   integrator who might be affected, not a paying subscriber — same reasoning
-  as every other free-forever verification route in this product.
+  as every other no-account verification route in this product.
 
 Feeds are keyed by the server-issued account id, not the supplier-chosen
 `supplier_id` string inside the advisory — the account id is already a safe
