@@ -39,7 +39,7 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CASE_KINDS, CaseStore, CaseStoreError
+from assurance.change.store import CASE_KINDS, CaseConflictError, CaseStore, CaseStoreError
 from assurance.core.errors import AssuranceError, LedgerIntegrityError
 from assurance.core.evidence import Actor
 from assurance.fleet.advisory import ComponentAdvisory
@@ -180,6 +180,11 @@ def _refused(exc: AssuranceError) -> HTTPException:
         # The account's chain does not verify: nothing is shown or extended.
         return HTTPException(status_code=500, detail={
             "error": "ledger_integrity", "detail": str(exc)})
+    if isinstance(exc, CaseConflictError):
+        # Someone else recorded on this case after it was read. Not a refusal of
+        # the step on its merits: re-read (GET the case) and send it again.
+        return HTTPException(status_code=409, detail={
+            "error": "case_conflict", "case_id": exc.case_id, "detail": str(exc)})
     return HTTPException(status_code=409, detail=str(exc))
 
 

@@ -42,12 +42,13 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CaseStore, CaseStoreError
+from assurance.change.store import CaseConflictError, CaseStore, CaseStoreError
 
 __all__ = [
     "CaseReplay",
     "CaseStatus",
     "CaseStore",
+    "CaseConflictError",
     "CaseNotFoundError",
     "CaseStoreError",
     "CaseTransitionError",

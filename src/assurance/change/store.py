@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from assurance.core.errors import AssuranceError, LedgerIntegrityError
+from assurance.core.errors import AssuranceError, LedgerConflictError, LedgerIntegrityError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
@@ -35,6 +35,7 @@ __all__ = [
     "REVERIFICATION_KIND",
     "TRANSITION_KIND",
     "UPDATED_KIND",
+    "CaseConflictError",
     "CaseStore",
     "CaseStoreError",
     "ChainBrokenError",
@@ -62,11 +63,43 @@ class CaseStoreError(AssuranceError):
     """A case transition was asked for that the ledger's own history refuses."""
 
 
+class CaseConflictError(CaseStoreError):
+    """The case changed between this caller's read and its write; nothing was written.
+
+    Another writer (a person at another desk, a watch report, a second process)
+    appended to the case after it was read, so the step in hand was prepared from
+    state that is no longer the case. The caller re-reads and decides again —
+    :func:`~assurance.change.service.decide` of a case someone has just moved back
+    to re-verification must be refused, not recorded on top.
+    """
+
+    def __init__(self, case_id: str, detail: str = "") -> None:
+        super().__init__(
+            f"{case_id} changed while this step was being prepared: another writer "
+            "recorded something on it after it was read, so nothing was recorded. "
+            "Re-read the case and decide again." + (f" ({detail})" if detail else ""))
+        self.case_id = case_id
+
+
 class CaseStore:
-    """Read and write ``ChangeAssuranceCase`` state through one ledger."""
+    """Read and write ``ChangeAssuranceCase`` state through one ledger.
+
+    **No lost update.** Reading a case and appending its next snapshot are two
+    steps, and the newest snapshot *is* the case, so an unguarded append silently
+    overwrites whatever another writer recorded in between. :meth:`get` therefore
+    remembers, per case, the ledger position of the newest case entry it saw, and
+    every write is a compare-and-swap against it, checked by the ledger inside
+    its own ``BEGIN IMMEDIATE`` write transaction (so it holds across threads and
+    processes alike). A write whose case has moved raises
+    :class:`CaseConflictError`. A store is meant to be short-lived (one request,
+    one command): the position is whatever *this* store last read, and a write to
+    a case this store never read is not guarded (only opening one is: it must not
+    exist yet).
+    """
 
     def __init__(self, ledger: EvidenceLedger) -> None:
         self.ledger = ledger
+        self._heads: dict[str, int] = {}
 
     def require_intact(self, *, full: bool = False) -> None:
         """Refuse (``LedgerIntegrityError``) unless the ledger's whole chain verifies.
@@ -108,13 +141,16 @@ class CaseStore:
         needed, and none trusted from inside a payload that could be forged.
         """
         latest: ChangeAssuranceCase | None = None
+        head = 0
         for entry in self.ledger.entries(subject=case_id):
             if entry.kind not in CASE_KINDS:
                 continue
+            head = entry.seq        # even an entry that does not verify is the head
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
             latest = ChangeAssuranceCase.from_dict(evidence.body["case"])
+        self._heads[case_id] = head
         return latest
 
     def list(self, *, status: CaseStatus | None = None) -> list[ChangeAssuranceCase]:
@@ -197,7 +233,16 @@ class CaseStore:
             else Confidence.LOW if stamped.confidence == "low" else Confidence.NONE,
             checks_skipped=stamped.checks_skipped,
         ).seal()
-        self.ledger.append(evidence, subject=stamped.case_id)
+        # Compare-and-swap against the case entry this store last read. An unread
+        # case is only guarded when it is being opened (it must not exist yet).
+        expected = self._heads.get(stamped.case_id, 0 if kind == OPENED_KIND else None)
+        try:
+            entry = self.ledger.append(
+                evidence, subject=stamped.case_id,
+                expect_subject_head=expected, expect_kinds=CASE_KINDS)
+        except LedgerConflictError as exc:
+            raise CaseConflictError(stamped.case_id, str(exc)) from exc
+        self._heads[stamped.case_id] = entry.seq
         return stamped
 
     def open(self, case: ChangeAssuranceCase, *, actor: Actor, detail: str) -> ChangeAssuranceCase:
