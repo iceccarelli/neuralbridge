@@ -12,11 +12,10 @@ import sqlite3
 
 import pytest
 
-from assurance.api import restore_check
 from assurance.api.deps import tenant_ledger_path
 from assurance.billing.accounts import AccountStore
 from assurance.core import Actor, Evidence, Origin
-from assurance.evidence import EvidenceLedger
+from assurance.evidence import EvidenceLedger, restore_check
 
 
 def _ev(n: int) -> Evidence:
@@ -40,6 +39,10 @@ def data(tmp_path, monkeypatch):
         for i in range(4):
             led.append(_ev(i), subject="CASE-1")
         ids.append(acct.id)
+    (root / "attestations").mkdir()
+    (root / "attestations" / f"{ids[0]}.jsonl").write_text('{"x":1}\n')
+    (root / "supplier-feeds").mkdir()
+    (root / "supplier-feeds" / f"{ids[0]}.jsonl").write_text('{"y":1}\n')
     shared = EvidenceLedger(root / "art14-register.db")
     shared.append(_ev(0))
     return root, ids
@@ -48,8 +51,9 @@ def data(tmp_path, monkeypatch):
 def test_backup_then_verify_covers_every_tenant(data, tmp_path):
     root, ids = data
     names = restore_check.backup(root, tmp_path / "bk")
-    assert set(names) == {"accounts.db", "art14-register.db",
-                          *(f"tenants/{i}.db" for i in ids)}
+    assert set(names) == {"accounts.db", "art14-register.db", "attestations/",
+                          "supplier-feeds/", *(f"tenants/{i}.db" for i in ids)}
+    assert (tmp_path / "bk" / "attestations" / f"{ids[0]}.jsonl").read_text() == '{"x":1}\n'
     result = restore_check.verify(tmp_path / "bk")
     assert result["ok"], result
     assert all(result["checked"][f"tenants/{i}.db"] == 4 for i in ids)

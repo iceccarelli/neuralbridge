@@ -4,7 +4,9 @@ The hosted service keeps three kinds of state, all SQLite, all on one volume:
 
 * ``accounts.db`` — accounts, key hashes, usage, processed billing events;
 * the operator ledger (``art14-register.db``) — the shared, operator-only chain;
-* ``tenants/<account id>.db`` — one hash-chained ledger per customer account.
+* ``tenants/<account id>.db`` — one hash-chained ledger per customer account;
+* ``attestations/`` and ``supplier-feeds/`` — append-only JSONL logs, copied as
+  files (they are written by single appends and are not SQLite).
 
 A plain file copy of a WAL-mode database can lose its newest records, and
 ``sqlite3 .dump`` of only the operator ledger — what the deploy README used to
@@ -18,8 +20,8 @@ What it cannot: that nothing was *removed* from a ledger by someone who rebuilt
 the chain — only a signed head attestation closes that (``ATTEST.md``). It says
 so in its output.
 
-    python -m assurance.api.restore_check backup  <data dir> <backup dir>
-    python -m assurance.api.restore_check verify  <data or backup dir>
+    python -m assurance.evidence.restore_check backup  <data dir> <backup dir>
+    python -m assurance.evidence.restore_check verify  <data or backup dir>
 
 Exit codes: 0 verified, 1 a finding, 2 could not run.
 """
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -39,6 +42,7 @@ __all__ = ["backup", "verify", "main"]
 _OPERATOR_LEDGER = "art14-register.db"
 _ACCOUNTS = "accounts.db"
 _TENANT = re.compile(r"^acc_[0-9a-f]{16}\.db$")
+_LOG_DIRS = ("attestations", "supplier-feeds")
 
 
 def _snapshot(src: Path, dest: Path) -> None:
@@ -69,6 +73,10 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
         for path in sorted(tenants.glob("*.db")):
             _snapshot(path, out_dir / "tenants" / path.name)
             taken.append(f"tenants/{path.name}")
+    for name in _LOG_DIRS:
+        if (data_dir / name).is_dir():
+            shutil.copytree(data_dir / name, out_dir / name, dirs_exist_ok=True)
+            taken.append(f"{name}/")
     return taken
 
 
@@ -133,6 +141,10 @@ def verify(root: Path) -> dict[str, object]:
             if known and path.stem not in known:
                 problems.append(f"{label}: belongs to no account in {_ACCOUNTS}")
             check_ledger(path, label)
+
+    for name in _LOG_DIRS:
+        if (root / name).is_dir():
+            checked[f"{name}/"] = sum(1 for _ in (root / name).glob("*"))
 
     return {
         "ok": not problems,

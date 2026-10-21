@@ -158,9 +158,9 @@ On the machine that holds the volume (single writer, so run it where the app
 runs):
 
 ```bash
-fly ssh console -C "python -m assurance.api.restore_check backup /data /data/backups/$(date +%F)"
+fly ssh console -C "python -m assurance.evidence.restore_check backup /data /data/backups/$(date +%F)"
 fly ssh sftp get -r /data/backups/$(date +%F) ./backup-$(date +%F)   # off the volume, off the provider
-python -m assurance.api.restore_check verify ./backup-$(date +%F)
+python -m assurance.evidence.restore_check verify ./backup-$(date +%F)
 ```
 
 `backup` takes a transactionally consistent snapshot of every database (a plain
