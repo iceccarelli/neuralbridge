@@ -179,6 +179,28 @@ async def machines(
     return Fleet.from_ledger(register.ledger).to_dict()
 
 
+@fleet_router.get(
+    "/observations",
+    summary="When was each machine last looked at, and did the last attempt work?",
+)
+async def observations(
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Per machine: last successful observation, last attempt, staleness, open cases.
+
+    Reads the ``watch.observation`` records in the caller's own ledger, which
+    are there only because the account holder reported them
+    (``POST /v1/watch/report``). A failed attempt is never a positive one, and
+    a machine is stale once its last *successful* observation is older than the
+    cadence the customer declared. Nothing is derived here that Watch did not
+    already record.
+    """
+    from assurance.watch.observations import fleet_observations
+
+    return fleet_observations(register.ledger)
+
+
 @fleet_router.post(
     "/advisory",
     summary="Which of your machines does this advisory touch?",

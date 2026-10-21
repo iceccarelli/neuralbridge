@@ -159,6 +159,7 @@ ignore = [
 "src/assurance/report/cli.py" = ["T20"]
 "src/assurance/bridge/cli.py" = ["T20"]
 "src/assurance/watch/cli.py" = ["T20"]
+"src/assurance/watch/push.py" = ["T20"]
 "src/assurance/attest/cli.py" = ["T20"]
 "src/assurance/kit/cli.py" = ["T20"]
 "src/assurance/supplier/cli.py" = ["T20"]

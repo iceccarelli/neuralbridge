@@ -1,0 +1,793 @@
+"""Reporting Watch results to the customer's own hosted ledger.
+
+``POST /v1/watch/report`` and ``GET /v1/fleet/observations`` exist so a paying
+customer can see the thing they pay for: the last successful observation, the
+attempts that failed and the machines nobody has looked at lately. Everything
+here runs the real engines — collection plans over synthetic vendor exports,
+the manifest ledger, ``compare()``, ``assess_drift``, the case store — and the
+real per-account ledgers behind ``get_register``. The properties pinned are the
+ones that make the feature honest:
+
+* a failed look is recorded as a failed look and never as a positive one;
+* the hosted side adds no finding of its own: a case it opens is the case
+  ``assess_drift`` opens for the same manifests;
+* a retry writes nothing; an older report cannot rewind the record;
+* one tenant's report is never another tenant's data.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import threading
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from assurance.api import deps
+from assurance.change import CaseStatus, CaseStore, assess_drift
+from assurance.change.store import CASE_KINDS
+from assurance.collect.collector import collect
+from assurance.collect.plan import CollectionPlan
+from assurance.core.evidence import Actor
+from assurance.evidence.ledger import EvidenceLedger
+from assurance.machinery.divergence import compare
+from assurance.machinery.manifest import ManifestSource
+from assurance.machinery.record import manifests_from_ledger, record_manifest
+from assurance.watch.ingest import ingest_report
+from assurance.watch.observations import fleet_observations
+from assurance.watch.runner import _last_observation_at
+
+from .support import plan_dict, write_export
+
+OPERATOR_KEY = "operator-key-test-watch-report"
+KEY_0412 = "Grimaldi/AR-7#0412"
+KEY_0501 = "Grimaldi/AR-7#0501"
+SCANNER = Actor("assurance-watch", "scheduled watch", "automation")
+
+
+def now() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def iso(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# -- building reports from the real collector --------------------------------
+
+_counter = {"n": 0}
+
+
+def make_manifest(base: Path, serial: str = "0412", *, fw: bytes = b"firmware 3.8.2",
+                  when: datetime | None = None) -> dict:
+    """A real manifest: the collection plan run over synthetic vendor exports."""
+    _counter["n"] += 1
+    root = base / f"exports-{serial}-{_counter['n']}"
+    write_export(root, stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181", fw=fw)
+    plan = CollectionPlan.from_dict(plan_dict())
+    result = collect(plan, root, serial=serial, taken_by=SCANNER, site="Plant 2",
+                     country="DE", source=ManifestSource.AS_FOUND,
+                     taken_at=when or now())
+    return result.manifest.to_dict()
+
+
+def good(manifest: dict, *, at: datetime, status: str = "unchanged", detail: str = "",
+         keep_taken_at: bool = False) -> dict:
+    """A positive entry. The manifest is stamped as taken at the observation, as a run does."""
+    if not keep_taken_at:
+        manifest = {**manifest, "taken_at": iso(at)}
+    m = manifest["machine"]
+    return {"serial": m["serial"],
+            "machine_key": f"{m['manufacturer']}/{m['model']}#{m['serial']}",
+            "status": status, "observed_at": iso(at), "collection_complete": True,
+            "manifest": manifest, "detail": detail}
+
+
+def failed(serial: str, *, at: datetime, status: str = "uncollectable",
+           key: str | None = None, detail: str = "could not be collected") -> dict:
+    return {"serial": serial, "machine_key": key if key is not None else f"Grimaldi/AR-7#{serial}",
+            "status": status, "observed_at": iso(at), "collection_complete": False,
+            "manifest": None, "detail": detail,
+            "missing_items": ["ITM-PLC"] if status == "incomplete" else []}
+
+
+def report(*machines: dict, started: datetime | None = None, watch_id: str = "WATCH-T",
+           max_age_hours: float | None = None, **extra) -> dict:
+    body = {"watch_id": watch_id, "run_started_at": iso(started or now()),
+            "machines": list(machines)}
+    if max_age_hours is not None:
+        body["max_age_hours"] = max_age_hours
+    body.update(extra)
+    return body
+
+
+# -- fixtures ------------------------------------------------------------------
+
+@pytest.fixture(name="env")
+def _env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "shared" / "art14.db"))
+    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
+    monkeypatch.setenv("ASSURANCE_API_KEYS", OPERATOR_KEY)
+    monkeypatch.delenv("ASSURANCE_TENANT_LEDGERS", raising=False)
+    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
+    monkeypatch.delenv("ASSURANCE_MAX_BODY_BYTES", raising=False)
+    for cache in (deps._register_for, deps._tenant_register_for, deps._accounts_for):
+        cache.cache_clear()
+    yield tmp_path
+    for cache in (deps._register_for, deps._tenant_register_for, deps._accounts_for):
+        cache.cache_clear()
+
+
+@pytest.fixture(name="client")
+def _client(env):
+    service = importlib.import_module("assurance.api.service")
+    with TestClient(service.create_app()) as c:
+        yield c
+
+
+@pytest.fixture(name="accounts")
+def _accounts(client):
+    return deps.get_accounts()
+
+
+def account(accounts, tier="cell", email="a@example.de"):
+    acct = accounts.upsert_account(email=email, tier=tier, stripe_customer_id=f"cus_{email}")
+    return acct, {"X-API-Key": accounts.issue_key(acct.id)}
+
+
+@pytest.fixture(name="cell")
+def _cell(accounts):
+    return account(accounts, "cell", "cell@example.de")
+
+
+def ledger_of(acct) -> EvidenceLedger:
+    return EvidenceLedger(deps.tenant_ledger_path(acct.id))
+
+
+def post(client, headers, body):
+    return client.post("/v1/watch/report", headers=headers, json=body)
+
+
+def observations(client, headers):
+    r = client.get("/v1/fleet/observations", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def machine_row(client, headers, key):
+    return next(m for m in observations(client, headers)["machines"] if m["machine"] == key)
+
+
+def case_entries(ledger):
+    return [e for e in ledger.entries() if e.kind in CASE_KINDS]
+
+
+# =====================================================================
+# the boundary: who may call, and what a body may be
+# =====================================================================
+
+class TestAccess:
+    def test_no_key_is_401_on_both_routes(self, client, tmp_path):
+        body = report(failed("0412", at=now()))
+        assert client.post("/v1/watch/report", json=body).status_code == 401
+        assert client.get("/v1/fleet/observations").status_code == 401
+
+    def test_a_wrong_key_is_401(self, client):
+        h = {"X-API-Key": "asr_not_a_real_key"}
+        assert post(client, h, report(failed("0412", at=now()))).status_code == 401
+        assert client.get("/v1/fleet/observations", headers=h).status_code == 401
+
+    def test_register_tier_is_402_on_both_routes_and_writes_nothing(self, client, accounts):
+        acct, h = account(accounts, "register", "reg@example.de")
+        r = post(client, h, report(failed("0412", at=now())))
+        assert r.status_code == 402
+        assert r.json()["detail"]["error"] == "plan_does_not_include_machine_verification"
+        assert client.get("/v1/fleet/observations", headers=h).status_code == 402
+        assert len(ledger_of(acct)) == 0
+
+    def test_an_oversize_body_is_413_and_writes_nothing(self, client, cell):
+        acct, h = cell
+        body = report(failed("0412", at=now(), detail="x" * 100))
+        body["padding"] = "p" * (1024 * 1024 + 10)
+        r = client.post("/v1/watch/report", headers=h, json=body)
+        assert r.status_code == 413
+        assert r.json()["detail"]["error"] == "request_too_large"
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_fleet_of_200_machines_fits_under_the_default_cap(self, client, cell):
+        acct, h = cell
+        t = now() - timedelta(hours=1)
+        machines = [failed(f"{n:04d}", at=t, detail="could not be collected: no export folder")
+                    for n in range(200)]
+        raw = json.dumps(report(*machines, max_age_hours=168))
+        assert len(raw.encode()) < 1024 * 1024
+        r = client.post("/v1/watch/report", headers={**h, "content-type": "application/json"},
+                        content=raw)
+        assert r.status_code == 200, r.text[:300]
+        assert r.json()["summary"]["recorded"] == 200
+
+    def test_more_than_200_machines_in_one_report_is_422(self, client, cell):
+        _, h = cell
+        t = now() - timedelta(hours=1)
+        machines = [failed(f"{n:04d}", at=t) for n in range(201)]
+        assert post(client, h, report(*machines)).status_code == 422
+
+    @pytest.mark.parametrize("mutate", [
+        lambda b: b.update(surprise=1),
+        lambda b: b["machines"][0].update(surprise=1),
+        lambda b: b["machines"][0].update(status="fine"),
+        lambda b: b.update(machines=[]),
+        lambda b: b.update(watch_id=""),
+        lambda b: b.update(run_started_at="yesterday"),
+        lambda b: b.update(run_started_at="2026-10-01T06:00:00"),   # naive: refuses to guess
+        lambda b: b["machines"][0].update(observed_at="2026-10-01T06:00:00"),
+        lambda b: b.update(max_age_hours=0),
+        lambda b: b.update(max_age_hours=-5),
+        lambda b: b.update(batch_index=1),
+        lambda b: b["machines"][0].update(detail="d" * 2001),
+        lambda b: b["machines"][0].update(collection_complete="maybe"),
+    ])
+    def test_malformed_bodies_are_422_and_write_nothing(self, client, cell, mutate):
+        acct, h = cell
+        body = report(failed("0412", at=now() - timedelta(minutes=5)))
+        mutate(body)
+        assert post(client, h, body).status_code == 422
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_report_started_in_the_future_is_422(self, client, cell):
+        acct, h = cell
+        body = report(failed("0412", at=now()), started=now() + timedelta(hours=2))
+        r = post(client, h, body)
+        assert r.status_code == 422
+        assert r.json()["detail"]["error"] == "run_started_at_in_future"
+        assert len(ledger_of(acct)) == 0
+
+
+# =====================================================================
+# failure to observe is explicit, and never a positive observation
+# =====================================================================
+
+class TestFailureIsExplicit:
+    def test_uncollectable_is_recorded_as_exactly_that(self, client, cell):
+        acct, h = cell
+        r = post(client, h, report(failed("0501", at=now() - timedelta(minutes=3))))
+        m = r.json()["machines"][0]
+        assert (m["outcome"], m["recorded_status"]) == ("recorded", "uncollectable")
+        assert m["counts_as_observation"] is False
+        body = [e.evidence().body for e in ledger_of(acct).entries(kind="watch.observation")][0]
+        assert body["status"] == "uncollectable" and body["complete"] is False
+        row = machine_row(client, h, KEY_0501)
+        assert row["last_successful_observation_at"] is None
+        assert row["last_attempt_status"] == "uncollectable"
+        assert row["last_attempt_succeeded"] is False
+        assert row["stale"] is True and row["stale_reason"] == "never_successfully_observed"
+        assert row["consecutive_failed_attempts"] == 1
+
+    def test_incomplete_is_recorded_as_incomplete_and_is_not_a_look(self, client, cell):
+        acct, h = cell
+        post(client, h, report(failed("0501", at=now() - timedelta(minutes=3), status="incomplete")))
+        row = machine_row(client, h, KEY_0501)
+        assert row["last_attempt_status"] == "incomplete"
+        assert row["last_successful_observation_at"] is None and row["stale"] is True
+
+    def test_a_failed_attempt_after_a_good_one_does_not_replace_it(self, client, cell, tmp_path):
+        acct, h = cell
+        good_at = now() - timedelta(hours=30)
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=good_at),
+                               started=good_at, max_age_hours=24))
+        bad_at = now() - timedelta(hours=1)
+        post(client, h, report(failed("0412", at=bad_at), started=bad_at, max_age_hours=24))
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_observation_at"] == iso(good_at)
+        assert row["last_attempt_at"] == iso(bad_at)
+        assert row["last_attempt_status"] == "uncollectable"
+        assert row["stale"] is True and row["stale_reason"] == "older_than_cadence"
+        assert row["consecutive_failed_attempts"] == 1
+
+    def test_the_runners_own_staleness_code_reads_the_hosted_ledger_the_same_way(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        good_at = now() - timedelta(hours=40)
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=good_at),
+                               failed("0501", at=now() - timedelta(hours=1))))
+        post(client, h, report(failed("0412", at=now() - timedelta(hours=1))))
+        ledger = ledger_of(acct)
+        assert _last_observation_at(ledger, "0412") == good_at
+        assert _last_observation_at(ledger, "0501") is None
+
+    def test_an_incomplete_look_is_not_a_look_to_the_runners_staleness_code_either(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        post(client, h, report(failed("0501", at=now() - timedelta(hours=2), status="incomplete")))
+        assert _last_observation_at(ledger_of(acct), "0501") is None
+
+    def test_consecutive_failures_count_and_a_success_resets_them(self, client, cell, tmp_path):
+        acct, h = cell
+        for hours in (50, 40, 30):
+            post(client, h, report(failed("0412", at=now() - timedelta(hours=hours))))
+        assert machine_row(client, h, KEY_0412)["consecutive_failed_attempts"] == 3
+        recovered = now() - timedelta(hours=5)
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=recovered)))
+        row = machine_row(client, h, KEY_0412)
+        assert row["consecutive_failed_attempts"] == 0
+        assert row["last_attempt_succeeded"] is True and row["stale"] is False
+
+    def test_a_failed_look_cannot_carry_a_manifest(self, client, cell, tmp_path):
+        acct, h = cell
+        entry = failed("0412", at=now() - timedelta(minutes=2))
+        entry["manifest"] = make_manifest(tmp_path, "0412")
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_not_accepted")
+        assert len(ledger_of(acct)) == 0
+
+    @pytest.mark.parametrize("status,flag,reason", [
+        ("unchanged", False, "inconsistent_collection_flag"),
+        ("changed", False, "inconsistent_collection_flag"),
+        ("uncollectable", True, "inconsistent_collection_flag"),
+        ("incomplete", True, "inconsistent_collection_flag"),
+    ])
+    def test_a_status_that_contradicts_its_completeness_flag_is_refused(
+            self, client, cell, tmp_path, status, flag, reason):
+        acct, h = cell
+        if status in ("unchanged", "changed"):
+            entry = good(make_manifest(tmp_path), at=now() - timedelta(minutes=2), status=status)
+        else:
+            entry = failed("0412", at=now() - timedelta(minutes=2), status=status)
+        entry["collection_complete"] = flag
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", reason)
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_positive_look_without_its_manifest_is_refused(self, client, cell, tmp_path):
+        acct, h = cell
+        entry = good(make_manifest(tmp_path), at=now() - timedelta(minutes=2))
+        entry["manifest"] = None
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_required")
+
+    def test_a_manifest_that_says_its_collection_was_incomplete_cannot_be_positive(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        manifest = make_manifest(tmp_path)
+        manifest["notes"] = "[collection incomplete: ITM-PLC not collected]"
+        m = post(client, h, report(good(manifest, at=now() - timedelta(minutes=2)))
+                 ).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_marked_incomplete")
+        assert len(ledger_of(acct)) == 0
+
+    def test_an_uncollectable_machine_never_moves_an_open_case(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(days=2)
+        post(client, h, report(good(make_manifest(tmp_path), at=t), started=t))
+        t2 = now() - timedelta(days=1)
+        r = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                        status="changed"), started=t2))
+        case_id = r.json()["machines"][0]["case_id"]
+        ledger = ledger_of(acct)
+        before = (CaseStore(ledger).get(case_id), len(case_entries(ledger)))
+        assert before[0].status is CaseStatus.OPEN
+
+        for status in ("uncollectable", "incomplete"):
+            m = post(client, h, report(failed("0412", at=now() - timedelta(minutes=1), status=status
+                                              ))).json()["machines"][0]
+            assert m["case_id"] == "" and m["case_status"] == ""
+            assert case_id in m["open_case_ids"]            # named, left exactly where it was
+            ledger = ledger_of(acct)
+            assert CaseStore(ledger).get(case_id) == before[0]
+            assert len(case_entries(ledger)) == before[1]
+
+    def test_nothing_a_report_does_can_close_a_case(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(days=3)
+        post(client, h, report(good(make_manifest(tmp_path), at=t), started=t))
+        t2 = now() - timedelta(days=2)
+        r = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                        status="changed"), started=t2))
+        case_id = r.json()["machines"][0]["case_id"]
+        # A later look that is perfectly clean — same, drifted configuration — is
+        # not a reason for the case to move: only a person with evidence closes it.
+        t3 = now() - timedelta(hours=1)
+        post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t3), started=t3))
+        case = CaseStore(ledger_of(acct)).get(case_id)
+        assert case.status is CaseStatus.OPEN
+        kinds = {h["kind"] for h in case.history}
+        assert kinds <= {"assurance.change.opened", "assurance.change.updated"}
+        for entry in case_entries(ledger_of(acct)):
+            assert entry.evidence().actor.kind == "automation"
+
+
+# =====================================================================
+# staleness against a declared cadence
+# =====================================================================
+
+class TestStale:
+    def test_stale_is_judged_against_the_declared_cadence(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(hours=30)
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=t),
+                               good(make_manifest(tmp_path, "0501"), at=now() - timedelta(hours=10)),
+                               started=t, max_age_hours=24))
+        data = observations(client, h)
+        assert data["cadence_hours"] == 24 and data["cadence_declared"] is True
+        rows = {m["machine"]: m for m in data["machines"]}
+        assert rows[KEY_0412]["stale"] is True
+        assert rows[KEY_0412]["age_hours"] == pytest.approx(30, abs=0.1)
+        assert rows[KEY_0501]["stale"] is False and rows[KEY_0501]["stale_reason"] == ""
+        assert data["summary"]["stale"] == 1
+
+    def test_the_default_cadence_is_168_hours_until_one_is_declared(self, client, cell, tmp_path):
+        acct, h = cell
+        post(client, h, report(good(make_manifest(tmp_path, "0412"), at=now() - timedelta(hours=100))))
+        post(client, h, report(good(make_manifest(tmp_path, "0501"), at=now() - timedelta(hours=200))))
+        data = observations(client, h)
+        assert data["cadence_hours"] == 168 and data["cadence_declared"] is False
+        rows = {m["machine"]: m for m in data["machines"]}
+        assert rows[KEY_0412]["stale"] is False and rows[KEY_0501]["stale"] is True
+
+    def test_an_older_report_cannot_move_the_declared_cadence(self, client, cell, tmp_path):
+        acct, h = cell
+        new = now() - timedelta(hours=2)
+        post(client, h, report(failed("0412", at=new), started=new, max_age_hours=24))
+        old = now() - timedelta(days=3)
+        post(client, h, report(failed("0501", at=old), started=old, max_age_hours=720))
+        assert observations(client, h)["cadence_hours"] == 24
+
+    def test_an_enrolled_machine_nobody_ever_reported_is_stale_and_says_so(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        record_manifest(ledger_of(acct), _manifest_obj(tmp_path, "0777"))
+        data = observations(client, h)
+        assert data["reporting"] is False
+        row = data["machines"][0]
+        assert row["machine"] == "Grimaldi/AR-7#0777"
+        assert row["reported"] is False and row["last_attempt_at"] is None
+        assert row["stale"] is True and row["stale_reason"] == "never_reported"
+        assert data["summary"]["never_reported"] == 1
+
+    def test_an_empty_ledger_reports_nothing_rather_than_something_invented(self, client, cell):
+        _, h = cell
+        data = observations(client, h)
+        assert data["machines"] == [] and data["reporting"] is False
+        assert data["summary"]["machines"] == 0
+
+
+def _manifest_obj(base, serial):
+    from assurance.machinery.manifest import SafetyManifest
+    return SafetyManifest.from_dict(make_manifest(base, serial))
+
+
+# =====================================================================
+# the hosted side derives no finding of its own
+# =====================================================================
+
+class TestSameDomainFunctions:
+    def test_a_changed_manifest_opens_exactly_the_case_assess_drift_opens(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        base = make_manifest(tmp_path, fw=b"firmware 3.8.2")
+        moved = make_manifest(tmp_path, fw=b"firmware 3.9.0")
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+
+        r1 = post(client, h, report(good(base, at=t1), started=t1)).json()["machines"][0]
+        assert (r1["recorded_status"], r1["case_id"]) == ("first_seen", "")
+        r2 = post(client, h, report(good(moved, at=t2, status="changed"), started=t2)
+                  ).json()["machines"][0]
+        assert r2["recorded_status"] == "changed" and r2["case_opened"] is True
+        hosted = CaseStore(ledger_of(acct)).get(r2["case_id"])
+
+        # The reference: the very function and the very inputs, on a fresh ledger.
+        ref_ledger = EvidenceLedger(tmp_path / "reference.db")
+        from assurance.machinery.manifest import SafetyManifest
+        b, o = SafetyManifest.from_dict(base), SafetyManifest.from_dict(moved)
+        record_manifest(ref_ledger, b)
+        reference = assess_drift(CaseStore(ref_ledger), compare(b, o), o, [], [],
+                                 actor=Actor("ref", "scheduled watch", "automation"))
+        assert hosted.case_id == reference.case_id
+        assert hosted.changed_items == reference.changed_items
+        assert hosted.affected_functions == reference.affected_functions
+        assert hosted.required_actions == reference.required_actions
+        assert hosted.after_hash == reference.after_hash and hosted.before_hash == reference.before_hash
+
+        # And it is the case /v1/change serves, in the same ledger.
+        listed = client.get("/v1/change/cases", headers=h).json()["cases"]
+        assert [c["case_id"] for c in listed] == [r2["case_id"]]
+
+    def test_the_status_the_reporter_claims_is_not_trusted(self, client, cell, tmp_path):
+        acct, h = cell
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.8.2"), at=t1)))
+        # "unchanged" over a manifest that moved: this ledger compares, and a case opens.
+        m = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                        status="unchanged"))).json()["machines"][0]
+        assert (m["reported_status"], m["recorded_status"]) == ("unchanged", "changed")
+        assert m["case_id"] and "reporter said" in m["detail"]
+        # "changed" over a manifest identical to what is held: no case, no new manifest.
+        t3 = now() - timedelta(hours=1)
+        n = len(manifests_from_ledger(ledger_of(acct), KEY_0412))
+        m = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t3,
+                                        status="changed"))).json()["machines"][0]
+        assert m["recorded_status"] == "observed" and m["case_opened"] is False
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == n
+
+    def test_a_first_manifest_is_a_baseline_not_a_finding(self, client, cell, tmp_path):
+        acct, h = cell
+        m = post(client, h, report(good(make_manifest(tmp_path), at=now() - timedelta(minutes=5),
+                                        status="changed"))).json()["machines"][0]
+        assert m["recorded_status"] == "first_seen" and m["case_id"] == ""
+        assert client.get("/v1/change/cases", headers=h).json()["cases"] == []
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == 1
+
+    def test_a_drift_that_is_not_safety_relevant_opens_no_case(self, client, cell, tmp_path):
+        acct, h = cell
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        a = make_manifest(tmp_path)
+        post(client, h, report(good(a, at=t1)))
+        b = json.loads(json.dumps(a))
+        for item in b["items"]:
+            if item["item_id"] == "ITM-ZONES":
+                item["name"] = "Safety scanner zone set (renamed)"
+        m = post(client, h, report(good(b, at=t2, status="changed"))).json()["machines"][0]
+        assert m["recorded_status"] == "changed" and m["case_id"] == ""
+
+
+# =====================================================================
+# idempotent, and order-safe
+# =====================================================================
+
+class TestRetryAndOrder:
+    def test_replaying_a_report_writes_nothing_and_opens_no_second_case(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        post(client, h, report(good(make_manifest(tmp_path), at=t1), started=t1))
+        moved = report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2, status="changed"),
+                       failed("0501", at=t2), started=t2, max_age_hours=100)
+        first = post(client, h, moved).json()
+        ledger = ledger_of(acct)
+        length = len(ledger)
+        cases = len(case_entries(ledger))
+
+        for _ in range(3):
+            again = post(client, h, moved).json()
+            assert [m["outcome"] for m in again["machines"]] == ["already_recorded"] * 2
+            assert again["report_recorded"] is False
+            assert again["cases_opened"] == []
+        assert len(ledger_of(acct)) == length
+        assert len(case_entries(ledger_of(acct))) == cases
+        assert len(client.get("/v1/change/cases", headers=h).json()["cases"]) == 1
+        assert first["cases_opened"] and first["report_recorded"] is True
+
+    def test_a_retry_that_spells_the_same_instant_differently_is_still_a_retry(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(hours=2)
+        entry = failed("0412", at=t)
+        post(client, h, report(entry, started=t))
+        length = len(ledger_of(acct))
+        entry2 = dict(entry, observed_at=t.strftime("%Y-%m-%dT%H:%M:%S+00:00"))
+        m = post(client, h, report(entry2, started=t)).json()["machines"][0]
+        assert m["outcome"] == "already_recorded"
+        assert len(ledger_of(acct)) == length
+
+    def test_an_older_report_arriving_late_is_ignored(self, client, cell, tmp_path):
+        acct, h = cell
+        t_new, t_old = now() - timedelta(hours=1), now() - timedelta(hours=30)
+        post(client, h, report(good(make_manifest(tmp_path), at=t_new), started=t_new))
+        length = len(ledger_of(acct))
+        r = post(client, h, report(failed("0412", at=t_old), started=t_old)).json()
+        m = r["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "superseded_by_newer_observation")
+        assert len(ledger_of(acct)) == length
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_attempt_status"] == "first_seen"      # not rewound to the old failure
+        assert row["last_attempt_at"] == iso(t_new)
+
+    def test_a_different_observation_at_a_recorded_instant_conflicts(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(hours=2)
+        post(client, h, report(failed("0412", at=t, detail="no folder")))
+        m = post(client, h, report(failed("0412", at=t, detail="a different story")))\
+            .json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "conflicts_with_recorded_observation")
+
+    def test_entries_in_one_report_are_applied_oldest_first(self, client, cell, tmp_path):
+        acct, h = cell
+        good_at, bad_at = now() - timedelta(days=9), now() - timedelta(hours=1)
+        # The newer failure is listed first on purpose: it must not make the older
+        # success look "older than recorded".
+        r = post(client, h, report(failed("0412", at=bad_at),
+                                   good(make_manifest(tmp_path), at=good_at),
+                                   started=bad_at)).json()
+        assert [m["outcome"] for m in r["machines"]] == ["recorded", "recorded"]
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_observation_at"] == iso(good_at)
+        assert row["last_attempt_status"] == "uncollectable"
+
+    def test_a_crash_between_the_case_and_the_manifest_leaves_a_retry_with_one_case(
+            self, env, tmp_path, monkeypatch):
+        ledger = EvidenceLedger(tmp_path / "crash.db")
+        actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        ingest_report(ledger, _plain(report(good(make_manifest(tmp_path), at=t1), started=t1)),
+                      actor=actor)
+        moved = _plain(report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                   status="changed"), started=t2))
+
+        from assurance.watch import ingest
+        real = ingest.record_manifest
+        calls = {"n": 0}
+
+        def die_once(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("process died after the case was opened")
+            return real(*a, **k)
+
+        monkeypatch.setattr(ingest, "record_manifest", die_once)
+        with pytest.raises(RuntimeError):
+            ingest_report(ledger, moved, actor=actor)
+        assert len([e for e in case_entries(ledger) if e.kind.endswith("opened")]) == 1
+        # The baseline is still the old one, so the retry sees the same drift.
+        retried = ingest_report(ledger, moved, actor=actor)
+        assert retried.results[0].outcome == "recorded"
+        assert len([e for e in case_entries(ledger) if e.kind.endswith("opened")]) == 1
+        assert len(CaseStore(ledger).list()) == 1
+
+    def test_two_overlapping_identical_retries_write_one_set_of_records(
+            self, env, tmp_path):
+        ledger = EvidenceLedger(tmp_path / "race.db")
+        actor = Actor("hosted-watch-report", "watch report via account acc_x", "automation")
+        body = _plain(report(good(make_manifest(tmp_path), at=now() - timedelta(hours=1)),
+                             failed("0501", at=now() - timedelta(hours=1))))
+        results = []
+
+        def go():
+            results.append(ingest_report(ledger, body, actor=actor))
+
+        threads = [threading.Thread(target=go) for _ in range(6)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        recorded = sum(1 for r in results for m in r.results if m.outcome == "recorded")
+        assert recorded == 2
+        assert len(ledger.entries(kind="watch.observation")) == 2
+        assert ledger.verify_chain()[0] is True
+
+
+def _plain(body: dict) -> dict:
+    """What the route hands the domain function: the validated body, as a dict."""
+    from assurance.api.watch_routes import WatchReportIn
+    return WatchReportIn.model_validate(body).model_dump(mode="json")
+
+
+# =====================================================================
+# time
+# =====================================================================
+
+class TestTime:
+    def test_an_observation_from_the_future_is_refused(self, client, cell, tmp_path):
+        acct, h = cell
+        entry = failed("0412", at=now() + timedelta(hours=3))
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "observed_at_in_future")
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_small_clock_skew_is_tolerated(self, client, cell, tmp_path):
+        acct, h = cell
+        entry = failed("0412", at=now() + timedelta(minutes=2))
+        assert post(client, h, report(entry)).json()["machines"][0]["outcome"] == "recorded"
+
+    def test_a_manifest_taken_after_its_observation_is_refused(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(days=1)
+        manifest = make_manifest(tmp_path, when=now() - timedelta(hours=1))
+        m = post(client, h, report(good(manifest, at=t, keep_taken_at=True))).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_taken_after_observation")
+
+    def test_a_future_entry_does_not_poison_the_rest_of_the_report(self, client, cell, tmp_path):
+        acct, h = cell
+        r = post(client, h, report(failed("0412", at=now() + timedelta(days=1)),
+                                   failed("0501", at=now() - timedelta(minutes=1)))).json()
+        assert [m["outcome"] for m in r["machines"]] == ["refused", "recorded"]
+        assert r["summary"] == {**r["summary"], "recorded": 1, "refused": 1}
+
+
+# =====================================================================
+# the tenant boundary
+# =====================================================================
+
+class TestTenancy:
+    def test_a_report_is_visible_to_its_sender_and_to_nobody_else(self, client, accounts, tmp_path):
+        a, ha = account(accounts, "cell", "a@example.de")
+        b, hb = account(accounts, "cell", "b@example.de")
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        post(client, ha, report(good(make_manifest(tmp_path), at=t1), started=t1))
+        post(client, ha, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                     status="changed"), failed("0501", at=t2), started=t2))
+
+        assert len(observations(client, ha)["machines"]) == 2
+        for path in ("/v1/fleet/observations", "/v1/fleet/machines", "/v1/change/cases"):
+            body = client.get(path, headers=hb).json()
+            assert KEY_0412 not in json.dumps(body) and KEY_0501 not in json.dumps(body)
+        assert observations(client, hb)["machines"] == []
+        assert observations(client, hb)["reporting"] is False
+        assert len(ledger_of(b)) == 0
+
+    def test_the_same_machine_key_reported_by_b_lands_in_bs_ledger_only(
+            self, client, accounts, tmp_path):
+        a, ha = account(accounts, "cell", "a@example.de")
+        b, hb = account(accounts, "cell", "b@example.de")
+        t = now() - timedelta(hours=5)
+        post(client, ha, report(good(make_manifest(tmp_path), at=t), started=t))
+        a_len, a_head = len(ledger_of(a)), ledger_of(a).head_attestation()
+
+        # B names A's machine. The key is per tenant ledger, so this is B's own
+        # row about B's own claim and cannot touch A's record.
+        r = post(client, hb, report(failed("0412", at=now() - timedelta(minutes=1)))).json()
+        assert r["machines"][0]["outcome"] == "recorded"
+        assert len(ledger_of(a)) == a_len and ledger_of(a).head_attestation() == a_head
+        assert machine_row(client, ha, KEY_0412)["last_attempt_succeeded"] is True
+        assert machine_row(client, hb, KEY_0412)["last_attempt_succeeded"] is False
+
+    def test_an_entry_cannot_name_one_machine_and_carry_the_manifest_of_another(
+            self, client, accounts, tmp_path):
+        a, ha = account(accounts, "cell", "a@example.de")
+        t = now() - timedelta(minutes=5)
+        entry = good(make_manifest(tmp_path, "0412"), at=t)
+        entry["machine_key"] = "Grimaldi/AR-7#0999"
+        m = post(client, ha, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "machine_key_mismatch")
+        entry["machine_key"] = KEY_0412
+        entry["serial"] = "0999"
+        m = post(client, ha, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "serial_mismatch")
+        assert len(ledger_of(a)) == 0
+
+    def test_the_operator_key_reaches_the_shared_ledger_and_a_customers_does_not(
+            self, client, accounts, tmp_path):
+        a, ha = account(accounts, "cell", "a@example.de")
+        t = now() - timedelta(minutes=5)
+        post(client, {"X-API-Key": OPERATOR_KEY}, report(failed("0412", at=t)))
+        assert observations(client, ha)["machines"] == []
+
+
+# =====================================================================
+# the read model, on its own
+# =====================================================================
+
+class TestObservationsReadModel:
+    def test_open_cases_are_listed_per_machine(self, client, cell, tmp_path):
+        acct, h = cell
+        t1, t2 = now() - timedelta(days=2), now() - timedelta(days=1)
+        post(client, h, report(good(make_manifest(tmp_path), at=t1), started=t1))
+        r = post(client, h, report(good(make_manifest(tmp_path, fw=b"firmware 3.9.0"), at=t2,
+                                        status="changed"), started=t2)).json()
+        case_id = r["cases_opened"][0]
+        row = machine_row(client, h, KEY_0412)
+        assert row["open_case_ids"] == [case_id]
+        assert fleet_observations(ledger_of(acct))["machines"][0]["open_case_ids"] == [case_id]
+
+    def test_a_tampered_observation_record_is_ignored_not_trusted(self, client, cell, tmp_path):
+        acct, h = cell
+        post(client, h, report(failed("0412", at=now() - timedelta(hours=2))))
+        import sqlite3
+        db = sqlite3.connect(ledger_of(acct).path)
+        db.execute("UPDATE chain SET payload = replace(payload, 'uncollectable', 'observed') "
+                   "WHERE kind = 'watch.observation'")
+        db.commit()
+        db.close()
+        # The forged "observed" does not verify, so it is not read at all: the
+        # machine is not reported as seen by anything this ledger can vouch for.
+        assert observations(client, h)["machines"] == []
+        assert observations(client, h)["reporting"] is False
+
+    def test_the_response_carries_honest_limitations(self, client, cell, tmp_path):
+        acct, h = cell
+        r = post(client, h, report(failed("0412", at=now() - timedelta(minutes=1)))).json()
+        text = " ".join(r["limitations"])
+        assert "cannot tell a true report from a false one" in text
+        assert "never count as a successful observation" in text
+        assert "advisory" in text
+        assert observations(client, h)["limitations"]
