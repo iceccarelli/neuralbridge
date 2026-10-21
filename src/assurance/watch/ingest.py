@@ -66,7 +66,12 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import VerificationRecord
 from assurance.watch.observations import (
+    DEFAULT_CADENCE_HOURS,
     FAILED_STATUSES,
+    MANIFEST_STALE,
+    MAX_CADENCE_HOURS,
+    MIN_CADENCE_HOURS,
+    NOT_A_LOOK_STATUSES,
     OBSERVATION_KIND,
     REPORT_KIND,
     observed_at_of,
@@ -197,6 +202,9 @@ class MachineResult:
     observed_at: str = ""
     #: Whether this entry counts as a successful observation of the machine.
     counts_as_observation: bool = False
+    #: Hours between the manifest's ``taken_at`` and ``observed_at``; None for a
+    #: failed look, which carries no manifest.
+    manifest_age_hours: float | None = None
     case_id: str = ""
     case_status: str = ""
     case_opened: bool = False
@@ -213,6 +221,7 @@ class MachineResult:
             "detail": self.detail,
             "observed_at": self.observed_at,
             "counts_as_observation": self.counts_as_observation,
+            "manifest_age_hours": self.manifest_age_hours,
             "case_id": self.case_id,
             "case_status": self.case_status,
             "case_opened": self.case_opened,
@@ -252,7 +261,7 @@ class ReportResult:
                 "refused": count("refused"),
                 "failed_observations": sum(
                     1 for r in self.results
-                    if r.outcome == "recorded" and r.recorded_status in FAILED_STATUSES),
+                    if r.outcome == "recorded" and r.recorded_status in NOT_A_LOOK_STATUSES),
             },
             "machines": [r.to_dict() for r in self.results],
             "cases_opened": list(self.cases_opened),
@@ -304,6 +313,7 @@ def _seal_observation(
     observed_at: datetime, configuration_hash: str, complete: bool,
     missing: Sequence[str], detail: str, watch_id: str, run_started_at: str,
     digest: str, actor: Actor, cadence: float | None = None,
+    manifest_age_hours: float | None = None, manifest_relayed: bool = False,
 ) -> Evidence:
     """Seal a ``watch.observation`` in exactly the shape ``run_watch`` seals.
 
@@ -312,7 +322,7 @@ def _seal_observation(
     (``source``, ``reported_status``, ``report_digest`` ...) sit beside the
     runner's, so everything that reads an observation reads this one.
     """
-    failed = status in FAILED_STATUSES
+    failed = status in NOT_A_LOOK_STATUSES
     evidence = Evidence(
         kind=OBSERVATION_KIND,
         body={
@@ -334,6 +344,10 @@ def _seal_observation(
             # Declared by the reporting watch with a successful look, never with a
             # failed one: a report cannot lengthen what it did not observe.
             "cadence_hours": None if failed else cadence,
+            # How old the manifest behind this look was at the look, as the
+            # reporter's own two dates say. None when the look carried none.
+            "manifest_age_hours": manifest_age_hours,
+            "manifest_relayed": manifest_relayed,
         },
         actor=actor,
         origin=Origin(system="assurance.watch.ingest", reference=key,
@@ -445,6 +459,7 @@ def _ingest_entry(
                        f"status {status!r} with collection_complete=true.", stamp)
 
     manifest: SafetyManifest | None = None
+    manifest_age: float | None = None
     if positive:
         if not raw_manifest:
             return _refuse(entry, fallback_key, "manifest_required",
@@ -471,6 +486,8 @@ def _ingest_entry(
             return _refuse(entry, key, "manifest_taken_after_observation",
                            "the manifest claims to have been taken after the "
                            "observation it supports.", stamp)
+        manifest_age = round(
+            max(0.0, (observed_at - manifest.taken_at).total_seconds() / 3600), 2)
     else:
         if raw_manifest:
             return _refuse(entry, fallback_key, "manifest_not_accepted",
@@ -503,6 +520,33 @@ def _ingest_entry(
             return _refuse(entry, key, "conflicts_with_recorded_observation",
                            f"a different observation of {key} at {stamp} is "
                            "already recorded.", stamp)
+
+    relayed = entry.get("manifest_relayed") is True
+    if manifest is not None and manifest_age is not None:
+        window = _freshness_window_hours(account.max_age_hours)
+        # A relayed manifest is one the reporter says it sealed earlier for the
+        # configuration this look re-confirmed (the `watch push` case: an
+        # unchanged machine's manifest is the one from when it last changed). Its
+        # age is recorded and shown, but it is not what makes the look stale.
+        if manifest_age > window and not relayed:
+            if key not in account.enrolled:
+                return _refuse(entry, key, "manifest_stale", _stale_detail(
+                    key, manifest, manifest_age, window) + " A machine this account "
+                    "has not enrolled is not created from it.", stamp)
+            _seal_observation(
+                ledger, key=key, serial=serial, status=MANIFEST_STALE, reported=status,
+                observed_at=observed_at, configuration_hash="", complete=False,
+                missing=[], detail=_stale_detail(key, manifest, manifest_age, window),
+                watch_id=watch_id, run_started_at=run_started_at, digest=digest,
+                actor=actor, manifest_age_hours=manifest_age)
+            return MachineResult(
+                serial=serial, machine_key=key, reported_status=status,
+                recorded_status=MANIFEST_STALE, outcome="recorded", observed_at=stamp,
+                reason="manifest_stale",
+                detail=_stale_detail(key, manifest, manifest_age, window)
+                + " Recorded as an attempt: it does not count as an observation, "
+                "no case was touched and the baseline did not move.",
+                counts_as_observation=False, manifest_age_hours=manifest_age)
 
     if key not in account.known:
         # Only a positive look (with its manifest) reaches here for a new machine.
@@ -577,7 +621,8 @@ def _ingest_entry(
         ledger, key=key, serial=serial, status=recorded, reported=status,
         observed_at=observed_at, configuration_hash=observed_hash, complete=True,
         missing=(), detail=note, watch_id=watch_id, run_started_at=run_started_at,
-        digest=digest, actor=actor, cadence=account.max_age_hours)
+        digest=digest, actor=actor, cadence=account.max_age_hours,
+        manifest_age_hours=manifest_age, manifest_relayed=relayed)
     if key not in account.known:
         account.new += 1
     account.known.add(key)
@@ -588,8 +633,28 @@ def _ingest_entry(
         detail=note + ("" if recorded_matches(status, recorded) else
                        f" (the reporter said {status!r}; this ledger's own "
                        "comparison is what is recorded)"),
-        counts_as_observation=True, case_id=case_id, case_status=case_status,
-        case_opened=case_opened)
+        counts_as_observation=True, manifest_age_hours=manifest_age,
+        case_id=case_id, case_status=case_status, case_opened=case_opened)
+
+
+def _freshness_window_hours(declared: float | None) -> float:
+    """How old a manifest may be, at the look, and still describe the machine.
+
+    The same window ``fleet_observations`` uses to call a machine stale: the
+    cadence the report declared (1 to 720 h), else ``DEFAULT_CADENCE_HOURS``
+    (168 h, the Watch configuration's default ``max_age_hours``). A manifest
+    older than the interval a machine may go unobserved cannot be a look at it.
+    """
+    if declared is not None and MIN_CADENCE_HOURS <= declared <= MAX_CADENCE_HOURS:
+        return declared
+    return DEFAULT_CADENCE_HOURS
+
+
+def _stale_detail(key: str, manifest: SafetyManifest, age: float, window: float) -> str:
+    return (f"the manifest for {key} was taken {format_utc(manifest.taken_at)}, "
+            f"{age:g} h before the look it is offered for; the freshness window is "
+            f"{window:g} h. An old manifest presented as a current look is not "
+            "an observation.")
 
 
 def recorded_matches(reported: str, recorded: str) -> bool:

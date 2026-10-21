@@ -32,6 +32,8 @@ __all__ = [
     "OBSERVATION_KIND",
     "REPORT_KIND",
     "FAILED_STATUSES",
+    "MANIFEST_STALE",
+    "NOT_A_LOOK_STATUSES",
     "fleet_observations",
     "observation_succeeded",
     "observed_at_of",
@@ -50,16 +52,23 @@ MIN_CADENCE_HOURS = 1.0
 MAX_CADENCE_HOURS = 720.0
 #: Statuses that mean the look did not happen, or did not finish.
 FAILED_STATUSES = frozenset({"uncollectable", "incomplete"})
+#: Recorded (never accepted as a reported status) when a positive look rests on a
+#: manifest older than the cadence window at the moment it claims to have been
+#: observed: a replay of old data is not a look at the machine.
+MANIFEST_STALE = "manifest_stale"
+#: Every recorded status that is not a successful look of the machine.
+NOT_A_LOOK_STATUSES = FAILED_STATUSES | {MANIFEST_STALE}
 
 
 def observation_succeeded(body: dict[str, Any]) -> bool:
     """Whether an observation record is a look that counts as having seen the machine.
 
-    ``uncollectable`` is an attempt, not an observation. ``incomplete`` (or any
+    ``uncollectable`` is an attempt, not an observation, and so is
+    ``manifest_stale`` (a manifest too old to describe the machine today). ``incomplete`` (or any
     record that says ``complete: false``) saw only part of what the plan names:
     it can describe a drift, but it cannot say the machine is current.
     """
-    if str(body.get("status", "")) in FAILED_STATUSES:
+    if str(body.get("status", "")) in NOT_A_LOOK_STATUSES:
         return False
     return body.get("complete", True) is not False
 
@@ -85,6 +94,13 @@ def _cadence_of(body: dict[str, Any]) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if MIN_CADENCE_HOURS <= value <= MAX_CADENCE_HOURS else None
+
+
+def _manifest_age_of(body: dict[str, Any]) -> float | None:
+    value = body.get("manifest_age_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _machine_cadence(seen: list[_Seen]) -> tuple[float, bool]:
@@ -117,6 +133,10 @@ class _Seen:
     watch_id: str = ""
     #: The cadence the reporting watch declared with this look, or None.
     cadence: float | None = None
+    #: Hours between the manifest's ``taken_at`` and the look's ``observed_at``
+    #: (hosted reports only; None where the record does not carry it).
+    manifest_age_hours: float | None = None
+    manifest_relayed: bool = False
 
 
 def fleet_observations(
@@ -142,6 +162,8 @@ def fleet_observations(
             succeeded=observation_succeeded(body),
             watch_id=str(body.get("watch_id", "")),
             cadence=_cadence_of(body) if observation_succeeded(body) else None,
+            manifest_age_hours=_manifest_age_of(body),
+            manifest_relayed=body.get("manifest_relayed") is True,
         ))
 
     enrolled = {e.subject for e in ledger.entries(kind=MANIFEST_KIND) if e.subject}
@@ -187,6 +209,15 @@ def fleet_observations(
             "last_attempt_status": last_attempt.status if last_attempt else None,
             "last_attempt_succeeded": last_attempt.succeeded if last_attempt else None,
             "last_attempt_detail": last_attempt.detail if last_attempt else "",
+            # How old the manifest behind a look was at the moment of the look, as
+            # reported. A successful look is one inside the cadence window; the
+            # attempt's age is what shows a stale manifest was offered.
+            "last_successful_manifest_age_hours":
+                last_ok.manifest_age_hours if last_ok else None,
+            "last_successful_manifest_relayed":
+                last_ok.manifest_relayed if last_ok else None,
+            "last_attempt_manifest_age_hours":
+                last_attempt.manifest_age_hours if last_attempt else None,
             "age_hours": age_hours,
             "stale": stale,
             "stale_reason": reason,
@@ -220,5 +251,11 @@ def fleet_observations(
             "reported it; 168 h when none declared one). A cadence is taken only "
             "from a successful look of that machine. A machine never reported is "
             "stale by definition.",
+            "A look whose manifest was taken longer before the look than that same "
+            "cadence window is recorded as manifest_stale and does not count, unless "
+            "the reporter marks the manifest as one it sealed earlier and relayed "
+            "(its age is then shown, not judged). The manifest's own date and that "
+            "mark are both declared by the reporting client, so this catches an old "
+            "export sent as new by mistake, not a forged date.",
         ],
     }

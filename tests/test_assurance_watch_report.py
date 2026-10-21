@@ -726,6 +726,108 @@ class TestTime:
         m = post(client, h, report(good(manifest, at=t, keep_taken_at=True))).json()["machines"][0]
         assert (m["outcome"], m["reason"]) == ("refused", "manifest_taken_after_observation")
 
+    def test_an_old_manifest_replayed_as_a_fresh_look_is_not_an_observation(self, client, cell, tmp_path):
+        """A 400-day-old manifest with observed_at=now is a replay, not a look."""
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        manifest = make_manifest(tmp_path, when=now() - timedelta(days=400))
+        entry = good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True)
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert m["outcome"] == "recorded"
+        assert m["reason"] == "manifest_stale"
+        assert m["recorded_status"] == "manifest_stale"
+        assert m["counts_as_observation"] is False
+        assert 399 * 24 < m["manifest_age_hours"] < 401 * 24
+
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_observation_at"] is None
+        assert row["stale"] is True
+        assert row["stale_reason"] == "never_successfully_observed"
+        assert row["last_attempt_status"] == "manifest_stale"
+        assert row["last_attempt_succeeded"] is False
+        assert 399 * 24 < row["last_attempt_manifest_age_hours"] < 401 * 24
+        assert len(case_entries(ledger_of(acct))) == 0
+
+    def test_a_stale_manifest_does_not_move_the_baseline_or_open_a_case(self, client, cell, tmp_path):
+        acct, h = cell
+        t0 = now() - timedelta(days=2)
+        post(client, h, report(good(make_manifest(tmp_path), at=t0), started=t0))
+        before = len(manifests_from_ledger(ledger_of(acct), KEY_0412))
+        old = make_manifest(tmp_path, fw=b"firmware 3.9.0", when=now() - timedelta(days=300))
+        m = post(client, h, report(good(old, at=now() - timedelta(minutes=1), status="changed",
+                                        keep_taken_at=True))).json()["machines"][0]
+        assert m["reason"] == "manifest_stale"
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == before
+        assert case_entries(ledger_of(acct)) == []
+        row = machine_row(client, h, KEY_0412)
+        # the earlier genuine look is still the last successful one
+        assert row["last_successful_observation_at"] == iso(t0)
+
+    def test_the_window_is_the_declared_cadence(self, client, cell, tmp_path):
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        taken = now() - timedelta(hours=30)
+        entry = good(make_manifest(tmp_path, when=taken), at=now() - timedelta(minutes=1),
+                     keep_taken_at=True)
+        # 30 h old against a 24 h cadence: stale. The same manifest in a 48 h cadence: fresh.
+        stale = post(client, h, report(entry, max_age_hours=24)).json()["machines"][0]
+        assert stale["reason"] == "manifest_stale"
+        entry2 = good(make_manifest(tmp_path, when=taken), at=now() - timedelta(seconds=30),
+                      keep_taken_at=True)
+        fresh = post(client, h, report(entry2, max_age_hours=48, watch_id="W2")).json()["machines"][0]
+        assert fresh["counts_as_observation"] is True and fresh["reason"] == ""
+        assert 29 < fresh["manifest_age_hours"] < 31
+
+    def test_a_manifest_as_old_as_the_default_window_is_stale_for_an_undeclared_cadence(
+            self, client, cell, tmp_path):
+        from assurance.watch.observations import DEFAULT_CADENCE_HOURS
+
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        taken = now() - timedelta(hours=DEFAULT_CADENCE_HOURS + 5)
+        entry = good(make_manifest(tmp_path, when=taken), at=now() - timedelta(minutes=1),
+                     keep_taken_at=True)
+        assert post(client, h, report(entry)).json()["machines"][0]["reason"] == "manifest_stale"
+
+    def test_a_stale_manifest_for_an_unenrolled_machine_is_refused_not_enrolled(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        manifest = make_manifest(tmp_path, when=now() - timedelta(days=400))
+        m = post(client, h, report(good(manifest, at=now() - timedelta(minutes=1),
+                                        keep_taken_at=True))).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "manifest_stale")
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_relayed_manifest_counts_but_its_age_is_recorded_and_shown(self, client, cell, tmp_path):
+        """`watch push` sends the manifest sealed when the configuration last changed."""
+        acct, h = cell
+        manifest = make_manifest(tmp_path, when=now() - timedelta(days=60))
+        entry = {**good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert m["counts_as_observation"] is True and m["reason"] == ""
+        assert 59 * 24 < m["manifest_age_hours"] < 61 * 24
+        row = machine_row(client, h, KEY_0412)
+        assert row["stale"] is False
+        assert row["last_successful_manifest_relayed"] is True
+        assert 59 * 24 < row["last_successful_manifest_age_hours"] < 61 * 24
+
+    def test_the_push_client_marks_an_older_manifest_as_relayed(self, tmp_path):
+        from assurance.watch.push import _relayed
+
+        at = now()
+        assert _relayed({"taken_at": iso(at - timedelta(days=30))}, at) is True
+        assert _relayed({"taken_at": iso(at - timedelta(seconds=20))}, at) is False
+        assert _relayed({"taken_at": "garbage"}, at) is False
+
+    def test_a_fresh_look_reports_the_manifest_age(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        post(client, h, report(good(make_manifest(tmp_path), at=t), started=t))
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_manifest_age_hours"] == 0.0
+        assert row["stale"] is False
+
     def test_a_future_entry_does_not_poison_the_rest_of_the_report(self, client, cell, tmp_path):
         acct, h = cell
         enroll_manifest(acct, tmp_path, "0501")
