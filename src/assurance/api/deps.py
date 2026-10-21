@@ -554,6 +554,16 @@ _TRACE_BODY_ENV = "ASSURANCE_MAX_TRACE_BODY_BYTES"
 _DEFAULT_BODY = 1024 * 1024
 _DEFAULT_TRACE_BODY = 32 * 1024 * 1024
 _TRACE_PATHS = frozenset({"/v1/machine/verify"})
+# The anonymous evidence verifier takes whole ledger exports. A 1 MiB cap would
+# refuse an export of a few thousand entries, and the point of the route is that
+# its caller has no account, so its cap cannot depend on a key: 4 MiB for
+# everyone, and only on this one path. An anonymous caller can therefore make the
+# server hold at most this much per request (the body is counted as it arrives,
+# not trusted from Content-Length), and each call costs a unit of the per-address
+# daily allowance before the body is read.
+_EVIDENCE_BODY_ENV = "ASSURANCE_MAX_EVIDENCE_BODY_BYTES"
+_DEFAULT_EVIDENCE_BODY = 4 * 1024 * 1024
+_EVIDENCE_PATHS = frozenset({"/v1/evidence/verify"})
 # Stripe events are a few KB. The webhook is read in full before its signature
 # is checked, so it gets a fixed small cap of its own: not the configurable one
 # (a mis-set value must never be why a payment event is lost) and not none (an
@@ -584,6 +594,8 @@ def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
         return _WEBHOOK_BODY
     if path in _TRACE_PATHS and authenticated:
         return _env_bytes(_TRACE_BODY_ENV, _DEFAULT_TRACE_BODY)
+    if path in _EVIDENCE_PATHS:
+        return _env_bytes(_EVIDENCE_BODY_ENV, _DEFAULT_EVIDENCE_BODY)
     return _env_bytes(_BODY_ENV, _DEFAULT_BODY)
 
 

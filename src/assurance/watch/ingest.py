@@ -29,7 +29,9 @@ What this does and, deliberately, does not do:
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -73,6 +75,8 @@ from assurance.watch.observations import (
 __all__ = [
     "FUTURE_SKEW",
     "LIMITATIONS",
+    "LOCK_DEADLINE",
+    "IngestBusyError",
     "MAX_MACHINES_PER_ACCOUNT",
     "MAX_NEW_MACHINES_PER_REPORT",
     "MachineResult",
@@ -92,11 +96,29 @@ MAX_NEW_MACHINES_PER_REPORT = 200
 POSITIVE_STATUSES = frozenset({"unchanged", "changed"})
 REPORT_SCHEMA = "assurance.watch.report/1"
 
-#: Serialises the check-then-write sequence inside one process; the advisory file
-#: lock below extends it across processes (several workers, or a CLI on the same
-#: volume). The ledger is single-writer by design; this keeps two identical
-#: retries that overlap from both passing the "already recorded?" check.
-_INGEST_LOCK = threading.Lock()
+#: Longest one ingest waits for another into the same ledger, in seconds. A report
+#: runs in a request thread; an unbounded wait behind a stuck holder would use up
+#: the thread pool and take every other route down with it.
+LOCK_DEADLINE = 30.0
+
+
+class IngestBusyError(AssuranceError):
+    """Another ingest into this ledger held the lock for the whole wait."""
+
+
+#: Serialises the check-then-write sequence inside one process, **per ledger**: one
+#: tenant's slow report must not queue another tenant's. The advisory file lock below
+#: extends it across processes (several workers, or a CLI on the same volume). The
+#: ledger is single-writer by design; this keeps two identical retries that overlap
+#: from both passing the "already recorded?" check.
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock(ledger: EvidenceLedger) -> threading.Lock:
+    key = os.path.realpath(ledger.path)
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.Lock())
 
 
 def lock_path(ledger: EvidenceLedger) -> str:
@@ -106,18 +128,36 @@ def lock_path(ledger: EvidenceLedger) -> str:
 
 @contextmanager
 def _ingest_lock(ledger: EvidenceLedger) -> Iterator[None]:
-    with _INGEST_LOCK:
+    deadline = time.monotonic() + LOCK_DEADLINE
+    thread_lock = _thread_lock(ledger)
+    if not thread_lock.acquire(timeout=max(0.0, LOCK_DEADLINE)):
+        raise IngestBusyError(
+            "another report into this ledger is still being recorded; retry shortly")
+    try:
         try:
             import fcntl
         except ImportError:  # pragma: no cover - not POSIX: one process only
             yield
             return
         with open(lock_path(ledger), "a+") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            delay = 0.01
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise IngestBusyError(
+                            "another process is still recording a report into this "
+                            "ledger; retry shortly") from None
+                    time.sleep(delay)
+                    delay = min(delay * 2, 0.2)
             try:
                 yield
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        thread_lock.release()
 
 LIMITATIONS: tuple[str, ...] = (
     "These are observations reported by the holder of this account's key. The "
