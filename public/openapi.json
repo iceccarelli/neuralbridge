@@ -4103,20 +4103,25 @@
     },
     "/v1/evidence/verify": {
       "post": {
-        "description": "The body is the raw JSON file itself (not wrapped in anything).\n\nNothing is stored. The body is read into memory, checked and dropped; the\nonly record is the ordinary access log line (method, path, status). The\nanswer separates facts established (`verified`), what is taken on trust\n(`assumptions`) and every limit (`not_checked`); there is no bare \"valid\".",
+        "description": "The body is the raw JSON file itself (not wrapped in anything).\n\nSend ``Content-Type: application/json``. Nothing is stored. The body is read\ninto memory, checked and dropped; the only record is the ordinary access log\nline (method, path, status). The answer separates facts established\n(`verified`), what is taken on trust (`assumptions`) and every limit\n(`not_checked`); there is no bare \"valid\".",
         "operationId": "verify_evidence_v1_evidence_verify_post",
         "parameters": [
           {
-            "description": "the issuer's Ed25519 public key (PEM), to check attestation signatures. Public by nature; omit for other kinds of file.",
-            "in": "query",
-            "name": "public_key_pem",
+            "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+            "in": "header",
+            "name": "x-issuer-public-key",
             "required": false,
             "schema": {
-              "default": "",
-              "description": "the issuer's Ed25519 public key (PEM), to check attestation signatures. Public by nature; omit for other kinds of file.",
-              "maxLength": 4096,
-              "title": "Public Key Pem",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+              "title": "X-Issuer-Public-Key"
             }
           },
           {

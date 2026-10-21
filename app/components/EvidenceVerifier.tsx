@@ -10,6 +10,7 @@ const MAX_BYTES = 4 * 1024 * 1024;
 // POST /v1/evidence/verify — the uniform result (src/assurance/api/evidence_routes.py).
 export type Outcome =
   | 'no_inconsistency_found'
+  | 'signatures_not_checked'
   | 'inconsistent'
   | 'unreadable'
   | 'unsupported'
@@ -18,7 +19,10 @@ export type Outcome =
 export type VerifyResult = {
   kind: 'ledger_export' | 'machine_bundle' | 'attestation_log' | 'unknown';
   outcome: Outcome;
+  // True only when every check this kind of file needs was run and none found a problem.
   ok: boolean;
+  // Attestation logs only (null otherwise): whether any signature was actually checked.
+  signatures_verified: boolean | null;
   scope: string;
   entries: number;
   verified: string[];
@@ -28,7 +32,7 @@ export type VerifyResult = {
   tier: {
     recorded_tier: string | null;
     recorded_verdict: string | null;
-    may_claim_physical_behaviour: boolean | null;
+    as_recorded_may_claim_physical_behaviour: boolean | null;
     evidence_required: string;
     product?: string | null;
     product_version?: string | null;
@@ -51,6 +55,7 @@ const KIND_LABEL: Record<VerifyResult['kind'], string> = {
 // is that the checks that ran found nothing wrong.
 const HEADLINE: Record<Outcome, string> = {
   no_inconsistency_found: 'No inconsistency found in the checks that ran',
+  signatures_not_checked: 'Structure only — no signature was checked',
   inconsistent: 'Problems found',
   unreadable: 'Could not read this file — nothing was checked',
   unsupported: 'Not a file this page can check',
@@ -69,7 +74,7 @@ const css = `
 .ev-headline { font-weight: 700; font-size: 1.05rem; margin: 0; }
 .ev-headline[data-outcome='no_inconsistency_found'] { color: var(--success); }
 .ev-headline[data-outcome='inconsistent'], .ev-headline[data-outcome='check_failed'] { color: var(--danger); }
-.ev-headline[data-outcome='unreadable'], .ev-headline[data-outcome='unsupported'] { color: var(--orange-dark); }
+.ev-headline[data-outcome='unreadable'], .ev-headline[data-outcome='unsupported'], .ev-headline[data-outcome='signatures_not_checked'] { color: var(--orange-dark); }
 .ev-sec h3 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.35rem; color: var(--ink-soft); }
 .ev-sec ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.86rem; line-height: 1.5; }
 .ev-sec[data-kind='problems'] { border-left: 3px solid var(--danger); padding-left: 0.75rem; }
@@ -142,24 +147,34 @@ export default function EvidenceVerifier() {
       setError('Choose or paste a JSON file first.');
       return;
     }
+    // A private key never needs to leave this browser, and nothing here wants one.
+    if (/PRIVATE/i.test(keyPem) || /BEGIN [A-Z ]*PRIVATE KEY/i.test(text)) {
+      setError(
+        'That looks like a private key. It was not sent. Only a PUBLIC key is ever needed here — and if this was a real private key, treat it as exposed and replace it.',
+      );
+      return;
+    }
     if (new Blob([text]).size > MAX_BYTES) {
       setError('That is larger than 4 MiB. Check it offline with python -m assurance evidence verify.');
       return;
     }
     setBusy(true);
     try {
-      const query = keyPem.trim() ? `?public_key_pem=${encodeURIComponent(keyPem.trim())}` : '';
-      const res = await fetch(`${API_BASE}/v1/evidence/verify${query}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: text,
-      });
+      // The public key goes in a header, not the URL: URLs are logged. A header cannot
+      // hold line breaks, so the PEM travels on one line and the server re-wraps it.
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (keyPem.trim()) headers['X-Issuer-Public-Key'] = keyPem.trim().split(/\s+/).join(' ');
+      const res = await fetch(`${API_BASE}/v1/evidence/verify`, { method: 'POST', headers, body: text });
       const body = await res.json().catch(() => null);
       if (res.status === 429) {
         const d = body?.detail;
         setError(
           `Daily allowance used (${d?.used ?? '?'} of ${d?.limit ?? '?'} checks from this address today). It resets at 00:00 UTC. The offline verifier has no limit.`,
         );
+      } else if (res.status === 422 && body?.detail?.error === 'private_key_refused') {
+        setError(body.detail.detail);
+      } else if (res.status === 503 && body?.detail?.error === 'verifier_busy') {
+        setError('The checker is busy with other files. Nothing was counted against your allowance — try again in a few seconds.');
       } else if (res.status === 413) {
         setError('The service refused the file as too large. Check it offline with python -m assurance evidence verify.');
       } else if (!res.ok || !body || typeof body.outcome !== 'string') {
@@ -235,8 +250,9 @@ export default function EvidenceVerifier() {
             </summary>
             <p className="ev-note" style={{ margin: '0.5rem 0' }}>
               A signature can only be checked against a public key you got <em>somewhere other than the file</em> —
-              a file carries a key fingerprint, not the key. Without one, only the log&apos;s structure is checked
-              and the signatures are reported as <strong>not verified</strong>.
+              a file carries a key fingerprint, not the key. Without one, only the log&apos;s structure is checked,
+              the signatures are reported as <strong>not verified</strong>, and the result is{' '}
+              <strong>never shown as a pass</strong>. Paste a public key only: a private key is refused and never sent.
             </p>
             <textarea
               className="ev-text"
@@ -263,7 +279,7 @@ export default function EvidenceVerifier() {
           <p className="ev-note" data-testid="ev-stateless">
             Nothing is stored. The file is sent to the Assurance API, checked in memory and dropped; the only
             record is the ordinary access-log line (time, path, status — never the file; a public key you paste for an
-            attestation check travels in the request URL, so it appears there too). It counts as one of your free
+            attestation check travels in a request header, which the access log does not record). It counts as one of your free
             daily checks from this address.
           </p>
           {error && (
@@ -289,6 +305,8 @@ export default function EvidenceVerifier() {
               <p className="ev-meta" data-testid="ev-kind">
                 Detected: <strong>{KIND_LABEL[result.kind]}</strong>
                 {result.scope ? ` · ${result.scope}` : ''}
+                {result.signatures_verified === false ? ' · signatures NOT verified' : ''}
+                {result.signatures_verified === true ? ' · signatures verified against the key you supplied' : ''}
                 {result.kind !== 'unknown' && result.entries > 0 ? ` · ${result.entries} record(s)` : ''}
               </p>
               <p className="ev-note">{result.summary}</p>
@@ -296,17 +314,18 @@ export default function EvidenceVerifier() {
               <List kind="verified" title="Facts a check established" items={result.verified} />
               {result.tier && (
                 <section className="ev-sec" data-testid="ev-tier">
-                  <h3>What the bundle records (not re-derived here)</h3>
+                  <h3>What the file records (not established by this check)</h3>
                   <ul>
                     <li>
                       Verdict: <strong>{result.tier.recorded_verdict ?? 'unknown'}</strong> · assurance tier:{' '}
                       <strong>{result.tier.recorded_tier ?? 'unknown'}</strong>
                       {result.tier.provenance ? ` · run provenance: ${result.tier.provenance}` : ''}
                     </li>
-                    {result.tier.may_claim_physical_behaviour !== null && (
+                    {result.tier.as_recorded_may_claim_physical_behaviour !== null && (
                       <li>
-                        May support a claim about the physical machine:{' '}
-                        <strong>{result.tier.may_claim_physical_behaviour ? 'yes, at this tier' : 'no, not at this tier'}</strong>
+                        The file says this tier would allow a claim about the physical machine:{' '}
+                        <strong>{result.tier.as_recorded_may_claim_physical_behaviour ? 'yes' : 'no'}</strong>{' '}
+                        (as recorded in the file — a seal is not a signature, and this check did not establish it)
                       </li>
                     )}
                     {result.tier.evidence_required && <li>This tier requires: {result.tier.evidence_required}</li>}

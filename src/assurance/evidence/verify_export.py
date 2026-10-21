@@ -36,7 +36,18 @@ from typing import Any
 
 from assurance.evidence.ledger import GENESIS, LEDGER_SCHEMA_VERSION, LedgerEntry
 
-__all__ = ["ASSUMPTIONS", "ExportVerification", "verify_export", "verify_export_file"]
+__all__ = ["ASSUMPTIONS", "MAX_PROBLEMS", "ExportVerification", "verify_export",
+           "verify_export_file"]
+
+#: Problems listed in a result. A hostile file can make every one of millions of
+#: entries a finding; the answer must stay readable and small, so past this the
+#: rest are counted, not listed.
+MAX_PROBLEMS = 50
+
+_TOP_LEVEL_FIELDS = frozenset({"ledger_schema_version", "exported_at", "subject",
+                               "chain_verified", "attestation", "entries"})
+_ATTESTATION_FIELDS = frozenset({"ledger_schema_version", "length", "head_seq",
+                                 "head_link_hash", "attested_at"})
 
 _ENTRY_FIELDS = ("seq", "at", "kind", "subject", "content_hash", "prev_hash",
                  "link_hash", "actor", "evidence")
@@ -94,13 +105,17 @@ def _exact_int(value: Any) -> bool:
 def verify_export(bundle: Any) -> ExportVerification:
     """Verify an exported bundle. Never raises on a malformed one: it reports."""
     problems: list[str] = []
+    total = 0
     # Which check each problem belongs to, so a fact is claimed only for a check
     # that found nothing.
     failed: set[str] = set()
 
     def bad(check: str, message: str) -> None:
+        nonlocal total
         failed.add(check)
-        problems.append(message)
+        total += 1
+        if len(problems) < MAX_PROBLEMS:
+            problems.append(message)
 
     skipped: list[str] = [
         "this checks the bundle's internal consistency, not that it matches the "
@@ -126,6 +141,11 @@ def verify_export(bundle: Any) -> ExportVerification:
         bad("claim", "the bundle does not claim chain_verified=true; the "
                      "exporter only emits verified chains")
 
+    extra_top = sorted(k for k in bundle if k not in _TOP_LEVEL_FIELDS)
+    if extra_top:
+        bad("extra", f"the bundle carries top-level field(s) the exporter does not "
+                     f"write: {', '.join(extra_top[:5])}")
+
     version = bundle.get("ledger_schema_version")
     if not _exact_int(version) or version != LEDGER_SCHEMA_VERSION:
         # The link-hash recipe belongs to a schema version; a file in another one
@@ -144,6 +164,10 @@ def verify_export(bundle: Any) -> ExportVerification:
                 or not isinstance(raw["evidence"], dict)):
             bad("shape", f"entry {index}: a field has the wrong type")
             continue
+        extra = sorted(k for k in raw if k not in _ENTRY_FIELDS)
+        if extra:
+            bad("extra", f"entry {index}: carries field(s) outside the seal and the "
+                         f"link hash: {', '.join(extra[:5])}")
         entries.append(LedgerEntry(
             seq=raw["seq"], at=raw["at"], kind=raw["kind"],
             subject=raw["subject"], content_hash=raw["content_hash"],
@@ -154,7 +178,11 @@ def verify_export(bundle: Any) -> ExportVerification:
     consecutive = 0
     for entry in entries:
         label = f"seq {entry.seq}"
-        if entry.link_hash != entry.expected_link_hash():
+        try:
+            link_ok = entry.link_hash == entry.expected_link_hash()
+        except Exception:  # noqa: BLE001 - e.g. an integer too large to hash
+            link_ok = False
+        if not link_ok:
             bad("link", f"{label}: link_hash does not match its own content "
                         "— the record was edited in place")
         try:
@@ -203,6 +231,10 @@ def verify_export(bundle: Any) -> ExportVerification:
             bad("start", "seq 1 does not chain to genesis")
         att = bundle.get("attestation")
         if isinstance(att, dict):
+            extra_att = sorted(k for k in att if k not in _ATTESTATION_FIELDS)
+            if extra_att:
+                bad("extra", "the bundle's attestation carries field(s) the exporter "
+                             f"does not write: {', '.join(extra_att[:5])}")
             # Checked even for an empty bundle: "no entries" is a claim too,
             # and an attestation naming N > 0 records contradicts it.
             head_seq = entries[-1].seq if entries else 0
@@ -215,12 +247,12 @@ def verify_export(bundle: Any) -> ExportVerification:
         else:
             bad("head", "a whole-ledger bundle must carry its head attestation")
     else:
-        if not entries and not problems:
+        if not entries and total == 0:
             # What exporting a subject that does not exist produces. It is
             # well-formed and consistent, and it establishes nothing: calling it
             # VERIFIED would let an empty file stand in for a record.
-            problems.append(f"the bundle holds no entries for subject {subject!r}: "
-                            "there is nothing to verify (the subject may not exist)")
+            bad("empty", f"the bundle holds no entries for subject {subject!r}: "
+                         "there is nothing to verify (the subject may not exist)")
         skipped.append(
             "this bundle holds one subject's entries only, so the links to entries "
             "of other subjects, the start of the chain and the ledger head were "
@@ -234,7 +266,7 @@ def verify_export(bundle: Any) -> ExportVerification:
 
     n = len(entries)
     verified: list[str] = []
-    if not problems:
+    if total == 0:
         if entries:
             verified.append(f"all {n} entries have every required field, with the "
                             "expected types")
@@ -272,7 +304,9 @@ def verify_export(bundle: Any) -> ExportVerification:
         if not ({"link", "format"} & failed):
             verified.append("each entry's link hash matches its own content")
 
-    ok = not problems
+    if total > len(problems):
+        problems.append(f"… and {total - len(problems)} more problem(s) not listed")
+    ok = total == 0
     return ExportVerification(
         ok, n, scope, tuple(problems), tuple(skipped), tuple(verified),
         ASSUMPTIONS, head if ok and whole else None)

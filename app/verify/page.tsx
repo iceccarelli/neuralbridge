@@ -103,8 +103,11 @@ python -m assurance attest verify --log attestations.jsonl --public-key issuer.p
           <p className="hero-panel-note" style={{ maxWidth: '72ch' }}>
             Where the file comes from: a Register or Cell account downloads a case export from the{' '}
             <a href="/assurance">workspace</a> (<code>GET /v1/cases/&#123;id&#125;/export</code>). The same free check
-            is <code>POST /v1/evidence/verify</code>, listed on <a href="/developers">/developers</a>. If this site
-            has no API configured, the button above says so rather than faking a result.
+            is <code>POST /v1/evidence/verify</code>, listed on <a href="/developers">/developers</a>: send the file
+            as the body with <code>Content-Type: application/json</code>. In the answer, <code>ok</code> is true only
+            when every check that kind of file needs was run and none found a problem &mdash; an attestation log
+            checked without the issuer&apos;s public key is never <code>ok</code>. If this site has no API
+            configured, the button above says so rather than faking a result.
           </p>
         </div>
       </section>

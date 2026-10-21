@@ -12,6 +12,8 @@ import copy
 import importlib
 import json
 import logging
+import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -109,9 +111,19 @@ def client(env):
         yield c
 
 
+JSON = {"content-type": "application/json"}
+KEY_HEADER = "X-Issuer-Public-Key"
+
+
+def key_header(pem: str) -> dict[str, str]:
+    """A PEM on one line (a header cannot carry newlines); the server re-wraps it."""
+    return {KEY_HEADER: " ".join(pem.split())}
+
+
 def post(client, doc, **kw):
     body = doc if isinstance(doc, (bytes, str)) else json.dumps(doc)
-    return client.post(URL, content=body, **kw)
+    headers = {**JSON, **kw.pop("headers", {})}
+    return client.post(URL, content=body, headers=headers, **kw)
 
 
 def check(client, doc, **kw):
@@ -161,7 +173,7 @@ class TestGenuineLedgerExport:
         store = deps.get_accounts()
         account = store.upsert_account(email="p@example.de", tier="register",
                                        stripe_customer_id="cus_p")
-        headers = {"X-API-Key": store.issue_key(account.id)}
+        headers = {**JSON, "X-API-Key": store.issue_key(account.id)}
         ledger = EvidenceLedger(env / "p.db")
         bundle = ledger.export()
         for _ in range(PLANS["free"].validations_per_day + 2):
@@ -440,7 +452,8 @@ class TestMachineBundle:
         tier = result["tier"]
         assert tier["recorded_tier"] == machine_bundle["result"]["tier"]
         assert tier["recorded_verdict"] == machine_bundle["result"]["verdict"]
-        assert isinstance(tier["may_claim_physical_behaviour"], bool)
+        assert isinstance(tier["as_recorded_may_claim_physical_behaviour"], bool)
+        assert "may_claim_physical_behaviour" not in tier
         assert tier["evidence_required"]
         assert any("hashes to the hash it carries" in f for f in result["verified"])
         assert any("envelope copy" in f for f in result["verified"])
@@ -463,7 +476,7 @@ class TestMachineBundle:
         machine_bundle["result"]["verdict"] = "fail"
         result = check(client, machine_bundle)
         assert result["ok"] is False
-        assert any("unsealed result block" in p for p in result["problems"])
+        assert any("result block was edited" in p for p in result["problems"])
 
     def test_editing_the_readable_tier_is_found(self, client, machine_bundle):
         machine_bundle["result"]["tier"] = "certified"
@@ -475,7 +488,7 @@ class TestMachineBundle:
         machine_bundle["envelope"]["intrusion_distance_mm"] = 1.0
         result = check(client, machine_bundle)
         assert result["ok"] is False
-        assert any("envelope copy" in p for p in result["problems"])
+        assert any("envelope printed in the bundle" in p and "edited" in p for p in result["problems"])
 
     def test_an_unreadable_envelope_copy_is_found(self, client, machine_bundle):
         machine_bundle["envelope"] = {"nonsense": True}
@@ -528,15 +541,18 @@ class TestAttestationLog:
     def test_without_a_key_only_the_structure_is_checked_and_the_page_says_so(
             self, client, signed):
         result = check(client, {"attestations": signed["records"]})
-        assert result["kind"] == "attestation_log" and result["ok"] is True
+        assert result["kind"] == "attestation_log"
+        # nothing about a signature was established, so this is not an "ok"
+        assert result["ok"] is False and result["signatures_verified"] is False
+        assert result["outcome"] == "signatures_not_checked" and result["problems"] == []
         assert any("NOT verified" in n for n in result["not_checked"])
         assert not any("signature(s) verify" in f for f in result["verified"])
         assert result["head"]["length"] == signed["records"][-1]["ledger_length"]
 
     def test_with_the_issuers_key_the_signatures_are_checked(self, client, signed):
         result = check(client, signed["records"],
-                       params={"public_key_pem": signed["pem"]})
-        assert result["ok"] is True
+                       headers=key_header(signed["pem"]))
+        assert result["ok"] is True and result["signatures_verified"] is True
         assert any("signature(s) verify against the public key you supplied" in f
                    for f in result["verified"])
         assert any("channel" in a for a in result["assumptions"])
@@ -544,14 +560,14 @@ class TestAttestationLog:
 
     def test_the_wrong_key_is_a_finding(self, client, signed):
         result = check(client, signed["records"],
-                       params={"public_key_pem": signed["other_pem"]})
+                       headers=key_header(signed["other_pem"]))
         assert result["ok"] is False
         assert any("signature does not verify" in p for p in result["problems"])
 
     def test_an_edited_record_fails_the_signature_check(self, client, signed):
         signed["records"][1]["ledger_length"] += 5
         result = check(client, signed["records"],
-                       params={"public_key_pem": signed["pem"]})
+                       headers=key_header(signed["pem"]))
         assert result["ok"] is False
 
     def test_an_edited_record_is_not_visible_without_the_key_and_says_so(
@@ -582,7 +598,7 @@ class TestAttestationLog:
         assert result["ok"] is False and any("fewer records" in p for p in result["problems"])
 
     def test_the_jsonl_file_the_cli_writes_is_accepted(self, client, signed):
-        result = check(client, signed["text"], params={"public_key_pem": signed["pem"]})
+        result = check(client, signed["text"], headers=key_header(signed["pem"]))
         assert result["kind"] == "attestation_log" and result["ok"] is True
 
     def test_a_single_record_and_the_attest_response_shape_are_accepted(self, client, signed):
@@ -590,7 +606,7 @@ class TestAttestationLog:
         assert check(client, {"attestation": signed["records"][0]})["kind"] == "attestation_log"
 
     def test_an_unreadable_key_is_a_structured_result(self, client, signed):
-        result = check(client, signed["records"], params={"public_key_pem": "-----BEGIN junk"})
+        result = check(client, signed["records"], headers={KEY_HEADER: "-----BEGIN junk"})
         assert result["outcome"] == "unreadable"
         assert "public key" in result["problems"][0]
 
@@ -677,7 +693,7 @@ class TestBodyCap:
         assert deps.max_body_bytes("/v1/machine/bundle/check") == 1024 * 1024
 
     def test_a_declared_oversize_body_is_a_413_for_an_anonymous_caller(self, client):
-        response = client.post(URL, content=b" " * (4 * 1024 * 1024 + 1))
+        response = client.post(URL, content=b" " * (4 * 1024 * 1024 + 1), headers=JSON)
         assert response.status_code == 413
         assert response.json()["detail"]["limit_bytes"] == 4 * 1024 * 1024
 
@@ -686,7 +702,7 @@ class TestBodyCap:
             for _ in range(5):
                 yield b" " * (1024 * 1024)
 
-        response = client.post(URL, content=chunks())
+        response = client.post(URL, content=chunks(), headers=JSON)
         assert response.status_code == 413
 
     def test_a_bundle_of_a_few_mebibytes_is_accepted_and_checked(self, client, whole):
@@ -760,3 +776,507 @@ class TestVerifierStrictness:
         result = verify_export(whole)
         assert result.ok
         assert any("recorded_at" in c for c in result.checks_skipped)
+
+
+# ===========================================================================
+# Round 2: findings from an independent red-team review of the endpoint above.
+# ===========================================================================
+SRC = Path(__file__).resolve().parents[1] / "src"
+SIZE_CEILING = 256 * 1024
+
+
+def _entry_shell() -> dict:
+    return {"seq": 1, "at": "", "kind": "", "subject": "", "content_hash": "",
+            "prev_hash": "", "link_hash": "", "actor": "", "evidence": {}}
+
+
+class TestAmplification:
+    """A 4 MiB body must not become an 85 MB answer or pin the single worker."""
+
+    def test_the_problem_list_is_capped_with_a_count_of_the_rest(self):
+        result = verify_export({"entries": [0] * 30_000, "chain_verified": True,
+                                "ledger_schema_version": 1, "subject": ""})
+        assert len(result.problems) <= 51
+        assert "more" in result.problems[-1] and "not listed" in result.problems[-1]
+        assert "29950" in result.problems[-1] or "29951" in result.problems[-1]
+        assert len(json.dumps(result.to_dict())) < SIZE_CEILING
+
+    def test_two_million_junk_entries_are_refused_by_size_not_walked(self, client):
+        body = b'{"entries":[' + b"0," * 2_000_000 + b"0]}"
+        assert len(body) <= 4 * 1024 * 1024
+        started = time.monotonic()
+        response = post(client, body)
+        assert response.status_code == 200
+        assert time.monotonic() - started < 3
+        assert len(response.content) < SIZE_CEILING
+        result = response.json()
+        assert result["outcome"] == "unsupported"
+        assert "50,000" in " ".join(result["problems"])
+
+    def test_tens_of_thousands_of_malformed_entries_give_a_bounded_answer(self, client):
+        body = json.dumps({"entries": [0] * 40_000, "chain_verified": True,
+                           "ledger_schema_version": 1, "subject": ""})
+        response = post(client, body)
+        result = response.json()
+        assert len(response.content) < SIZE_CEILING
+        assert len(result["problems"]) <= 51
+        assert any("not listed" in p for p in result["problems"])
+
+    def test_a_huge_attacker_string_is_clipped_in_every_field_of_the_answer(self, client, whole):
+        big = "S" * (3 * 1024 * 1024)
+        whole["subject"] = big
+        response = post(client, whole)
+        assert len(response.content) < SIZE_CEILING
+
+    def test_a_huge_subject_inside_entries_is_clipped(self, client, case_export):
+        for entry in case_export["entries"]:
+            entry["subject"] = "Z" * 400_000
+        response = post(client, case_export)
+        assert len(response.content) < SIZE_CEILING
+
+    def test_a_huge_machine_bundle_field_is_clipped(self, client, machine_bundle):
+        machine_bundle["evidence"]["body"]["product"] = "P" * (3 * 1024 * 1024)
+        response = post(client, machine_bundle)
+        assert len(response.content) < SIZE_CEILING
+
+    @pytest.mark.parametrize("text", [
+        "1\n" * 2_000_000,
+        "x\n" * 100,
+        "[1]\n" * 900_000,
+        "{}\n" * 6_000,
+    ], ids=["ones", "junk-lines", "lists", "objects"])
+    def test_a_lines_file_is_not_parsed_line_by_line_without_limit(self, client, text, monkeypatch):
+        from assurance.api import evidence_routes
+
+        calls = {"n": 0}
+        real = evidence_routes._parse
+
+        def counting(t):
+            calls["n"] += 1
+            return real(t)
+
+        monkeypatch.setattr(evidence_routes, "_parse", counting)
+        started = time.monotonic()
+        response = post(client, text.encode())
+        assert calls["n"] <= 2, f"{calls['n']} parses: every line was tried"
+        assert response.status_code == 200
+        assert time.monotonic() - started < 3, "parsed every line"
+        assert response.json()["ok"] is False
+        assert len(response.content) < SIZE_CEILING
+
+    def test_an_attestation_log_with_many_bad_records_is_capped(self, client):
+        records = [{"head_link_hash": "x"}] * 4_000
+        response = post(client, records)
+        result = response.json()
+        assert len(result["problems"]) <= 51 and len(response.content) < SIZE_CEILING
+
+    def test_analysis_runs_at_most_a_few_at_a_time_and_the_rest_get_503(self, client, whole, monkeypatch):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from assurance.api import evidence_routes
+
+        gate = threading.Event()
+        started = threading.Semaphore(0)
+        real = evidence_routes.analyse
+
+        def slow(raw, *a, **k):
+            started.release()
+            gate.wait(10)
+            return real(raw, *a, **k)
+
+        monkeypatch.setattr(evidence_routes, "analyse", slow)
+        body = json.dumps(whole).encode()
+        with ThreadPoolExecutor(6) as pool:
+            futures = [pool.submit(lambda: post(client, body)) for _ in range(2)]
+            assert started.acquire(timeout=10) and started.acquire(timeout=10)
+            busy = [pool.submit(lambda: post(client, body)) for _ in range(3)]
+            statuses = [f.result(timeout=20).status_code for f in busy]
+            gate.set()
+            done = [f.result(timeout=20).status_code for f in futures]
+        assert statuses == [503, 503, 503]
+        assert done == [200, 200]
+        busy_response = busy[0].result()
+        assert busy_response.headers["Retry-After"]
+        assert busy_response.json()["detail"]["error"] == "verifier_busy"
+
+    def test_a_busy_refusal_does_not_cost_the_visitor_a_unit_of_allowance(
+            self, client, whole, monkeypatch):
+        import threading
+
+        from assurance.api import evidence_routes
+
+        gate = threading.Event()
+        started = threading.Semaphore(0)
+        real = evidence_routes.analyse
+
+        def slow(raw, *a, **k):
+            started.release()
+            gate.wait(10)
+            return real(raw, *a, **k)
+
+        monkeypatch.setattr(evidence_routes, "analyse", slow)
+        from concurrent.futures import ThreadPoolExecutor
+        body = json.dumps(whole).encode()
+        with ThreadPoolExecutor(4) as pool:
+            held = [pool.submit(lambda: post(client, body)) for _ in range(2)]
+            assert started.acquire(timeout=10) and started.acquire(timeout=10)
+            for _ in range(5):
+                assert post(client, body).status_code == 503
+            gate.set()
+            [f.result(timeout=20) for f in held]
+        monkeypatch.setattr(evidence_routes, "analyse", real)
+        remaining = post(client, whole).headers["X-Assurance-Quota-Remaining"]
+        assert int(remaining) == PLANS["free"].validations_per_day - 3
+
+
+    def test_the_gate_is_freed_after_each_analysis(self, client, whole):
+        for _ in range(5):
+            assert post(client, whole).status_code == 200
+
+    def test_a_crashing_analysis_still_frees_its_slot(self, client, whole, monkeypatch):
+        from assurance.api import evidence_routes
+
+        real = evidence_routes.analyse
+
+        def boom(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(evidence_routes, "analyse", boom)
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                post(client, whole)
+        monkeypatch.setattr(evidence_routes, "analyse", real)
+        assert post(client, whole).status_code == 200
+
+
+def _free_port() -> int:
+    import socket
+
+    for port in range(18120, 18200):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("no free port in 18120-18199")
+
+
+class TestUnderHostileLoad:
+    """Real uvicorn, one worker (as deployed): hostile maximum-size bodies in parallel
+    must leave /healthz responsive and memory bounded."""
+
+    def test_twenty_parallel_hostile_bodies(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+        import urllib.request
+        from concurrent.futures import ThreadPoolExecutor
+
+        port = _free_port()
+        env = {**os.environ, "PYTHONPATH": str(SRC),
+               "ASSURANCE_LEDGER": str(tmp_path / "l.db"),
+               "ASSURANCE_ACCOUNTS": str(tmp_path / "a.db"),
+               "ASSURANCE_API_KEYS": "operator-key-load"}
+        server = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "uvicorn", "assurance.api.service:app", "--port", str(port),
+             "--workers", "1", "--log-level", "warning"],
+            env=env, cwd=str(SRC.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            for _ in range(100):
+                try:
+                    urllib.request.urlopen(base + "/healthz", timeout=1).read()  # noqa: S310
+                    break
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.2)
+            else:
+                pytest.fail("server did not start")
+
+            def rss_mb() -> float:
+                for line in Path(f"/proc/{server.pid}/status").read_text().splitlines():
+                    if line.startswith("VmRSS"):
+                        return int(line.split()[1]) / 1024
+                return 0.0
+
+            shell = json.dumps(_entry_shell(), separators=(",", ":"))
+            bodies = [
+                ('{"entries":[' + ",".join([shell] * 36_000) + "]}").encode(),
+                b'{"entries":[' + b"0," * 1_900_000 + b"0]}",
+                ("1\n" * 2_000_000).encode(),
+                b"[" * 900 + b"]" * 900,
+            ]
+            assert all(len(b) <= 4 * 1024 * 1024 for b in bodies)
+            before = rss_mb()
+            latencies: list[float] = []
+            sizes: list[int] = []
+            stop = False
+
+            def probe() -> None:
+                while not stop:
+                    t0 = time.monotonic()
+                    urllib.request.urlopen(base + "/healthz", timeout=30).read()  # noqa: S310
+                    latencies.append(time.monotonic() - t0)
+                    time.sleep(0.05)
+
+            def hostile(i: int) -> int:
+                req = urllib.request.Request(  # noqa: S310
+                    base + "/v1/evidence/verify", data=bodies[i % len(bodies)],
+                    headers={"content-type": "application/json", "X-Forwarded-For": f"10.0.0.{i}"})
+                try:
+                    with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310
+                        data = r.read()
+                        sizes.append(len(data))
+                        return r.status
+                except urllib.error.HTTPError as exc:
+                    sizes.append(len(exc.read()))
+                    return exc.code
+
+            import threading
+            watcher = threading.Thread(target=probe)
+            watcher.start()
+            peak = before
+            with ThreadPoolExecutor(20) as pool:
+                futures = [pool.submit(hostile, i) for i in range(20)]
+                while not all(f.done() for f in futures):
+                    peak = max(peak, rss_mb())
+                    time.sleep(0.1)
+                codes = [f.result() for f in futures]
+            stop = True
+            watcher.join()
+            assert set(codes) <= {200, 429, 503}
+            assert max(sizes) < SIZE_CEILING
+            latencies.sort()
+            p95 = latencies[int(len(latencies) * 0.95) - 1]
+            print(  # noqa: T201
+                f"hostile load: healthz p95={p95:.2f}s max={latencies[-1]:.2f}s "
+                  f"rss growth={peak - before:.0f} MB codes={sorted(set(codes))}")
+            assert p95 < 2.0, f"/healthz p95 {p95:.2f}s during the load"
+            assert peak - before < 200, f"RSS grew {peak - before:.0f} MB"
+        finally:
+            server.terminate()
+            server.wait(timeout=20)
+
+
+class TestRequestShape:
+    def test_a_non_json_content_type_is_a_415_that_costs_nothing(self, client, whole):
+        for headers in ({"content-type": "text/plain"},
+                        {"content-type": "application/x-www-form-urlencoded"},
+                        {"content-type": "multipart/form-data; boundary=x"}):
+            response = client.post(URL, content=json.dumps(whole), headers=headers)
+            assert response.status_code == 415, headers
+            assert response.json()["detail"]["error"] == "unsupported_media_type"
+        no_type = client.post(URL, content=json.dumps(whole), headers={"content-type": ""})
+        assert no_type.status_code == 415
+        remaining = post(client, whole).headers["X-Assurance-Quota-Remaining"]
+        assert int(remaining) == PLANS["free"].validations_per_day - 1
+
+    def test_json_with_a_charset_is_accepted(self, client, whole):
+        response = client.post(URL, content=json.dumps(whole),
+                               headers={"content-type": "application/json; charset=utf-8"})
+        assert response.status_code == 200 and response.json()["ok"] is True
+
+    def test_the_browser_preflight_is_allowed_for_the_key_header_from_a_listed_origin(
+            self, client, monkeypatch):
+        response = client.options(URL, headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-issuer-public-key"})
+        assert response.status_code == 200
+        assert "x-issuer-public-key" in response.headers["access-control-allow-headers"].lower()
+
+    def test_a_chunked_body_over_the_cap_spends_a_unit_and_that_is_documented(self, client):
+        # Not avoidable without reading the body first, which is the cost the spend
+        # exists to prevent. Pinned so a change is a decision, not an accident.
+        def chunks():
+            for _ in range(5):
+                yield b" " * (1024 * 1024)
+
+        assert client.post(URL, content=chunks(), headers=JSON).status_code == 413
+        remaining = post(client, b"{}").headers["X-Assurance-Quota-Remaining"]
+        assert int(remaining) == PLANS["free"].validations_per_day - 2
+
+    def test_a_declared_oversize_body_costs_nothing(self, client):
+        client.post(URL, content=b" " * (4 * 1024 * 1024 + 1), headers=JSON)
+        remaining = post(client, b"{}").headers["X-Assurance-Quota-Remaining"]
+        assert int(remaining) == PLANS["free"].validations_per_day - 1
+
+
+class TestThePublicKeyStaysOutOfTheUrl:
+    def test_the_key_is_read_from_the_header_and_not_from_the_query(self, client, signed):
+        from_query = check(client, signed["records"],
+                           params={"public_key_pem": signed["pem"]})
+        assert from_query["signatures_verified"] is False
+        from_header = check(client, signed["records"], headers=key_header(signed["pem"]))
+        assert from_header["signatures_verified"] is True and from_header["ok"] is True
+
+    @pytest.mark.parametrize("value", [
+        "-----BEGIN PRIVATE KEY----- AAAA -----END PRIVATE KEY-----",
+        "-----BEGIN ENCRYPTED PRIVATE KEY----- AAAA -----END ENCRYPTED PRIVATE KEY-----",
+        "-----begin ed25519 private key----- AAAA",
+        "x PRIVATE x",
+    ])
+    def test_anything_that_looks_like_a_private_key_is_refused_and_costs_nothing(
+            self, client, signed, value):
+        response = post(client, signed["records"], headers={KEY_HEADER: value})
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "private_key_refused"
+        assert "AAAA" not in response.text
+        remaining = post(client, signed["records"]).headers["X-Assurance-Quota-Remaining"]
+        assert int(remaining) == PLANS["free"].validations_per_day - 1
+
+    def test_a_private_key_pasted_as_the_document_is_never_echoed(self, client):
+        secret = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PRIVATE KEY-----"
+        response = post(client, secret)
+        assert "MC4CAQAw" not in response.text
+
+
+class TestAttestationHonesty:
+    def test_no_key_is_never_ok_even_for_an_edited_head(self, client, signed):
+        signed["records"][1]["head_link_hash"] = "f" * 64
+        result = check(client, signed["records"])
+        assert result["ok"] is False and result["signatures_verified"] is False
+
+    def test_an_edited_head_fails_the_signature_with_the_key(self, client, signed):
+        signed["records"][1]["head_link_hash"] = "f" * 64
+        result = check(client, signed["records"], headers=key_header(signed["pem"]))
+        assert result["ok"] is False
+        assert any("signature does not verify" in p for p in result["problems"])
+
+    def test_dropping_the_last_attestation_passes_but_the_result_says_it_cannot_tell(
+            self, client, signed):
+        result = check(client, signed["records"][:-1], headers=key_header(signed["pem"]))
+        assert result["ok"] is True
+        assert any("most recent" in n and "cannot be detected" in n
+                   for n in result["not_checked"])
+
+    @pytest.mark.parametrize("with_key", [True, False])
+    def test_a_signature_that_is_not_base64_is_a_finding_not_a_crash(
+            self, client, signed, with_key):
+        signed["records"][0]["signature"] = "not base64 !!"
+        headers = key_header(signed["pem"]) if with_key else {}
+        result = check(client, signed["records"], headers=headers)
+        assert result["outcome"] == "inconsistent"
+        assert any("not base64" in p for p in result["problems"])
+
+    def test_other_kinds_carry_no_signature_claim(self, client, whole):
+        assert check(client, whole)["signatures_verified"] is None
+
+
+def _reseal(bundle: dict, **body_changes) -> dict:
+    """What a forger does: edit the sealed body, then recompute the seal."""
+    from assurance.core.evidence import Evidence
+
+    bundle = copy.deepcopy(bundle)
+    body = bundle["evidence"]["body"]
+    # A competent forger keeps the file consistent: a changed input hash is also
+    # written into the sealed relations and the readable result block, otherwise the
+    # engine's coherence rules refuse the file for the wrong reason.
+    for key in ("envelope_hash", "trace_hash"):
+        if key in body_changes:
+            old = body.get(key)
+            for rel in bundle["evidence"].get("relations", []):
+                if rel.get("content_hash") == old:
+                    rel["content_hash"] = body_changes[key]
+    body.update(body_changes)
+    bundle["evidence"]["content_hash"] = Evidence.from_dict(bundle["evidence"]).compute_hash()
+    for key in ("verdict", "tier", "provenance", "envelope_hash", "trace_hash"):
+        if key in body_changes and key in bundle["result"]:
+            bundle["result"][key] = body_changes[key]
+    return bundle
+
+
+class TestResealedMachineBundles:
+    def test_a_genuine_bundle_still_passes(self, client, machine_bundle):
+        assert check(client, machine_bundle)["ok"] is True
+
+    @pytest.mark.parametrize("changes", [
+        {"tier": "certified", "provenance": "simulation"},
+        {"tier": "certified"},
+        {"tier": "validated", "provenance": "simulation"},
+        {"provenance": "teleported"},
+        {"tier": "platinum"},
+        {"verdict": "pass", "checks": []},
+        {"checks": []},
+    ], ids=lambda c: "+".join(f"{k}={v!r}"[:24] for k, v in c.items()))
+    def test_a_self_consistent_forgery_is_refused(self, client, machine_bundle, changes):
+        forged = _reseal(machine_bundle, **changes)
+        # the forged file is internally consistent: only the rules of the engine refuse it
+        from assurance.core.evidence import Evidence
+        assert Evidence.from_dict(forged["evidence"]).verify()
+        result = check(client, forged)
+        assert result["ok"] is False and result["outcome"] == "inconsistent"
+        assert result["problems"]
+        assert result["verified"] == []
+
+    def test_a_tier_above_the_envelopes_own_ceiling_is_refused(self, client, machine_bundle):
+        from assurance.machine.envelope import SafetyEnvelope
+
+        bundle = copy.deepcopy(machine_bundle)
+        bundle["envelope"]["stop"]["basis"]["kind"] = "datasheet"
+        envelope = SafetyEnvelope.from_dict(bundle["envelope"])
+        assert envelope.tier_ceiling.value != "validated"
+        forged = _reseal(bundle, envelope_hash=envelope.content_hash(), tier="validated")
+        result = check(client, forged)
+        assert result["ok"] is False
+        assert any("envelope" in p and "ceiling" in p for p in result["problems"])
+
+    def test_an_edited_readable_provenance_is_found(self, client, machine_bundle):
+        from assurance.core.evidence import Evidence
+
+        machine_bundle["result"]["provenance"] = "field"
+        machine_bundle["evidence"]["body"]["provenance"] = "bench"
+        machine_bundle["evidence"]["content_hash"] = Evidence.from_dict(
+            machine_bundle["evidence"]).compute_hash()
+        result = check(client, machine_bundle)
+        assert result["ok"] is False
+        assert any("result block was edited" in p for p in result["problems"])
+
+    def test_every_pass_says_a_seal_is_not_a_signature(self, client, machine_bundle):
+        result = check(client, machine_bundle)
+        assert any("a seal is not a signature" in n for n in result["not_checked"])
+
+    def test_the_tier_is_reported_as_recorded_never_as_a_capability(self, client, machine_bundle):
+        tier = check(client, machine_bundle)["tier"]
+        assert "as_recorded_may_claim_physical_behaviour" in tier
+        assert "may_claim_physical_behaviour" not in tier
+
+    def test_the_existing_bundle_check_applies_the_same_rules(self, client, machine_bundle):
+        forged = _reseal(machine_bundle, tier="certified", provenance="simulation")
+        old = client.post("/v1/machine/bundle/check", json={"bundle": forged}).json()
+        assert old["ok"] is False
+
+
+class TestVerifierRobustness:
+    def test_a_huge_integer_is_a_finding_not_an_exception(self, whole):
+        whole["entries"][0]["seq"] = 10**400
+        result = verify_export(whole)
+        assert not result.ok and result.problems
+
+    def test_an_extra_key_on_an_entry_is_flagged(self, whole):
+        whole["entries"][1]["approved"] = True
+        result = verify_export(whole)
+        assert not result.ok and any("outside the seal" in p or "unexpected" in p
+                                     for p in result.problems)
+
+    def test_an_extra_top_level_key_is_flagged(self, whole):
+        whole["reviewed_by"] = "TUV"
+        result = verify_export(whole)
+        assert not result.ok and any("reviewed_by" in p for p in result.problems)
+
+    def test_an_extra_key_in_the_attestation_is_flagged(self, whole):
+        whole["attestation"]["signed_by"] = "TUV"
+        assert not verify_export(whole).ok
+
+    def test_a_gap_is_found_even_when_the_attestation_length_is_made_to_agree(self, whole):
+        del whole["entries"][2]
+        whole["attestation"]["length"] -= 1
+        result = verify_export(whole)
+        assert not result.ok
+        assert any("gap after seq" in p for p in result.problems), result.problems
+
+    def test_the_cli_text_is_capped_too(self):
+        result = verify_export({"entries": [0] * 5_000, "chain_verified": True,
+                                "ledger_schema_version": 1, "subject": ""})
+        assert result.text().count("PROBLEM") <= 51
