@@ -304,6 +304,11 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               intervention history, its evidence staleness, and the fleet-wide fan-out across every other enrolled
               machine &mdash; the Cell plan.
             </p>
+            <p className="hero-panel-note">
+              Handed an evidence export, a machine verification bundle or a signed attestation log?{' '}
+              <a href="/verify">Check what can and cannot be established from the file</a> &mdash; free, no account,
+              nothing stored.
+            </p>
           </div>
 
           <div className="section-head">
@@ -565,6 +570,9 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           <div className="hero-actions">
             <a className="btn btn-primary" href={QUICKSTART}>
               Get the quickstart
+            </a>
+            <a className="btn btn-outline" href="/verify">
+              Check an evidence file
             </a>
             <a className="btn btn-outline" href={SALES}>
               Talk to sales

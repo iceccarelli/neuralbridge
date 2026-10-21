@@ -301,6 +301,10 @@ export default function Header() {
                 <strong>Developers</strong>
                 <span>Auth, the real route table, and copy-paste curl/Python.</span>
               </a>
+              <a className="finder-item" href="/verify" onClick={closeAll}>
+                <strong>Check an evidence file</strong>
+                <span>Drop in an export or bundle: what can and cannot be established. Free, nothing stored.</span>
+              </a>
               <a className="finder-item" href="/applications" onClick={closeAll}>
                 <strong>Applications</strong>
                 <span>Cobots, packaging, fleet, OEM register, insurer evidence — mapped to real routes.</span>
@@ -411,6 +415,7 @@ export default function Header() {
             <>
               <a className="mobile-drill-item" href={DOCS} onClick={() => setMobileOpen(false)}>Documentation</a>
               <a className="mobile-drill-item" href="/developers" onClick={() => setMobileOpen(false)}>Developers</a>
+              <a className="mobile-drill-item" href="/verify" onClick={() => setMobileOpen(false)}>Check an evidence file</a>
               <a className="mobile-drill-item" href="/applications" onClick={() => setMobileOpen(false)}>Applications</a>
               <a className="mobile-drill-item" href="/cli" onClick={() => setMobileOpen(false)}>CLI</a>
               <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>MCP connector</a>

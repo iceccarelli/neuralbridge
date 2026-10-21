@@ -29,7 +29,7 @@ from assurance.api.deps import Machine, get_register
 from assurance.billing.accounts import Principal
 from assurance.core.evidence import Actor
 from assurance.core.identity import parse_utc, utc_now
-from assurance.watch.ingest import FUTURE_SKEW, ingest_report
+from assurance.watch.ingest import FUTURE_SKEW, IngestBusyError, ingest_report
 from assurance.watch.observations import MAX_CADENCE_HOURS, MIN_CADENCE_HOURS
 
 __all__ = ["MAX_MACHINES_PER_REPORT", "watch_router"]
@@ -137,7 +137,13 @@ def post_report(
         raise HTTPException(status_code=422, detail={
             "error": "run_started_at_in_future",
             "detail": "run_started_at is later than this server's clock allows."})
-    result = ingest_report(
-        register.ledger, body.model_dump(mode="json"),
-        actor=_actor(principal), now=now)
+    try:
+        result = ingest_report(
+            register.ledger, body.model_dump(mode="json"),
+            actor=_actor(principal), now=now)
+    except IngestBusyError as exc:
+        # Nothing was recorded; reports are idempotent, so the retry is safe.
+        raise HTTPException(
+            status_code=503, headers={"Retry-After": "5"},
+            detail={"error": "ingest_busy", "detail": str(exc)}) from exc
     return result.to_dict()
