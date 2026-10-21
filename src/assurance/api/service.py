@@ -28,7 +28,7 @@ from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
-from .routes import free_router, public_router, router
+from .routes import evidence_router, free_router, public_router, router
 from .supplier_routes import supplier_router
 from .watch_routes import watch_router
 
@@ -137,6 +137,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(attest_router)
     application.include_router(supplier_router)
     application.include_router(router)
+    application.include_router(evidence_router)
     return application
 
 
