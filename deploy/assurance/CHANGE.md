@@ -239,12 +239,33 @@ authoritative record" means here, as a function that can fail.
 skips an entry whose sealed evidence no longer verifies, which is right for a
 replay that reports it and wrong for a screen: a case whose newest entry was
 edited would read as the state before the edit. So `CaseStore.require_intact()`
-(the whole chain) runs before every write and before every read an interface
-presents as the case: HTTP answers `500 {"error": "ledger_integrity"}` and the
-CLI prints `THE LEDGER CHAIN DOES NOT VERIFY` to stderr first, prints nothing to
-stdout and exits 2. `replay` and `export` keep their own behaviour (a report of
-the violations; a refusal). The cost is one chain walk per request, which grows
-with the account's ledger.
+runs before every write and before every read an interface presents as the case:
+HTTP answers `500 {"error": "ledger_integrity"}` (also from `POST
+/v1/watch/report`, which records nothing onto a broken chain) and the CLI prints
+`THE LEDGER CHAIN DOES NOT VERIFY` to stderr first, prints nothing to stdout and
+exits 2. `replay` and `export` keep their own behaviour (a report of the
+violations; a refusal), and both always walk the whole chain.
+
+**The check is incremental, and what that costs in detection.** A full walk is
+~55 microseconds per record (1 s at 20 000), too much for every request, so
+`EvidenceLedger.verify_cached()` (`assurance/evidence/chain_cache.py`) remembers
+per ledger file (resolved path + inode + device, so replacing the file
+invalidates it) the head a full walk verified, and on each call (a) re-reads that
+head record and confirms it is unchanged and still hashes, which catches
+truncation, a rewind and a replacement at the head, and (b) verifies completely
+every record appended since, which catches garbage appended after the head.
+Measured on a 20 000-record ledger on a loaded machine: a full walk 1.9-2.5 s;
+the incremental check 1.0 ms unchanged and 2.4 ms after 5 appends. The
+trade-off, plainly: **an in-place edit of an *old* record by someone with write
+access to the database file is seen at the next full pass, not on every read.**
+A full pass happens at the first check in each process, whenever the last one is
+older than `ASSURANCE_CHAIN_RECHECK_SECONDS` (default 60; `0` = every check is a
+full walk), and on every `verify_chain` (export, replay, `GET /v1/ledger/verify`,
+fleet reads). An incremental pass never extends the age of the full pass it rests
+on, a failure is never remembered as a pass, and a failing full walk forgets the
+cache. The cache is per process. A chain rebuilt to be self-consistent is caught
+by neither kind of pass; that is what a signed head attestation
+(`assurance attest`) is for.
 
 ## Surfaces
 
@@ -293,7 +314,7 @@ What is the same on every interface:
 
 | | |
 |---|---|
-| unknown case id | HTTP `404` `{"detail": {"error": "case_not_found", "case_id"}}` on every verb; CLI exit `2` on every verb (`show`, `claim`, ..., `replay`, `export`) |
+| unknown case id | HTTP `404` `{"detail": {"error": "case_not_found", "case_id"}}` on every verb; CLI exit `2` on every verb (`show`, `claim`, ..., `replay`, `export`). The Article 14 register's `GET /v1/cases/{id}/export` and `art14 export` answer the same way (they used to export an empty bundle) |
 | a refused transition (wrong state, non-person actor on a decision, nothing outstanding) | HTTP `409` with the domain sentence; CLI exit `1`, `finding: ...` on stderr |
 | invalid input | HTTP `422`; CLI exit `2` |
 | the actor rules (`_require_human`), the waiver and resolution rules | one implementation, in the service; no interface re-implements them |
@@ -321,6 +342,12 @@ What is **intentionally different**, so nobody mistakes it for a bug:
   and `POST /v1/machine/verify {"subject": ...}` do that (without it a bundle is
   filed under `product@version`, a product line, and `reverify` will not find
   it). The API response carries the hash to cite as `content_hash`.
+
+**Reserved case fields.** `reviewer` and `last_valid_verification` exist on the
+model but nothing sets them (the owner claims; several people may advance,
+resolve or waive, each recorded in `history` and `resolved_decisions`), so they
+are not emitted by the API, `show --json` or the text view while empty. They are
+not data; do not build on them.
 
 ## What is not solved here
 
