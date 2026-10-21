@@ -28,6 +28,7 @@ __all__ = [
     "stripe_configured",
     "create_checkout_session",
     "create_billing_portal_session",
+    "list_invoices",
     "list_subscriptions",
     "retrieve_subscription",
     "verify_webhook",
@@ -88,7 +89,7 @@ def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
 
 
 _SECRET_LOOKING = re.compile(r"\b(?:sk|rk|pk|whsec)_[A-Za-z0-9_*]+")
-_STRIPE_ID = re.compile(r"^[A-Za-z0-9_]{1,255}$")
+_STRIPE_ID = re.compile(r"[A-Za-z0-9_]{1,255}")
 
 
 def _scrub(text: str) -> str:
@@ -157,9 +158,32 @@ def list_subscriptions(
     return _get("/subscriptions", params)
 
 
+def list_invoices(
+    subscription: str | None = None,
+    status: str = "open",
+    starting_after: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """One page of invoices: ``{"data": [...], "has_more": bool}``. Read-only.
+
+    ``status="open"`` is the unpaid ones; the oldest of a past-due subscription
+    shows how long it has really been unpaid, which Stripe's subscription
+    object does not say.
+    """
+    params: list[tuple[str, str]] = [
+        ("status", status),
+        ("limit", str(max(1, min(int(limit), 100)))),
+    ]
+    if subscription:
+        params.append(("subscription", subscription))
+    if starting_after:
+        params.append(("starting_after", starting_after))
+    return _get("/invoices", params)
+
+
 def retrieve_subscription(subscription_id: str) -> dict[str, Any]:
     """One subscription by id. Read-only."""
-    if not _STRIPE_ID.match(subscription_id or ""):
+    if not _STRIPE_ID.fullmatch(subscription_id or ""):
         raise StripeError("not a Stripe subscription id", status=400, code="invalid_id")
     return _get(f"/subscriptions/{subscription_id}")
 

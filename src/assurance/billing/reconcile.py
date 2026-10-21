@@ -46,7 +46,7 @@ import json
 import os
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -187,11 +187,21 @@ class ReconcileReport:
         return sorted({f.account_id for f in self.findings if f.account_id})
 
     @property
+    def fully_checked(self) -> bool:
+        """True only when every eligible account was compared against Stripe.
+
+        Deferred and unchecked accounts are *not* in sync: they were not
+        verified, and "not verified" must never read as clean.
+        """
+        return self.complete and not self.deferred and not self.unchecked
+
+    @property
     def exit_code(self) -> int:
-        """0 in sync, 1 drift found (corrected or not), 2 could not complete."""
+        """0 in sync and fully checked; 1 drift found (corrected or not) or some
+        account deferred (not checked this run); 2 could not complete."""
         if not self.complete:
             return 2
-        return 1 if self.drift_count else 0
+        return 1 if (self.drift_count or self.deferred) else 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -199,10 +209,12 @@ class ReconcileReport:
             "run_id": self.run_id,
             "mode": "apply" if self.apply else "dry_run",
             "complete": self.complete,
+            "fully_checked": self.fully_checked,
             "error": self.error,
             "snapshot_at": self.snapshot_at,
             "past_due_days": self.past_due_days,
             "drift_count": self.drift_count,
+            "deferred_count": len(self.deferred),
             "by_category": self.by_category,
             "drift_account_ids": self.drift_account_ids,
             "accounts": {
@@ -223,15 +235,20 @@ class ReconcileReport:
 
     def render(self) -> str:
         """Plain text. Account ids and Stripe object ids only; no emails, no keys."""
+        mode = (
+            "APPLY: corrections are written; the store is migrated additively if needed"
+            if self.apply else
+            "dry run: the account store is opened read-only and corrections are not written"
+        )
         lines = [
-            "NeuralBridge billing reconciliation "
-            f"({'APPLY' if self.apply else 'dry run, nothing written'})",
+            f"NeuralBridge billing reconciliation ({mode})",
             f"NOTICE: {self.notice}",
             f"run {self.run_id}  snapshot {self.snapshot_at}",
             f"accounts: total={self.accounts_total} checked={self.accounts_checked} "
             f"in_sync={self.in_sync} skipped={len(self.skipped)} "
             f"deferred={len(self.deferred)} unchecked={len(self.unchecked)}",
             f"drift_count={self.drift_count}",
+            f"deferred_count={len(self.deferred)}",
         ]
         for category, n in self.by_category.items():
             if n:
@@ -254,10 +271,16 @@ class ReconcileReport:
                 f"INCOMPLETE: {self.error} Nothing was written; this report covers only "
                 "what could be read. Exit 2."
             )
-        elif self.drift_count:
-            lines.append("DRIFT FOUND. Exit 1.")
         else:
-            lines.append("IN SYNC. Exit 0.")
+            if self.drift_count:
+                lines.append("DRIFT FOUND. Exit 1.")
+            if self.deferred:
+                lines.append(
+                    f"NOT FULLY CHECKED: {len(self.deferred)} account(s) deferred (a newer "
+                    "webhook exists); run again. Exit 1."
+                )
+            if not self.drift_count and not self.deferred:
+                lines.append("IN SYNC. Exit 0.")
         return "\n".join(lines)
 
 
@@ -316,6 +339,54 @@ def _scrub(text: str) -> str:
     return stripe_gateway._scrub(text)
 
 
+def _observed(snapshot_at: int, subs: list[_Sub]) -> int:
+    """The instant Stripe was read at for these subscriptions.
+
+    Stripe's own timestamps may run ahead of our clock, but never by more than
+    the skew margin is believed. Anything further out (a test clock, a corrupt
+    object) is clamped, because this value is persisted into ``last_event_at``
+    and a far-future one would make every later real webhook look stale.
+    """
+    latest = max([snapshot_at, *(t for s in subs for t in s.stamps)])
+    return min(latest, snapshot_at + SKEW_SECONDS)
+
+
+def _foreign_live(subs: list[_Sub]) -> _Sub | None:
+    """A subscription not recognisably ours that may be what the customer pays for."""
+    for s in subs:
+        if s.ours:
+            continue
+        if s.state is None or s.state.kind in {"entitled", "past_due"}:
+            return s
+    return None
+
+
+def _oldest_open_invoice(gateway: Any, subscription_id: str) -> int:
+    """``created`` of the oldest unpaid invoice of a subscription, or 0 if Stripe gives none."""
+    lister = getattr(gateway, "list_invoices", None)
+    if lister is None:
+        return 0
+    oldest = 0
+    cursor: str | None = None
+    for _ in range(_MAX_PAGES):
+        page = lister(subscription=subscription_id, status="open",
+                      starting_after=cursor, limit=_PAGE)
+        data = page.get("data") if isinstance(page, dict) else None
+        if not isinstance(data, list):
+            raise _IncompleteError("Stripe returned an invoice list without data.")
+        for inv in data:
+            created = inv.get("created") if isinstance(inv, dict) else None
+            if isinstance(created, int) and not isinstance(created, bool) and created > 0:
+                oldest = created if not oldest else min(oldest, created)
+        if not page.get("has_more"):
+            return oldest
+        last = str(data[-1].get("id") or "") if data and isinstance(data[-1], dict) else ""
+        if not last or last == cursor:
+            raise _IncompleteError("Stripe pagination did not advance; refusing to guess.")
+        cursor = last
+    raise _IncompleteError("too many pages of invoices; refusing to guess.")
+
+
 def _pages(gateway: Any, **kwargs: Any) -> Iterator[dict[str, Any]]:
     """Every subscription object, across pages. Raises ``_IncompleteError``."""
     cursor: str | None = None
@@ -371,7 +442,7 @@ def _effective(subs: list[_Sub]) -> tuple[_Sub | None, str]:
 
 def _assess(
     acct: Account, subs: list[_Sub], *, snapshot_at: int, past_due_days: int,
-    last_recon: dict[str, Any] | None,
+    last_recon: dict[str, Any] | None, unpaid_since: Callable[[str], int],
 ) -> Finding | None:
     """Compare one account with its Stripe subscriptions. None means in sync."""
     ours = [s for s in subs if s.ours]
@@ -381,9 +452,24 @@ def _assess(
     }
     local_entitled = acct.status in ENTITLED_STATUSES
 
-    if not ours:
-        if not local_entitled:
+    def blocked_by_foreign() -> Finding | None:
+        """Never revoke on an incomplete picture: a live subscription we cannot
+        classify may be exactly what this customer pays for."""
+        foreign = _foreign_live(subs)
+        if foreign is None:
             return None
+        return Finding(
+            category="ambiguous", **base,
+            stripe_subscription_id=foreign.id, stripe_status=foreign.raw_status,
+            reason="a live subscription on a price or status we do not recognise exists "
+                   "for this customer; not revoking access on an incomplete picture",
+        )
+
+    if not ours:
+        if not local_entitled or acct.tier == "free":
+            return None  # nothing paid is granted, so nothing is out of step
+        if (blocked := blocked_by_foreign()) is not None:
+            return blocked
         # A customer Stripe knows, with no subscription of ours: the access we
         # grant has nothing behind it. A human decides; this is not a status
         # Stripe reported, so it is never applied automatically.
@@ -400,8 +486,10 @@ def _assess(
     common = {**base, "stripe_subscription_id": sub_id, "stripe_status": eff.raw_status}
 
     if state.kind in {"terminal", "suspended"}:
-        if not local_entitled:
+        if not local_entitled or acct.tier == "free":
             return None
+        if (blocked := blocked_by_foreign()) is not None:
+            return blocked
         return Finding(
             category="stripe_ended_but_we_grant", **common,
             new_status="cancelled", new_tier=state.tier or acct.tier, correctable=True,
@@ -445,14 +533,29 @@ def _assess(
             reason="no change to what the account may do; the past_due warning differs",
         )
     if target_status == "past_due":
+        limit = past_due_days * _DAY
         since = acct.past_due_since or acct.last_event_at
-        if since and snapshot_at - since > past_due_days * _DAY:
-            return Finding(
-                category="past_due_too_long", **common,
-                new_status="cancelled", new_tier=acct.tier, correctable=True,
-                reason=f"past_due since {since}; Stripe has not recovered it in over "
-                       f"{past_due_days} days",
-            )
+        # Our own timer is only a prefilter: a lost "active" webhook between two
+        # dunning episodes leaves it stale. Cutting someone off needs Stripe's
+        # word: the oldest invoice still unpaid.
+        if since and snapshot_at - since > limit:
+            if (blocked := blocked_by_foreign()) is not None:
+                return blocked
+            oldest = unpaid_since(sub_id)
+            if oldest and snapshot_at - oldest > limit:
+                return Finding(
+                    category="past_due_too_long", **common,
+                    new_status="cancelled", new_tier=acct.tier, correctable=True,
+                    reason=f"Stripe's oldest unpaid invoice is from {oldest}, over "
+                           f"{past_due_days} days ago",
+                )
+            if not oldest:
+                return Finding(
+                    category="past_due_too_long", **common,
+                    reason="our timer says past_due for over "
+                           f"{past_due_days} days but Stripe gave no unpaid invoice to "
+                           "prove it; reported, not applied",
+                )
     return None
 
 
@@ -548,7 +651,7 @@ def reconcile(
             continue
         cid = acct.stripe_customer_id
         subs = by_customer.get(cid, [])
-        observed = max([snapshot_at, *(t for s in subs for t in s.stamps)])
+        observed = _observed(snapshot_at, subs)
         if acct.last_event_at > observed - SKEW_SECONDS:
             report.deferred.append({
                 "account_id": acct.id,
@@ -565,11 +668,19 @@ def reconcile(
                        "never corrected automatically",
             ))
             continue
-        finding = _assess(
-            acct, subs, snapshot_at=observed, past_due_days=past_due_days,
-            last_recon=accounts.last_reconciliation(acct.id)
-            if acct.status == "cancelled" else None,
-        )
+        try:
+            finding = _assess(
+                acct, subs, snapshot_at=observed, past_due_days=past_due_days,
+                last_recon=accounts.last_reconciliation(acct.id)
+                if acct.status == "cancelled" else None,
+                unpaid_since=lambda sub_id: _oldest_open_invoice(gateway, sub_id),
+            )
+        except (StripeError, _IncompleteError) as exc:
+            report.accounts_checked -= 1
+            report.unchecked.append({"account_id": acct.id, "reason": _scrub(str(exc))})
+            report.complete = False
+            report.error = "Stripe could not be read for every account."
+            continue
         if finding is None:
             report.in_sync += 1
         else:
@@ -617,6 +728,17 @@ def reconcile(
                 listed.raw_status, listed.tier, listed.tier_source
             ):
                 changed[id(f)] = "the subscription changed while this run was reading it"
+            elif f.new_status == "cancelled" and _picture(
+                _list_customer(gateway, f.stripe_customer_id)
+            ) != _picture(by_customer.get(f.stripe_customer_id, [])):
+                # Revoking is the correction that costs a paying customer, so
+                # the customer's whole set of subscriptions is read again just
+                # before: a new one created since listing (with its webhook
+                # lost) must stop the revocation.
+                changed[id(f)] = (
+                    "changed_since_read: the customer's subscriptions changed while "
+                    "this run was reading them"
+                )
             else:
                 confirmed.append(f)
     except Exception as exc:
@@ -659,6 +781,14 @@ def reconcile(
                 updated.append(_with(f, action="refused", reason=outcome))
     report.findings = updated
     return report
+
+
+def _list_customer(gateway: Any, customer: str) -> list[_Sub]:
+    return [_parse(obj) for obj in _pages(gateway, customer=customer)]
+
+
+def _picture(subs: list[_Sub]) -> frozenset[tuple[str, str, str | None, str]]:
+    return frozenset((s.id, s.raw_status, s.tier, s.tier_source) for s in subs)
 
 
 def _with(f: Finding, **changes: Any) -> Finding:
@@ -707,6 +837,9 @@ def main(
     parser.add_argument("--apply", action="store_true",
                         help="correct status/tier of existing accounts (default: report only)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument("--i-have-run-this-in-test-mode", action="store_true",
+                        dest="tested",
+                        help="required with --apply when STRIPE_SECRET_KEY is a live key")
     parser.add_argument("--past-due-days", type=_positive_int, default=DEFAULT_PAST_DUE_DAYS,
                         help="end a past_due that Stripe has not recovered after N days "
                              f"(default {DEFAULT_PAST_DUE_DAYS})")
@@ -725,12 +858,20 @@ def main(
         if not stripe_gateway.stripe_configured():
             return fail("STRIPE_SECRET_KEY is not set.")
         gateway = stripe_gateway
+    if (args.apply and not args.tested
+            and os.environ.get("STRIPE_SECRET_KEY", "").startswith(("sk_live_", "rk_live_"))):
+        return fail(
+            "--apply with a live Stripe key is refused: this tool has only been verified "
+            "against a fake transport. Run it with a test mode key (and read its dry run) "
+            "first, then pass --i-have-run-this-in-test-mode to confirm you have."
+        )
     path = os.environ.get("ASSURANCE_ACCOUNTS", "accounts.db")
     if not Path(path).is_file():
         # AccountStore would create an empty database; a typo must not.
         return fail("ASSURANCE_ACCOUNTS does not point at an existing account store.")
     try:
-        store = AccountStore(path)
+        # A dry run must not even migrate the production database.
+        store = AccountStore(path) if args.apply else AccountStore.open_readonly(path)
         report = reconcile(
             store, gateway, apply=args.apply, now=now, past_due_days=args.past_due_days
         )

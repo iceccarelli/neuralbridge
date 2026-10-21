@@ -267,19 +267,67 @@ class AccountStore:
         """Additive, idempotent changes to a database an older build created.
 
         ``CREATE TABLE IF NOT EXISTS`` in the schema covers new tables; a new
-        column on an existing table needs this.
+        column on an existing table needs this. Safe against a second process
+        doing the same at the same moment: the check and the ``ALTER`` share
+        one write transaction, and a "duplicate column" from a process that won
+        the race anyway is the outcome we wanted, not an error.
         """
-        columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
-        if "last_event_at" not in columns:
-            db.execute(
-                "ALTER TABLE accounts ADD COLUMN last_event_at INTEGER NOT NULL DEFAULT 0"
+        additions = (
+            ("last_event_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("past_due_since", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+            for name, definition in additions:
+                if name in columns:
+                    continue
+                try:
+                    db.execute(f"ALTER TABLE accounts ADD COLUMN {name} {definition}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+
+    @classmethod
+    def open_readonly(cls, path: str | Path) -> AccountStore:
+        """Open an existing store without writing a byte: no schema, no migration.
+
+        For a dry run against a production database that may not have been
+        migrated yet. Reads tolerate the older shape (``past_due_since`` and
+        the audit table may be missing); any write raises.
+        """
+        self = cls.__new__(cls)
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._readonly = True
+        db = self._connect()
+        try:
+            row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        finally:
+            db.close()
+        if row is None or int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{self.path} was written by accounts schema "
+                f"{row[0] if row else 'unknown'}; this build speaks "
+                f"{ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
             )
-        if "past_due_since" not in columns:
-            db.execute(
-                "ALTER TABLE accounts ADD COLUMN past_due_since INTEGER NOT NULL DEFAULT 0"
-            )
+        return self
+
+    _readonly = False
 
     def _connect(self) -> sqlite3.Connection:
+        if self._readonly:
+            db = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0,
+                isolation_level=None,
+            )
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA query_only=ON")
+            return db
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
@@ -601,8 +649,8 @@ class AccountStore:
             status=row["status"],
             stripe_customer_id=row["stripe_customer_id"],
             stripe_subscription_id=row["stripe_subscription_id"],
-            last_event_at=row["last_event_at"],
-            past_due_since=row["past_due_since"],
+            last_event_at=row["last_event_at"] if "last_event_at" in row.keys() else 0,
+            past_due_since=row["past_due_since"] if "past_due_since" in row.keys() else 0,
         )
 
     def account(self, account_id: str) -> Account | None:
@@ -704,11 +752,16 @@ class AccountStore:
         """The newest audit row for an account, or None."""
         db = self._connect()
         try:
-            row = db.execute(
-                "SELECT * FROM entitlement_reconciliations WHERE account_id=? "
-                "ORDER BY id DESC LIMIT 1",
-                (account_id,),
-            ).fetchone()
+            try:
+                row = db.execute(
+                    "SELECT * FROM entitlement_reconciliations WHERE account_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (account_id,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+                return None  # a store not yet migrated has no history
             return dict(row) if row else None
         finally:
             db.close()
