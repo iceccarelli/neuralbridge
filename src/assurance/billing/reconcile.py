@@ -55,6 +55,8 @@ from typing import Any
 from ..core.identity import utc_now
 from . import stripe_gateway
 from .accounts import ENTITLED_STATUSES, Account, AccountStore
+from .payg import reconcile_usage
+from .plans import payg_available
 from .stripe_gateway import StripeError
 from .subscription_state import (
     PURCHASABLE_TIERS,
@@ -169,6 +171,10 @@ class ReconcileReport:
     error: str = ""
     corrected: int = 0
     notice: str = NOTICE
+    #: Pay-as-you-go usage against the provider's meter, or None when there is
+    #: no billable usage and pay-as-you-go is off (the usual case): then the
+    #: report is exactly what it was before usage metering existed.
+    usage: Any = None
 
     @property
     def drift_count(self) -> int:
@@ -199,11 +205,19 @@ class ReconcileReport:
     def exit_code(self) -> int:
         """0 in sync and fully checked; 1 drift found (corrected or not) or some
         account deferred (not checked this run); 2 could not complete."""
-        if not self.complete:
-            return 2
-        return 1 if (self.drift_count or self.deferred) else 0
+        code = 2 if not self.complete else (1 if (self.drift_count or self.deferred) else 0)
+        if self.usage is not None:
+            code = max(code, self.usage.exit_code)
+        return code
 
     def to_dict(self) -> dict[str, Any]:
+        payload = self._base_dict()
+        if self.usage is not None:
+            payload["usage"] = self.usage.to_dict()
+        payload["exit_code"] = self.exit_code
+        return payload
+
+    def _base_dict(self) -> dict[str, Any]:
         return {
             "notice": self.notice,
             "run_id": self.run_id,
@@ -281,7 +295,10 @@ class ReconcileReport:
                 )
             if not self.drift_count and not self.deferred:
                 lines.append("IN SYNC. Exit 0.")
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        if self.usage is not None:
+            text += "\n\n" + self.usage.render()
+        return text
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +854,9 @@ def main(
     parser.add_argument("--apply", action="store_true",
                         help="correct status/tier of existing accounts (default: report only)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument("--usage", action="store_true",
+                        help="always include the pay-as-you-go usage section (it is included "
+                             "anyway when billable usage exists or pay-as-you-go is configured)")
     parser.add_argument("--i-have-run-this-in-test-mode", action="store_true",
                         dest="tested",
                         help="required with --apply when STRIPE_SECRET_KEY is a live key")
@@ -875,6 +895,11 @@ def main(
         report = reconcile(
             store, gateway, apply=args.apply, now=now, past_due_days=args.past_due_days
         )
+        if args.usage or payg_available() or any(store.billable_by_state().values()):
+            # Same safety rules: read-only unless --apply, Stripe read before any write.
+            report.usage = reconcile_usage(
+                store, gateway if hasattr(gateway, "list_meter_event_summaries") else None,
+                now=now, apply=args.apply)
     except Exception as exc:
         return fail(f"{type(exc).__name__}: {exc}")
 

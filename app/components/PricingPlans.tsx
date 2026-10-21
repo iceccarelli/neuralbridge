@@ -6,7 +6,30 @@ import { FALLBACK_PLANS, type Plan } from '../lib/plans';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
-function CheckoutForm({ tier, variant = 'primary' }: { tier: 'register' | 'cell'; variant?: 'primary' | 'secondary' }) {
+type PaidTier = 'register' | 'cell' | 'payg';
+
+// "€390 / month" -> amount and period, straight from the plan the API served.
+// Nothing about a price is typed into this file: it is whatever plans.py says.
+function Price({ price }: { price: string }) {
+  if (price.toLowerCase() === 'free') return <p className="price-amount">Free</p>;
+  const [amount, period] = price.split(' / ');
+  return (
+    <p className="price-amount">
+      {amount}
+      {period ? <span> / {period}</span> : null}
+    </p>
+  );
+}
+
+function CheckoutForm({
+  tier,
+  label,
+  variant = 'primary',
+}: {
+  tier: PaidTier;
+  label: string;
+  variant?: 'primary' | 'secondary';
+}) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
@@ -42,7 +65,7 @@ function CheckoutForm({ tier, variant = 'primary' }: { tier: 'register' | 'cell'
   if (!open) {
     return (
       <button className={btnClass} onClick={() => setOpen(true)}>
-        Buy {tier === 'register' ? 'Register' : 'Cell'}
+        {tier === 'payg' ? `Start ${label}` : `Buy ${label}`}
       </button>
     );
   }
@@ -74,7 +97,11 @@ export default function PricingPlans() {
     fetch(`${API_BASE}/v1/plans`)
       .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
       .then((data: Plan[]) => {
-        if (!cancelled && Array.isArray(data) && data.length === 3) {
+        // The three standing plans must all be present; a fourth (pay as you go)
+        // appears only when the deployment has configured it, and is rendered
+        // only from this live list, never from the static fallback.
+        const tiers = new Set(Array.isArray(data) ? data.map((p) => p.tier) : []);
+        if (!cancelled && ['free', 'register', 'cell'].every((t) => tiers.has(t as Plan['tier']))) {
           setPlans(data);
           setLive(true);
         }
@@ -91,6 +118,8 @@ export default function PricingPlans() {
   const validator = byTier('free');
   const register = byTier('register');
   const cell = byTier('cell');
+  // Never defaulted from FALLBACK_PLANS: if the API did not list it, it is not on sale.
+  const payg = live ? plans.find((p) => p.tier === 'payg') : undefined;
 
   // Derived from the live plan's own `limits`, not hand-typed — so this
   // sentence cannot drift from what the entitlement gate actually enforces
@@ -107,8 +136,8 @@ export default function PricingPlans() {
     <>
       <div className="pricing-grid">
         <div className="price-card">
-          <p className="price-name">Validator</p>
-          <p className="price-amount">Free</p>
+          <p className="price-name">{validator.name}</p>
+          <Price price={validator.price} />
           <p className="price-tagline">{validator.blurb}</p>
           <ul className="price-list">
             {validator.includes.slice(0, 8).map((item) => (
@@ -121,8 +150,8 @@ export default function PricingPlans() {
         </div>
 
         <div className="price-card featured">
-          <p className="price-name">Register</p>
-          <p className="price-amount">&euro;390 <span>/ month</span></p>
+          <p className="price-name">{register.name}</p>
+          <Price price={register.price} />
           <p className="price-tagline">{register.blurb}</p>
           <ul className="price-list">
             {register.includes.map((item) => (
@@ -131,15 +160,15 @@ export default function PricingPlans() {
           </ul>
           {firstTenMinutes(register) && <p className="pricing-note" style={{ fontSize: '0.78rem' }}>{firstTenMinutes(register)}</p>}
           {register.purchasable ? (
-            <CheckoutForm tier="register" />
+            <CheckoutForm tier="register" label={register.name} />
           ) : (
             <a className="btn btn-primary" href={SALES}>Talk to sales</a>
           )}
         </div>
 
         <div className="price-card">
-          <p className="price-name">Cell</p>
-          <p className="price-amount">&euro;1,290 <span>/ month</span></p>
+          <p className="price-name">{cell.name}</p>
+          <Price price={cell.price} />
           <p className="price-tagline">{cell.blurb}</p>
           <ul className="price-list">
             {cell.includes.slice(0, 6).map((item) => (
@@ -148,12 +177,27 @@ export default function PricingPlans() {
           </ul>
           {firstTenMinutes(cell) && <p className="pricing-note" style={{ fontSize: '0.78rem' }}>{firstTenMinutes(cell)}</p>}
           {cell.purchasable ? (
-            <CheckoutForm tier="cell" variant="secondary" />
+            <CheckoutForm tier="cell" label={cell.name} variant="secondary" />
           ) : (
             <a className="btn btn-secondary" href={SALES}>Talk to sales</a>
           )}
         </div>
       </div>
+      {payg && (
+        <div className="pricing-grid" style={{ gridTemplateColumns: 'minmax(0, 1fr)', maxWidth: '28rem' }}>
+          <div className="price-card" id="payg">
+            <p className="price-name">{payg.name}</p>
+            <Price price={payg.price} />
+            <p className="price-tagline">{payg.blurb}</p>
+            <ul className="price-list">
+              {payg.includes.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            {payg.purchasable && <CheckoutForm tier="payg" label={payg.name.toLowerCase()} variant="secondary" />}
+          </div>
+        </div>
+      )}
       {live && (
         <p className="pricing-live-note">
           <span className="live-dot" /> Live from <code>GET /v1/plans</code> — this table is generated from the
