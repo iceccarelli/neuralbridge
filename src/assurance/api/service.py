@@ -113,7 +113,9 @@ def create_app(**kwargs: Any) -> FastAPI:
         # deployment: the browser never even sends the key, so the API sees
         # an anonymous caller and returns 401/402 for a request that should
         # have succeeded. Found while building the Console guided flow.
-        allow_headers=["content-type", "authorization", "x-api-key"],
+        # idempotency-key: a browser client that retries a metered call must be
+        # allowed to send it, or the preflight refuses the request outright.
+        allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key"],
         allow_credentials=False,
     )
 

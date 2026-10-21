@@ -106,7 +106,6 @@ def overage_allowed(account: Account) -> bool:
     """
     return (
         account.plan.metered_overage
-        and account.tier == "payg"
         # ``active`` only: a ``past_due`` account is still entitled to what it
         # has, but must not keep running up a bill while its card is failing.
         and account.status == "active"

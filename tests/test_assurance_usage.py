@@ -483,6 +483,21 @@ class TestOldDatabase:
         assert errors == []
         AccountStore(path)
 
+    def test_opening_an_up_to_date_store_never_waits_for_the_write_lock(self, store):
+        """Check first, lock only if there is something to change: a writer holding
+        the lock (a busy billing webhook) must not make every new process queue."""
+        import time
+
+        holder = sqlite3.connect(store.path, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            started = time.monotonic()
+            AccountStore(store.path)
+            assert time.monotonic() - started < 2.0
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
     def test_a_read_only_open_of_an_unmigrated_store_still_works_and_writes_nothing(
             self, tmp_path):
         path = self._old(tmp_path)
@@ -555,6 +570,13 @@ class TestOverHttp:
         assert r.json()["detail"]["error"] == "invalid_idempotency_key"
         assert events(store, account.id) == []
 
+    def test_a_browser_may_send_the_idempotency_key(self, client):
+        preflight = client.options("/v1/spec/validate", headers={
+            "Origin": "https://neuralbridge.io", "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-api-key,idempotency-key"})
+        assert preflight.status_code == 200
+        assert "idempotency-key" in preflight.headers["access-control-allow-headers"].lower()
+
     def test_reusing_a_key_for_other_work_is_a_409(self, client, store):
         account, headers = key_for(store)
         h = {**headers, "Idempotency-Key": "same"}
@@ -622,6 +644,22 @@ class TestOverHttp:
         assert over.json()["detail"]["error"] == "quota_exceeded"
         assert "retry-after" in over.headers
         assert events(store, account.id) == before
+
+    def test_a_caller_who_is_certainly_over_limit_costs_no_computation(
+            self, client, store, monkeypatch):
+        from assurance.api import routes
+
+        account, headers = key_for(store)
+        for _ in range(ALLOWANCE):
+            client.post("/v1/spec/validate", json=VALIDATE, headers=headers)
+        ran = []
+        monkeypatch.setattr(routes, "validate_payload", lambda *a, **k: ran.append(1))
+        assert client.post("/v1/spec/validate", json=VALIDATE, headers=headers).status_code == 429
+        assert ran == []
+        # ... and the same for an address-keyed anonymous caller.
+        for _ in range(ALLOWANCE):
+            client.post("/v1/machine/separation", json=SEPARATION)
+        assert client.post("/v1/machine/separation", json=SEPARATION).status_code == 429
 
     def test_payg_beyond_the_allowance_is_billable_and_then_hard_stops_at_the_limit(
             self, client, store, payg_on):
