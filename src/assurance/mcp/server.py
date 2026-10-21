@@ -164,6 +164,52 @@ async def change_case(case_id: str) -> dict[str, Any]:
     return await _call("GET", f"/v1/change/cases/{case_id}")
 
 
+# Write parity for the change queue — claim, advance, reverify. Deliberately NOT
+# `decide`: closing, rejecting, deferring, resuming and resolving a case are
+# decisions only a named person may make, and this server is the surface an
+# agent drives. An agent can read the queue, take a case up, move it to the
+# next stop its own required work names and submit a re-verification for the
+# engine to judge; it cannot decide. Those stay on the CLI and the HTTP API.
+
+@mcp.tool()
+async def change_claim(case_id: str, owner: str, actor: str = "") -> dict[str, Any]:
+    """POST /v1/change/cases/{case_id}/claim — OPEN -> IN_REVIEW; a named owner takes the case.
+
+    Cell-tier only. A case in any other state is a real 409, and an unknown
+    case id is a 409 too (the read tools return 404 for the same id).
+    """
+    return await _call("POST", f"/v1/change/cases/{case_id}/claim",
+                       json_body={"owner": owner, "actor": actor})
+
+
+@mcp.tool()
+async def change_advance(case_id: str, actor: str = "") -> dict[str, Any]:
+    """POST /v1/change/cases/{case_id}/advance — move to the next stop the case's own
+    required work names. It never reaches ready_to_close while a re-verification or a
+    human decision is outstanding, and it never marks anything done by itself.
+
+    Cell-tier only.
+    """
+    return await _call("POST", f"/v1/change/cases/{case_id}/advance",
+                       json_body={"actor": actor})
+
+
+@mcp.tool()
+async def change_reverify(
+    case_id: str, manifest: dict[str, Any], verification_content_hash: str, actor: str = "",
+) -> dict[str, Any]:
+    """POST /v1/change/cases/{case_id}/reverification — submit the machine's current
+    manifest and the content hash of a sealed verification bundle; the coverage engine,
+    not the caller, decides which functions are current again.
+
+    Cell-tier only. There is deliberately no tool here to close, reject, defer or
+    resume a case: those need a named person.
+    """
+    return await _call("POST", f"/v1/change/cases/{case_id}/reverification",
+                       json_body={"manifest": manifest, "actor": actor,
+                                  "verification_content_hash": verification_content_hash})
+
+
 def main() -> None:
     mcp.run()
 
