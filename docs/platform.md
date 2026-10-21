@@ -12,7 +12,7 @@ same honest table shown on the [homepage](https://neuralbridge.io/#platform).
 | Connection management model | **Supported** |
 | MCP tool listing / invocation | **Supported** |
 | Dashboard foundation (separate Vite admin UI, not wired to the assurance API) | **Experimental / evolving** |
-| Basic audit trail | **Supported** |
+| Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
 | Small set of working adapters (PostgreSQL, REST) | **Supported** |
 | Broad adapter ecosystem | Evolving |
 | Full enterprise compliance posture | Evolving |

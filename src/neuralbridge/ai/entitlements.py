@@ -26,22 +26,72 @@ from fastapi import HTTPException, status
 
 from assurance.api.deps import _operator_keys, auth_mode, current_principal, get_accounts, spend
 from assurance.billing.accounts import Account, AccountStore, Principal
+from neuralbridge.ai.tenancy import OPERATOR_OWNER, Scope
 
 __all__ = [
     "Principal",
     "current_principal",
     "get_accounts",
     "require_ai_control_plane",
+    "require_operator",
+    "require_scope",
     "resolve_principal",
+    "scope_for",
     "spend_ai_read",
 ]
 
 _OPERATOR = Account(id="operator", email="", company="operator", tier="cell", status="active")
 
 
+def scope_for(principal: Principal) -> Scope:
+    """The tenancy scope of a *validated* principal — the only place an
+    ``owner`` is ever derived. Nothing the caller sends other than the API
+    key (which ``current_principal`` has already resolved or 401'd) reaches
+    this function.
+
+    * operator key, or open mode (where ``require_ai_control_plane`` also
+      treats the anonymous caller as the operator) -> operator, full access;
+    * a customer account -> its server-issued account id;
+    * anonymous -> its address subject; it owns nothing, so it can only ever
+      match the shared seeded demo.
+    """
+    account = principal.account
+    if account is None:
+        if auth_mode() == "open":
+            return Scope(owner=OPERATOR_OWNER, is_operator=True)
+        return Scope(owner=principal.anonymous_subject or "anonymous:unknown")
+    if account.id == _OPERATOR.id:
+        return Scope(owner=OPERATOR_OWNER, is_operator=True)
+    return Scope(owner=account.id)
+
+
+def require_scope(principal: Principal) -> Scope:
+    """Any *identified* caller: 401 for an anonymous one (outside open mode).
+    For surfaces with no free tier — the audit-log routes."""
+    scope = scope_for(principal)
+    if principal.account is None and not scope.is_operator:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="An API key is required.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    return scope
+
+
+def require_operator(principal: Principal) -> Scope:
+    """Operator only: 401 with no key, 403 for a customer account."""
+    scope = require_scope(principal)
+    if not scope.is_operator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is restricted to the operator.",
+        )
+    return scope
+
+
 async def require_ai_control_plane(principal: Principal) -> Principal:
     """The door into WRITE (plan/approve), additional connections, and the
-    full audit trail — everywhere this is imported, not just `/ai`'s own
+    the account's audit log — everywhere this is imported, not just `/ai`'s own
     routes, so a free caller cannot buy the same capability more cheaply by
     going around `/ai` through the raw adapters REST route or the MCP
     gateway (see `reports/NEURALBRIDGE-AI-PHASE2.md`, "closing the bypass").
@@ -67,7 +117,7 @@ async def require_ai_control_plane(principal: Principal) -> Principal:
                 "tier": principal.tier,
                 "remedy": (
                     "The /ai control plane's write path (propose-and-approve, "
-                    "additional connections, full audit trail) is included from "
+                    "additional connections, the account's audit log) is included from "
                     "the Register plan upward. Reads stay free, rate-limited. "
                     "GET /v1/plans, then POST /v1/checkout."
                 ),
@@ -91,7 +141,7 @@ def resolve_principal(api_key: str | None, accounts: AccountStore, *, anonymous_
     if not presented:
         return Principal(account=None, key_prefix="", anonymous_subject=anonymous_subject)
     for key in _operator_keys():
-        if hmac.compare_digest(presented, key):
+        if hmac.compare_digest(presented.encode(), key.encode()):
             return Principal(account=_OPERATOR, key_prefix="operator")
     principal = accounts.resolve_key(presented)
     if principal is None:

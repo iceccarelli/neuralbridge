@@ -16,7 +16,11 @@ elsewhere and reconciling later is how a metered product leaks.
 
 Configuration, all by environment variable:
 
-``ASSURANCE_LEDGER``    evidence ledger path (default ``art14-register.db``)
+``ASSURANCE_LEDGER``    evidence ledger path (default ``art14-register.db``). This is
+                        the OPERATOR ledger; see "Tenancy" below.
+``ASSURANCE_TENANT_LEDGERS``  directory holding one ledger file per customer
+                        account (default: ``tenants/`` beside the operator ledger,
+                        so ``/data/tenants`` on the Fly volume)
 ``ASSURANCE_ACCOUNTS``  account and key store path (default ``accounts.db``)
 ``ASSURANCE_API_KEYS``  comma-separated operator keys; full access, no quota
 ``ASSURANCE_ALLOW_UNAUTHENTICATED``  ``1`` to run open for local evaluation
@@ -25,15 +29,36 @@ Configuration, all by environment variable:
 ``ASSURANCE_ATTEST_KEY``   a path to that key instead
 ``ASSURANCE_ATTEST_PASSPHRASE``  passphrase for it, if encrypted
 ``ASSURANCE_ATTEST_LOGS``  directory holding one attestation log per account
+``ASSURANCE_TRUST_FLY_PROXY``  ``1`` to key the free-tier quota on the
+                        ``Fly-Client-IP`` header instead of the socket peer
+                        (set it ONLY when every request arrives through Fly's
+                        proxy, which overwrites that header)
+``ASSURANCE_MAX_BODY_BYTES``  request body cap for ``/v1`` POSTs (default 1 MiB)
+``ASSURANCE_MAX_TRACE_BODY_BYTES``  the cap for ``POST /v1/machine/verify``,
+                        whose recorded traces are legitimately large
+                        (default 32 MiB)
 ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+
+**Tenancy.** Every ``/v1`` route reaches the ledger through
+:func:`get_register`, so tenant isolation is decided in exactly one place. A
+customer account gets its own SQLite ledger file under
+:func:`tenant_ledgers_dir`; the operator (``ASSURANCE_API_KEYS``, or open
+mode) keeps the shared ledger at :func:`ledger_path`; an anonymous caller gets
+no ledger at all. Isolation is by file, not by a column, so there is no query
+that can forget a ``WHERE account_id = ?``.
 """
 
 from __future__ import annotations
 
 import hmac
+import ipaddress
+import json
 import os
+import re
+from collections.abc import Awaitable, Callable, MutableMapping
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
@@ -43,6 +68,11 @@ from ..security.art14.engine import Art14Register
 
 __all__ = [
     "get_register",
+    "shared_register",
+    "tenant_ledger_path",
+    "tenant_ledgers_dir",
+    "BodySizeLimitMiddleware",
+    "max_body_bytes",
     "get_accounts",
     "current_principal",
     "require_attestation",
@@ -63,6 +93,7 @@ _LEDGER_ENV = "ASSURANCE_LEDGER"
 _ACCOUNTS_ENV = "ASSURANCE_ACCOUNTS"
 _KEYS_ENV = "ASSURANCE_API_KEYS"
 _OPEN_ENV = "ASSURANCE_ALLOW_UNAUTHENTICATED"
+_FLY_ENV = "ASSURANCE_TRUST_FLY_PROXY"
 
 
 def ledger_path() -> str:
@@ -136,13 +167,77 @@ def _register_for(path: str) -> Art14Register:
     return Art14Register(EvidenceLedger(path))
 
 
+_TENANT_ENV = "ASSURANCE_TENANT_LEDGERS"
+# Account ids are minted by the server (``acc_`` + 16 hex digits), never taken
+# from a request. The shape is still checked before it becomes part of a file
+# name, so a corrupted or hostile value cannot become a path.
+_ACCOUNT_ID_RE = re.compile(r"acc_[0-9a-f]{16}")
+
+
+def tenant_ledgers_dir() -> Path:
+    """Where each customer account's ledger lives.
+
+    Defaults to ``tenants/`` beside the operator ledger, which on the Fly
+    deployment (``ASSURANCE_LEDGER=/data/art14-register.db``) is the persistent
+    volume.
+    """
+    raw = os.environ.get(_TENANT_ENV, "")
+    if raw:
+        return Path(raw)
+    return Path(ledger_path()).parent / "tenants"
+
+
+def tenant_ledger_path(account_id: str) -> Path:
+    """The ledger file for one account. ``ValueError`` for anything not an account id."""
+    if not isinstance(account_id, str) or not _ACCOUNT_ID_RE.fullmatch(account_id):
+        raise ValueError("not a valid account id")
+    base = tenant_ledgers_dir()
+    path = base / f"{account_id}.db"
+    # Belt and braces: the pattern already excludes every path separator.
+    if path.resolve().parent != base.resolve():
+        raise ValueError("not a valid account id")
+    return path
+
+
+# A ledger object holds no open connection (each operation connects and
+# closes), so a cache entry costs a path and a lock. The bound exists only to
+# stop an unbounded number of accounts pinning memory; it is generous so that
+# a busy deployment does not thrash, which would also replace the per-ledger
+# write lock while a request is using it.
+@lru_cache(maxsize=512)
+def _tenant_register_for(path: str) -> Art14Register:
+    return Art14Register(EvidenceLedger(path))
+
+
+def shared_register() -> Art14Register:
+    """The operator's ledger. Only the operator and in-process code get this."""
+    return _register_for(ledger_path())
+
+
+class _NoRegister:
+    """What an anonymous caller is handed instead of a ledger.
+
+    A route that accepts anonymous callers and also asks for the register may
+    only touch it for a caller who has an account. Anonymous callers share one
+    address-keyed quota bucket and have no tenant; letting them near the
+    operator's ledger would be a shared write path for the whole internet.
+    Touching this raises a 401 rather than quietly using some other ledger.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+
+_NO_REGISTER = _NoRegister()
+
+
 @lru_cache(maxsize=8)
 def _accounts_for(path: str) -> AccountStore:
     return AccountStore(path)
-
-
-def get_register() -> Art14Register:
-    return _register_for(ledger_path())
 
 
 def get_accounts() -> AccountStore:
@@ -158,9 +253,45 @@ _OPERATOR = Account(
 )
 
 
+def _client_address(request: Request, fly_client_ip: str | None) -> str:
+    """The address the free-tier quota is keyed on.
+
+    Behind Fly's proxy every socket peer is the proxy, so every anonymous
+    caller would share one bucket. ``Fly-Client-IP`` is set (overwritten) by
+    that proxy, but it is an ordinary header to anyone who can reach the
+    process directly, so it is honoured only when the operator says every
+    request arrives through the proxy.
+    """
+    if os.environ.get(_FLY_ENV) == "1" and fly_client_ip:
+        candidate = fly_client_ip.strip()
+        if 0 < len(candidate) <= 64 and re.fullmatch(r"[0-9A-Fa-f:.]+", candidate):
+            return _bucket(candidate)
+    return _bucket(request.client.host) if request.client else "unknown"
+
+
+def _bucket(address: str) -> str:
+    """One quota bucket per caller: an IPv6 /64, an IPv4 address.
+
+    A single IPv6 subscriber is routinely handed a whole /64, so keying on the
+    full address would give one person 2**64 daily allowances.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            # ::ffff:a.b.c.d is an IPv4 client seen through a dual-stack socket;
+            # as an IPv6 /64 they would all share the single bucket "::/64".
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 async def current_principal(
     request: Request,
     x_api_key: str | None = Header(default=None),
+    fly_client_ip: str | None = Header(default=None),
     accounts: AccountStore = Depends(get_accounts),
 ) -> Principal:
     """Resolve the caller. Never raises for an absent key.
@@ -172,11 +303,13 @@ async def current_principal(
     """
     presented = (x_api_key or "").strip()
     if not presented:
-        client = request.client.host if request.client else "unknown"
+        client = _client_address(request, fly_client_ip)
         return Principal(account=None, key_prefix="", anonymous_subject=f"ip:{client}")
 
     for key in _operator_keys():
-        if hmac.compare_digest(presented, key):
+        # Compare bytes: str comparison raises TypeError on non-ASCII input, and
+        # an unhandled 500 from a header anyone can send is not a failure mode.
+        if hmac.compare_digest(presented.encode(), key.encode()):
             return Principal(account=_OPERATOR, key_prefix="operator")
 
     principal = accounts.resolve_key(presented)
@@ -187,6 +320,41 @@ async def current_principal(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     return principal
+
+
+def get_register(
+    principal: Annotated[Principal | None, Depends(current_principal)] = None,
+) -> Art14Register:
+    """The ledger this caller may touch. The single choke point for tenancy.
+
+    * A customer account: its own ledger file.
+    * The operator (an ``ASSURANCE_API_KEYS`` key, or open mode): the shared
+      ledger.
+    * Anonymous, outside open mode: nothing (see :class:`_NoRegister`).
+    * ``None``: only in-process callers that invoke this function directly
+      with no request (tests, tooling); it is never what FastAPI passes.
+    """
+    if principal is None:
+        return shared_register()
+    account = principal.account
+    if account is None:
+        if auth_mode() == "open":
+            # require_* maps an anonymous caller to the operator in open mode;
+            # this must agree with it or open mode would split across ledgers.
+            return shared_register()
+        return _NO_REGISTER  # type: ignore[return-value]
+    if account.id == _OPERATOR.id:
+        return shared_register()
+    try:
+        path = tenant_ledger_path(account.id)
+    except ValueError as exc:
+        # Account ids are server-issued, so this is a corrupted store, not a
+        # client mistake. Refuse rather than fall back to a shared ledger.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "invalid_account_id"},
+        ) from exc
+    return _tenant_register_for(str(path))
 
 
 def spend(principal: Principal, scope: str, limit: int | None, accounts: AccountStore) -> None:
@@ -376,3 +544,138 @@ Machine = Depends(require_machine)
 Attesting = Depends(require_attestation)
 Supplying = Depends(require_supplier)
 Anyone = Depends(current_principal)
+
+
+# ---------------------------------------------------------------------------
+# request body cap
+# ---------------------------------------------------------------------------
+_BODY_ENV = "ASSURANCE_MAX_BODY_BYTES"
+_TRACE_BODY_ENV = "ASSURANCE_MAX_TRACE_BODY_BYTES"
+_DEFAULT_BODY = 1024 * 1024
+_DEFAULT_TRACE_BODY = 32 * 1024 * 1024
+_TRACE_PATHS = frozenset({"/v1/machine/verify"})
+# Stripe events are a few KB. The webhook is read in full before its signature
+# is checked, so it gets a fixed small cap of its own: not the configurable one
+# (a mis-set value must never be why a payment event is lost) and not none (an
+# unsigned 256 MiB POST would otherwise be buffered before being refused).
+_WEBHOOK_PATH = "/v1/billing/webhook"
+_WEBHOOK_BODY = 1024 * 1024
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+def _env_bytes(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
+    """The largest request body accepted at ``path``; ``None`` = not capped here.
+
+    The large allowance for recorded traces is only for a caller whose key
+    resolves: the body is parsed before the route's own auth runs, so granting
+    32 MiB to anyone would let an anonymous POST make the server hold it.
+    """
+    if not path.startswith("/v1/"):
+        return None
+    if path == _WEBHOOK_PATH:
+        return _WEBHOOK_BODY
+    if path in _TRACE_PATHS and authenticated:
+        return _env_bytes(_TRACE_BODY_ENV, _DEFAULT_TRACE_BODY)
+    return _env_bytes(_BODY_ENV, _DEFAULT_BODY)
+
+
+def _key_resolves(presented: str) -> bool:
+    """Whether ``presented`` may send a large recorded trace. Never raises.
+
+    True for an operator key, or a live account key whose plan includes machine
+    verification (the only route with the large allowance). Read-only: this runs
+    before authentication, so it must not take the write lock.
+    """
+    if not presented:
+        return False
+    try:
+        raw = presented.encode()
+        if any(hmac.compare_digest(raw, k.encode()) for k in _operator_keys()):
+            return True
+        principal = get_accounts().peek_key(presented)
+        return principal is not None and principal.plan.machine_verification
+    except Exception:  # noqa: BLE001 - an unresolvable key just gets the small cap
+        return False
+
+
+async def _send_413(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]], detail: dict[str, Any]
+) -> None:
+    body = json.dumps({"detail": detail}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": 413,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+class BodySizeLimitMiddleware:
+    """Refuse an oversized ``/v1`` request body with a 413.
+
+    Checks ``Content-Length`` up front, and counts bytes as they arrive for a
+    chunked body that declares nothing, so neither a lying nor a silent client
+    makes the server buffer an arbitrary amount of JSON.
+    """
+
+    def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        if scope["type"] != "http" or scope.get("method") not in _WRITE_METHODS:
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        limit = max_body_bytes(
+            scope.get("path", ""),
+            authenticated=_key_resolves(headers.get(b"x-api-key", b"").decode("latin-1").strip()),
+        )
+        if limit is None:
+            await self.app(scope, receive, send)
+            return
+
+        detail = {
+            "error": "request_too_large",
+            "limit_bytes": limit,
+            "detail": f"Request bodies on this endpoint are limited to {limit} bytes.",
+        }
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > limit
+            except ValueError:
+                too_big = False
+            if too_big:
+                await _send_413(send, detail)
+                return
+
+        seen = 0
+
+        async def limited_receive() -> MutableMapping[str, Any]:
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    # An HTTPException raised from the body read is turned into
+                    # a response by the application's own exception handling.
+                    raise HTTPException(status_code=413, detail=detail)
+            return message
+
+        await self.app(scope, limited_receive, send)

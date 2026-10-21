@@ -192,7 +192,7 @@ This README therefore focuses on the smaller product that the repository can gro
 | Connection management model | **Supported as a core direction** |
 | MCP tool listing / invocation layer | **Supported** |
 | Dashboard foundation (separate Vite admin UI, not wired to the assurance API) | **Experimental / evolving** |
-| Basic audit trail | **Supported as a practical foundation** |
+| Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
 | Small set of working adapters | **Intended supported scope** |
 | Broad adapter ecosystem | **Experimental / evolving** |
 | Full enterprise compliance posture | **Not part of the core promise yet** |
