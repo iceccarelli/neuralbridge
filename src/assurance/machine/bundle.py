@@ -277,7 +277,7 @@ def _standard_check_names() -> tuple[str, ...] | None:
             uncertainty=SensingUncertainty(
                 human_position_mm=0.0, robot_position_mm=0.0,
                 basis=FigureBasis(kind="estimated", reference="probe")),
-            intrusion_distance_mm=0.0,
+            intrusion_distance_mm=1.0,
         )
         probe_trace = Trace(
             trace_id="probe", provenance=Provenance.SIMULATION, source_system="probe",

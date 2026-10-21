@@ -45,10 +45,12 @@ pipeline. Checks run:
 |---|---|
 | `workspace_containment` | the TCP stayed inside the declared box |
 | `speed_limit` | speed stayed under the declared limit for the mode in force |
-| `ssm_separation` | measured separation met S(t0) at every instant |
+| `ssm_separation` | measured separation met the separation distance computed by the formula in `ssm.py` from the envelope's declared figures, at every sampled instant (the formula and constants are not verified against a licensed copy of the standard) |
 | `stop_characterisation` | the cell never relied on a stopping distance outside the speed range it was measured over |
 | `pfl_contact` | contact force and pressure stayed inside the body-region limits |
 | `mode_consistency` | nobody was detected during unrestricted automatic operation |
+| `trace_coverage` | the trace is long enough and exercised a safety regime (sanity floor of `MIN_TRACE_SAMPLES` samples and `MIN_TRACE_DURATION_S` seconds, not a standard) |
+| `input_dates` | the trace start and the envelope's figure dates are not after the verification clock |
 
 A check that could not run reports `unchecked`, never `verified`. The verdict
 is `incomplete` when anything is unchecked, and `incomplete` is not a pass.
@@ -79,7 +81,15 @@ limitations (and if *every* separation-controlled sample is `None`, the check is
 is why a column named `separation_m` (or any other unit variant of a field this
 package reads) is refused instead of loading as "nobody detected".
 
-Engine version 2 is the first with these rules; a bundle records its engine
+Engine version 3 adds to these rules: a sample in a mode with no declared speed
+limit, a separation-controlled sample with no separation measured, or a contact
+sample with no force each make their check `unchecked`; every "stayed within"
+check goes `unchecked` beside a recording gap; a trace below the sanity floor or
+that exercised no regime is `unchecked`, not a pass; a PFL table the envelope
+does not pin by hash is not evaluated; reaction time, stop time, stop distance
+and intrusion distance must be strictly positive; and a human approach speed the
+envelope does not declare is reported as a default. Version 2 was the first with
+the gap and contact rules; a bundle records its engine
 version and `machine check` will not call a re-run under a different engine a
 reproduction.
 

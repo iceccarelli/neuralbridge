@@ -55,11 +55,11 @@ def envelope(pfl=False):
 
 def trace(provenance=Provenance.FIELD, separation=3000.0, pfl=False):
     samples = []
-    for i in range(4):
+    for i in range(20):
         samples.append(Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
                               mode=OperatingMode.SSM, separation=separation))
     if pfl:
-        for i in range(4, 6):
+        for i in range(20, 40):
             samples.append(Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=100.0,
                                   mode=OperatingMode.PFL, contact_force=50.0,
                                   contact_area=2.0, body_region="hand"))
