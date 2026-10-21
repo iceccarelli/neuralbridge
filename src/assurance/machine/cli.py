@@ -71,6 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("bundle", type=Path)
     chk.add_argument("--envelope", type=Path, default=None)
     chk.add_argument("--trace", type=Path, default=None)
+    chk.add_argument("--limits", type=Path, default=None,
+                     help="the body-region limits table the bundle was verified "
+                          "against, if it used one")
     chk.add_argument("--json", action="store_true")
 
     return p
@@ -139,7 +142,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 def _cmd_check(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope) if args.envelope else None
     trace = Trace.from_json(args.trace) if args.trace else None
-    ok, problems = verify_bundle(args.bundle, envelope=envelope, trace=trace)
+    limits = LimitsTable.from_json(args.limits) if args.limits else None
+    ok, problems = verify_bundle(args.bundle, envelope=envelope, trace=trace,
+                                 limits=limits)
     if args.json:
         print(json.dumps({"ok": ok, "problems": problems}, indent=2))
     else:

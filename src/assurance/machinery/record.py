@@ -169,10 +169,13 @@ def record_divergence(
             method=f"baseline {divergence.baseline_id} compared against observed "
                    f"{divergence.observed_id}",
         ),
-        validation_state=(
-            ValidationState.VERIFIED if divergence.verdict == "matches"
-            else ValidationState.REFUTED
-        ),
+        # "unverifiable" is neither: nothing that could be seen moved, and some of
+        # it could not be seen. Sealing that as refuted would be as wrong as
+        # sealing it as verified.
+        validation_state={
+            "matches": ValidationState.VERIFIED,
+            "unverifiable": ValidationState.INDETERMINATE,
+        }.get(divergence.verdict, ValidationState.REFUTED),
         confidence=Confidence.HIGH if divergence.tier.may_claim_physical_behaviour
         else Confidence.MEDIUM,
         checks_skipped=divergence.checks_skipped,

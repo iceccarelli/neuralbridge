@@ -23,6 +23,7 @@ visibly a different measurement rather than an invisible change of machine.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +46,27 @@ from assurance.machinery.manifest import (
     SafetyManifest,
 )
 
-__all__ = ["CollectionError", "CollectionResult", "ItemOutcome", "collect"]
+__all__ = [
+    "DEFAULT_MAX_SECONDS",
+    "MAX_FILES_PER_ITEM",
+    "MAX_ITEM_BYTES",
+    "MAX_VERSION_SCAN_BYTES",
+    "CollectionError",
+    "CollectionResult",
+    "ItemOutcome",
+    "collect",
+]
+
+#: Resource limits for one collection, as sanity limits (see ``normalise``). A
+#: hostile or runaway folder hits one of these and the item is reported
+#: unreadable; the run does not hang and does not exhaust memory.
+MAX_FILES_PER_ITEM = 10_000
+MAX_ITEM_BYTES = 4 * 1024**3
+MAX_VERSION_SCAN_BYTES = 8 * 1024**2
+DEFAULT_MAX_SECONDS = 1800.0
+
+#: Indirection so a test can drive the clock.
+_now = time.monotonic
 
 
 class CollectionError(AssuranceError):
@@ -142,13 +163,64 @@ class CollectionResult:
         return "\n".join(lines)
 
 
+class _TooManyFilesError(Exception):
+    """The glob matched more files than one item may hold."""
+
+
 def _matches(root: Path, spec: ItemSpec) -> list[Path]:
     """Every file the spec's glob matches, sorted, directories excluded."""
-    return sorted(p for p in root.glob(spec.source) if p.is_file())
+    found: list[Path] = []
+    for p in root.glob(spec.source):
+        if p.is_file():
+            found.append(p)
+            if len(found) > MAX_FILES_PER_ITEM:
+                raise _TooManyFilesError
+    return sorted(found)
 
 
-def _collect_item(root: Path, spec: ItemSpec) -> ItemOutcome:
-    files = _matches(root, spec)
+def _inside(root: Path, p: Path) -> bool:
+    try:
+        p.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _read_version(path: Path, spec: ItemSpec, warnings: list[str]) -> str:
+    """Read the version label from a file no larger than ``MAX_VERSION_SCAN_BYTES``.
+
+    A larger file is not scanned in part: a pattern run over a prefix can match a
+    label cut off mid-token. It reads as unknown, and the item says why.
+    """
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(MAX_VERSION_SCAN_BYTES + 1)
+    except OSError as exc:
+        warnings.append(f"{path.name}: the version could not be read ({exc}).")
+        return ""
+    if len(data) > MAX_VERSION_SCAN_BYTES:
+        warnings.append(
+            f"{path.name}: larger than the {MAX_VERSION_SCAN_BYTES} bytes scanned for "
+            "a version; no version was read rather than one guessed from part of it.")
+        return ""
+    return spec.version.read(data)
+
+
+def _unreadable(spec: ItemSpec, rel: tuple[str, ...], detail: str) -> ItemOutcome:
+    return ItemOutcome(item_id=spec.item_id, status="unreadable", files=rel,
+                       detail=detail)
+
+
+def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
+    try:
+        files = _matches(root, spec)
+    except _TooManyFilesError:
+        return _unreadable(
+            spec, (), f"more than {MAX_FILES_PER_ITEM} files match {spec.source!r}; "
+                      "an item that large is not a safety export, and the glob is "
+                      "refused rather than half-read.")
+    except OSError as exc:
+        return _unreadable(spec, (), f"the collection root could not be searched: {exc}")
     rel = tuple(str(p.relative_to(root)) for p in files)
 
     if not files:
@@ -173,26 +245,37 @@ def _collect_item(root: Path, spec: ItemSpec) -> ItemOutcome:
     fingerprint = spec.rule.fingerprint()
 
     for path, name in zip(files, rel, strict=True):
+        if _now() > deadline:
+            return _unreadable(
+                spec, rel, "the collection's time budget ran out before this item "
+                           "was read; it was not hashed.")
+        if not _inside(root, path):
+            return _unreadable(
+                spec, rel, f"{name} is a link to a file outside the collection root. "
+                           "It is not followed: a digest of something that is not in "
+                           "this folder is not a digest of this machine's export.")
         try:
             result: NormalisationResult = normalise_file(path, spec.rule)
         except NormalisationError as exc:
-            return ItemOutcome(
-                item_id=spec.item_id, status="unreadable", files=rel,
-                detail=str(exc),
-            )
+            return _unreadable(spec, rel, str(exc))
+        if not result.usable:
+            why = (" ".join(result.warnings) if result.warnings else
+                   "normalisation removed every byte, so the digest distinguishes "
+                   "nothing; check the rule, or the export is empty.")
+            return _unreadable(
+                spec, rel, f"{name} could not be hashed completely: {why}")
         digests.append((name, result.digest))
         bytes_in += result.bytes_in
         bytes_hashed += result.bytes_hashed
+        if bytes_in > MAX_ITEM_BYTES:
+            return _unreadable(
+                spec, rel, f"the files for this item total more than "
+                           f"{MAX_ITEM_BYTES} bytes, which this system will not hash.")
         for k, v in result.applied.items():
             applied[k] = applied.get(k, 0) + v
         warnings.extend(result.warnings)
-        if result.dropped_everything:
-            warnings.append(
-                f"{name}: normalisation removed every byte, so this digest "
-                "distinguishes nothing. Check the rule."
-            )
         if not version and spec.version.kind != "unknown":
-            version = spec.version.read(path.read_bytes())
+            version = _read_version(path, spec, warnings)
 
     if len(digests) == 1:
         digest = digests[0][1]
@@ -229,6 +312,7 @@ def collect(
     source: ManifestSource = ManifestSource.AS_FOUND,
     taken_at: datetime | None = None,
     notes: str = "",
+    max_seconds: float = DEFAULT_MAX_SECONDS,
 ) -> CollectionResult:
     """Run a plan against a folder of exports.
 
@@ -242,7 +326,8 @@ def collect(
     if not base.is_dir():
         raise CollectionError(f"{base} is not a directory.")
 
-    outcomes = [_collect_item(base, spec) for spec in plan.items]
+    deadline = _now() + max_seconds
+    outcomes = [_collect_item(base, spec, deadline) for spec in plan.items]
 
     items: list[SafetyItem] = []
     warnings: list[str] = []
