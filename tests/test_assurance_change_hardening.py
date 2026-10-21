@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,14 +19,29 @@ from assurance.change import (
     decide,
     resolve_decision,
     resume,
+    reverify,
     waive_reverification,
 )
 from assurance.change.store import ChainBrokenError
 from assurance.evidence import chain_cache
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.bundle import build_bundle
+from assurance.machine.envelope import (
+    FigureBasis,
+    SafetyEnvelope,
+    SensingUncertainty,
+    StopPerformance,
+    Workspace,
+)
+from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
+from assurance.machinery.record import interventions_from_ledger
+from assurance.machinery.staleness import VerificationRecord
 
 from .test_assurance_change import (
     BOT,
+    ENG,
+    LATER,
+    MACHINE,
     REVIEWER,
     drive,
 )
@@ -148,3 +164,114 @@ class TestHumanDecisionsVerifyTheWholeChain:
         monkeypatch.setattr(ledger, "verify_full", lambda: walks.append(1) or real())
         advance(store, case.case_id, actor=REVIEWER)
         assert walks == []
+
+
+# =====================================================================
+# 2 + 3. What may clear a re-verification entry
+# =====================================================================
+
+def record(content_hash, *, checks, seq=10**6, when=LATER, tier="validated"):
+    """A verification as the coverage check sees it, without sealing a bundle."""
+    return VerificationRecord(
+        content_hash=content_hash * 64, effective_at=when, ledger_seq=seq,
+        product="AR-7", product_version="2.4.1", verdict="pass", tier=tier,
+        checks_verified=tuple(checks))
+
+
+def seal_bundle(ledger, *, provenance, when=LATER):
+    """``seal_a_real_verification`` with a choice of where the trace came from."""
+    env = SafetyEnvelope(
+        envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
+        workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
+        max_tcp_speed_mm_s={OperatingMode.SSM: 400.0},
+        stop=StopPerformance(0.10, 0.25, 120.0, 500.0,
+                             FigureBasis("measured", "STOP-11", "2026-01-18")),
+        uncertainty=SensingUncertainty(100.0, 50.0, FigureBasis("measured", "CAL-003")),
+        intrusion_distance_mm=850.0)
+    run = Trace(trace_id=f"RUN-{provenance.value}", provenance=provenance,
+                source_system="AR-7 fw", started_at=when, sample_rate_hz=50.0,
+                samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0), tcp_speed=400.0,
+                                     mode=OperatingMode.SSM, separation=2200.0)
+                              for i in range(10)))
+    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
+
+
+class TestTheCitedBundleMustCoverEveryCheck:
+    """Survived mutation: ``not set(fn.verified_by) <= set(record.checks_verified)``."""
+
+    def test_a_new_bundle_for_one_check_and_an_old_one_for_the_other_clears_nothing(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        # No intervention is on record. SF-01 declares ssm_separation AND
+        # stop_characterisation; coverage reads it current because the older bundle
+        # ran one and the newer ran the other. The newer one alone is not evidence
+        # that SF-01 was re-verified after the change.
+        before_the_change = record("1", checks=("stop_characterisation", "speed_limit"),
+                                   seq=2, when=datetime(2026, 2, 9, tzinfo=UTC))
+        after = record("2", checks=("ssm_separation",))
+        c = reverify(store, case.case_id, observed, [before_the_change, after], [],
+                     verification_content_hash=after.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == ("SF-01", "SF-02")
+        assert c.evidence_current["SF-01"] == "no_new_evidence"
+        assert c.evidence_current["SF-02"] == "no_new_evidence"
+
+    def test_a_bundle_that_covers_all_of_a_functions_checks_clears_that_function(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        before_the_change = record("1", checks=("stop_characterisation", "speed_limit"),
+                                   seq=2, when=datetime(2026, 2, 9, tzinfo=UTC))
+        full = record("3", checks=("ssm_separation", "stop_characterisation"))
+        c = reverify(store, case.case_id, observed, [before_the_change, full], [],
+                     verification_content_hash=full.content_hash, actor=REVIEWER)
+        assert c.required_reverifications == ("SF-02",)       # SF-02's speed_limit is old
+        assert c.evidence_current["SF-01"] == "current"
+
+
+class TestWeakEvidenceDoesNotClear:
+    def test_a_simulation_bundle_leaves_every_entry_awaiting_and_says_why(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_bundle(ledger, provenance=Provenance.SIMULATION)
+        c = reverify(store, case.case_id, observed,
+                     VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+                     interventions_from_ledger(ledger, MACHINE.key),
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == case.required_reverifications
+        for entry in case.required_reverifications:
+            assert c.evidence_current[entry] == "below_validated:community"
+        assert any("community" in s and "validated" in s for s in c.checks_skipped)
+        assert "below 'validated'" in c.history[-1]["detail"]
+
+    @pytest.mark.parametrize("tier", ["community", "profile", "", "nonsense"])
+    def test_no_tier_below_validated_clears(self, ledger, store, tier):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        weak = record("4", checks=("ssm_separation", "stop_characterisation", "speed_limit"),
+                      tier=tier)
+        c = reverify(store, case.case_id, observed, [weak], [],
+                     verification_content_hash=weak.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.AWAITING_REVERIFICATION
+        assert c.required_reverifications == ("SF-01", "SF-02")
+
+    @pytest.mark.parametrize("tier", ["validated", "certified"])
+    def test_validated_and_above_still_clear(self, ledger, store, tier):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        strong = record("5", checks=("ssm_separation", "stop_characterisation", "speed_limit"),
+                        tier=tier)
+        c = reverify(store, case.case_id, observed, [strong], [],
+                     verification_content_hash=strong.content_hash, actor=REVIEWER)
+        assert c.status is CaseStatus.READY_TO_CLOSE
+        assert c.required_reverifications == ()
+
+    def test_a_person_can_still_waive_what_weak_evidence_left_outstanding(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        weak = record("4", checks=("ssm_separation", "stop_characterisation", "speed_limit"),
+                      tier="community")
+        c = reverify(store, case.case_id, observed, [weak], [],
+                     verification_content_hash=weak.content_hash, actor=REVIEWER)
+        for entry in c.required_reverifications:
+            c = waive_reverification(store, c.case_id, entry=entry,
+                                     reason="simulation accepted for now", actor=REVIEWER)
+        assert c.evidence_current["SF-01"] == "waived"

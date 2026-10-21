@@ -30,6 +30,7 @@ from typing import TypeVar
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
@@ -912,6 +913,19 @@ def advance(store: CaseStore, case_id: str, *, actor: Actor) -> ChangeAssuranceC
     return store.transition(updated, actor=actor, detail=f"advanced to {nxt.value}")
 
 
+def _validated_or_better(tier: str) -> bool:
+    """Is a verification's recorded tier at least ``validated``?
+
+    The ladder is :class:`~assurance.core.tiers.AssuranceTier`. A tier name it
+    does not contain (empty, misspelt, from a newer build) is not known to be
+    enough, so it is not.
+    """
+    try:
+        return AssuranceTier(tier).rank >= AssuranceTier.VALIDATED.rank
+    except ValueError:
+        return False
+
+
 def reverify(
     store: CaseStore, case_id: str,
     manifest: SafetyManifest, verifications: list[VerificationRecord],
@@ -932,11 +946,16 @@ def reverify(
       at or after both the change that triggered the case and the manifest it
       is checked against — a bundle that already existed when the change was
       found cannot be evidence about it;
-    * that bundle passed every check the function declares; and
+    * that bundle passed every check the function declares (a newer bundle for one
+      check plus an older one for another is not enough);
+    * that bundle's tier is at least ``validated``: evidence from a simulation or
+      a datasheet (``community``, ``profile``) is about a model or a figure and
+      never clears an entry, only a person's waiver does; and
     * :func:`assess_coverage` reads the function ``current``.
 
     An entry that fails any of them stays required, with the reason in
-    ``evidence_current``. A function the manifest no longer declares cannot be
+    ``evidence_current`` (``below_validated:<tier>`` for weak evidence, which the
+    case also records in ``checks_skipped``). A function the manifest no longer declares cannot be
     shown current and stays required too.
     """
     case = _require(store, case_id)
@@ -1002,6 +1021,7 @@ def reverify(
 
     coverage = assess_coverage(sealed, verifications, interventions)
     cleared: set[str] = set()
+    weak: list[str] = []
     evidence_current = dict(case.evidence_current)
     for entry in mine:
         fid = _entry_function(case, entry)
@@ -1013,10 +1033,24 @@ def reverify(
             evidence_current[entry] = fc.coverage.value
         elif not fn.verified_by or not set(fn.verified_by) <= set(record.checks_verified):
             evidence_current[entry] = "no_new_evidence"
+        elif not _validated_or_better(record.tier):
+            # Current on a simulated trace or a datasheet figure is a statement
+            # about a model or a number, not about the machine. It does not clear
+            # the entry; only a person can accept it, by waiving it.
+            evidence_current[entry] = f"below_validated:{record.tier or 'unknown'}"
+            weak.append(entry)
         else:
             evidence_current[entry] = Coverage.CURRENT.value
             cleared.add(entry)
     still_required = tuple(e for e in case.required_reverifications if e not in cleared)
+    skipped = case.checks_skipped
+    if weak:
+        skipped = _union(skipped, [
+            f"{', '.join(weak)}: the re-verification evidence "
+            f"{record.content_hash[:12]} is at tier {record.tier or 'unknown'!r}, below "
+            "'validated' (it describes a model or a figure, not the physical machine), "
+            "so it did not clear the entry. Re-verify on the machine, or have a person "
+            "waive it."])
 
     if still_required:
         nxt = CaseStatus.AWAITING_REVERIFICATION
@@ -1032,12 +1066,15 @@ def reverify(
         required_reverifications=still_required,
         required_actions=() if not still_required else case.required_actions,
         reverified_at=format_utc(utc_now()), linked_evidence=linked,
+        checks_skipped=skipped,
     )
     return store.reverify(
         updated, actor=actor,
         detail=f"re-verified {key} against {verification_content_hash[:12]}; "
               f"{len(still_required)} entr{'y' if len(still_required) == 1 else 'ies'} "
-              "still not current")
+              "still not current"
+              + (f" ({len(weak)} on evidence below 'validated': tier "
+                 f"{record.tier or 'unknown'!r})" if weak else ""))
 
 
 def waive_reverification(
