@@ -5,9 +5,13 @@ normalisation rule that is not doing its job — it is hashing the export's own
 noise along with the machine — and every future weekly report will cry wolf
 about it until somebody fixes the rule or stops reading the report.
 
-This is the step no configuration-drift tool ships and every one of them needs.
-It costs one extra export and it is the difference between a drift report a
-safety engineer acts on and one they filter to a folder.
+This is the step that shows whether the rules do their job. It costs one extra
+export and it is the difference between a drift report a safety engineer can act
+on and one that cries wolf.
+
+A plan is STABLE only if every rule in it was run on both exports and held. A
+rule whose files were in neither export, or which could not be read, has not
+been exercised, and the verdict is INCOMPLETE.
 
 The probe also does the tedious half of the fix: where the item is text, it
 shows the lines that actually differed, which is almost always a timestamp, an
@@ -23,7 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from assurance.collect.normalise import NormalisationError, Normaliser, normalise_file
+from assurance.collect.normalise import (
+    MAX_TEXT_BYTES,
+    NormalisationError,
+    Normaliser,
+    normalise_file,
+    split_lines,
+)
 from assurance.collect.plan import CollectionPlan, ItemSpec
 
 __all__ = ["ItemVolatility", "VolatilityReport", "probe"]
@@ -77,6 +87,9 @@ class VolatilityReport:
     root_b: str
     items: tuple[ItemVolatility, ...]
     checks_skipped: tuple[str, ...]
+    #: Items whose rule was never exercised: absent from one or both exports, or
+    #: unreadable. A rule nobody ran has not been shown to hold.
+    unexercised: tuple[str, ...] = ()
 
     @property
     def volatile(self) -> tuple[ItemVolatility, ...]:
@@ -84,8 +97,15 @@ class VolatilityReport:
 
     @property
     def verdict(self) -> str:
-        """``stable`` when every rule holds, otherwise ``volatile``."""
-        return "stable" if not self.volatile else "volatile"
+        """``volatile`` | ``incomplete`` | ``stable``.
+
+        ``stable`` means every rule in the plan was run on both exports and held.
+        A plan whose files were in neither export, or whose rules could not run,
+        has proved nothing, and says ``incomplete`` — not ``stable``.
+        """
+        if self.volatile:
+            return "volatile"
+        return "incomplete" if self.unexercised or not self.items else "stable"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +113,7 @@ class VolatilityReport:
             "root_a": self.root_a, "root_b": self.root_b,
             "verdict": self.verdict,
             "volatile_items": [i.item_id for i in self.volatile],
+            "unexercised_items": list(self.unexercised),
             "items": [i.to_dict() for i in self.items],
             "checks_skipped": list(self.checks_skipped),
         }
@@ -100,6 +121,8 @@ class VolatilityReport:
     def summary(self) -> str:
         head = {
             "stable": "STABLE — every rule survived two exports of the same machine",
+            "incomplete": "INCOMPLETE — some rules were never exercised, so nothing "
+                          "is shown about them",
             "volatile": "VOLATILE — these rules will report drift that did not happen",
         }[self.verdict]
         lines = [f"plan {self.plan_id} — {head}",
@@ -124,14 +147,18 @@ class VolatilityReport:
 def _text_of(path: Path, spec: ItemSpec) -> list[str] | None:
     """The item's lines after its own exclusions, or None if it is not text."""
     try:
-        text = path.read_bytes().decode(spec.rule.encoding)
+        with path.open("rb") as fh:
+            data = fh.read(MAX_TEXT_BYTES + 1)
+        if len(data) > MAX_TEXT_BYTES:
+            return None
+        text = data.decode(spec.rule.encoding)
     except (UnicodeDecodeError, LookupError, OSError):
         return None
     if spec.rule.kind is Normaliser.TEXT_EXCLUDING:
         compiled = [re.compile(p) for p in spec.rule.patterns]
-        return [ln for ln in text.splitlines()
+        return [ln for ln in split_lines(text)
                 if not any(rx.search(ln) for rx in compiled)]
-    return text.splitlines()
+    return split_lines(text)
 
 
 def _suggest(lines: list[str]) -> tuple[tuple[str, str], ...]:
@@ -162,6 +189,7 @@ def probe(
         raise NormalisationError(f"both roots must be directories: {a}, {b}")
 
     items: list[ItemVolatility] = []
+    unexercised: list[str] = []
     skipped: list[str] = [
         "this assumes the two exports are of the same machine with nothing changed "
         "between them. If the machine did change, a correct detection is reported "
@@ -173,6 +201,7 @@ def probe(
         files_b = sorted(p for p in b.glob(spec.source) if p.is_file())
 
         if not files_a or not files_b:
+            unexercised.append(spec.item_id)
             skipped.append(
                 f"{spec.item_id}: matched "
                 f"{len(files_a)} file(s) in the first export and {len(files_b)} in the "
@@ -193,11 +222,20 @@ def probe(
             continue
 
         try:
-            da = [normalise_file(p, spec.rule).digest for p in files_a]
-            db = [normalise_file(p, spec.rule).digest for p in files_b]
+            ra = [normalise_file(p, spec.rule) for p in files_a]
+            rb = [normalise_file(p, spec.rule) for p in files_b]
         except NormalisationError as exc:
+            unexercised.append(spec.item_id)
             skipped.append(f"{spec.item_id}: {exc}")
             continue
+        if not all(r.usable for r in ra + rb):
+            unexercised.append(spec.item_id)
+            skipped.append(
+                f"{spec.item_id}: a file could not be hashed completely (empty, or "
+                "a declared archive member missing), so its rule was not exercised.")
+            continue
+        da = [r.digest for r in ra]
+        db = [r.digest for r in rb]
 
         if da == db:
             items.append(ItemVolatility(
@@ -240,4 +278,5 @@ def probe(
         plan_id=plan.plan_id, plan_hash=plan.content_hash(),
         root_a=str(a), root_b=str(b), items=tuple(items),
         checks_skipped=tuple(dict.fromkeys(skipped)),
+        unexercised=tuple(unexercised),
     )

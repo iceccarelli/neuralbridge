@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import csv
 import json
+import re
+import statistics
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,8 +29,19 @@ from typing import Any
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of, format_utc, parse_utc
 from assurance.core.tiers import AssuranceTier
+from assurance.machine.quantities import (
+    AREA_MAX_CM2,
+    DISTANCE_MAX_MM,
+    DURATION_MAX_S,
+    FORCE_MAX_N,
+    RATE_MAX_HZ,
+    SPEED_MAX_MM_S,
+    number,
+)
 
 __all__ = [
+    "MAX_FILE_BYTES",
+    "MAX_SAMPLES",
     "OperatingMode",
     "Provenance",
     "Sample",
@@ -36,9 +49,51 @@ __all__ = [
     "TraceError",
 ]
 
+#: The most samples one trace may carry, and the largest file read for one.
+#: Past these a hostile or runaway export would exhaust memory before any check
+#: ran; the trace is refused instead. (The hosted API applies a much lower cap.)
+MAX_SAMPLES = 2_000_000
+MAX_FILE_BYTES = 512 * 1024 * 1024
+
 
 class TraceError(AssuranceError):
     """A trace is malformed, or is being asked to support a claim it cannot."""
+
+
+def _num(value: Any, name: str, **kw: Any) -> float:
+    return number(value, name, exc=TraceError, **kw)
+
+
+#: Samples are read by these keys only. Anything else is ignored unless it looks
+#: like one of these in other units (see :func:`_refuse_unit_variants`).
+_SAMPLE_KEYS = ("t", "tcp", "x", "y", "z", "tcp_speed", "mode", "separation",
+                "human_speed", "contact_force", "contact_area", "body_region")
+_UNIT_SUFFIX = re.compile(
+    r"(?:^|_)(?:mm|cm|km|m|ms|us|min|mps|kmh|mph|in|ft|lbf|kn|n|deg|rad)"
+    r"(?:_s|_s2|_per_s)?$"
+)
+
+
+def _refuse_unit_variants(keys: Iterable[str]) -> None:
+    """Refuse a column that is probably a known field in another unit.
+
+    A controller log with ``separation_m`` and no ``separation`` used to load
+    with every separation ``None`` — "nobody was detected" — which is the one
+    reading that cannot be checked and so cannot fail. Unrecognised columns are
+    otherwise ignored (logs carry plenty), but one that begins with a field name
+    or ends in a unit token is refused: it is a number we are not reading.
+    """
+    for key in keys:
+        if key in _SAMPLE_KEYS:
+            continue
+        low = str(key).lower()
+        if any(low.startswith(f + "_") for f in _SAMPLE_KEYS) or _UNIT_SUFFIX.search(low):
+            raise TraceError(
+                f"column {key!r} looks like a recorded quantity in units this package "
+                f"does not read (it takes {', '.join(_SAMPLE_KEYS)}, in millimetres, "
+                "mm/s, seconds, newtons and cm²). Convert it and name it as the field, "
+                "or remove it: a column that is silently ignored reads as 'not recorded'."
+            )
 
 
 class Provenance(StrEnum):
@@ -108,6 +163,21 @@ class OperatingMode(StrEnum):
         return self in (OperatingMode.PFL, OperatingMode.HAND_GUIDING)
 
 
+def _csv_cell(value: Any, name: str) -> float:
+    """A CSV cell is text. It must be a plain decimal number, nothing else."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise TraceError(f"{name} {value!r} is not a number.")
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError as exc:
+            raise TraceError(
+                f"{name} {value!r} is not a number. A cell with a unit in it "
+                "('750 mm') is refused rather than guessed at."
+            ) from exc
+    return float(value)
+
+
 @dataclass(frozen=True)
 class Sample:
     """One instant of machine state.
@@ -138,12 +208,24 @@ class Sample:
     body_region: str = ""
 
     def __post_init__(self) -> None:
-        if self.tcp_speed < 0:
-            raise TraceError(f"t={self.t}: tcp_speed is negative ({self.tcp_speed}).")
-        if self.separation is not None and self.separation < 0:
-            raise TraceError(f"t={self.t}: separation is negative ({self.separation}).")
-        if len(self.tcp) != 3:
-            raise TraceError(f"t={self.t}: tcp needs three coordinates, got {len(self.tcp)}.")
+        _num(self.t, "t", maximum=DURATION_MAX_S, signed=True)
+        where = f"t={self.t}"
+        if not isinstance(self.tcp, (tuple, list)) or len(self.tcp) != 3:
+            raise TraceError(f"{where}: tcp needs three coordinates, got {self.tcp!r}.")
+        for axis, v in zip("xyz", self.tcp, strict=True):
+            _num(v, f"{where}: tcp {axis}", maximum=DISTANCE_MAX_MM, signed=True)
+        _num(self.tcp_speed, f"{where}: tcp_speed", maximum=SPEED_MAX_MM_S)
+        if self.separation is not None:
+            _num(self.separation, f"{where}: separation", maximum=DISTANCE_MAX_MM)
+        if self.human_speed is not None:
+            _num(self.human_speed, f"{where}: human_speed", maximum=SPEED_MAX_MM_S)
+        if self.contact_force is not None:
+            _num(self.contact_force, f"{where}: contact_force", maximum=FORCE_MAX_N)
+        if self.contact_area is not None:
+            _num(self.contact_area, f"{where}: contact_area", maximum=AREA_MAX_CM2,
+                 positive=True)
+        if not isinstance(self.mode, OperatingMode):
+            raise TraceError(f"{where}: mode {self.mode!r} is not an OperatingMode.")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,21 +241,46 @@ class Sample:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Sample:
-        def opt(key: str) -> float | None:
+    def from_dict(cls, d: dict[str, Any], *, csv_row: bool = False) -> Sample:
+        """Read one sample.
+
+        ``csv_row`` means every value is text, as a CSV cell is, and is parsed to
+        a number here; a JSON sample must already carry numbers, and a string or a
+        boolean in one is refused.
+        """
+        if not isinstance(d, dict):
+            raise TraceError(f"a sample must be an object, got {type(d).__name__}.")
+        _refuse_unit_variants(k for k in d if isinstance(k, str))
+
+        def need(key: str, *, numeric: bool = True) -> Any:
+            if key not in d or d[key] is None or d[key] == "":
+                raise TraceError(f"sample is missing required field {key!r}.")
+            return _csv_cell(d[key], key) if (csv_row and numeric) else d[key]
+
+        def opt(key: str) -> Any:
             v = d.get(key)
             if v is None or v == "":
                 return None
-            return float(v)
+            return _csv_cell(v, key) if csv_row else v
 
         tcp = d.get("tcp")
         if tcp is None:
-            tcp = [d.get("x", 0.0), d.get("y", 0.0), d.get("z", 0.0)]
+            # A position that was not recorded is not the origin.
+            tcp = [need("x"), need("y"), need("z")]
+        elif csv_row or not isinstance(tcp, (list, tuple)) or len(tcp) != 3:
+            raise TraceError(f"tcp needs three coordinates, got {tcp!r}.")
+        try:
+            mode = OperatingMode(str(need("mode", numeric=False)))
+        except ValueError as exc:
+            raise TraceError(
+                f"mode {d.get('mode')!r} is not one of "
+                f"{', '.join(m.value for m in OperatingMode)}."
+            ) from exc
         return cls(
-            t=float(d["t"]),
-            tcp=(float(tcp[0]), float(tcp[1]), float(tcp[2])),
-            tcp_speed=float(d["tcp_speed"]),
-            mode=OperatingMode(str(d["mode"])),
+            t=need("t"),
+            tcp=(tcp[0], tcp[1], tcp[2]),
+            tcp_speed=need("tcp_speed"),
+            mode=mode,
             separation=opt("separation"),
             human_speed=opt("human_speed"),
             contact_force=opt("contact_force"),
@@ -200,10 +307,15 @@ class Trace:
     def __post_init__(self) -> None:
         if not self.samples:
             raise TraceError(f"trace {self.trace_id!r} has no samples.")
+        if len(self.samples) > MAX_SAMPLES:
+            raise TraceError(
+                f"trace {self.trace_id!r} has {len(self.samples)} samples, more than "
+                f"the {MAX_SAMPLES} this package will hold. Split the run."
+            )
         if self.started_at.tzinfo is None:
             raise TraceError(f"trace {self.trace_id!r} started_at has no timezone.")
-        if self.sample_rate_hz <= 0:
-            raise TraceError(f"trace {self.trace_id!r} sample_rate_hz must be positive.")
+        _num(self.sample_rate_hz, f"trace {self.trace_id!r} sample_rate_hz",
+             maximum=RATE_MAX_HZ, positive=True)
         times = [s.t for s in self.samples]
         if any(b <= a for a, b in zip(times, times[1:], strict=False)):
             raise TraceError(
@@ -216,18 +328,54 @@ class Trace:
         return self.samples[-1].t - self.samples[0].t
 
     @property
+    def observed_period_s(self) -> float | None:
+        """The median interval between samples, or ``None`` for a single sample."""
+        deltas = [b.t - a.t for a, b in zip(self.samples, self.samples[1:], strict=False)]
+        return statistics.median(deltas) if deltas else None
+
+    @property
+    def rate_disagrees_with_data(self) -> bool:
+        """Whether the declared rate is more than a factor of two from the data's own.
+
+        The declared rate decides what counts as a gap, so a wrong declaration
+        moves the goalposts: 1 Hz declared over 1 kHz data hides every dropout
+        shorter than two seconds, and 5 kHz declared over 50 Hz data makes every
+        interval look like one. Neither is believed silently.
+        """
+        observed = self.observed_period_s
+        if observed is None:
+            return False
+        nominal = 1.0 / self.sample_rate_hz
+        return observed > 2 * nominal or observed < nominal / 2
+
+    def _gap_period(self) -> float:
+        """The *shorter* of the declared period and the one the data shows.
+
+        A declared rate that is too low cannot hide a dropout, and one that is
+        too high marks every interval as a gap, loudly.
+        """
+        nominal = 1.0 / self.sample_rate_hz
+        observed = self.observed_period_s
+        return nominal if observed is None else min(nominal, observed)
+
+    @property
     def gaps(self) -> list[tuple[float, float]]:
-        """Intervals longer than twice the nominal sample period.
+        """Intervals longer than twice the sample period.
 
         A gap is where the evidence is silent. A protective stop that happened
         inside a gap was not recorded, whatever the surrounding samples imply.
         """
-        nominal = 1.0 / self.sample_rate_hz
-        out: list[tuple[float, float]] = []
-        for a, b in zip(self.samples, self.samples[1:], strict=False):
-            if (b.t - a.t) > 2 * nominal:
-                out.append((a.t, b.t))
-        return out
+        period = self._gap_period()
+        return [(a.t, b.t) for a, b in zip(self.samples, self.samples[1:], strict=False)
+                if (b.t - a.t) > 2 * period]
+
+    def gap_touches(self, predicate: Any) -> bool:
+        """Whether any gap has a recorded sample on either side satisfying ``predicate``."""
+        period = self._gap_period()
+        return any(
+            (b.t - a.t) > 2 * period and (predicate(a) or predicate(b))
+            for a, b in zip(self.samples, self.samples[1:], strict=False)
+        )
 
     def modes_present(self) -> list[OperatingMode]:
         seen: list[OperatingMode] = []
@@ -260,19 +408,57 @@ class Trace:
     # -- loading ----------------------------------------------------------
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Trace:
+        if not isinstance(d, dict):
+            raise TraceError(f"a trace must be an object, got {type(d).__name__}.")
+
+        def need(key: str) -> Any:
+            if key not in d:
+                raise TraceError(f"trace is missing required field {key!r}.")
+            return d[key]
+
+        raw_samples = need("samples")
+        if not isinstance(raw_samples, list):
+            raise TraceError("trace samples must be a list.")
+        if len(raw_samples) > MAX_SAMPLES:
+            raise TraceError(
+                f"trace has {len(raw_samples)} samples, more than the {MAX_SAMPLES} "
+                "this package will hold. Split the run."
+            )
+        try:
+            provenance = Provenance(str(need("provenance")))
+        except ValueError as exc:
+            raise TraceError(
+                f"provenance {d['provenance']!r} is not one of "
+                f"{', '.join(p.value for p in Provenance)}."
+            ) from exc
+        try:
+            started_at = parse_utc(str(need("started_at")))
+        except ValueError as exc:
+            raise TraceError(f"started_at {d['started_at']!r}: {exc}") from exc
         return cls(
-            trace_id=str(d["trace_id"]),
-            provenance=Provenance(str(d["provenance"])),
-            source_system=str(d["source_system"]),
-            started_at=parse_utc(str(d["started_at"])),
-            sample_rate_hz=float(d["sample_rate_hz"]),
-            samples=tuple(Sample.from_dict(s) for s in d["samples"]),
+            trace_id=str(need("trace_id")),
+            provenance=provenance,
+            source_system=str(need("source_system")),
+            started_at=started_at,
+            sample_rate_hz=_num(need("sample_rate_hz"), "sample_rate_hz",
+                                maximum=RATE_MAX_HZ, positive=True),
+            samples=tuple(Sample.from_dict(s) for s in raw_samples),
             conditions=dict(d.get("conditions") or {}),
         )
 
     @classmethod
     def from_json(cls, path: str | Path) -> Trace:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        p = Path(path)
+        if p.stat().st_size > MAX_FILE_BYTES:
+            raise TraceError(
+                f"{p.name} is {p.stat().st_size} bytes, more than the {MAX_FILE_BYTES} "
+                "this package will read."
+            )
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+            raise TraceError(f"{p.name} is not valid JSON: {exc}") from exc
+        return cls.from_dict(raw)
 
     @classmethod
     def from_csv(
@@ -293,8 +479,31 @@ class Trace:
         There is no default for ``provenance`` on purpose: the one field that
         decides what the run may prove is the one field nobody may omit.
         """
-        rows = list(csv.DictReader(Path(path).open(newline="", encoding="utf-8")))
-        if not rows:
+        p = Path(path)
+        if p.stat().st_size > MAX_FILE_BYTES:
+            raise TraceError(
+                f"{p.name} is {p.stat().st_size} bytes, more than the {MAX_FILE_BYTES} "
+                "this package will read."
+            )
+        samples: list[Sample] = []
+        try:
+            with p.open(newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    if len(samples) >= MAX_SAMPLES:
+                        raise TraceError(
+                            f"{p.name} has more than {MAX_SAMPLES} rows, more than "
+                            "this package will hold. Split the run."
+                        )
+                    if None in row:
+                        raise TraceError(
+                            f"{p.name} row {len(samples) + 2} has more cells than the "
+                            "header has columns; a shifted row would read one field "
+                            "as another."
+                        )
+                    samples.append(Sample.from_dict(row, csv_row=True))
+        except (UnicodeDecodeError, csv.Error) as exc:
+            raise TraceError(f"{p.name} is not readable as UTF-8 CSV: {exc}") from exc
+        if not samples:
             raise TraceError(f"{path} has no rows.")
         return cls(
             trace_id=trace_id,
@@ -302,7 +511,7 @@ class Trace:
             source_system=source_system,
             started_at=started_at,
             sample_rate_hz=sample_rate_hz,
-            samples=tuple(Sample.from_dict(r) for r in rows),
+            samples=tuple(samples),
             conditions=dict(conditions or {}),
         )
 
