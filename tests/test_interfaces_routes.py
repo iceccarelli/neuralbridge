@@ -473,3 +473,46 @@ class TestAVerificationCanBeFiledUnderTheMachine:
         assert rc == 0
         ledger = EvidenceLedger(ledger_path)
         assert len(VerificationRecord.from_ledger(ledger, subject=MACHINE.key)) == 1
+
+
+class TestTheRegisterExportOfAnUnknownCase:
+    """`GET /v1/cases/{id}/export` answered 200 with an empty bundle for an id that
+    names nothing, which `evidence verify` then (wrongly) called verified."""
+
+    def test_unknown_is_404_with_the_shape_the_other_verbs_use(self, client, account_store):
+        headers = keyed(account_store, "register")
+        r = client.get("/v1/cases/C-nope/export", headers=headers)
+        assert r.status_code == 404
+        assert r.json()["detail"] == {"error": "case_not_found", "case_id": "C-nope"}
+
+    def test_a_known_case_still_exports_and_another_tenants_is_a_404(
+            self, client, account_store):
+        headers = keyed(account_store, "cell")
+        cid = _drift(client, headers)
+        assert client.get(f"/v1/cases/{cid}/export", headers=headers).status_code == 200
+        other = account_store.upsert_account(email="other-register@example.de", tier="register")
+        b = {"X-API-Key": account_store.issue_key(other.id)}
+        assert client.get(f"/v1/cases/{cid}/export", headers=b).status_code == 404
+
+
+class TestNoAlwaysEmptyFieldIsPresentedAsData:
+    """`reviewer` and `last_valid_verification` were never set by anything, so every
+    case said `""` and the text view said 'reviewer: —'. They are reserved: not
+    emitted until something truthfully fills them."""
+
+    def test_the_api_case_does_not_carry_them(self, client, account_store):
+        headers = keyed(account_store, "cell")
+        cid = _drift(client, headers)
+        case = client.get(f"/v1/change/cases/{cid}", headers=headers).json()
+        assert "reviewer" not in case and "last_valid_verification" not in case
+        rows = client.get("/v1/change/cases", headers=headers).json()["cases"]
+        assert "reviewer" not in rows[0]
+
+    def test_old_snapshots_that_carry_the_keys_still_load(self):
+        from assurance.change.model import CaseStatus, ChangeAssuranceCase, TriggerType
+
+        case = ChangeAssuranceCase(case_id="c", trigger_type=TriggerType.MACHINE_DRIFT,
+                                   trigger_id="t", status=CaseStatus.OPEN)
+        old = {**case.to_dict(), "reviewer": "", "last_valid_verification": ""}
+        assert ChangeAssuranceCase.from_dict(old) == case
+        assert "reviewer:" not in case.summary()

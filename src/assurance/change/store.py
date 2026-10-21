@@ -77,8 +77,17 @@ class CaseStore:
         would read as the state *before* the edit, with nothing to say so. Every
         write is guarded by this, and every interface that shows a case calls it
         first.
+
+        Incremental (:meth:`EvidenceLedger.verify_cached`): the head last verified
+        and everything appended since are checked on every call, so the cost is
+        O(new records), not a walk of the account's whole ledger per request. The
+        honest trade-off: an in-place edit of an *old* record by someone with write
+        access to the database file is seen at the next full pass (within
+        ``ASSURANCE_CHAIN_RECHECK_SECONDS``, default 60 s, and on any export,
+        replay or ``verify_chain``), not on every read. A rebuilt, self-consistent
+        chain is caught by neither; that is what a signed head attestation is for.
         """
-        ok, problems = self.ledger.verify_chain()
+        ok, problems = self.ledger.verify_cached()
         if not ok:
             raise ChainBrokenError(
                 "the ledger's chain does not verify, so no case in it can be shown or "
