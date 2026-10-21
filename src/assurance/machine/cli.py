@@ -64,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--role", default="verification engineer")
     ver.add_argument("--ledger", type=Path, default=None,
                      help="append the sealed bundle to this evidence ledger")
+    ver.add_argument("--subject", default="",
+                     help="file the bundle in the ledger under this subject. Give the "
+                          "machine's key (manufacturer/model#serial) for it to count as "
+                          "evidence for that unit; default is product@version")
     ver.add_argument("--out", type=Path, default=None, help="write the bundle here")
     ver.add_argument("--json", action="store_true")
 
@@ -115,7 +119,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     bundle = build_bundle(
         envelope, trace,
         actor=Actor(identifier=args.actor, role=args.role, kind="person"),
-        limits=limits, ledger=ledger,
+        limits=limits, ledger=ledger, subject=args.subject,
     )
     if args.out:
         bundle.write(args.out)
