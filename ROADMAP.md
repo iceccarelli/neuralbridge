@@ -1,46 +1,88 @@
-# NeuralBridge Roadmap
+# NeuralBridge Roadmap — ordered by the path to recurring revenue
 
-What is shipped versus what is planned, kept to the same honesty standard as
-the rest of this repository: nothing here is marked done unless it is gated
-in code and covered by `pytest tests/ -q`. The full detail behind this table
-is in the [README's platform section](README.md#neuralbridge--the-platform-underneath)
-and the live [Platform status page](docs/platform.md).
+Same honesty standard as the rest of this repository: nothing is marked done
+unless it is gated in code and covered by `python -m pytest tests/ -q`. Current
+state, with the verification that backs it, is `HANDOFF.md` §0.
+
+**Standing facts (until `HANDOFF.md` says otherwise with evidence):** zero
+revenue, zero customers, zero pilots, nothing deployed, Stripe has never
+processed a payment. The prices are unvalidated. The single most important
+unproven assumption is that a machine builder or integrator will pay a
+recurring fee to keep safety-evidence applicability current instead of relying
+on vendor change-detection plus an engineer's checklist
+(`docs/pmf/PILOT-PROGRAMME.md`). Features do not answer that question; a paid
+pilot does.
+
+## How work is chosen
+Working backwards from a paying customer, an item earns a place only if it does
+one of three things, and says which number it moves:
+
+1. **Shortens time to first useful result** for a customer who has paid or will.
+2. **Protects revenue already earned** — entitlement matches payment; evidence
+   stays trustworthy; the product keeps working while nobody is watching.
+3. **Removes a blocker to a paid transaction** (deployability, billing,
+   procurement objections).
+
+Everything else waits, however interesting. Operating practice borrowed from
+large-scale services, applied to this size of company: every guarantee has a
+measured indicator (an SLI such as entitlement drift count, failed-observation
+rate); every release passes the same automated gates; independent adversarial
+review before anything that touches tenancy, billing or closure logic;
+toil that recurs gets automated; changes are small and reversible.
 
 ## Shipped
+- [x] Industrial Autonomous Assurance: Art. 14 register, hash-chained ledger,
+      offline enrolment kit, machine safety verification, Annex III manifests,
+      fleet advisory fan-out, signed supplier feeds, counter-signed head
+      attestation
+- [x] Continuous Machine Change Assurance: `ChangeAssuranceCase`s opened by
+      Watch from drift, advisories and interventions; evidence-bound
+      re-verification; human-only closure; ledger replay
+- [x] Per-account tenancy (assurance ledgers, `/ai` control plane, audit log)
+- [x] Billing hardening: identity-bound accounts, idempotent ordered webhooks,
+      key lifecycle, enforced plan catalogue with parity test
+- [x] `/assurance` customer workspace; offline bundle verifier; volume
+      backup/verify tool
 
-- [x] Industrial Autonomous Assurance: CRA Art. 14 register, hash-chained
-      ledger, offline enrolment kit, Article 14 draft validation
-- [x] Machine safety verification (ISO/TS 15066 separation check)
-- [x] Machinery Regulation Annex III manifests, passports, staleness join
-- [x] Fleet advisory fan-out and hash/version/name matching
-- [x] Continuous Machine Change Assurance: `ChangeAssuranceCase` opened from
-      drift, a supplier advisory or an intervention, moved through
-      re-verification to a human-decided closure — see
-      `deploy/assurance/CHANGE.md`
-- [x] Counter-signed head attestation
-- [x] FastAPI backend for connection management and tool exposure
-- [x] MCP gateway for tool listing / invocation
-- [x] A small set of working adapters (PostgreSQL, REST)
-- [x] Dashboard foundation (`src/dashboard`) — not yet integrated with the
-      assurance product
+## Next — on the money path, in this order
+- [ ] **Watch reporting** (moves: time to first useful result; renewal risk).
+      Opt-in `assurance watch push` + hosted ingestion so a paying customer sees
+      last successful observation, failed runs and stale machines in their
+      workspace. The kit and `watch run` stay offline.
+- [x] **Entitlement reconciliation** (moves: revenue protected).
+      `python -m assurance.billing.reconcile` compares Stripe subscription state
+      with the account store, reports drift by category (the drift count is the
+      SLI), and with `--apply` corrects existing accounts only. **Verified
+      against a fake Stripe transport only; it has never run against real
+      Stripe. Run it with a test-mode key first.** Never creates accounts or keys.
+- [ ] **Staging deployment on test-mode Stripe** (blocker; needs founder
+      credentials). Real webhooks, real restore rehearsal, a real
+      `scripts/e2e-assurance.sh` against a hosted URL. Checklist:
+      `DEPLOY_NOW.md`, `deploy/assurance/README.md`.
+- [ ] **Paid-pilot conversion path**: first-run guide that gets a customer from
+      kit output to a populated workspace in one sitting; pilot metrics
+      captured from the ledger (`docs/pmf/PILOT-PROGRAMME.md` §6).
 
-## Evolving — real, but not yet the core promise
+## Then — only on customer pull
+- [ ] Supplier-to-fleet advisory distribution at scale (the two-sided
+      network effect). Build the supplier price and directory only after
+      integrators are paying.
+- [ ] Additional supported collection sources (structured vendor exports),
+      each with proven parsing, diff and missing-data behaviour. No claim of
+      universal vendor support.
+- [ ] CRA lifecycle evidence (SBOM / support period association) where a
+      paying customer asks for it. Not another scanner.
+- [ ] Auditor/insurer acceptance of the evidence format — test acceptance
+      before building feeds or certificates.
 
-- [ ] Broad adapter ecosystem beyond the current small supported set
-- [ ] Full enterprise compliance posture
-- [ ] Full zero-trust security posture
-- [ ] Supplier advisory API (skeleton shipped, gated behind an unpriced
-      sales-assigned tier — see `deploy/assurance/ADR-0001-supplier-api.md`)
-- [ ] `assurance.watch.runner` opening change-assurance cases itself, rather
-      than a caller running `assess-drift`/`assess-advisory` against its
-      output — see `deploy/assurance/ADR-0002-change-assurance.md`
+## Gated on the founder (not engineering)
+Deploying anything; setting production secrets or Stripe live prices; sending
+outreach or accepting a pilot; the open-source licence decision (`HANDOFF.md`
+§4.4); retiring the stale `neuralbridge.vercel.app` project.
 
-## Planned, not started
-
-- [ ] Adapter marketplace
-- [ ] LangChain / AutoGPT toolkits
-- [ ] Serverless deployment targets (AWS Lambda, Google Cloud Functions)
-- [ ] Dashboard integration with the assurance product
-
-Treat anything not checked off as not built, whatever older marketing copy
-elsewhere in this repository's history might have claimed.
+## Explicitly not building now
+Adapter marketplace; broad adapter ecosystem; serverless targets; LangChain /
+AutoGPT toolkits; per-incident pricing; new SKUs; `src/dashboard/` (Vite admin
+UI, not wired to the assurance API — `/assurance` is the customer surface).
+Treat anything not checked off as not built, whatever older copy elsewhere in
+this repository's history claimed.
