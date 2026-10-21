@@ -31,7 +31,11 @@ from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
-from assurance.machinery.record import MANIFEST_KIND, manifests_from_ledger
+from assurance.machinery.record import (
+    MANIFEST_KIND,
+    interventions_from_ledger,
+    manifests_from_ledger,
+)
 from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
@@ -43,11 +47,14 @@ from .store import CaseStore
 
 __all__ = [
     "INCOMPLETE_COLLECTION_MARK",
+    "CaseNotFoundError",
     "CaseTransitionError",
+    "UnknownInterventionError",
     "advance",
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
+    "assess_recorded_intervention",
     "case_id_for",
     "claim",
     "decide",
@@ -61,6 +68,24 @@ __all__ = [
 
 class CaseTransitionError(AssuranceError):
     """A case was asked to move somewhere its own state does not permit."""
+
+
+class CaseNotFoundError(CaseTransitionError):
+    """The case id names no case in this ledger.
+
+    A subclass, so a caller that only knows :class:`CaseTransitionError` still
+    refuses. The interfaces tell it apart: HTTP answers 404 (the same as a read
+    of that id), the command line exits 2 (it could not run, as ``show`` does)
+    instead of the 409 / exit 1 that a refused *transition* gets.
+    """
+
+    def __init__(self, case_id: str) -> None:
+        super().__init__(f"no case {case_id!r}.")
+        self.case_id = case_id
+
+
+class UnknownInterventionError(AssuranceError):
+    """The intervention id names no intervention sealed for that machine."""
 
 
 def _case_id(trigger_type: TriggerType, trigger_id: str) -> str:
@@ -758,18 +783,39 @@ def assess_intervention(
               f"{len(mine)} function(s)")
 
 
+def assess_recorded_intervention(
+    store: CaseStore, manifest: SafetyManifest, intervention_id: str, *, actor: Actor,
+) -> tuple[Intervention, ChangeAssuranceCase | None]:
+    """:func:`assess_intervention` for an intervention already sealed in the ledger.
+
+    The one place that looks the intervention up, so the command line and the
+    HTTP route cannot disagree about which record they assessed. The
+    verifications and interventions come from the ledger, never the caller.
+    """
+    key = manifest.machine.key
+    interventions = interventions_from_ledger(store.ledger, key)
+    chosen = next((i for i in interventions if i.intervention_id == intervention_id), None)
+    if chosen is None:
+        raise UnknownInterventionError(
+            f"no intervention {intervention_id!r} is sealed for {key}. "
+            "Record it first with `assurance machinery record-change`.")
+    verifications = VerificationRecord.from_ledger(store.ledger, subject=key)
+    return chosen, assess_intervention(
+        store, chosen, manifest, verifications, interventions, actor=actor)
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
 
 def claim(store: CaseStore, case_id: str, *, owner: str, actor: Actor) -> ChangeAssuranceCase:
     """OPEN -> IN_REVIEW. A named person is now responsible for this case."""
+    case = _require(store, case_id)
     problem = _name_problem(owner)
     if problem:
         raise CaseTransitionError(
             f"{owner!r} cannot own a case: {problem}. An owner is the person "
             "who answers for it.")
-    case = _require(store, case_id)
     if case.status is not CaseStatus.OPEN:
         raise CaseTransitionError(
             f"{case_id} is {case.status.value}, not open. claim() is only valid "
@@ -964,11 +1010,11 @@ def waive_reverification(
     name, and the entry's ``evidence_current`` reads ``waived`` rather than
     ``current``.
     """
+    case = _require(store, case_id)
     _require_human(actor, "waiving a re-verification")
     if not reason.strip():
         raise CaseTransitionError(
             "a waiver needs a reason: why closing without evidence is acceptable.")
-    case = _require(store, case_id)
     if case.status.is_settled:
         raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
     if entry not in case.required_reverifications:
@@ -996,10 +1042,10 @@ def resolve_decision(
     the same advisory never asks it again. Without this, a case that names a
     human decision could only ever be rejected or deferred.
     """
+    case = _require(store, case_id)
     _require_human(actor, "resolving a human decision")
     if not resolution.strip():
         raise CaseTransitionError("a resolution needs the answer the person gave.")
-    case = _require(store, case_id)
     if case.status.is_settled:
         raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
     if decision not in case.human_decisions_required:
@@ -1025,10 +1071,10 @@ def resume(store: CaseStore, case_id: str, *, reason: str, actor: Actor) -> Chan
     ``decide`` is a fresh one. The resumed case is ``IN_REVIEW`` and must be
     advanced again, so nobody inherits a stop they did not confirm.
     """
+    case = _require(store, case_id)
     _require_human(actor, "resuming a deferred case")
     if not reason.strip():
         raise CaseTransitionError("resuming a case needs a reason.")
-    case = _require(store, case_id)
     if case.status is not CaseStatus.DEFERRED:
         raise CaseTransitionError(
             f"{case_id} is {case.status.value}, not deferred. resume() is only "
@@ -1061,12 +1107,12 @@ def decide(
     if disposition not in ("closed", "rejected", "deferred"):
         raise CaseTransitionError(
             f"disposition must be closed, rejected or deferred, not {disposition!r}.")
+    case = _require(store, case_id)
     _require_human(actor, f"{disposition} a case")
     if not reason.strip():
         raise CaseTransitionError(
             "a decision needs a reason. This is the sentence a reviewer reads "
             "when they ask why a case ended the way it did.")
-    case = _require(store, case_id)
     if case.status.is_settled:
         raise CaseTransitionError(f"{case_id} is already {case.status.value}.")
     if disposition == "closed":
@@ -1095,5 +1141,5 @@ def decide(
 def _require(store: CaseStore, case_id: str) -> ChangeAssuranceCase:
     case = store.get(case_id)
     if case is None:
-        raise CaseTransitionError(f"no case {case_id!r}.")
+        raise CaseNotFoundError(case_id)
     return case
