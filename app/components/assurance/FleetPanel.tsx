@@ -101,7 +101,8 @@ export default function FleetPanel({
           )}
           <p data-testid="fleet-summary">
             {data.summary.machines} machine(s): {data.summary.covered} with every declared safety function covered,{' '}
-            {data.summary.with_gaps} with gaps.
+            {data.summary.with_gaps} not fully covered (a declared function with a gap, or no safety function declared
+            at all — see each row).
           </p>
           {data.machines.length === 0 ? (
             <p className="console-empty-note">

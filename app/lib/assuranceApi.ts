@@ -192,6 +192,8 @@ export type ImpactReport = {
   assessed_at: string;
   verdict: 'clear' | 'exposed' | 'needs_review';
   machines_in_fleet: number;
+  /** False when the ledger chain does not verify: an empty match list then proves nothing. */
+  chain_verified: boolean;
   machines_affected: string[];
   functions_newly_in_question: number;
   exposures: Exposure[];
