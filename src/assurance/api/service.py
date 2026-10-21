@@ -29,7 +29,7 @@ from .evidence_routes import evidence_router
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
-from .routes import free_router, public_router, router
+from .routes import evidence_router, free_router, public_router, router
 from .supplier_routes import supplier_router
 from .watch_routes import watch_router
 
@@ -114,7 +114,9 @@ def create_app(**kwargs: Any) -> FastAPI:
         # deployment: the browser never even sends the key, so the API sees
         # an anonymous caller and returns 401/402 for a request that should
         # have succeeded. Found while building the Console guided flow.
-        allow_headers=["content-type", "authorization", "x-api-key"],
+        # idempotency-key: a browser client that retries a metered call must be
+        # allowed to send it, or the preflight refuses the request outright.
+        allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key"],
         allow_credentials=False,
     )
 
@@ -139,6 +141,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(attest_router)
     application.include_router(supplier_router)
     application.include_router(router)
+    application.include_router(evidence_router)
     return application
 
 

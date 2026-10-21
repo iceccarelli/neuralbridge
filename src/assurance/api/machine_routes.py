@@ -29,9 +29,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from assurance.api.deps import (
     Anyone,
     Machine,
+    Metered,
+    MeterTicket,
     get_accounts,
     get_register,
-    spend,
 )
 from assurance.billing.accounts import AccountStore, Principal
 from assurance.core.errors import AssuranceError
@@ -115,18 +116,15 @@ def _bad(exc: Exception, what: str) -> HTTPException:
 async def separation(
     body: SeparationIn,
     response: Response,
-    principal: Annotated[Principal, Anyone],
-    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    meter: Annotated[MeterTicket, Metered("separation")],
 ) -> dict[str, Any]:
     """S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.
 
     Two things this returns that a spreadsheet usually gets wrong: Sh runs over
     the reaction time as well as the stop time, and Ss is flagged when the
     requested speed is above the speed the stopping distance was measured at.
+    Counted once the answer is complete (``billing/metering.py``).
     """
-    limit = principal.plan.separations_per_day
-    spend(principal, "separation", limit, accounts)
-
     from assurance.machine.envelope import (
         FigureBasis,
         SensingUncertainty,
@@ -166,12 +164,6 @@ async def separation(
     except (AssuranceError, ValueError) as exc:
         raise _bad(exc, "separation_inputs") from exc
 
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("separation", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
-
     notes = [
         "Sh runs over the reaction time and the stop time together. A person "
         "keeps moving while the cell is still noticing them.",
@@ -192,7 +184,7 @@ async def separation(
             "at short range is normally taken as 2000 mm/s."
         )
 
-    return {
+    result = {
         "required_separation_mm": breakdown.total_mm,
         "breakdown": breakdown.to_dict(),
         "explain": breakdown.explain(),
@@ -202,6 +194,8 @@ async def separation(
             "they describe your machine, and it is not a risk assessment.",
         ],
     }
+    meter.commit(response)
+    return result
 
 
 @machine_router.post(

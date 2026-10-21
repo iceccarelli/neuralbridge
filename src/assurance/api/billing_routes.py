@@ -30,10 +30,11 @@ account exists.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..billing import stripe_gateway as stripe
 from ..billing.accounts import (
@@ -44,8 +45,10 @@ from ..billing.accounts import (
     Principal,
     hash_key,
 )
-from ..billing.plans import PLANS, public_catalogue
+from ..billing.metering import MAX_SPEND_LIMIT_UNITS, parse_period, usage_report
+from ..billing.plans import PLANS, payg_available, public_catalogue
 from ..billing.subscription_state import PURCHASABLE_TIERS, map_subscription
+from ..core.identity import utc_now
 from .deps import current_principal, get_accounts, marketing_url, public_url
 
 __all__ = ["billing_router"]
@@ -60,7 +63,7 @@ _PURCHASABLE_TIERS = PURCHASABLE_TIERS
 class CheckoutIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tier: str = Field(pattern="^(register|cell)$")
+    tier: str = Field(pattern="^(register|cell|payg)$")
     # A plain pattern rather than EmailStr: correctness here is Stripe's job,
     # and pulling in email-validator to reject "a@b" would be a dependency
     # bought for nothing.
@@ -106,6 +109,17 @@ def post_checkout(
             },
         )
     plan = PLANS[body.tier]
+    if body.tier == "payg" and not payg_available():
+        # Off unless fully configured (a metered price, a meter, a test-mode
+        # key): a subscription that cannot be metered must not be sold.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "payg_not_available",
+                "detail": "Pay-as-you-go is not enabled on this deployment. Checkout is "
+                          "disabled rather than selling a subscription that cannot be metered.",
+            },
+        )
     if not plan.purchasable:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -127,6 +141,7 @@ def post_checkout(
             success_url=f"{market}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{market}/#pricing",
             tier=plan.tier,
+            metered=plan.metered_overage,
         )
     except stripe.StripeError as exc:
         raise HTTPException(
@@ -349,6 +364,14 @@ def get_me(
             "status": principal.account.status,
         }
         body["keys"] = accounts.keys_for(principal.account.id)
+        body["usage"] = usage_report(
+            accounts, principal.account, period=parse_period(None, utc_now()), now=utc_now())
+        # A customer whose subscription ended keeps read/verify/export of their
+        # own evidence (plans.EVIDENCE_READOUT_AFTER_LAPSE); writes are closed.
+        body["evidence_readout"] = bool(
+            principal.account.id != "operator" and principal.account.ever_paid
+            and not plan.register
+        )
         if principal.account.warning:
             body["warning"] = principal.account.warning
     else:
@@ -357,6 +380,78 @@ def get_me(
             "GET /v1/plans to see what a plan removes."
         )
     return body
+
+
+@billing_router.get("/usage", response_model=dict, summary="What your account has used")
+def get_usage(
+    principal: Annotated[Principal, Depends(current_principal)],
+    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    period: Annotated[
+        str | None,
+        Query(description="'current' (this UTC month, default), 'today' or YYYY-MM"),
+    ] = None,
+    events: Annotated[int, Query(ge=1, le=200, description="how many recent events")] = 50,
+) -> dict[str, Any]:
+    """Your own metered usage: per-scope totals, allowance, remaining, pay-as-you-go
+    state and your recent events with their idempotency keys.
+
+    Everything is read from the account store for the account the key belongs
+    to. There is no parameter that names another account, and no total is ever
+    taken from the client. The operator and anonymous callers have no account
+    usage (anonymous gets a 401).
+    """
+    if principal.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usage needs an API key.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    now = utc_now()
+    try:
+        chosen = parse_period(period, now)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_period", "detail": str(exc)},
+        ) from exc
+    return usage_report(accounts, principal.account, period=chosen, now=now, events=events)
+
+
+class UsageLimitsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Most billable units (operations past the free daily allowance) per UTC
+    #: month. 0 = never bill. Strict: a float or a string is refused, not coerced.
+    spend_limit_units: int | None = Field(default=None, strict=True, ge=0, le=MAX_SPEND_LIMIT_UNITS)
+    #: Percent of the limit at which GET /v1/usage raises ``budget_alert``.
+    budget_alert_pct: int | None = Field(default=None, strict=True, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _something_to_set(self) -> UsageLimitsIn:
+        if self.spend_limit_units is None and self.budget_alert_pct is None:
+            raise ValueError("send spend_limit_units and/or budget_alert_pct")
+        return self
+
+
+@billing_router.post(
+    "/usage/limits", response_model=dict, summary="Set your monthly spend limit and alert"
+)
+def post_usage_limits(
+    body: UsageLimitsIn,
+    principal: Annotated[Principal, Depends(current_principal)],
+    accounts: Annotated[AccountStore, Depends(get_accounts)],
+) -> dict[str, Any]:
+    """Your guard against a surprise bill, in billable units per UTC month.
+
+    Takes effect on the next call. Lowering it below what you have used stops
+    billing at once. Setting a limit does not turn billing on: that needs the
+    pay-as-you-go plan (a free or lapsed account stays at its daily cap).
+    """
+    account_id = _own_account(principal)
+    account = accounts.set_spend_limit(
+        account_id, units=body.spend_limit_units, budget_alert_pct=body.budget_alert_pct)
+    now: datetime = utc_now()
+    return usage_report(accounts, account, period=parse_period(None, now), now=now)
 
 
 class KeyIssueIn(BaseModel):

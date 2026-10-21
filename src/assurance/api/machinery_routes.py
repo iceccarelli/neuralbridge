@@ -25,8 +25,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
-from assurance.billing.accounts import AccountStore, Principal
+from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
+from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.machinery.divergence import compare
@@ -124,31 +124,24 @@ def _manifest(raw: dict[str, Any], what: str = "manifest") -> SafetyManifest:
 async def diff(
     body: DiffIn,
     response: Response,
-    principal: Annotated[Principal, Anyone],
-    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    meter: Annotated[MeterTicket, Metered("machinery_diff")],
 ) -> dict[str, Any]:
     """Compare an as-declared baseline against what was found on the machine.
 
     A version string changing while the artefact stays byte-identical is graded
     administrative; a hash changing on an item that implements a safety function
     is the finding. An item carrying no hash is reported as uncomparable — never
-    as unchanged.
+    as unchanged. Counted once the answer is complete (``billing/metering.py``).
     """
-    limit = principal.plan.diffs_per_day
-    spend(principal, "machinery_diff", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("machinery_diff", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
-
     baseline = _manifest(body.baseline, "baseline")
     observed = _manifest(body.observed, "observed")
     try:
         divergence = compare(baseline, observed)
     except ValueError as exc:
         raise _bad(exc, "comparison") from exc
-    return divergence.to_dict()
+    result = divergence.to_dict()
+    meter.commit(response)
+    return result
 
 
 @machinery_router.post("/manifest", summary="Seal a safety software manifest")
