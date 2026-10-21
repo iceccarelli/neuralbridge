@@ -33,11 +33,11 @@ export const ROUTES: RouteRow[] = [
 
   { method: 'GET', path: '/v1/register', tier: 'register', summary: 'The Article 14 register for your account' },
   { method: 'GET', path: '/v1/register/breaches', tier: 'register', summary: 'Cases past a deadline clock' },
-  { method: 'GET', path: '/v1/cases', tier: 'register', summary: 'List cases' },
-  { method: 'GET', path: '/v1/cases/{id}/export', tier: 'register', summary: 'A verifiable evidence bundle for one case' },
+  { method: 'GET', path: '/v1/cases', tier: 'register', summary: 'List cases (read-out: also open, from your own ledger, to an account whose subscription has lapsed after it paid)' },
+  { method: 'GET', path: '/v1/cases/{id}/export', tier: 'register', summary: 'A verifiable evidence bundle for one case (read-out: also open to a lapsed account that once paid)' },
   { method: 'POST', path: '/v1/cases/{id}/triage', tier: 'register', summary: 'Record a triage decision' },
   { method: 'POST', path: '/v1/cases/{id}/filings', tier: 'register', summary: 'Record a platform filing' },
-  { method: 'GET', path: '/v1/ledger/verify', tier: 'register', summary: 'Verify the hash chain' },
+  { method: 'GET', path: '/v1/ledger/verify', tier: 'register', summary: 'Verify the hash chain (read-out: also open to a lapsed account that once paid)' },
 
   { method: 'POST', path: '/v1/machine/verify', tier: 'cell', summary: 'Verify a recorded machine run against its declared envelope' },
   { method: 'POST', path: '/v1/machinery/manifest', tier: 'cell', summary: 'Seal a safety software manifest' },
