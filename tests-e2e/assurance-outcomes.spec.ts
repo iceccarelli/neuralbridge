@@ -12,7 +12,14 @@ import { call, callText, describeOutcome, keepsLastGood, type ApiOutcome } from 
 const seedPath = process.env.ASSURANCE_E2E_SEED;
 const apiBase = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || 'http://127.0.0.1:8001';
 
-type Seed = { key_a: string; key_g: string; key_register: string; case_id: string };
+type Seed = {
+  key_a: string;
+  key_g: string;
+  key_register: string;
+  case_id: string;
+  k_manifest: Record<string, unknown>;
+  advisories: { clear: Record<string, unknown> };
+};
 
 function refusal(o: ApiOutcome<unknown>) {
   if (o.kind === 'ok') throw new Error('expected a refusal, got ok');
@@ -84,10 +91,14 @@ test.describe('assuranceApi against the real API', () => {
   });
 
   test('429: the free allowance running out says what removes the cap', async () => {
-    // Anonymous callers spend the free daily allowance (10); the validation failure still costs one.
+    // Anonymous callers spend the free daily allowance (10). Only a call that completes is
+    // counted (a refused one costs nothing), so the calls here are real, valid ones.
     let last: ApiOutcome<unknown> | null = null;
     for (let i = 0; i < 12 && (last === null || last.kind !== 'ratelimited'); i++) {
-      last = await call(apiBase, '', '/v1/fleet/advisory/check', { method: 'POST', body: { advisory: {}, manifest: {} } });
+      last = await call(apiBase, '', '/v1/fleet/advisory/check', {
+        method: 'POST',
+        body: { advisory: seed.advisories.clear, manifest: seed.k_manifest },
+      });
     }
     const o = refusal(last!);
     expect(o.kind).toBe('ratelimited');
