@@ -257,6 +257,8 @@ PLANS: dict[Tier, Plan] = {
             "Both final-report clocks computed correctly, and the platform's counter "
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
+            "If the subscription ends you keep read, verify and export of your own "
+            "evidence; new records and the operational views stop",
             "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
             "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
         ),

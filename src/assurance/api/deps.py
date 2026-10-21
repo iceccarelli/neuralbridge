@@ -38,6 +38,10 @@ Configuration, all by environment variable:
                         whose recorded traces are legitimately large
                         (default 32 MiB)
 ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+``ASSURANCE_PAYG_METER_EVENT`` / ``ASSURANCE_PAYG_METER_ID`` / ``ASSURANCE_PAYG_ALLOW_LIVE``
+                        pay-as-you-go, off unless ``ASSURANCE_PRICE_PAYG`` and
+                        ``ASSURANCE_PAYG_METER_EVENT`` are both set (see
+                        ``billing/plans.py:payg_available`` and the deploy README)
 
 **Tenancy.** Every ``/v1`` route reaches the ledger through
 :func:`get_register`, so tenant isolation is decided in exactly one place. A
