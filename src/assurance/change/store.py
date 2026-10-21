@@ -68,8 +68,13 @@ class CaseStore:
     def __init__(self, ledger: EvidenceLedger) -> None:
         self.ledger = ledger
 
-    def require_intact(self) -> None:
+    def require_intact(self, *, full: bool = False) -> None:
         """Refuse (``LedgerIntegrityError``) unless the ledger's whole chain verifies.
+
+        ``full=True`` is a complete walk of the chain (:meth:`EvidenceLedger.verify_chain`),
+        never the cached check. A human decision that settles or reshapes a case
+        (close, reject, defer, resume, resolve, waive) is rare and carries weight, so
+        it pays for the walk and never relies on the up-to-60 s window below.
 
         :meth:`get` skips an entry whose sealed evidence no longer verifies, which
         is right for a reconstruction that reports it, and wrong for anything that
@@ -87,7 +92,7 @@ class CaseStore:
         replay or ``verify_chain``), not on every read. A rebuilt, self-consistent
         chain is caught by neither; that is what a signed head attestation is for.
         """
-        ok, problems = self.ledger.verify_cached()
+        ok, problems = self.ledger.verify_chain() if full else self.ledger.verify_cached()
         if not ok:
             raise ChainBrokenError(
                 "the ledger's chain does not verify, so no case in it can be shown or "
@@ -162,7 +167,7 @@ class CaseStore:
         # while it still names work that has not been done or a question
         # nobody has answered, and nothing is appended to a chain that no
         # longer verifies.
-        self.require_intact()
+        self.require_intact(full=kind == DECISION_KIND)
         if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):
             outstanding = [*(f"re-verification of {f}" for f in case.required_reverifications),
                            *(f"decision: {d}" for d in case.human_decisions_required)]

@@ -212,6 +212,32 @@ class TestAnOldEditIsSeenByTheNextFullPass:
         assert not ledger.verify_cached()[0]      # the cache cannot mask what a full walk showed
         assert chain_cache.lookup(chain_cache.identity(ledger.path)) is None
 
+    def test_a_failing_incremental_pass_drops_the_remembered_head(self, ledger):
+        """verify_cached must forget what it had verified when it finds a problem,
+        so the next call is a full walk and not a re-check from a head that has
+        since been shown to sit on a damaged chain."""
+        assert ledger.verify_cached()[0]
+        key = chain_cache.identity(ledger.path)
+        assert chain_cache.lookup(key) is not None
+        sql(ledger.path, "UPDATE chain SET payload = replace(payload, '\"n\":1', '\"n\":2') "
+            "WHERE seq = 300")
+        ok, _ = ledger.verify_cached()           # the head itself: seen by the incremental pass
+        assert not ok
+        assert chain_cache.lookup(key) is None
+
+    def test_after_a_failure_the_next_check_is_a_full_walk(self, ledger, monkeypatch):
+        assert ledger.verify_cached()[0]
+        sql(ledger.path, "UPDATE chain SET payload = replace(payload, '\"n\":1', '\"n\":2') "
+            "WHERE seq = 300")
+        assert not ledger.verify_cached()[0]
+        sql(ledger.path, "UPDATE chain SET payload = replace(payload, '\"n\":2', '\"n\":1') "
+            "WHERE seq = 300")                    # put it back
+        walks = []
+        real = ledger.verify_full
+        monkeypatch.setattr(ledger, "verify_full", lambda: walks.append(1) or real())
+        assert ledger.verify_cached() == (True, [])
+        assert walks == [1], "with the cache dropped, the check must be a full walk"
+
     def test_a_failure_is_never_remembered_as_a_pass(self, ledger):
         sql(ledger.path, "UPDATE chain SET payload = replace(payload, '\"n\":1', '\"n\":2') "
             "WHERE seq = 5")

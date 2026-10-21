@@ -1010,7 +1010,7 @@ def waive_reverification(
     name, and the entry's ``evidence_current`` reads ``waived`` rather than
     ``current``.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "waiving a re-verification")
     if not reason.strip():
         raise CaseTransitionError(
@@ -1042,7 +1042,7 @@ def resolve_decision(
     the same advisory never asks it again. Without this, a case that names a
     human decision could only ever be rejected or deferred.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "resolving a human decision")
     if not resolution.strip():
         raise CaseTransitionError("a resolution needs the answer the person gave.")
@@ -1071,7 +1071,7 @@ def resume(store: CaseStore, case_id: str, *, reason: str, actor: Actor) -> Chan
     ``decide`` is a fresh one. The resumed case is ``IN_REVIEW`` and must be
     advanced again, so nobody inherits a stop they did not confirm.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "resuming a deferred case")
     if not reason.strip():
         raise CaseTransitionError("resuming a case needs a reason.")
@@ -1107,7 +1107,7 @@ def decide(
     if disposition not in ("closed", "rejected", "deferred"):
         raise CaseTransitionError(
             f"disposition must be closed, rejected or deferred, not {disposition!r}.")
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, f"{disposition} a case")
     if not reason.strip():
         raise CaseTransitionError(
@@ -1138,10 +1138,13 @@ def decide(
     return store.decide(updated, actor=actor, detail=f"{disposition}: {reason}")
 
 
-def _require(store: CaseStore, case_id: str) -> ChangeAssuranceCase:
+def _require(store: CaseStore, case_id: str, *, human: bool = False) -> ChangeAssuranceCase:
     # First: on a ledger that does not verify a case whose only entry was edited
     # reads as "no such case", which is the wrong thing to say about it.
-    store.require_intact()
+    # ``human``: a person is about to decide something about this case, so the
+    # whole chain is walked rather than trusting the cached check (see
+    # CaseStore.require_intact).
+    store.require_intact(full=human)
     case = store.get(case_id)
     if case is None:
         raise CaseNotFoundError(case_id)
