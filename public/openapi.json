@@ -6393,6 +6393,7 @@
     },
     "/v1/supplier/advisory": {
       "post": {
+        "description": "Host an advisory you signed locally.\n\nThis checks structure and the feed's chain (sequence, predecessor hash, one\nsupplier per feed, no repeated advisory id) and refuses what it cannot parse.\nIt does not verify the signature: it holds no supplier key. Readers verify\nthe feed against a key fingerprint they obtained from you by another route.",
         "operationId": "post_advisory_v1_supplier_advisory_post",
         "parameters": [
           {
@@ -6462,7 +6463,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Publish a signed advisory to your hosted feed (Supplier tier)",
+        "summary": "Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
         "tags": [
           "supplier"
         ]
@@ -6502,7 +6503,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Read a hosted supplier feed (free, no account, forever)",
+        "summary": "Read a hosted supplier feed (no account needed)",
         "tags": [
           "supplier"
         ]
