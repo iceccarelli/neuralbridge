@@ -226,6 +226,7 @@ class WatchRun:
 def _seal_observation(
     ledger: EvidenceLedger, target: WatchTarget, machine_key: str,
     configuration_hash: str, status: str, actor: Actor, detail: str,
+    observed_at: datetime,
 ) -> Evidence:
     """Record that this machine was looked at, whatever the look found.
 
@@ -239,6 +240,7 @@ def _seal_observation(
             "serial": target.serial,
             "machine": machine_key,
             "status": status,
+            "observed_at": format_utc(observed_at),
             "configuration_hash": configuration_hash,
             "plan": target.plan,
             "root": target.root,
@@ -411,7 +413,7 @@ def run_watch(
             ))
             if seal and machine_key:
                 _seal_observation(ledger, target, machine_key, "", "uncollectable",
-                                  actor, detail)
+                                  actor, detail, started)
             continue
 
         manifest = result.manifest
@@ -490,7 +492,7 @@ def run_watch(
 
         if seal:
             _seal_observation(ledger, target, machine_key, observed, status,
-                              actor, detail)
+                              actor, detail, started)
 
     # A machine whose last look is older than the declared cadence.
     cutoff = started - timedelta(hours=config.max_age_hours)
@@ -589,8 +591,12 @@ def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None
             continue
         if evidence.body.get("status") == "uncollectable":
             continue
+        # The run's own clock when it recorded one: the ledger stamps append
+        # time, which differs from the observation time whenever a run is given
+        # an explicit `now` (a replay, a backfill, a test). Records sealed before
+        # this field existed fall back to the append time.
         try:
-            return parse_utc(entry.at)
+            return parse_utc(str(evidence.body.get("observed_at") or entry.at))
         except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
             return None
     return None
