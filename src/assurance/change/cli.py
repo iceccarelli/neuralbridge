@@ -61,7 +61,7 @@ from assurance.change.service import (
     reverify,
     waive_reverification,
 )
-from assurance.change.store import CASE_KINDS, CaseStore, ChainBrokenError
+from assurance.change.store import CASE_KINDS, CaseConflictError, CaseStore, ChainBrokenError
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
@@ -401,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         # queue gets an empty queue and a non-zero exit, never a stale one.
         print(f"THE LEDGER CHAIN DOES NOT VERIFY — {exc}", file=sys.stderr)
         return 2
-    except CaseTransitionError as exc:
+    except (CaseTransitionError, CaseConflictError) as exc:
         print(f"finding: {exc}", file=sys.stderr)
         return 1
     except FileNotFoundError as exc:

@@ -19,14 +19,18 @@ deciding may not.
 
 from __future__ import annotations
 
+import random
 import re
+import time
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from typing import TypeVar
 
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
@@ -43,7 +47,9 @@ from assurance.machinery.staleness import (
 )
 
 from .model import CaseStatus, ChangeAssuranceCase, TriggerType
-from .store import CaseStore
+from .store import CaseConflictError, CaseStore
+
+T = TypeVar("T")
 
 __all__ = [
     "INCOMPLETE_COLLECTION_MARK",
@@ -285,8 +291,18 @@ def _merge(
         # Links the case earned itself (a prior closure it follows) survive.
         kept = tuple(r for r in existing.linked_evidence
                      if r.get("note", "").startswith("prior closure by"))
-        return replace(base, human_decisions_required=fresh_decisions,
-                       linked_evidence=_links_union(new.linked_evidence, kept))
+        # The facts are replaced; the work is not. A later look may name more, but
+        # it never names less than what is already outstanding: dropping a
+        # re-verification, an action or a question takes a re-verification or a
+        # person's recorded waiver or answer, not a repeat observation.
+        return replace(
+            base,
+            required_reverifications=_union(existing.required_reverifications,
+                                            new.required_reverifications),
+            required_actions=_union(existing.required_actions, new.required_actions),
+            human_decisions_required=_union(existing.human_decisions_required,
+                                            fresh_decisions),
+            linked_evidence=_links_union(new.linked_evidence, kept))
 
     items = list(existing.changed_items)
     known = {_key(i) for i in items}
@@ -449,7 +465,40 @@ def _grow_deferred(
                         detail="deferred case's exposure grew: " + ", ".join(extra))
 
 
+#: How many times a machine-driven step re-reads and recomputes after losing a
+#: race to another writer before it gives up and reports the conflict.
+_CONFLICT_RETRIES = 8
+
+
+def _retrying(step: Callable[[], T]) -> T:
+    """Run a machine-driven read-decide-append, redoing all of it when it lost a race.
+
+    ``step`` re-reads the case on every call, so a retry judges the new state: a
+    second observer of a recurrence finds the case already reopened and writes
+    nothing; a repeat look finds the human's decision and leaves it alone. Human
+    steps are *not* retried here — a person's decision was made on what they
+    saw, so they are told (409) and decide again.
+    """
+    for attempt in range(_CONFLICT_RETRIES):
+        try:
+            return step()
+        except CaseConflictError:
+            if attempt == _CONFLICT_RETRIES - 1:
+                raise
+            time.sleep(random.random() * 0.01 * (attempt + 1))  # noqa: S311 - jitter
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _open_or_update(
+    store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
+    actions_by_fid: Mapping[str, Sequence[str]] | None = None,
+) -> ChangeAssuranceCase:
+    """:func:`_open_or_update_once`, redone from a fresh read if another writer won."""
+    return _retrying(lambda: _open_or_update_once(
+        store, new, actor=actor, detail=detail, actions_by_fid=actions_by_fid))
+
+
+def _open_or_update_once(
     store: CaseStore, new: ChangeAssuranceCase, *, actor: Actor, detail: str,
     actions_by_fid: Mapping[str, Sequence[str]] | None = None,
 ) -> ChangeAssuranceCase:
@@ -699,21 +748,24 @@ def note_advisory_withdrawn(
     decision on the open case — it does not close, reject or advance anything.
     A case already settled is left alone; no case at all returns ``None``.
     """
-    case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
-    if case is None or case.status.is_settled:
-        return case
-    question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "
-                "Decide whether the work this case drove still stands, or reject "
-                "the case as raised on a retracted advisory.")
-    if question in case.human_decisions_required or any(
-            r.get("decision") == question for r in case.resolved_decisions):
-        return case
-    status = CaseStatus.AWAITING_ACTION if case.status is CaseStatus.READY_TO_CLOSE \
-        else case.status
-    return store.update(
-        replace(case, status=status,
-                human_decisions_required=(*case.human_decisions_required, question)),
-        actor=actor, detail=f"advisory {advisory_id} withdrawn by the supplier")
+    def step() -> ChangeAssuranceCase | None:
+        case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
+        if case is None or case.status.is_settled:
+            return case
+        question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "
+                    "Decide whether the work this case drove still stands, or reject "
+                    "the case as raised on a retracted advisory.")
+        if question in case.human_decisions_required or any(
+                r.get("decision") == question for r in case.resolved_decisions):
+            return case
+        status = CaseStatus.AWAITING_ACTION if case.status is CaseStatus.READY_TO_CLOSE \
+            else case.status
+        return store.update(
+            replace(case, status=status,
+                    human_decisions_required=(*case.human_decisions_required, question)),
+            actor=actor, detail=f"advisory {advisory_id} withdrawn by the supplier")
+
+    return _retrying(step)
 
 
 # ---------------------------------------------------------------------------
@@ -871,6 +923,19 @@ def advance(store: CaseStore, case_id: str, *, actor: Actor) -> ChangeAssuranceC
     return store.transition(updated, actor=actor, detail=f"advanced to {nxt.value}")
 
 
+def _validated_or_better(tier: str) -> bool:
+    """Is a verification's recorded tier at least ``validated``?
+
+    The ladder is :class:`~assurance.core.tiers.AssuranceTier`. A tier name it
+    does not contain (empty, misspelt, from a newer build) is not known to be
+    enough, so it is not.
+    """
+    try:
+        return AssuranceTier(tier).rank >= AssuranceTier.VALIDATED.rank
+    except ValueError:
+        return False
+
+
 def reverify(
     store: CaseStore, case_id: str,
     manifest: SafetyManifest, verifications: list[VerificationRecord],
@@ -891,11 +956,16 @@ def reverify(
       at or after both the change that triggered the case and the manifest it
       is checked against — a bundle that already existed when the change was
       found cannot be evidence about it;
-    * that bundle passed every check the function declares; and
+    * that bundle passed every check the function declares (a newer bundle for one
+      check plus an older one for another is not enough);
+    * that bundle's tier is at least ``validated``: evidence from a simulation or
+      a datasheet (``community``, ``profile``) is about a model or a figure and
+      never clears an entry, only a person's waiver does; and
     * :func:`assess_coverage` reads the function ``current``.
 
     An entry that fails any of them stays required, with the reason in
-    ``evidence_current``. A function the manifest no longer declares cannot be
+    ``evidence_current`` (``below_validated:<tier>`` for weak evidence, which the
+    case also records in ``checks_skipped``). A function the manifest no longer declares cannot be
     shown current and stays required too.
     """
     case = _require(store, case_id)
@@ -961,6 +1031,7 @@ def reverify(
 
     coverage = assess_coverage(sealed, verifications, interventions)
     cleared: set[str] = set()
+    weak: list[str] = []
     evidence_current = dict(case.evidence_current)
     for entry in mine:
         fid = _entry_function(case, entry)
@@ -972,10 +1043,24 @@ def reverify(
             evidence_current[entry] = fc.coverage.value
         elif not fn.verified_by or not set(fn.verified_by) <= set(record.checks_verified):
             evidence_current[entry] = "no_new_evidence"
+        elif not _validated_or_better(record.tier):
+            # Current on a simulated trace or a datasheet figure is a statement
+            # about a model or a number, not about the machine. It does not clear
+            # the entry; only a person can accept it, by waiving it.
+            evidence_current[entry] = f"below_validated:{record.tier or 'unknown'}"
+            weak.append(entry)
         else:
             evidence_current[entry] = Coverage.CURRENT.value
             cleared.add(entry)
     still_required = tuple(e for e in case.required_reverifications if e not in cleared)
+    skipped = case.checks_skipped
+    if weak:
+        skipped = _union(skipped, [
+            f"{', '.join(weak)}: the re-verification evidence "
+            f"{record.content_hash[:12]} is at tier {record.tier or 'unknown'!r}, below "
+            "'validated' (it describes a model or a figure, not the physical machine), "
+            "so it did not clear the entry. Re-verify on the machine, or have a person "
+            "waive it."])
 
     if still_required:
         nxt = CaseStatus.AWAITING_REVERIFICATION
@@ -991,12 +1076,15 @@ def reverify(
         required_reverifications=still_required,
         required_actions=() if not still_required else case.required_actions,
         reverified_at=format_utc(utc_now()), linked_evidence=linked,
+        checks_skipped=skipped,
     )
     return store.reverify(
         updated, actor=actor,
         detail=f"re-verified {key} against {verification_content_hash[:12]}; "
               f"{len(still_required)} entr{'y' if len(still_required) == 1 else 'ies'} "
-              "still not current")
+              "still not current"
+              + (f" ({len(weak)} on evidence below 'validated': tier "
+                 f"{record.tier or 'unknown'!r})" if weak else ""))
 
 
 def waive_reverification(
@@ -1010,7 +1098,7 @@ def waive_reverification(
     name, and the entry's ``evidence_current`` reads ``waived`` rather than
     ``current``.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "waiving a re-verification")
     if not reason.strip():
         raise CaseTransitionError(
@@ -1042,7 +1130,7 @@ def resolve_decision(
     the same advisory never asks it again. Without this, a case that names a
     human decision could only ever be rejected or deferred.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "resolving a human decision")
     if not resolution.strip():
         raise CaseTransitionError("a resolution needs the answer the person gave.")
@@ -1071,7 +1159,7 @@ def resume(store: CaseStore, case_id: str, *, reason: str, actor: Actor) -> Chan
     ``decide`` is a fresh one. The resumed case is ``IN_REVIEW`` and must be
     advanced again, so nobody inherits a stop they did not confirm.
     """
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, "resuming a deferred case")
     if not reason.strip():
         raise CaseTransitionError("resuming a case needs a reason.")
@@ -1107,7 +1195,7 @@ def decide(
     if disposition not in ("closed", "rejected", "deferred"):
         raise CaseTransitionError(
             f"disposition must be closed, rejected or deferred, not {disposition!r}.")
-    case = _require(store, case_id)
+    case = _require(store, case_id, human=True)
     _require_human(actor, f"{disposition} a case")
     if not reason.strip():
         raise CaseTransitionError(
@@ -1138,10 +1226,13 @@ def decide(
     return store.decide(updated, actor=actor, detail=f"{disposition}: {reason}")
 
 
-def _require(store: CaseStore, case_id: str) -> ChangeAssuranceCase:
+def _require(store: CaseStore, case_id: str, *, human: bool = False) -> ChangeAssuranceCase:
     # First: on a ledger that does not verify a case whose only entry was edited
     # reads as "no such case", which is the wrong thing to say about it.
-    store.require_intact()
+    # ``human``: a person is about to decide something about this case, so the
+    # whole chain is walked rather than trusting the cached check (see
+    # CaseStore.require_intact).
+    store.require_intact(full=human)
     case = store.get(case_id)
     if case is None:
         raise CaseNotFoundError(case_id)

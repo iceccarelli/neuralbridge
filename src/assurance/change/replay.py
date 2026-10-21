@@ -225,18 +225,14 @@ def _check_step(
     return out
 
 
-def _pre_work(case: ChangeAssuranceCase) -> bool:
-    """Nothing re-verified yet, so a fresh reading may replace the work lists."""
-    return case.status in (S.OPEN, S.IN_REVIEW) and not case.reverified_at
-
-
 def _check_work_lists(
     where: str, kind: str, prev: ChangeAssuranceCase, snap: ChangeAssuranceCase,
 ) -> list[str]:
     """Required work may leave a case only on an entry that has the standing to
     remove it: a ``reverification`` (re-verifications and actions), a person's
-    resolution or waiver (named in ``resolved_decisions``), a fresh reading
-    before any work started, or a reopening. A plain transition that quietly
+    resolution or waiver (named in ``resolved_decisions``), or a reopening. A
+    repeat observation is not one of them, even before any work has started: it
+    may name more work, never less. A plain transition or update that quietly
     empties the lists is how a case would be walked to ``ready_to_close``
     without anyone doing anything."""
     out: list[str] = []
@@ -245,10 +241,9 @@ def _check_work_lists(
     short = kind.rsplit(".", 1)[-1]
     resolved_now = {r.get("decision") for r in snap.resolved_decisions}
     grew = len(snap.resolved_decisions) > len(prev.resolved_decisions)
-    free = kind == UPDATED_KIND and _pre_work(prev)
 
     gone_rev = set(prev.required_reverifications) - set(snap.required_reverifications)
-    if gone_rev and not free and kind != REVERIFICATION_KIND:
+    if gone_rev and kind != REVERIFICATION_KIND:
         unwaived = [e for e in gone_rev
                     if not (grew and f"close without re-verification evidence: {e}"
                             in resolved_now)]
@@ -257,11 +252,11 @@ def _check_work_lists(
                        f"removed by a {short} entry, which cannot remove it (only a "
                        "re-verification, or a person's recorded waiver, can).")
     gone_act = set(prev.required_actions) - set(snap.required_actions)
-    if gone_act and not free and kind != REVERIFICATION_KIND:
+    if gone_act and kind != REVERIFICATION_KIND:
         out.append(f"{where}: {len(gone_act)} required action(s) were removed by a "
                    f"{short} entry, which cannot remove them.")
     gone_dec = set(prev.human_decisions_required) - set(snap.human_decisions_required)
-    if gone_dec and not free:
+    if gone_dec:
         unresolved = [d for d in gone_dec if d not in resolved_now]
         if unresolved:
             out.append(f"{where}: {len(unresolved)} human decision(s) were removed "
