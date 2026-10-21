@@ -31,12 +31,15 @@ verify it against code and tests — it has been stale before.
 
 ## Definition of done
 ```bash
-python -m pytest tests/ -q --no-cov     # with the Postgres env below for the full 843
+python -m pytest tests/ -q --no-cov     # run with the Postgres env below so nothing skips
 ruff check src/ tests/
 npx tsc --noEmit && npm run build        # Next.js site
 ```
 Postgres-backed tests (`/ai` control plane) skip honestly without a server:
 `NEURALBRIDGE_AI_PG_{HOST,PORT,USER,PASSWORD,TEST_DATABASE}` (see `.github/workflows/ci.yml`).
+A green run means **0 skipped**: a skip is a gate that did not run. CI tools are
+unpinned unless `requirements/dev.txt` bounds them; run the latest ruff too.
+Check the PR's CI before saying it is merged or green — a merge is not a green build.
 Use `python -m pytest`, not the bare `pytest` entry point, which may bind a
 different interpreter.
 

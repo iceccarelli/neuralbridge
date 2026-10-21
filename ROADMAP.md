@@ -49,10 +49,12 @@ toil that recurs gets automated; changes are small and reversible.
       Opt-in `assurance watch push` + hosted ingestion so a paying customer sees
       last successful observation, failed runs and stale machines in their
       workspace. The kit and `watch run` stay offline.
-- [ ] **Entitlement reconciliation** (moves: revenue protected). Scheduled
-      comparison of Stripe subscription state with the account store; drift
-      count as the SLI; safe correction. Verified against a fake transport only
-      until run with a Stripe test-mode key.
+- [x] **Entitlement reconciliation** (moves: revenue protected).
+      `python -m assurance.billing.reconcile` compares Stripe subscription state
+      with the account store, reports drift by category (the drift count is the
+      SLI), and with `--apply` corrects existing accounts only. **Verified
+      against a fake Stripe transport only; it has never run against real
+      Stripe. Run it with a test-mode key first.** Never creates accounts or keys.
 - [ ] **Staging deployment on test-mode Stripe** (blocker; needs founder
       credentials). Real webhooks, real restore rehearsal, a real
       `scripts/e2e-assurance.sh` against a hosted URL. Checklist:
