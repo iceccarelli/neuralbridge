@@ -99,23 +99,6 @@ def webhook_configured() -> bool:
     return bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))
 
 
-def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
-    response = httpx.post(
-        f"{API}{path}",
-        # A mapping: httpx treats a list of tuples as raw request content and
-        # fails to send it (found when the metering calls were first tested
-        # through a real httpx transport). Our form keys are unique.
-        data=dict(form),
-        auth=(_secret_key(), ""),
-        timeout=20.0,
-        headers={"Stripe-Version": "2024-06-20"},
-    )
-    if response.status_code >= 400:
-        detail = response.json().get("error", {}).get("message", response.text)
-        raise StripeError(f"Stripe {response.status_code}: {detail}")
-    return response.json()
-
-
 _SECRET_LOOKING = re.compile(r"\b(?:sk|rk|pk|whsec)_[A-Za-z0-9_*]+")
 _STRIPE_ID = re.compile(r"[A-Za-z0-9_]{1,255}")
 
@@ -133,7 +116,7 @@ def _scrub(text: str) -> str:
 
 
 def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, Any]:
-    """A read-only Stripe call. Same auth, version and timeout as :func:`_post`."""
+    """A read-only Stripe call. Same auth, version, timeout and errors as :func:`_post`."""
     try:
         response = httpx.get(
             f"{API}{path}",
@@ -145,6 +128,35 @@ def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, An
     except httpx.HTTPError as exc:
         # The class name only: a transport error's text can carry the URL.
         raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    return _unwrap(response)
+
+
+def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
+    """A write call (Checkout, portal).
+
+    A transport error and Stripe's 4xx text are handled exactly as in
+    :func:`_get`: a scrubbed :class:`StripeError`, never a raw ``httpx``
+    exception (which the routes would turn into a 500).
+    """
+    try:
+        response = httpx.post(
+            f"{API}{path}",
+            # A mapping: httpx treats a list of tuples as raw request content and
+            # fails to send it (found when the metering calls were first tested
+            # through a real httpx transport). Our form keys are unique.
+            data=dict(form),
+            auth=(_secret_key(), ""),
+            timeout=20.0,
+            headers={"Stripe-Version": "2024-06-20"},
+        )
+    except httpx.HTTPError as exc:
+        # The class name only: a transport error's text can carry the URL.
+        raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    return _unwrap(response)
+
+
+def _unwrap(response: httpx.Response) -> dict[str, Any]:
+    """The JSON object of a successful reply, or a scrubbed :class:`StripeError`."""
     try:
         body = response.json()
     except ValueError:
