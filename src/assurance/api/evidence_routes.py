@@ -11,8 +11,8 @@ offline CLI uses:
 * a **ledger export** (``GET /v1/cases/{id}/export``, ``assurance evidence
   export``) — :func:`assurance.evidence.verify_export.verify_export`;
 * a **machine verification bundle** — :func:`assurance.machine.bundle.
-  verify_bundle_data`, plus the checks on the parts of the file the seal does
-  not cover;
+  check_bundle_data` (the same rules as the offline CLI, including the parts of
+  the file the seal does not cover);
 * a **signed head attestation log** — signatures are checked only against a
   public key the caller supplies, because the file carries a key *fingerprint*,
   not the key, and a key delivered with the signature proves nothing.
@@ -67,8 +67,7 @@ from assurance.billing.accounts import AccountStore, Principal
 from assurance.core.evidence import Evidence
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.verify_export import verify_export
-from assurance.machine.bundle import BUNDLE_SCHEMA, verify_bundle_data
-from assurance.machine.envelope import SafetyEnvelope
+from assurance.machine.bundle import BUNDLE_SCHEMA, check_bundle_data
 
 __all__ = ["evidence_router", "analyse"]
 
@@ -77,6 +76,15 @@ evidence_router = APIRouter(prefix="/v1/evidence", tags=["free"])
 #: Nesting deeper than this is not an evidence file. It also keeps every later
 #: recursive step (canonical JSON for hashing) far from the interpreter's limit.
 MAX_DEPTH = 48
+
+#: Most JSON containers (objects and arrays) a file may hold, counted before it is
+#: parsed. The parse and the depth walk cost a Python call per container, so a
+#: 4 MiB file of ``{},`` or of small nested lists is seconds of GIL on the single
+#: worker. A real export has about 7 containers per 1,000 bytes (about 30,000 in a
+#: full 4 MiB body); this leaves it several times that. The count is of ``{`` and
+#: ``[`` characters, so braces inside strings count too: it can over-refuse, never
+#: under-refuse.
+MAX_CONTAINERS = 200_000
 
 #: A ledger export with more entries than this is refused by size, not walked. A
 #: genuine 4 MiB export holds a few thousand; this is generous.
@@ -203,6 +211,7 @@ def _result(
     assumptions: list[str] | None = None, not_checked: list[str] | None = None,
     tier: dict[str, Any] | None = None, head: dict[str, Any] | None = None,
     summary: str = "", signatures_verified: bool | None = None,
+    level: str | None = None,
 ) -> dict[str, Any]:
     return _clip({
         "kind": kind,
@@ -211,6 +220,9 @@ def _result(
         "ok": outcome == "no_inconsistency_found",
         # Only an attestation log has signatures; null for every other kind.
         "signatures_verified": signatures_verified,
+        # Machine bundles only: rejected | integrity_only | reproduced. This route
+        # never receives the originals, so a bundle here is never "reproduced".
+        "level": level,
         "scope": scope,
         "entries": entries,
         "verified": verified or [],
@@ -273,68 +285,21 @@ def _ledger(doc: dict[str, Any]) -> dict[str, Any]:
 # machine verification bundle
 # ---------------------------------------------------------------------------
 def _machine(doc: dict[str, Any]) -> dict[str, Any]:
-    ok, notes = verify_bundle_data(doc)
-    problems = [n for n in notes if not n.startswith("NOT CHECKED:")]
-    verified: list[str] = []
+    # The one implementation of the rules (seal, coherence, the envelope's tier
+    # ceiling, the engine's set of checks, the unsealed copies) is the library's;
+    # the same call is behind `assurance machine check` and /v1/machine/bundle/check.
+    check = check_bundle_data(doc)
+    problems = list(check.problems)
+    # Only what a check actually established, and only when nothing was found.
+    verified = list(check.verified) if check.ok else []
     tier: dict[str, Any] | None = None
     body: dict[str, Any] = {}
     try:
         body = Evidence.from_dict(doc["evidence"]).body
-    except Exception:  # noqa: BLE001 - verify_bundle_data already reported it
+    except Exception:  # noqa: BLE001 - check_bundle_data already reported it
         body = {}
-
-    if not problems:
-        # Beyond the seal: `envelope` and `result` sit outside the sealed
-        # evidence, so a reader looking at them is looking at unsealed text.
-        copy = doc.get("envelope")
-        if isinstance(copy, dict):
-            try:
-                if SafetyEnvelope.from_dict(copy).content_hash() != body.get("envelope_hash"):
-                    problems.append(
-                        "the envelope copy in the bundle is not the envelope the "
-                        "sealed evidence names — the readable copy was changed")
-                else:
-                    verified.append(
-                        "the envelope copy in the bundle hashes to the envelope "
-                        "hash sealed inside the evidence")
-                    envelope = SafetyEnvelope.from_dict(copy)
-                    try:
-                        recorded_tier = AssuranceTier(str(body.get("tier")))
-                    except ValueError:
-                        recorded_tier = None
-                    if recorded_tier is not None \
-                            and recorded_tier.rank > envelope.tier_ceiling.rank:
-                        problems.append(
-                            f"the bundle records tier {recorded_tier.value!r}, above the "
-                            f"ceiling {envelope.tier_ceiling.value!r} that its own "
-                            "envelope's figures allow (the stop and sensing figures "
-                            "were not measured on this machine)")
-            except Exception:  # noqa: BLE001 - report, never crash on input
-                problems.append("the envelope copy in the bundle cannot be read")
-        result = doc.get("result")
-        if isinstance(result, dict):
-            for key in ("verdict", "tier", "provenance"):
-                if key in result and result[key] != body.get(key):
-                    problems.append(
-                        f"the bundle's unsealed result block says {key} "
-                        f"{result[key]!r}; the sealed evidence says "
-                        f"{body.get(key)!r}")
-                    break
-            else:
-                verified.append("the unsealed result block agrees with the sealed "
-                                "verdict, tier and provenance")
-
-    if not problems:
-        checks = body.get("checks") or []
-        violated = sum(1 for c in checks if isinstance(c, dict) and c.get("outcome") == "violated")
-        unchecked = sum(1 for c in checks if isinstance(c, dict) and c.get("outcome") == "unchecked")
-        verified.insert(0, "the sealed evidence object still hashes to the hash it carries")
-        verified.insert(1, f"the recorded verdict {body.get('verdict')!r} agrees with the "
-                           f"bundle's own {len(checks)} checks ({violated} violated, "
-                           f"{unchecked} unchecked)")
-        verified.insert(2, "the recorded tier is one the engine can produce from the "
-                           "recorded provenance (not 'certified', not above that "
-                           "provenance's ceiling, not above the envelope's own)")
+    if not isinstance(body, dict):
+        body = {}
 
     try:
         recorded = AssuranceTier(str(body.get("tier")))
@@ -349,9 +314,6 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         tier = {"recorded_tier": body.get("tier"),
                 "as_recorded_may_claim_physical_behaviour": None,
                 "evidence_required": ""}
-        if not problems:
-            problems.append(f"the recorded tier {body.get('tier')!r} is not a tier "
-                            "this system defines")
     tier.update({
         "recorded_verdict": body.get("verdict"),
         "product": body.get("product"),
@@ -374,22 +336,29 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         "it is the latest verification of that machine, or that the software "
         "running on the machine today is the software it describes.",
     ]
+    # What the checker itself said it did not do, beyond the fixed list above (the
+    # missing-originals note repeats the second item there).
+    not_checked.extend(
+        n.removeprefix("NOT CHECKED: ") for n in check.limitations
+        if "original envelope and trace were not supplied" not in n)
     assumptions = [
         "The actor named in the bundle is whoever the writer declared. Nothing "
         "here checks who a person is.",
         _SERVICE_ASSUMPTION,
     ]
-    ok_final = not problems
+    ok_final = check.ok
     summary = (
-        "The sealed record is internally consistent. That does not show the machine "
-        "behaved as recorded; read 'Not checked'." if ok_final else
+        "The sealed record is internally consistent. It was NOT REPRODUCED from the "
+        "original envelope and trace, so that does not show the machine behaved as "
+        "recorded; read 'Not checked'." if ok_final else
         f"{len(problems)} problem(s) found: this bundle is not what the verifier "
         "sealed, or it was edited after sealing.")
     return _result(
         "machine_bundle", "no_inconsistency_found" if ok_final else "inconsistent",
         scope=f"{body.get('product', '?')} {body.get('product_version', '')}".strip(),
         entries=1, verified=verified if ok_final else [], problems=problems,
-        assumptions=assumptions, not_checked=not_checked, tier=tier, summary=summary)
+        assumptions=assumptions, not_checked=not_checked, tier=tier, summary=summary,
+        level=check.level)
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +541,13 @@ def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         return _unreadable("the file is not UTF-8 text")
+    containers = text.count("{") + text.count("[")
+    if containers > MAX_CONTAINERS:
+        return _unreadable(
+            f"the file holds about {containers:,} JSON objects and lists, more than the "
+            f"{MAX_CONTAINERS:,} this page reads (a genuine export of the allowed size "
+            "holds a fraction of that); nothing was parsed. Verify a file this "
+            "unusual offline: `python -m assurance evidence verify <file>`.")
     try:
         try:
             doc: Any = _parse(text)
