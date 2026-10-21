@@ -98,7 +98,7 @@ def plant(tmp_path):
     p = Plant(tmp_path / "plant")
     (p.root / "envelope.json").write_text(json.dumps(envelope_dict()), encoding="utf-8")
     (p.root / "trace.json").write_text(
-        json.dumps(trace_dict(datetime(2031, 1, 1, tzinfo=UTC))), encoding="utf-8")
+        json.dumps(trace_dict(datetime.now(UTC))), encoding="utf-8")   # not future-dated: the engine refuses that
     return p
 
 

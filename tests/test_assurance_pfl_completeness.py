@@ -56,7 +56,7 @@ def run(*samples):
 
 class TestContactThatWasNotEvaluatedIsNotAPass:
     def test_every_contact_evaluated_is_a_pass(self):
-        r = verify(envelope(), run(contact(0), contact(1)), limits=TABLE)
+        r = verify(envelope(), run(*[contact(i) for i in range(20)]), limits=TABLE)
         assert r.check("pfl_contact").outcome is CheckOutcome.VERIFIED
         assert r.verdict is Verdict.PASS
 

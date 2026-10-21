@@ -35,7 +35,7 @@ def envelope(stop_date="2026-03-11", sensing_date=""):
 
 def run():
     samples = tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
-                           mode=OperatingMode.SSM, separation=3000.0) for i in range(4))
+                           mode=OperatingMode.SSM, separation=3000.0) for i in range(20))
     return Trace(trace_id="R", provenance=Provenance.FIELD, source_system="s",
                  started_at=datetime(2026, 9, 12, 4, 31, tzinfo=UTC),
                  sample_rate_hz=50.0, samples=samples)

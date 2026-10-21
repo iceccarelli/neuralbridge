@@ -107,8 +107,13 @@ class TestSeparation:
         assert b.human_speed_source == "sensed"
         assert b.human_travel_mm == pytest.approx(800.0 * 0.35)
 
-    def test_the_declared_speed_is_labelled_as_declared(self):
+    def test_an_undeclared_speed_is_labelled_as_default(self):
         b = separation_required(envelope(), robot_speed_mm_s=500.0)
+        assert b.human_speed_source == "default"
+
+    def test_the_declared_speed_is_labelled_as_declared(self):
+        b = separation_required(envelope(human_approach_speed_mm_s=1600.0),
+                                robot_speed_mm_s=500.0)
         assert b.human_speed_source == "declared"
 
     def test_stopping_distance_below_the_measured_point_is_used_unchanged(self):
@@ -231,8 +236,11 @@ class TestChecks:
         r = verify(envelope(), trace(
             [sample(i, separation=None) for i in range(5)]
             + [sample(5 + i, separation=2000.0) for i in range(5)]))
-        assert r.check("ssm_separation").samples_examined == 5
-        assert any("reported no detected person" in c for c in r.checks_skipped)
+        c = r.check("ssm_separation")
+        assert c.samples_examined == 5
+        # A missing separation is not 'nobody there': the check cannot be verified.
+        assert c.outcome is CheckOutcome.UNCHECKED
+        assert any("no separation measurement" in x for x in r.checks_skipped)
 
     def test_a_trace_where_nobody_was_ever_detected_is_unchecked_not_passed(self):
         r = verify(envelope(), trace([sample(i, separation=None) for i in range(5)]))
@@ -399,7 +407,7 @@ class TestTrace:
 
 class TestBundle:
     def test_a_bundle_is_sealed_and_verifies(self, tmp_path):
-        b = build_bundle(envelope(), trace([sample(i) for i in range(5)]), actor=ACTOR)
+        b = build_bundle(envelope(), trace([sample(i) for i in range(20)]), actor=ACTOR)
         assert b.evidence.verify()
         assert b.verdict is Verdict.PASS
         assert b.evidence.validation_state is ValidationState.VERIFIED
@@ -583,7 +591,7 @@ class TestSeparationEndpoint:
 
 class TestVerifyEndpoint:
     def _payload(self):
-        env, t = envelope(), trace([sample(i) for i in range(5)])
+        env, t = envelope(), trace([sample(i) for i in range(20)])
         return {"envelope": env.to_dict(), "trace": t.hashable_payload(),
                 "actor": "v.grimaldi"}
 

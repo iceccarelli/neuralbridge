@@ -73,9 +73,9 @@ def reference_mm(*, vh_mm_s, vr_mm_s, tr_s, ts_s, ss_mm, vm_mm_s, c_mm, zd_mm, z
 # -- agreement with the independent calculation ----------------------------
 
 GRID = list(itertools.product(
-    (0.0, 0.05, 0.1, 0.5),           # Tr
-    (0.0, 0.25, 1.0),                # Ts
-    (0.0, 120.0, 900.0),             # Ss at vm
+    (0.001, 0.05, 0.1, 0.5),         # Tr (zero is refused by the envelope)
+    (0.001, 0.25, 1.0),              # Ts
+    (1.0, 120.0, 900.0),             # Ss at vm
     (250.0, 500.0, 1500.0),          # vm
     (0.0, 300.0, 750.0, 2500.0),     # vr
     (800.0, 1600.0, 2000.0),         # vh
@@ -187,10 +187,10 @@ def total(vr=300.0, hs=None, **over):
 
 class TestMonotonicity:
     @pytest.mark.parametrize("field,values", [
-        ("tr", [0.0, 0.05, 0.1, 0.3, 1.0]),
-        ("ts", [0.0, 0.1, 0.25, 0.5, 2.0]),
-        ("ss", [0.0, 50.0, 120.0, 500.0]),
-        ("c", [0.0, 100.0, 850.0, 2000.0]),
+        ("tr", [0.001, 0.05, 0.1, 0.3, 1.0]),
+        ("ts", [0.001, 0.1, 0.25, 0.5, 2.0]),
+        ("ss", [1.0, 50.0, 120.0, 500.0]),
+        ("c", [1.0, 100.0, 850.0, 2000.0]),
         ("zd", [0.0, 10.0, 100.0, 400.0]),
         ("zr", [0.0, 10.0, 50.0, 400.0]),
         ("vh", [100.0, 800.0, 1600.0, 2000.0]),
@@ -249,7 +249,7 @@ class TestMonotonicity:
 
 # -- the boundary ----------------------------------------------------------
 
-def one_sample_run(envelope, separation, speed=300.0, n=3):
+def one_sample_run(envelope, separation, speed=300.0, n=20):
     samples = tuple(
         Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=speed,
                mode=OperatingMode.SSM, separation=separation)
@@ -385,12 +385,11 @@ class TestWeakestInputDecidesTheTier:
         e = SafetyEnvelope.from_dict({**env().to_dict(),
                                       "max_tcp_speed_mm_s": {"ssm": 5000.0, "pfl": 250.0},
                                       "pfl_limits_hash": table.content_hash()})
-        samples = (
-            Sample(t=0.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=100.0, mode=OperatingMode.PFL,
-                   contact_force=50.0, contact_area=2.0, body_region="hand"),
-            Sample(t=0.02, tcp=(0.0, 0.0, 1000.0), tcp_speed=100.0,
+        samples = tuple(
+            Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=100.0,
                    mode=OperatingMode.PFL, contact_force=50.0, contact_area=2.0,
-                   body_region="hand"),
+                   body_region="hand")
+            for i in range(20)
         )
         run = Trace(trace_id="R", provenance=Provenance.FIELD, source_system="s",
                     started_at=datetime(2026, 9, 12, tzinfo=UTC), sample_rate_hz=50.0,
