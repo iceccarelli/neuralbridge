@@ -45,10 +45,15 @@ toil that recurs gets automated; changes are small and reversible.
       backup/verify tool
 
 ## Next — on the money path, in this order
-- [ ] **Watch reporting** (moves: time to first useful result; renewal risk).
-      Opt-in `assurance watch push` + hosted ingestion so a paying customer sees
-      last successful observation, failed runs and stale machines in their
-      workspace. The kit and `watch run` stay offline.
+- [x] **Watch reporting** (moves: time to first useful result; renewal risk).
+      Opt-in `assurance watch push` + `POST /v1/watch/report` +
+      `GET /v1/fleet/observations`: a paying customer sees, per machine, the last
+      successful observation, failed or incomplete attempts and staleness in
+      their workspace. The kit and `watch run` stay offline (a CI job proves it
+      from a bare checkout). **What it is not:** the report is client-declared
+      (cadence and `observed_at` come from the customer's own Watch) and the
+      workspace says so; it is not independent observation. Not yet covered:
+      advisory findings and Art. 14 drafts in the report, an MCP tool.
 - [x] **Entitlement reconciliation** (moves: revenue protected).
       `python -m assurance.billing.reconcile` compares Stripe subscription state
       with the account store, reports drift by category (the drift count is the
