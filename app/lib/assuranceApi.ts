@@ -69,9 +69,20 @@ export type CaseRow = {
 
 export type CaseQueue = {
   cases: CaseRow[];
-  summary: { open: number; safety_relevant: number; awaiting_reverification: number; ready_to_close: number };
+  summary: {
+    open: number;
+    safety_relevant: number;
+    awaiting_reverification: number;
+    ready_to_close: number;
+    // Counted apart from `open`: a deferral is "not today", not "settled". `degraded` is an
+    // open case that names no machine (for example one raised from an incomplete collection).
+    deferred: number;
+    degraded: number;
+  };
 };
 
+// The case's own history carries what happened and when. WHO is not a field of
+// it: the actor is sealed on the ledger entry of each event (see ExportEntry).
 export type HistoryItem = { kind: string; at: string; detail: string };
 
 export type CaseDetail = {
@@ -94,24 +105,167 @@ export type CaseDetail = {
   decision_by: string;
   checks_skipped: string[];
   history: HistoryItem[];
+  opened_at?: string;
+  updated_at?: string;
+  resolved_decisions?: { decision?: string; resolution?: string; by?: string; at?: string }[];
 };
 
-export type ApiOutcome<T> =
-  | { kind: 'ok'; data: T }
-  | { kind: 'unconfigured' }
-  | { kind: 'unauthorized'; message: string }
-  | { kind: 'upgrade'; tier: string; remedy: string }
-  | { kind: 'conflict'; message: string }
-  | { kind: 'error'; status: number; message: string };
+// GET /v1/change/cases/{id}/replay — the case rebuilt from the ledger alone. ok=false is HTTP 200.
+export type Replay = { case_id: string; ok: boolean; entries: number; violations: string[]; case: unknown };
 
-function messageOf(body: unknown, fallback: string): string {
-  const detail = (body as { detail?: unknown } | null)?.detail;
-  if (typeof detail === 'string') return detail;
-  if (detail && typeof detail === 'object') {
-    const d = detail as { detail?: string; remedy?: string; error?: string };
-    return d.detail || d.remedy || d.error || fallback;
+// POST /v1/change/assess/intervention
+export type AssessInterventionResult = {
+  opened: boolean;
+  case: { case_id: string; status: string; history?: HistoryItem[] } | null;
+  intervention_id: string;
+};
+
+// GET /v1/cases/{id}/export — the evidence bundle. `actor` on an entry is the
+// person/automation the account asserted for that event.
+export type ExportEntry = {
+  seq: number;
+  at: string;
+  kind: string;
+  subject: string;
+  content_hash: string;
+  actor: unknown;
+};
+
+export type ExportBundle = {
+  exported_at: string;
+  subject: string;
+  chain_verified: boolean;
+  entries: ExportEntry[];
+};
+
+// GET /v1/me
+export type Me = {
+  authenticated: boolean;
+  tier: string;
+  plan: {
+    tier: string;
+    name: string;
+    blurb: string;
+    price: string;
+    purchasable: boolean;
+    includes: string[];
+    limits: Record<string, number | boolean | null>;
+  };
+  usage_today: Record<string, number>;
+  account?: { id: string; company: string; email: string; status: string };
+  keys?: { prefix?: string; label?: string; created_at?: string; revoked_at?: string | null; [k: string]: unknown }[];
+  warning?: string;
+  note?: string;
+};
+
+// POST /v1/fleet/advisory — assess_impact(...).to_dict()
+export type FunctionExposure = {
+  function_id: string;
+  description: string;
+  coverage_before: string;
+  newly_in_question: boolean;
+  last_verified_at: string;
+  last_verified_hash: string;
+};
+
+export type Exposure = {
+  machine: string;
+  site: string;
+  item_id: string;
+  item_name: string;
+  item_version: string;
+  basis: 'hash' | 'hash_mismatch' | 'version' | 'name_only';
+  confidence: string;
+  needs_a_human: boolean;
+  detail: string;
+  functions: FunctionExposure[];
+  newly_in_question: string[];
+};
+
+export type ImpactReport = {
+  advisory_id: string;
+  advisory_hash: string;
+  issued_by: string;
+  severity: string;
+  title: string;
+  reference: string;
+  assessed_at: string;
+  verdict: 'clear' | 'exposed' | 'needs_review';
+  machines_in_fleet: number;
+  machines_affected: string[];
+  functions_newly_in_question: number;
+  exposures: Exposure[];
+  checks_skipped: string[];
+};
+
+// POST /v1/change/assess/advisory
+export type AssessAdvisoryResult = {
+  opened: boolean;
+  case: { case_id: string; status: string; history?: HistoryItem[] } | null;
+  verdict: string;
+};
+
+// ---------------------------------------------------------------------------
+// Outcomes
+// ---------------------------------------------------------------------------
+
+export type ApiOutcome<T> =
+  | { kind: 'ok'; data: T; at: number }
+  | { kind: 'unconfigured' }
+  // 401: no key, or a key the server does not recognise.
+  | { kind: 'unauthorized'; status: 401; message: string }
+  // 402: authenticated, not entitled (plan or account state).
+  | { kind: 'upgrade'; status: 402; tier: string; accountStatus: string; code: string; remedy: string }
+  // 403: refused for a reason that is not payment.
+  | { kind: 'forbidden'; status: 403; message: string }
+  // 404: nothing by that id in the caller's own ledger/store.
+  | { kind: 'notfound'; status: 404; message: string }
+  // 409: the request is well-formed but the resource's state does not allow it.
+  | { kind: 'conflict'; status: 409; message: string }
+  // 413: the request body is over the server's limit.
+  | { kind: 'toolarge'; status: 413; limitBytes: number | null; message: string }
+  // 422: the server could not use the content of the request.
+  | { kind: 'invalid'; status: 422; message: string }
+  // 429: a daily allowance is spent.
+  | { kind: 'ratelimited'; status: 429; message: string; remedy: string; retryAfter: string }
+  // The request never produced an HTTP answer.
+  | { kind: 'unreachable'; message: string }
+  // Anything else, including 5xx.
+  | { kind: 'error'; status: number; code: string; message: string };
+
+export type Detail = { code: string; message: string; remedy: string; extra: Record<string, unknown> };
+
+// FastAPI shapes seen from this server: {"detail": "text"}, {"detail": {error, detail|remedy, ...}},
+// {"detail": [{loc, msg}, ...]} (request validation) and, from the ValueError handler,
+// {"error": ..., "detail": "text"}.
+export function parseDetail(body: unknown, fallback: string): Detail {
+  const out: Detail = { code: '', message: '', remedy: '', extra: {} };
+  const b = body as { detail?: unknown; error?: unknown } | null;
+  if (!b || typeof b !== 'object') {
+    out.message = fallback;
+    return out;
   }
-  return fallback;
+  if (typeof b.error === 'string') out.code = b.error;
+  const d = b.detail;
+  if (typeof d === 'string') {
+    out.message = d;
+  } else if (Array.isArray(d)) {
+    out.message = d
+      .map((e) => {
+        const item = e as { loc?: unknown[]; msg?: string };
+        const where = Array.isArray(item.loc) ? item.loc.filter((p) => p !== 'body').join('.') : '';
+        return where ? `${where}: ${item.msg ?? 'invalid'}` : (item.msg ?? 'invalid');
+      })
+      .join('; ');
+  } else if (d && typeof d === 'object') {
+    const o = d as Record<string, unknown>;
+    if (typeof o.error === 'string') out.code = o.error;
+    if (typeof o.detail === 'string') out.message = o.detail;
+    if (typeof o.remedy === 'string') out.remedy = o.remedy;
+    out.extra = o;
+  }
+  if (!out.message && !out.remedy) out.message = fallback;
+  return out;
 }
 
 export async function call<T>(
@@ -132,19 +286,170 @@ export async function call<T>(
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
   } catch {
-    return { kind: 'error', status: 0, message: 'The API could not be reached from this browser.' };
+    return { kind: 'unreachable', message: 'The API could not be reached from this browser.' };
   }
   const body = await res.json().catch(() => null);
-  if (res.ok) return { kind: 'ok', data: body as T };
-  if (res.status === 401) return { kind: 'unauthorized', message: messageOf(body, 'This view needs an API key.') };
-  if (res.status === 402) {
-    const d = (body as { detail?: { tier?: string; remedy?: string } } | null)?.detail;
-    return {
-      kind: 'upgrade',
-      tier: d?.tier || 'free',
-      remedy: d?.remedy || 'Your plan does not include this view.',
-    };
+  if (res.ok) return { kind: 'ok', data: body as T, at: Date.now() };
+  return classify(res.status, body, res.headers.get('retry-after') || '');
+}
+
+// Plain-text GET (the hosted supplier feed is newline-delimited JSON). Never sends a key:
+// the feed is public by design.
+export async function callText(apiBase: string, path: string): Promise<ApiOutcome<string>> {
+  if (!apiBase) return { kind: 'unconfigured' };
+  let res: Response;
+  try {
+    res = await fetch(`${apiBase}${path}`);
+  } catch {
+    return { kind: 'unreachable', message: 'The API could not be reached from this browser.' };
   }
-  if (res.status === 409) return { kind: 'conflict', message: messageOf(body, 'The case is not in a state that allows that.') };
-  return { kind: 'error', status: res.status, message: messageOf(body, `HTTP ${res.status}`) };
+  if (res.ok) return { kind: 'ok', data: await res.text(), at: Date.now() };
+  const body = await res.json().catch(() => null);
+  return classify(res.status, body, res.headers.get('retry-after') || '');
+}
+
+export function classify(status: number, body: unknown, retryAfter = ''): ApiOutcome<never> {
+  const d = parseDetail(body, `HTTP ${status}`);
+  switch (status) {
+    case 401:
+      return { kind: 'unauthorized', status, message: d.message || 'This view needs an API key.' };
+    case 402: {
+      const x = d.extra as { tier?: string; account_status?: string };
+      return {
+        kind: 'upgrade',
+        status,
+        tier: x.tier || 'free',
+        accountStatus: x.account_status || '',
+        code: d.code,
+        remedy: d.remedy || d.message || 'Your plan does not include this view.',
+      };
+    }
+    case 403:
+      return { kind: 'forbidden', status, message: d.remedy ? `${d.message} ${d.remedy}`.trim() : d.message };
+    case 404:
+      return { kind: 'notfound', status, message: d.message };
+    case 409:
+      return {
+        kind: 'conflict',
+        status,
+        message: d.remedy ? `${d.message} ${d.remedy}`.trim() : d.message || 'The case is not in a state that allows that.',
+      };
+    case 413: {
+      const limit = (d.extra as { limit_bytes?: number }).limit_bytes;
+      return { kind: 'toolarge', status, limitBytes: typeof limit === 'number' ? limit : null, message: d.message };
+    }
+    case 422:
+      return { kind: 'invalid', status, message: d.message };
+    case 429:
+      return { kind: 'ratelimited', status, message: d.message, remedy: d.remedy, retryAfter };
+    default:
+      return { kind: 'error', status, code: d.code, message: d.message };
+  }
+}
+
+export type Described = { heading: string; text: string; remedy: string; kind: ApiOutcome<unknown>['kind'] };
+
+// One sentence per outcome a person can act on. The server's own remedy text is
+// passed through unchanged; this only adds which refusal it was.
+export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'ok' }>): Described {
+  switch (outcome.kind) {
+    case 'unconfigured':
+      return {
+        kind: outcome.kind,
+        heading: 'No API configured',
+        text: 'This build has no API address (NEXT_PUBLIC_ASSURANCE_API_URL), so there is nothing to ask. Nothing is shown rather than something invented.',
+        remedy: '',
+      };
+    case 'unauthorized':
+      return {
+        kind: outcome.kind,
+        heading: 'Not signed in (401)',
+        text: `The API did not accept the key: ${outcome.message}`,
+        remedy: 'Paste a valid key. Keys start with asr_ and are shown once, at checkout.',
+      };
+    case 'upgrade':
+      return {
+        kind: outcome.kind,
+        heading: `Not included in your plan (402)`,
+        text: `Your plan (${outcome.tier}${outcome.accountStatus ? `, account ${outcome.accountStatus}` : ''}) does not include this.`,
+        remedy: outcome.remedy,
+      };
+    case 'forbidden':
+      return {
+        kind: outcome.kind,
+        heading: 'Refused (403)',
+        text: outcome.message || 'The server refused this request.',
+        remedy: '',
+      };
+    case 'notfound':
+      return {
+        kind: outcome.kind,
+        heading: 'Not found (404)',
+        text: outcome.message || 'Nothing by that id.',
+        remedy: '',
+      };
+    case 'conflict':
+      return {
+        kind: outcome.kind,
+        heading: 'Not allowed in the current state (409)',
+        text: outcome.message,
+        remedy: '',
+      };
+    case 'toolarge':
+      return {
+        kind: outcome.kind,
+        heading: 'Too large (413)',
+        text: `${outcome.message || 'The request body is over the server limit.'}${
+          outcome.limitBytes ? ` Limit: ${outcome.limitBytes.toLocaleString('en')} bytes.` : ''
+        }`,
+        remedy: 'Send a smaller file, or split it (a feed can be sent record by record).',
+      };
+    case 'invalid':
+      return {
+        kind: outcome.kind,
+        heading: 'The server could not use that content (422)',
+        text: outcome.message,
+        remedy: '',
+      };
+    case 'ratelimited':
+      return {
+        kind: outcome.kind,
+        heading: 'Daily allowance used (429)',
+        text: outcome.message || 'You have used today’s allowance for this call.',
+        remedy: `${outcome.remedy}${outcome.retryAfter ? ` Retry after ${outcome.retryAfter} s.` : ''}`.trim(),
+      };
+    case 'unreachable':
+      return {
+        kind: outcome.kind,
+        heading: 'API unreachable',
+        text: outcome.message,
+        remedy: 'This is not an empty result: nothing was learned. Check your connection and try Reload.',
+      };
+    case 'error':
+      if (outcome.code === 'ledger_integrity') {
+        return {
+          kind: outcome.kind,
+          heading: 'THE LEDGER CHAIN DOES NOT VERIFY (500)',
+          text: `The server refused to build this because your ledger's hash chain fails verification: ${outcome.message}`,
+          remedy:
+            'Nothing was exported. Do not rely on anything drawn from this ledger until the break is explained; this is not an empty result.',
+        };
+      }
+      return {
+        kind: outcome.kind,
+        heading: outcome.status >= 500 ? `Server error (${outcome.status})` : `Request failed (${outcome.status})`,
+        text: outcome.message,
+        remedy: outcome.status >= 500 ? 'The server failed; this is not an empty result. Try again shortly.' : '',
+      };
+  }
+}
+
+// Failures after which keeping the last good data on screen is honest (the data may be
+// old, and we say so). After a 401/402/403/404 the old data may no longer be yours to see.
+export function keepsLastGood(outcome: Exclude<ApiOutcome<unknown>, { kind: 'ok' }>): boolean {
+  return (
+    outcome.kind === 'unreachable' ||
+    outcome.kind === 'ratelimited' ||
+    (outcome.kind === 'error' && outcome.status >= 500)
+  );
 }

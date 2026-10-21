@@ -26,7 +26,7 @@ instance returns this same table, generated from the entitlements
 
 These prices are launch hypotheses; they have not been validated with paying customers.
 
-Verification stays free at every tier, forever — the audience for a piece of
+Re-checking evidence is not metered at any tier — the audience for a piece of
 evidence is a regulator, an insurer, or a customer's customer, none of whom
 should ever need to hold an API key here.
 

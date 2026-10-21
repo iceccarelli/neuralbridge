@@ -24,7 +24,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
       { name: 'Machine safety verification', blurb: 'ISO/TS 15066 checks against a declared envelope.', href: `/docs/assurance/machine` },
       { name: 'Machinery Annex III', blurb: 'The safety software manifest and the staleness join.', href: `/docs/assurance/machinery` },
       { name: 'Fleet advisory', blurb: 'One advisory, fanned out by hash across a fleet.', href: `/docs/assurance/fleet` },
-      { name: 'Watch', blurb: 'The component that runs when nobody is looking.', href: `/docs/assurance/watch` },
+      { name: 'Watch', blurb: 'Scheduled drift checks. Runs in your kit or cron; the hosted API does not run it.', href: `/docs/assurance/watch` },
       { name: 'Attest', blurb: 'Counter-signed head attestation; catches deletion.', href: `/docs/assurance/attest` },
       { name: 'Offline enrolment kit', blurb: 'Your ledger, your disk. No account, no upload.', href: `/docs/assurance/kit` },
     ],
@@ -34,7 +34,8 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
     cards: [
       { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
       { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '/#platform' },
-      { name: 'Assurance API', blurb: '42 routes; GET /v1/plans mirrors enforced entitlements.', href: `${SRC}/api`, external: true },
+      { name: 'Assurance API', blurb: 'GET /v1/plans mirrors the entitlements the code enforces.', href: `${SRC}/api`, external: true },
+      { name: 'Workspace', blurb: 'Your fleet, cases, supplier advisories and plan, read from the API with your key.', href: '/assurance' },
       { name: 'Console', blurb: 'Browser REST console for the Assurance API — key paste, real /v1 calls.', href: '/console' },
       { name: 'AI (agent control plane)', blurb: 'Discover a real connection, read it, plan a write, approve, get a receipt.', href: '/ai' },
     ],
@@ -47,20 +48,17 @@ export default function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>('root');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
 
   const closeAll = () => {
     setOpenMenu(null);
-    setLangOpen(false);
   };
 
   const toggle = (name: MenuKey) => {
-    setLangOpen(false);
     setOpenMenu((current) => (current === name ? null : name));
   };
 
-  // Escape closes whatever overlay is open; click outside the header closes megas/language.
+  // Escape closes whatever overlay is open; click outside the header closes the megas.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
@@ -164,26 +162,6 @@ export default function Header() {
 
             <div className="topbar-actions">
               <button className="icon-button" aria-label="Search" onClick={() => setSearchOpen(true)}>⌕</button>
-
-              <div className={`nav-item lang-item ${langOpen ? 'open' : ''}`}>
-                <button
-                  className="icon-button lang-button"
-                  aria-label="Language"
-                  aria-expanded={langOpen}
-                  onClick={() => {
-                    setOpenMenu(null);
-                    setLangOpen((v) => !v);
-                  }}
-                >
-                  🌐 EN
-                </button>
-                <div className="mega-panel lang-panel">
-                  <div className="mega-col">
-                    <a href="#top" onClick={() => setLangOpen(false)}>English (detected)</a>
-                    <span className="lang-stub">Deutsch — coming soon</span>
-                  </div>
-                </div>
-              </div>
 
               <a className="nav-cta ghost" href={SALES}>Talk to sales</a>
               <a className="nav-cta primary" href="/#products">Start free</a>
@@ -321,6 +299,10 @@ export default function Header() {
                 <strong>Cursor connector</strong>
                 <span>Same MCP server, wired into Cursor's own config.</span>
               </a>
+              <a className="finder-item" href="/assurance" onClick={closeAll}>
+                <strong>Workspace</strong>
+                <span>Your fleet, cases, advisories and plan, with your own key.</span>
+              </a>
               <a className="finder-item" href="/console" onClick={closeAll}>
                 <strong>Console</strong>
                 <span>Paste an API key, call real /v1 routes from your browser.</span>
@@ -420,6 +402,7 @@ export default function Header() {
               <a className="mobile-drill-item" href="/cli" onClick={() => setMobileOpen(false)}>CLI</a>
               <a className="mobile-drill-item" href="/connectors/mcp" onClick={() => setMobileOpen(false)}>MCP connector</a>
               <a className="mobile-drill-item" href="/connectors/cursor" onClick={() => setMobileOpen(false)}>Cursor connector</a>
+              <a className="mobile-drill-item" href="/assurance" onClick={() => setMobileOpen(false)}>Workspace</a>
               <a className="mobile-drill-item" href="/console" onClick={() => setMobileOpen(false)}>Console</a>
               <a className="mobile-drill-item" href="/ai" onClick={() => setMobileOpen(false)}>AI</a>
               <a className="mobile-drill-item" href="/roadmap" onClick={() => setMobileOpen(false)}>Roadmap</a>
