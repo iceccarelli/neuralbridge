@@ -58,12 +58,20 @@ def sub(sid, customer, status="active", price="price_reg", created=TS - 90 * DAY
     return obj
 
 
+def unpaid(sub_id, days_ago):
+    """Stripe's open invoices for a subscription, the oldest ``days_ago`` days old."""
+    return {sub_id: [{"id": f"in_{sub_id}", "status": "open", "created": TS - days_ago * DAY},
+                     {"id": f"in2_{sub_id}", "status": "open", "created": TS - 2 * DAY},
+                     {"id": f"in3_{sub_id}", "status": "paid", "created": TS - 400 * DAY}]}
+
+
 class FakeStripe:
     """The two read calls the reconciler uses, with Stripe's paging and filtering."""
 
     def __init__(self, subs=(), *, customers=(), page_size=100, fail_list_call=0,
-                 fail_retrieve=None, on_retrieve=None):
+                 fail_retrieve=None, on_retrieve=None, invoices=None):
         self.subs = list(subs)
+        self.invoices = invoices or {}  # subscription id -> [invoice objects]
         self.known = {s["customer"] for s in self.subs} | set(customers)
         self.page_size = page_size
         self.fail_list_call = fail_list_call
@@ -91,6 +99,11 @@ class FakeStripe:
         size = min(limit, self.page_size)
         page = items[start:start + size]
         return {"data": page, "has_more": start + size < len(items)}
+
+    def list_invoices(self, subscription=None, status="open", starting_after=None, limit=100):
+        self.calls.append(("invoices", subscription, status))
+        items = [i for i in self.invoices.get(subscription, []) if i["status"] == status]
+        return {"data": items, "has_more": False}
 
     def retrieve_subscription(self, subscription_id):
         self.calls.append(("retrieve", subscription_id))
@@ -200,6 +213,14 @@ class TestGatewayCalls:
         requests, _ = seen
         stripe_gateway.list_subscriptions()
         assert dict(requests[0].url.params) == {"status": "all", "limit": "100"}
+
+    def test_list_invoices_asks_for_the_open_ones_of_one_subscription(self, seen):
+        requests, _ = seen
+        stripe_gateway.list_invoices(subscription="sub_1", starting_after="in_9")
+        req = requests[0]
+        assert req.method == "GET" and req.url.path == "/v1/invoices"
+        assert dict(req.url.params) == {"status": "open", "limit": "100",
+                                        "subscription": "sub_1", "starting_after": "in_9"}
 
     def test_retrieve_hits_the_subscription_path(self, seen):
         requests, responses = seen
@@ -356,10 +377,20 @@ class TestCategories:
         assert not report.findings[0].correctable
         assert state(store, acct.id) == ("active", "register"), "no Stripe status was reported"
 
-    def test_another_products_subscription_on_the_customer_is_not_ours(self, store):
+    def test_another_products_live_subscription_is_never_a_reason_to_revoke(self, store):
+        # (Changed by review: it used to be "ended but we grant"; a live
+        # subscription we cannot classify may be what the customer pays for.)
         acct = add(store, "cus_a", "register", "active")
         stripe = FakeStripe([sub("sub_other", "cus_a", price="price_other")])
-        assert cats(run(store, stripe, apply=True)) == {"stripe_ended_but_we_grant"}
+        assert cats(run(store, stripe, apply=True)) == {"ambiguous"}
+        assert state(store, acct.id) == ("active", "register")
+
+    def test_another_products_cancelled_subscription_leaves_a_human_to_decide(self, store):
+        acct = add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([sub("sub_other", "cus_a", status="canceled", price="price_other")])
+        report = run(store, stripe, apply=True)
+        assert cats(report) == {"stripe_ended_but_we_grant"}
+        assert not report.findings[0].correctable
         assert state(store, acct.id) == ("active", "register")
 
     def test_an_orphan_subscription_is_reported_and_never_creates_anything(self, store):
@@ -383,7 +414,7 @@ class TestCategories:
 
     def test_past_due_too_long_ends_a_past_due_stripe_never_resolved(self, store):
         acct = add(store, "cus_a", "register", "past_due", past_due_days=45)
-        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")], invoices=unpaid("sub_a", 45))
         report = run(store, stripe)
         assert cats(report) == {"past_due_too_long"}
         run(store, stripe, apply=True)
@@ -391,7 +422,7 @@ class TestCategories:
 
     def test_past_due_inside_the_window_is_left_alone_and_the_window_is_configurable(self, store):
         add(store, "cus_a", "register", "past_due", past_due_days=20)
-        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")], invoices=unpaid("sub_a", 20))
         assert run(store, stripe).drift_count == 0
         assert cats(run(store, stripe, past_due_days=10)) == {"past_due_too_long"}
 
@@ -402,7 +433,7 @@ class TestCategories:
 
     def test_ending_a_stale_past_due_does_not_flap_back_on_the_next_run(self, store):
         acct = add(store, "cus_a", "register", "past_due", past_due_days=45)
-        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")], invoices=unpaid("sub_a", 45))
         run(store, stripe, apply=True)
         later = NOW + timedelta(hours=1)
         again = run(store, stripe, apply=True, now=later)
@@ -658,8 +689,9 @@ class TestEventOrdering:
 
     def test_stripes_own_clock_running_ahead_widens_the_window(self, store):
         acct = add(store, "cus_a", "register", "cancelled", event_age_days=0)
-        _sql(store, "UPDATE accounts SET last_event_at=? WHERE id=?", TS + 300, acct.id)
-        ahead = sub("sub_a", "cus_a", canceled_at=TS + 3600)
+        _sql(store, "UPDATE accounts SET last_event_at=? WHERE id=?", TS - 10, acct.id)
+        assert run(store, FakeStripe([sub("sub_a", "cus_a")])).deferred, "inside the margin"
+        ahead = sub("sub_a", "cus_a", canceled_at=TS + 60)  # Stripe's clock a minute ahead
         report = run(store, FakeStripe([ahead]), apply=True)
         assert not report.deferred, "Stripe's clock is later than the webhook"
         assert state(store, acct.id) == ("active", "register")
@@ -898,7 +930,7 @@ class TestCommandLine:
 
     def test_past_due_days_flag(self, cli, capsys):
         add(cli, "cus_a", "register", "past_due", past_due_days=20)
-        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")], invoices=unpaid("sub_a", 20))
         assert rec.main([], gateway=stripe, now=NOW) == 0
         assert rec.main(["--past-due-days", "10"], gateway=stripe, now=NOW) == 1
 
@@ -924,6 +956,8 @@ class TestCommandLine:
         missing = tmp_path / "typo.db"
         monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(missing))
         assert rec.main([], gateway=FakeStripe([])) == 2
+        assert not missing.exists()
+        assert rec.main(["--apply"], gateway=FakeStripe([])) == 2
         assert not missing.exists()
         assert SECRET not in capsys.readouterr().err
 
@@ -1083,3 +1117,339 @@ class TestOneMapping:
             sub("s", "c", price=None, metadata={"tier": "cell"})) == ("cell", "metadata")
         assert shared.subscription_tier_source(
             sub("s", "c", price=None, metadata={"tier": "supplier"})) == (None, "")
+
+
+# ---------------------------------------------------------------------------
+# findings from the independent review
+# ---------------------------------------------------------------------------
+class TestNeverRevokeOnAnIncompletePicture:
+    def test_a_live_subscription_on_a_price_we_do_not_recognise_blocks_revocation(self, store):
+        acct = add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([
+            sub("sub_old", "cus_a", status="canceled"),
+            sub("sub_new", "cus_a", status="active", price="price_legacy"),
+        ])
+        report = run(store, stripe, apply=True)
+        assert cats(report) == {"ambiguous"} and report.corrected == 0
+        assert not report.findings[0].correctable and "recognise" in report.findings[0].reason
+        assert state(store, acct.id) == ("active", "register")
+
+    @pytest.mark.parametrize("foreign_status", ["active", "trialing", "past_due"])
+    def test_any_entitled_or_past_due_foreign_subscription_blocks_every_revocation(
+            self, store, foreign_status):
+        acct = add(store, "cus_a", "cell", "active")
+        stripe = FakeStripe([
+            sub("sub_old", "cus_a", status="canceled", price="price_cell"),
+            sub("sub_x", "cus_a", status=foreign_status, price="price_other"),
+        ])
+        report = run(store, stripe, apply=True)
+        assert cats(report) == {"ambiguous"}
+        assert state(store, acct.id) == ("active", "cell")
+
+    def test_it_also_blocks_the_no_ours_subscription_case_and_past_due_too_long(self, store):
+        only_foreign = add(store, "cus_f", "register", "active")
+        dunning = add(store, "cus_p", "register", "past_due", past_due_days=60)
+        stripe = FakeStripe([
+            sub("sub_f", "cus_f", price="price_legacy"),
+            sub("sub_p", "cus_p", status="past_due"),
+            sub("sub_p2", "cus_p", status="active", price="price_legacy"),
+        ], invoices=unpaid("sub_p", 60))
+        report = run(store, stripe, apply=True)
+        assert cats(report) == {"ambiguous"} and report.corrected == 0
+        assert state(store, only_foreign.id) == ("active", "register")
+        assert state(store, dunning.id) == ("past_due", "register")
+
+    def test_a_cancelled_foreign_subscription_does_not_block_revocation(self, store):
+        acct = add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="canceled"),
+                             sub("sub_x", "cus_a", status="canceled", price="price_other")])
+        run(store, stripe, apply=True)
+        assert state(store, acct.id) == ("cancelled", "free")
+
+    def test_a_free_account_with_a_customer_and_no_subscription_is_not_drift(self, store):
+        add(store, "cus_a", "free", "active")
+        add(store, "cus_b", "free", "active")
+        stripe = FakeStripe([sub("sub_b", "cus_b", status="canceled")], customers=["cus_a"])
+        report = run(store, stripe)
+        assert report.drift_count == 0 and report.in_sync == 2
+
+
+class TestDeferredIsNotClean:
+    def deferred_setup(self, store):
+        acct = add(store, "cus_a", "register", "cancelled", event_age_days=0)
+        _sql(store, "UPDATE accounts SET last_event_at=? WHERE id=?", TS + 5, acct.id)
+        return acct, FakeStripe([sub("sub_a", "cus_a")])
+
+    def test_deferred_accounts_make_the_run_not_clean(self, store):
+        _, stripe = self.deferred_setup(store)
+        report = run(store, stripe)
+        assert report.drift_count == 0 and not report.fully_checked
+        assert report.exit_code == 1
+        text = report.render()
+        assert "NOT FULLY CHECKED" in text and "1 account(s) deferred" in text
+        assert "IN SYNC" not in text
+
+    def test_json_exposes_deferred_count_apart_from_drift_count(self, store):
+        _, stripe = self.deferred_setup(store)
+        data = run(store, stripe).to_dict()
+        assert data["deferred_count"] == 1 and data["drift_count"] == 0
+        assert data["fully_checked"] is False and data["exit_code"] == 1
+
+    def test_a_clean_run_says_so(self, store):
+        add(store, "cus_a", "register", "active")
+        report = run(store, FakeStripe([sub("sub_a", "cus_a")]))
+        data = report.to_dict()
+        assert data["fully_checked"] is True and data["deferred_count"] == 0
+        assert report.exit_code == 0 and "IN SYNC" in report.render()
+
+    def test_the_cli_exits_1_for_a_deferred_only_run(self, store, monkeypatch, capsys):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", SECRET)
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(store.path))
+        _, stripe = self.deferred_setup(store)
+        assert rec.main([], gateway=stripe, now=NOW) == 1
+        assert "NOT FULLY CHECKED" in capsys.readouterr().out
+
+
+class TestFutureDatedStripeTimes:
+    def test_a_far_future_stripe_time_does_not_poison_last_event_at(self, store):
+        acct = add(store, "cus_a", "register", "cancelled")
+        three_years = TS + 3 * 365 * DAY
+        stripe = FakeStripe([sub("sub_a", "cus_a", created=three_years,
+                                 canceled_at=three_years, ended_at=three_years)])
+        report = run(store, stripe, apply=True)
+        assert state(store, acct.id) == ("active", "register") and report.corrected == 1
+        assert store.account(acct.id).last_event_at <= TS
+        # A real cancellation arriving afterwards still applies.
+        outcome = store.apply_subscription_event(
+            event_id="evt_real", kind="customer.subscription.deleted",
+            stripe_customer_id="cus_a", status="cancelled", tier="free",
+            event_created=TS + 600, hold_if_unknown=False)
+        assert outcome == "applied" and state(store, acct.id) == ("cancelled", "free")
+
+    def test_the_audit_snapshot_is_clamped_too(self, store):
+        add(store, "cus_a", "register", "cancelled")
+        run(store, FakeStripe([sub("sub_a", "cus_a", created=TS + 10 * 365 * DAY)]), apply=True)
+        (snap,) = rows(store, "SELECT snapshot_at FROM entitlement_reconciliations")[0]
+        assert snap <= TS + rec.SKEW_SECONDS
+
+
+class TestPastDueNeedsStripeEvidence:
+    def test_a_new_dunning_episode_is_not_cut_off_on_our_stale_timer(self, store):
+        # The "active" webhook between two past_due episodes was lost, so our
+        # timer still says 45 days. Stripe's current invoice is 3 days old.
+        add(store, "cus_a", "register", "past_due", past_due_days=45)
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")],
+                            invoices=unpaid("sub_a", 3))
+        report = run(store, stripe, apply=True)
+        assert report.drift_count == 0 and report.corrected == 0
+
+    def test_stripe_evidence_older_than_the_window_ends_it(self, store):
+        acct = add(store, "cus_a", "register", "past_due", past_due_days=45)
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")],
+                            invoices=unpaid("sub_a", 45))
+        assert cats(run(store, stripe, apply=True)) == {"past_due_too_long"}
+        assert state(store, acct.id) == ("cancelled", "register")
+
+    def test_an_error_reading_invoices_is_an_incomplete_run_and_writes_nothing(self, store):
+        acct = add(store, "cus_a", "register", "past_due", past_due_days=60)
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+
+        def boom(**kwargs):
+            raise StripeError("Stripe 500: upstream", status=500)
+
+        stripe.list_invoices = boom
+        before = everything(store)
+        report = run(store, stripe, apply=True)
+        assert not report.complete and report.exit_code == 2
+        assert [u["account_id"] for u in report.unchecked] == [acct.id]
+        assert everything(store) == before
+
+    def test_without_a_stripe_timestamp_it_is_reported_and_never_applied(self, store):
+        acct = add(store, "cus_a", "register", "past_due", past_due_days=60)
+        stripe = FakeStripe([sub("sub_a", "cus_a", status="past_due")])
+        report = run(store, stripe, apply=True)
+        assert cats(report) == {"past_due_too_long"}
+        assert not report.findings[0].correctable and report.corrected == 0
+        assert state(store, acct.id) == ("past_due", "register")
+
+
+class TestRevocationRelistsTheCustomer:
+    def test_a_subscription_created_after_listing_stops_the_revocation(self, store):
+        acct = add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([sub("sub_old", "cus_a", status="canceled")])
+
+        def new_subscription(_):
+            stripe.subs.append(sub("sub_new", "cus_a", status="active"))
+
+        stripe.on_retrieve = new_subscription
+        report = run(store, stripe, apply=True)
+        assert report.corrected == 0
+        assert report.findings[0].action == "skipped"
+        assert "changed" in report.findings[0].reason
+        assert state(store, acct.id) == ("active", "register")
+
+    def test_an_unchanged_picture_still_revokes(self, store):
+        acct = add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([sub("sub_old", "cus_a", status="canceled")])
+        run(store, stripe, apply=True)
+        assert state(store, acct.id) == ("cancelled", "free")
+        assert any(c[0] == "list" and c[1] == "cus_a" for c in stripe.calls)
+
+    def test_an_error_on_the_relist_leaves_the_store_untouched(self, store):
+        add(store, "cus_a", "register", "active")
+        stripe = FakeStripe([sub("sub_old", "cus_a", status="canceled")])
+        original = stripe.list_subscriptions
+        seen = {"customer_lists": 0}
+
+        def flaky(customer=None, **kw):
+            if customer == "cus_a":
+                seen["customer_lists"] += 1
+                raise StripeError("Stripe 500: upstream", status=500)
+            return original(customer=customer, **kw)
+
+        stripe.list_subscriptions = flaky
+        before = everything(store)
+        report = run(store, stripe, apply=True)
+        assert seen["customer_lists"] >= 1
+        assert not report.complete and report.exit_code == 2
+        assert everything(store) == before
+
+
+class TestDryRunMigratesNothing:
+    def old_db(self, tmp_path):
+        path = tmp_path / "old.db"
+        db = sqlite3.connect(path)
+        db.executescript(TestSchema.OLD)
+        db.commit()
+        db.close()
+        return path
+
+    def test_a_dry_run_on_an_unmigrated_database_changes_no_byte(self, tmp_path, monkeypatch,
+                                                                  capsys):
+        import hashlib
+        path = self.old_db(tmp_path)
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        monkeypatch.setenv("STRIPE_SECRET_KEY", SECRET)
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(path))
+        code = rec.main(["--json"], gateway=FakeStripe([sub("sub_old", "cus_old")]), now=NOW)
+        data = json.loads(capsys.readouterr().out)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+        db = sqlite3.connect(path)
+        assert "past_due_since" not in {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name="
+                              "'entitlement_reconciliations'").fetchone()
+        db.close()
+        assert data["complete"] is True and code in (0, 1)
+
+    def test_apply_migrates_it_and_the_text_says_which(self, tmp_path, monkeypatch, capsys):
+        path = self.old_db(tmp_path)
+        monkeypatch.setenv("STRIPE_SECRET_KEY", SECRET)
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(path))
+        rec.main(["--apply"], gateway=FakeStripe([sub("sub_old", "cus_old")]), now=NOW)
+        out = capsys.readouterr().out
+        assert "APPLY" in out and "nothing written" not in out
+        db = sqlite3.connect(path)
+        assert "past_due_since" in {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+        db.close()
+
+    def test_the_dry_run_text_does_not_overclaim(self, store, monkeypatch, capsys):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", SECRET)
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(store.path))
+        rec.main([], gateway=FakeStripe([]), now=NOW)
+        out = capsys.readouterr().out
+        assert "dry run" in out and "read-only" in out
+
+    def test_a_read_only_store_cannot_write(self, store):
+        ro = AccountStore.open_readonly(store.path)
+        with pytest.raises(sqlite3.OperationalError):
+            ro.upsert_account(email="x@example.test", tier="free")
+
+
+class TestMigrationRace:
+    def test_a_lost_race_on_the_alter_is_not_an_error(self, tmp_path):
+        path = tmp_path / "old.db"
+        db = sqlite3.connect(path)
+        db.executescript(TestSchema.OLD)
+        db.commit()
+        db.close()
+
+        class Loser:
+            """Another process added the column after our check."""
+
+            def __init__(self, real):
+                self.real = real
+
+            def execute(self, sql, *args):
+                if sql.startswith("ALTER TABLE accounts ADD COLUMN past_due_since"):
+                    self.real.execute(sql)
+                    raise sqlite3.OperationalError("duplicate column name: past_due_since")
+                return self.real.execute(sql, *args)
+
+        real = sqlite3.connect(path, isolation_level=None)
+        AccountStore._migrate(Loser(real))
+        real.close()
+        check = sqlite3.connect(path)
+        assert "past_due_since" in {r[1] for r in check.execute("PRAGMA table_info(accounts)")}
+        check.close()
+
+    def test_many_threads_opening_an_old_database_at_once_all_succeed(self, tmp_path):
+        import threading
+        path = tmp_path / "old.db"
+        db = sqlite3.connect(path)
+        db.executescript(TestSchema.OLD)
+        db.commit()
+        db.close()
+        barrier = threading.Barrier(8)
+        errors: list[BaseException] = []
+
+        def open_it():
+            try:
+                barrier.wait()
+                AccountStore(path)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=open_it) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
+
+class TestMinorFindings:
+    @pytest.mark.parametrize("bad", ["sub_1\n", "sub_1\r\n", "sub_1 "])
+    def test_retrieve_rejects_a_trailing_newline(self, monkeypatch, bad):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", SECRET)
+        monkeypatch.setattr(stripe_gateway.httpx, "get",
+                            lambda *a, **k: pytest.fail("must not reach the network"))
+        with pytest.raises(StripeError):
+            stripe_gateway.retrieve_subscription(bad)
+
+    def test_apply_with_a_live_key_is_refused_without_the_flag(self, store, monkeypatch, capsys):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_AbCdEf123456")
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(store.path))
+        acct = add(store, "cus_a", "free", "cancelled")
+        stripe = FakeStripe([sub("sub_a", "cus_a")])
+        assert rec.main(["--apply"], gateway=stripe, now=NOW) == 2
+        err = capsys.readouterr().err
+        assert "test mode" in err and "--i-have-run-this-in-test-mode" in err
+        assert "sk_live_AbCdEf" not in err
+        assert state(store, acct.id) == ("cancelled", "free") and stripe.calls == []
+
+    def test_the_flag_allows_it_and_a_live_key_may_always_dry_run(self, store, monkeypatch):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_AbCdEf123456")
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(store.path))
+        acct = add(store, "cus_a", "free", "cancelled")
+        stripe = FakeStripe([sub("sub_a", "cus_a")])
+        assert rec.main([], gateway=stripe, now=NOW) == 1
+        assert state(store, acct.id) == ("cancelled", "free")
+        assert rec.main(["--apply", "--i-have-run-this-in-test-mode"], gateway=stripe,
+                        now=NOW) == 1
+        assert state(store, acct.id) == ("active", "register")
+
+    def test_a_test_key_needs_no_flag(self, store, monkeypatch):
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_AbCdEf123456")
+        monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(store.path))
+        add(store, "cus_a", "free", "cancelled")
+        assert rec.main(["--apply"], gateway=FakeStripe([sub("sub_a", "cus_a")]), now=NOW) == 1
