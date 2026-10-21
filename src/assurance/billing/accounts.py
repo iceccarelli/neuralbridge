@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS accounts (
                              CHECK (status IN ('active','past_due','cancelled')),
     created_at             TEXT NOT NULL,
     updated_at             TEXT NOT NULL,
-    last_event_at          INTEGER NOT NULL DEFAULT 0
+    last_event_at          INTEGER NOT NULL DEFAULT 0,
+    past_due_since         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS accounts_by_customer ON accounts (stripe_customer_id);
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -126,6 +127,22 @@ CREATE TABLE IF NOT EXISTS orphan_states (
     event_created      INTEGER NOT NULL,
     recorded_at        TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS entitlement_reconciliations (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                 TEXT NOT NULL,
+    account_id             TEXT NOT NULL,
+    category               TEXT NOT NULL,
+    old_status             TEXT NOT NULL,
+    old_tier               TEXT NOT NULL,
+    new_status             TEXT NOT NULL,
+    new_tier               TEXT NOT NULL,
+    stripe_subscription_id TEXT NOT NULL DEFAULT '',
+    stripe_status          TEXT NOT NULL DEFAULT '',
+    snapshot_at            INTEGER NOT NULL,
+    applied_at             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reconciliations_by_account
+    ON entitlement_reconciliations (account_id);
 CREATE TABLE IF NOT EXISTS usage (
     subject TEXT NOT NULL,
     scope   TEXT NOT NULL,
@@ -166,6 +183,10 @@ class Account:
     #: ``created`` of the newest Stripe event applied to this account (unix
     #: seconds); older subscription events are ignored as stale.
     last_event_at: int = 0
+    #: Unix seconds at which the account entered ``past_due`` (the Stripe event
+    #: time when known), or 0 if unknown or not past due. Lets reconciliation
+    #: end a ``past_due`` that Stripe never resolves.
+    past_due_since: int = 0
 
     @property
     def plan(self) -> Plan:
@@ -246,15 +267,67 @@ class AccountStore:
         """Additive, idempotent changes to a database an older build created.
 
         ``CREATE TABLE IF NOT EXISTS`` in the schema covers new tables; a new
-        column on an existing table needs this.
+        column on an existing table needs this. Safe against a second process
+        doing the same at the same moment: the check and the ``ALTER`` share
+        one write transaction, and a "duplicate column" from a process that won
+        the race anyway is the outcome we wanted, not an error.
         """
-        columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
-        if "last_event_at" not in columns:
-            db.execute(
-                "ALTER TABLE accounts ADD COLUMN last_event_at INTEGER NOT NULL DEFAULT 0"
+        additions = (
+            ("last_event_at", "INTEGER NOT NULL DEFAULT 0"),
+            ("past_due_since", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(accounts)")}
+            for name, definition in additions:
+                if name in columns:
+                    continue
+                try:
+                    db.execute(f"ALTER TABLE accounts ADD COLUMN {name} {definition}")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+
+    @classmethod
+    def open_readonly(cls, path: str | Path) -> AccountStore:
+        """Open an existing store without writing a byte: no schema, no migration.
+
+        For a dry run against a production database that may not have been
+        migrated yet. Reads tolerate the older shape (``past_due_since`` and
+        the audit table may be missing); any write raises.
+        """
+        self = cls.__new__(cls)
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._readonly = True
+        db = self._connect()
+        try:
+            row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        finally:
+            db.close()
+        if row is None or int(row[0]) != ACCOUNTS_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"{self.path} was written by accounts schema "
+                f"{row[0] if row else 'unknown'}; this build speaks "
+                f"{ACCOUNTS_SCHEMA_VERSION}. Refusing rather than guessing."
             )
+        return self
+
+    _readonly = False
 
     def _connect(self) -> sqlite3.Connection:
+        if self._readonly:
+            db = sqlite3.connect(
+                f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30.0,
+                isolation_level=None,
+            )
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA query_only=ON")
+            return db
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
@@ -365,7 +438,8 @@ class AccountStore:
         only_from: frozenset[str] | None = None,
     ) -> str:
         row = db.execute(
-            "SELECT id, status, last_event_at FROM accounts WHERE stripe_customer_id = ?",
+            "SELECT id, status, last_event_at, past_due_since FROM accounts "
+            "WHERE stripe_customer_id = ?",
             (customer,),
         ).fetchone() if customer else None
         if row is None:
@@ -382,16 +456,25 @@ class AccountStore:
             return "not_applicable"
         now = format_utc(utc_now())
         last = max(row["last_event_at"], event_created)
+        # When the account entered past_due, so reconciliation can end a
+        # past_due that Stripe never resolves. Kept across repeat past_due events.
+        if status != "past_due":
+            since = 0
+        elif row["status"] == "past_due" and row["past_due_since"]:
+            since = row["past_due_since"]
+        else:
+            since = event_created or int(utc_now().timestamp())
         if tier is None:
             db.execute(
-                "UPDATE accounts SET status=?, updated_at=?, last_event_at=? WHERE id=?",
-                (status, now, last, row["id"]),
+                "UPDATE accounts SET status=?, updated_at=?, last_event_at=?, "
+                "past_due_since=? WHERE id=?",
+                (status, now, last, since, row["id"]),
             )
         else:
             db.execute(
-                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=? "
-                "WHERE id=?",
-                (status, tier, now, last, row["id"]),
+                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=?, "
+                "past_due_since=? WHERE id=?",
+                (status, tier, now, last, since, row["id"]),
             )
         return "applied"
 
@@ -566,7 +649,8 @@ class AccountStore:
             status=row["status"],
             stripe_customer_id=row["stripe_customer_id"],
             stripe_subscription_id=row["stripe_subscription_id"],
-            last_event_at=row["last_event_at"],
+            last_event_at=row["last_event_at"] if "last_event_at" in row.keys() else 0,
+            past_due_since=row["past_due_since"] if "past_due_since" in row.keys() else 0,
         )
 
     def account(self, account_id: str) -> Account | None:
@@ -574,6 +658,111 @@ class AccountStore:
         try:
             row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
             return self._row_to_account(row) if row else None
+        finally:
+            db.close()
+
+    def list_accounts(self) -> list[Account]:
+        """Every account, oldest first. Read-only; the reconciler's input."""
+        db = self._connect()
+        try:
+            return [
+                self._row_to_account(r)
+                for r in db.execute("SELECT * FROM accounts ORDER BY created_at, id")
+            ]
+        finally:
+            db.close()
+
+    def apply_reconciliation(
+        self,
+        *,
+        run_id: str,
+        account_id: str,
+        category: str,
+        expect_status: str,
+        expect_tier: str,
+        new_status: str,
+        new_tier: str,
+        snapshot_at: int,
+        skew_seconds: int,
+        stripe_subscription_id: str = "",
+        stripe_status: str = "",
+    ) -> str:
+        """Correct one account's status and tier to what Stripe reports, with an audit row.
+
+        The change and its row in ``entitlement_reconciliations`` are one
+        transaction: both happen or neither does. Nothing else on the account
+        is touched. Refuses (changing nothing) for the operator, an account
+        with no Stripe customer, a tier that is not ``free`` or purchasable,
+        and:
+
+        ``webhook_newer``
+            the account's newest applied webhook is newer than the snapshot the
+            caller read Stripe at (minus ``skew_seconds`` for clock difference),
+            so the snapshot may predate it.
+        ``changed_since_read``
+            the account is no longer in the (status, tier) the caller compared.
+        ``noop``
+            it already is in the target state (a second apply).
+
+        On success ``last_event_at`` moves up to the snapshot (less the skew), so
+        a delayed older webhook retry cannot undo the correction. Returns
+        ``applied``, one of the refusals above, ``not_found``,
+        ``not_stripe_account`` or ``invalid_target``.
+        """
+        if new_status not in {"active", "past_due", "cancelled"} or new_tier not in {
+            "free", "register", "cell"
+        }:
+            return "invalid_target"
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["id"] == "operator" or not row["stripe_customer_id"]:
+                return "not_stripe_account"
+            horizon = snapshot_at - skew_seconds
+            if row["last_event_at"] > horizon:
+                return "webhook_newer"
+            if (row["status"], row["tier"]) != (expect_status, expect_tier):
+                return "changed_since_read"
+            if (row["status"], row["tier"]) == (new_status, new_tier):
+                return "noop"
+            if new_status != "past_due":
+                since = 0
+            elif row["status"] == "past_due" and row["past_due_since"]:
+                since = row["past_due_since"]
+            else:
+                since = snapshot_at
+            now = format_utc(utc_now())
+            db.execute(
+                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=?, "
+                "past_due_since=? WHERE id=?",
+                (new_status, new_tier, now, max(row["last_event_at"], horizon), since,
+                 row["id"]),
+            )
+            db.execute(
+                "INSERT INTO entitlement_reconciliations (run_id, account_id, category, "
+                "old_status, old_tier, new_status, new_tier, stripe_subscription_id, "
+                "stripe_status, snapshot_at, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, row["id"], category, row["status"], row["tier"], new_status,
+                 new_tier, stripe_subscription_id, stripe_status, snapshot_at, now),
+            )
+            return "applied"
+
+    def last_reconciliation(self, account_id: str) -> dict[str, Any] | None:
+        """The newest audit row for an account, or None."""
+        db = self._connect()
+        try:
+            try:
+                row = db.execute(
+                    "SELECT * FROM entitlement_reconciliations WHERE account_id=? "
+                    "ORDER BY id DESC LIMIT 1",
+                    (account_id,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+                return None  # a store not yet migrated has no history
+            return dict(row) if row else None
         finally:
             db.close()
 

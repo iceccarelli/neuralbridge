@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,9 @@ __all__ = [
     "stripe_configured",
     "create_checkout_session",
     "create_billing_portal_session",
+    "list_invoices",
+    "list_subscriptions",
+    "retrieve_subscription",
     "verify_webhook",
 ]
 
@@ -35,7 +39,17 @@ _TOLERANCE_SECONDS = 300
 
 
 class StripeError(RuntimeError):
-    """Stripe refused the call, or is not configured."""
+    """Stripe refused the call, or is not configured.
+
+    ``status`` and ``code`` carry Stripe's HTTP status and error code when it
+    answered (``resource_missing`` for an id it does not know); both are empty
+    for a call that never reached Stripe.
+    """
+
+    def __init__(self, message: str = "", *, status: int | None = None, code: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.code = code
 
 
 class SignatureError(StripeError):
@@ -72,6 +86,106 @@ def _post(path: str, form: list[tuple[str, str]]) -> dict[str, Any]:
         detail = response.json().get("error", {}).get("message", response.text)
         raise StripeError(f"Stripe {response.status_code}: {detail}")
     return response.json()
+
+
+_SECRET_LOOKING = re.compile(r"\b(?:sk|rk|pk|whsec)_[A-Za-z0-9_*]+")
+_STRIPE_ID = re.compile(r"[A-Za-z0-9_]{1,255}")
+
+
+def _scrub(text: str) -> str:
+    """Remove anything key-shaped, and the configured key itself, from ``text``.
+
+    Stripe's own message for a rejected key quotes part of it; it must not
+    reach a log, an exception message or a terminal.
+    """
+    key = os.environ.get("STRIPE_SECRET_KEY", "")
+    if key:
+        text = text.replace(key, "[redacted]")
+    return _SECRET_LOOKING.sub("[redacted]", text)
+
+
+def _get(path: str, params: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+    """A read-only Stripe call. Same auth, version and timeout as :func:`_post`."""
+    try:
+        response = httpx.get(
+            f"{API}{path}",
+            params=params or None,
+            auth=(_secret_key(), ""),
+            timeout=20.0,
+            headers={"Stripe-Version": "2024-06-20"},
+        )
+    except httpx.HTTPError as exc:
+        # The class name only: a transport error's text can carry the URL.
+        raise StripeError(f"Stripe request failed ({type(exc).__name__})") from None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if response.status_code >= 400:
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        error = error if isinstance(error, dict) else {}
+        detail = error.get("message") or f"HTTP {response.status_code}"
+        raise StripeError(
+            f"Stripe {response.status_code}: {_scrub(str(detail))}",
+            status=response.status_code,
+            code=str(error.get("code") or ""),
+        )
+    if not isinstance(body, dict):
+        raise StripeError(f"Stripe {response.status_code}: response was not a JSON object")
+    return body
+
+
+def list_subscriptions(
+    customer: str | None = None,
+    status: str = "all",
+    starting_after: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """One page of subscriptions: ``{"data": [...], "has_more": bool}``. Read-only.
+
+    ``status="all"`` matters: Stripe's default listing leaves cancelled
+    subscriptions out, which would make every ended subscription invisible to
+    reconciliation. Callers page with ``starting_after`` (the last id seen).
+    """
+    params: list[tuple[str, str]] = [
+        ("status", status),
+        ("limit", str(max(1, min(int(limit), 100)))),
+    ]
+    if customer:
+        params.append(("customer", customer))
+    if starting_after:
+        params.append(("starting_after", starting_after))
+    return _get("/subscriptions", params)
+
+
+def list_invoices(
+    subscription: str | None = None,
+    status: str = "open",
+    starting_after: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """One page of invoices: ``{"data": [...], "has_more": bool}``. Read-only.
+
+    ``status="open"`` is the unpaid ones; the oldest of a past-due subscription
+    shows how long it has really been unpaid, which Stripe's subscription
+    object does not say.
+    """
+    params: list[tuple[str, str]] = [
+        ("status", status),
+        ("limit", str(max(1, min(int(limit), 100)))),
+    ]
+    if subscription:
+        params.append(("subscription", subscription))
+    if starting_after:
+        params.append(("starting_after", starting_after))
+    return _get("/invoices", params)
+
+
+def retrieve_subscription(subscription_id: str) -> dict[str, Any]:
+    """One subscription by id. Read-only."""
+    if not _STRIPE_ID.fullmatch(subscription_id or ""):
+        raise StripeError("not a Stripe subscription id", status=400, code="invalid_id")
+    return _get(f"/subscriptions/{subscription_id}")
 
 
 @dataclass(frozen=True)
