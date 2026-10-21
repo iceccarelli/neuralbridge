@@ -148,12 +148,28 @@ verification is `GET /v1/ledger/verify`, with a key.
 
 ## Backups
 
+Everything the service remembers is on the `/data` volume: `accounts.db` (accounts,
+key hashes, billing events), `art14-register.db` (the operator-only shared
+ledger) and `tenants/<account id>.db` (**one ledger per customer** — their
+evidence). Backing up only the shared ledger, as an earlier version of this page
+suggested, would back up none of a customer's records.
+
+On the machine that holds the volume (single writer, so run it where the app
+runs):
+
 ```bash
-fly ssh console -C "sqlite3 /data/art14-register.db .dump" > ledger-$(date +%F).sql
+fly ssh console -C "python -m assurance.api.restore_check backup /data /data/backups/$(date +%F)"
+fly ssh sftp get -r /data/backups/$(date +%F) ./backup-$(date +%F)   # off the volume, off the provider
+python -m assurance.api.restore_check verify ./backup-$(date +%F)
 ```
 
-The ledger is append-only and self-verifying, so a restored copy can be checked
-with `GET /v1/ledger/verify` rather than trusted.
+`backup` takes a transactionally consistent snapshot of every database (a plain
+file copy of a WAL database can miss its newest records). `verify` checks each
+database's integrity and each ledger's hash chain, and that every tenant ledger
+belongs to a known account. **Rehearse a restore before relying on it**: restore
+the files to a scratch volume, point a throwaway service at them, and call
+`GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
+done against a deployed service — there is none.
 
 That check answers "was anything **edited**?" and not "was anything
 **removed**?" — a chain rebuilt without the inconvenient records verifies
