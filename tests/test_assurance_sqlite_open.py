@@ -115,7 +115,7 @@ class TestHelpers:
             raise sqlite3.OperationalError("database is locked")
 
         with pytest.raises(sqlite3.OperationalError, match="locked"):
-            retry_locked(always, attempts=3, first_delay=0.0001, max_delay=0.0002)
+            retry_locked(always, deadline=0.05, first_delay=0.0001, max_delay=0.0002)
 
     def test_enable_wal_is_idempotent_and_takes_no_write_when_already_wal(self, tmp_path):
         db = sqlite3.connect(tmp_path / "x.db", isolation_level=None)
@@ -130,3 +130,80 @@ class TestHelpers:
         for c in (db, holder, other):
             c.close()
 
+
+
+class TestTheWaitIsBounded:
+    """A stuck lock must fail in about the deadline, not in hours."""
+
+    def test_the_total_wait_is_the_deadline_not_attempts_times_the_busy_timeout(self, tmp_path):
+        import time
+
+        path = tmp_path / "legacy.db"
+        # A legacy (delete-mode) database that a reader is holding shared, so
+        # the switch to WAL cannot take its lock.
+        setup = sqlite3.connect(path, isolation_level=None)
+        setup.execute("CREATE TABLE t (x)")
+        setup.execute("INSERT INTO t VALUES (1)")
+        setup.close()
+        reader = sqlite3.connect(path, isolation_level=None)
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM t").fetchall()           # holds SHARED
+
+        db = sqlite3.connect(path, timeout=30.0, isolation_level=None)  # as our stores do
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            retry_locked(lambda: db.execute("PRAGMA journal_mode=WAL").fetchone(),
+                         db=db, deadline=1.0)
+        elapsed = time.monotonic() - started
+        assert elapsed < 5.0, f"waited {elapsed:.1f}s: the 30 s busy timeout leaked into the retry"
+        # And the connection's own busy timeout is restored afterwards.
+        assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        reader.execute("ROLLBACK")
+        reader.close()
+        db.close()
+
+
+class TestOpeningAnExistingFileNeverQueuesBehindAWriter:
+    """Constructing a store must not need the write lock when nothing is missing."""
+
+    @staticmethod
+    def _hold_the_write_lock(path):
+        holder = sqlite3.connect(path, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        return holder
+
+    def _assert_fast(self, make, path):
+        import time
+
+        make()                                  # create + migrate once
+        holder = self._hold_the_write_lock(path)
+        try:
+            started = time.monotonic()
+            make()
+            assert time.monotonic() - started < 2.0, "open queued behind a held write lock"
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    def test_ledger(self, tmp_path):
+        path = tmp_path / "e.db"
+        self._assert_fast(lambda: EvidenceLedger(path), path)
+
+    def test_accounts(self, tmp_path):
+        path = tmp_path / "a.db"
+        self._assert_fast(lambda: AccountStore(path), path)
+
+    def test_ai_store(self, tmp_path):
+        from neuralbridge.ai.store import AiStore
+
+        path = tmp_path / "ai.db"
+        self._assert_fast(lambda: AiStore(path), path)
+
+
+class TestAiStoreFirstOpen:
+    @pytest.mark.parametrize("round_", range(6))
+    def test_a_brand_new_ai_store_opened_by_many_threads(self, tmp_path, round_):
+        from neuralbridge.ai.store import AiStore
+
+        path = tmp_path / "ai.db"
+        assert _race(lambda: AiStore(path), 24) == []
