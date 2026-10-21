@@ -339,8 +339,13 @@ def render_report(data: ReportInput) -> str:
     unsound = sum(1 for s in statuses.values() if not s.is_sound)
 
     parts: list[str] = [
+        # A complete document that names its encoding: the page carries typographic
+        # quotes and is forwarded, saved and printed by readers that would
+        # otherwise guess.
+        "<!doctype html><html lang='en'><head><meta charset=\"utf-8\">"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>Machine safety evidence report</title>",
-        f"<style>{_CSS}</style>",
+        f"<style>{_CSS}</style></head><body>",
         "<div class='sheet'>",
         "<header class='masthead'><div>",
         "<h1>Machine safety evidence report</h1>",
@@ -375,7 +380,7 @@ def render_report(data: ReportInput) -> str:
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
-    parts.append(_tile(functions - uncovered, "functions covered",
+    parts.append(_tile(functions - uncovered, "functions with current evidence",
                        "good" if uncovered == 0 else ""))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
@@ -457,6 +462,11 @@ def render_report(data: ReportInput) -> str:
         "amounts to a substantial modification requiring a new conformity assessment "
         "is a question for the manufacturer and, where one is involved, the notified "
         "body.</p>"
-        "</footer></div>")
+        "<p class='disclaimer'>This report is a record of what was collected, sealed and "
+        "verified, and of what that evidence no longer supports. It is not a declaration "
+        "of conformity and not a certification, and it does not say that any machine is "
+        "safe. Where it shows evidence as current, that means a recorded verification "
+        "still describes the configuration found, nothing more.</p>"
+        "</footer></div></body></html>")
 
     return "".join(parts)

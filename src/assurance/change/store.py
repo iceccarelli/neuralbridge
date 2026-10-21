@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from assurance.core.errors import AssuranceError
+from assurance.core.errors import AssuranceError, LedgerIntegrityError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
@@ -37,6 +37,7 @@ __all__ = [
     "UPDATED_KIND",
     "CaseStore",
     "CaseStoreError",
+    "ChainBrokenError",
 ]
 
 OPENED_KIND = "assurance.change.opened"
@@ -53,6 +54,10 @@ CASE_KINDS = (OPENED_KIND, UPDATED_KIND, TRANSITION_KIND, REVERIFICATION_KIND,
               DECISION_KIND, REOPENED_KIND)
 
 
+class ChainBrokenError(LedgerIntegrityError):
+    """The ledger's hash chain does not verify; nothing in it is shown or extended."""
+
+
 class CaseStoreError(AssuranceError):
     """A case transition was asked for that the ledger's own history refuses."""
 
@@ -62,6 +67,23 @@ class CaseStore:
 
     def __init__(self, ledger: EvidenceLedger) -> None:
         self.ledger = ledger
+
+    def require_intact(self) -> None:
+        """Refuse (``LedgerIntegrityError``) unless the ledger's whole chain verifies.
+
+        :meth:`get` skips an entry whose sealed evidence no longer verifies, which
+        is right for a reconstruction that reports it, and wrong for anything that
+        would present the result as the case: a case whose newest entry was edited
+        would read as the state *before* the edit, with nothing to say so. Every
+        write is guarded by this, and every interface that shows a case calls it
+        first.
+        """
+        ok, problems = self.ledger.verify_chain()
+        if not ok:
+            raise ChainBrokenError(
+                "the ledger's chain does not verify, so no case in it can be shown or "
+                "extended as fact:\n  " + "\n  ".join(problems[:5])
+                + (f"\n  ... and {len(problems) - 5} more" if len(problems) > 5 else ""))
 
     # -- reading ------------------------------------------------------
     def get(self, case_id: str) -> ChangeAssuranceCase | None:
@@ -129,7 +151,9 @@ class CaseStore:
         # The last line of defence, below every service function: whatever
         # called this, a case is never recorded as ready to close or closed
         # while it still names work that has not been done or a question
-        # nobody has answered.
+        # nobody has answered, and nothing is appended to a chain that no
+        # longer verifies.
+        self.require_intact()
         if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):
             outstanding = [*(f"re-verification of {f}" for f in case.required_reverifications),
                            *(f"decision: {d}" for d in case.human_decisions_required)]

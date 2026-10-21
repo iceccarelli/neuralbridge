@@ -172,9 +172,16 @@ class Fleet:
         }
 
     def table(self) -> str:
-        """Worst first, because that is the order somebody reads it in."""
+        """Worst first, because that is the order somebody reads it in.
+
+        A chain that does not verify is said first: a warning under the rows
+        would be read after the rows had already been believed.
+        """
+        warning = ("THE LEDGER CHAIN DOES NOT VERIFY — every row below is drawn from a "
+                   "store whose integrity is in question.\n\n"
+                   if not self.chain_verified else "")
         if not self.records:
-            return "no machines in this ledger."
+            return warning + "no machines in this ledger."
         rows = sorted(
             self.records,
             key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count,
@@ -194,7 +201,4 @@ class Fleet:
         out.append("")
         out.append(f"{s.machines} machine(s): {s.covered} covered, "
                    f"{s.with_gaps} with gaps")
-        if not self.chain_verified:
-            out.append("THE LEDGER CHAIN DOES NOT VERIFY — every row above is drawn "
-                       "from a store whose integrity is in question.")
-        return "\n".join(out)
+        return warning + "\n".join(out)

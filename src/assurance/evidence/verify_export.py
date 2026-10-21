@@ -148,6 +148,12 @@ def verify_export(bundle: Any) -> ExportVerification:
         else:
             problems.append("a whole-ledger bundle must carry its head attestation")
     else:
+        if not entries and not problems:
+            # What exporting a subject that does not exist produces. It is
+            # well-formed and consistent, and it establishes nothing: calling it
+            # VERIFIED would let an empty file stand in for a record.
+            problems.append(f"the bundle holds no entries for subject {subject!r}: "
+                            "there is nothing to verify (the subject may not exist)")
         skipped.append(
             "this bundle holds one subject's entries only, so the links to entries "
             "of other subjects, the start of the chain and the ledger head were "

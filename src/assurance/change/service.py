@@ -1139,6 +1139,9 @@ def decide(
 
 
 def _require(store: CaseStore, case_id: str) -> ChangeAssuranceCase:
+    # First: on a ledger that does not verify a case whose only entry was edited
+    # reads as "no such case", which is the wrong thing to say about it.
+    store.require_intact()
     case = store.get(case_id)
     if case is None:
         raise CaseNotFoundError(case_id)
