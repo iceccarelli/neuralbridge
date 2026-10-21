@@ -20,6 +20,13 @@
 #   ASSURANCE_ACCOUNTS=/tmp/verify-buyer-path/accounts.db \
 #   ./scripts/verify-buyer-path.sh
 #
+# NOTE: step 3 writes the shared seeded DEMO database as a paid account. That
+# is read-only for paid accounts by default (tenant isolation), so the local
+# neuralbridge stack this script talks to must be started with
+#   export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1
+# (a LOCAL-DEVELOPMENT switch — never set it in production). Without it the
+# plan call in step 3 gets a real 403 "demo connection is read-only".
+#
 # Cross-linked from docs/buyer-journey.md and DEPLOY_NOW.md. See
 # docs/ai-local-setup.md for how to bring the local stack up first — this
 # script does not start uvicorn itself and fails immediately, with a

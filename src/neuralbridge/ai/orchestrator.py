@@ -36,6 +36,7 @@ from neuralbridge.ai.tenancy import (
     can_access_plan,
     can_plan_on_connection,
     can_read_connection,
+    is_demo,
 )
 from neuralbridge.core.router import AdapterRegistry, RequestRouter
 
@@ -95,6 +96,14 @@ def _not_found_connection(connection_id: str) -> OrchestratorError:
     return OrchestratorError(404, f"Connection '{connection_id}' not found.")
 
 
+_UPSTREAM_FAILED = "The connection could not complete the operation."
+
+_DEMO_READ_ONLY = (
+    "The shared demo connection is read-only. Bind your own connection "
+    "(POST /ai/connections) to propose writes."
+)
+
+
 def _not_found_plan(plan_id: str) -> OrchestratorError:
     return OrchestratorError(404, f"Plan '{plan_id}' not found.")
 
@@ -144,14 +153,20 @@ def _build_provenance(conn: ConnectionRecord, operation: str, response: AdapterR
 async def _run(
     router: RequestRouter, scope: Scope, actor: Actor, conn: ConnectionRecord, operation: str, params: dict[str, Any]
 ) -> tuple[AdapterResponse, Provenance]:
-    result = await router.route(
-        adapter_type=conn.registry_key,
-        operation=operation,
-        params=params,
-        request_id=str(uuid.uuid4()),
-        actor=actor.as_audit_string(),
-        owner=scope.owner,
-    )
+    try:
+        result = await router.route(
+            adapter_type=conn.registry_key,
+            operation=operation,
+            params=params,
+            request_id=str(uuid.uuid4()),
+            actor=actor.as_audit_string(),
+            owner=scope.owner,
+        )
+    except Exception as exc:
+        # The router has already logged the real error server-side and in the
+        # owner's audit entry. The client gets a generic body: driver/OS text
+        # carries the target's host and port.
+        raise OrchestratorError(502, _UPSTREAM_FAILED) from exc
     response: AdapterResponse = result["data"]
     provenance = _build_provenance(conn, operation, response)
     return response, provenance
@@ -189,8 +204,12 @@ def create_plan(
     by the caller (``api/routes/ai.py``) before this is reached. The plan is
     owned by ``scope.owner`` — only that account may approve or deny it."""
     conn = store.get_connection(connection_id)
-    if conn is None or not can_plan_on_connection(scope, conn):
+    if conn is None or not can_read_connection(scope, conn):
         raise _not_found_connection(connection_id)
+    if not can_plan_on_connection(scope, conn):
+        # Only the shared demo reaches here (anything else unplannable is
+        # unreadable, so already a 404): it is visible, so a 403 is no oracle.
+        raise OrchestratorError(403, _DEMO_READ_ONLY)
 
     try:
         decision = evaluate(conn.adapter_type, operation, params)
@@ -247,6 +266,8 @@ async def approve_and_execute(
     conn = store.get_connection(record.connection_id)
     if conn is None:
         raise OrchestratorError(404, f"Connection '{record.connection_id}' backing this plan no longer exists.")
+    if not can_plan_on_connection(scope, conn):
+        raise OrchestratorError(403, _DEMO_READ_ONLY if is_demo(conn) else f"Plan '{plan_id}' not found.")
     _require_live_adapter(registry, conn)
 
     store.update_plan_status(
@@ -256,9 +277,9 @@ async def approve_and_execute(
 
     try:
         response, provenance = await _run(router, scope, actor, conn, record.operation, record.params)
-    except Exception as exc:
+    except OrchestratorError:
         store.update_plan_status(plan_id, status=PlanStatus.FAILED.value)
-        raise OrchestratorError(502, f"Execution failed: {exc}") from exc
+        raise
 
     updated = store.update_plan_status(plan_id, status=PlanStatus.EXECUTED.value)
     return ExecutionReceipt(

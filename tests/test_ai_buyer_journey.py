@@ -73,6 +73,10 @@ def shared_entitlement_env(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("ASSURANCE_API_KEYS", OPERATOR_KEY)
     monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
     monkeypatch.setenv("NEURALBRIDGE_AI_STORE", str(tmp_path / "ai-store.db"))
+    # The journey writes the shared seeded demo DB, which is read-only for paid
+    # accounts by default; the local buyer path opts in explicitly (never set
+    # this in production — see docs/ai-local-setup.md).
+    monkeypatch.setenv("NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID", "1")
     monkeypatch.setenv("NEURALBRIDGE_AI_PG_HOST", PG_HOST)
     monkeypatch.setenv("NEURALBRIDGE_AI_PG_PORT", str(PG_PORT))
     monkeypatch.setenv("NEURALBRIDGE_AI_PG_USER", PG_USER)
