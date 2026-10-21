@@ -19,7 +19,7 @@ same honest table shown on the [homepage](https://neuralbridge.io/#platform).
 
 Treat anything not marked **Supported** as evolving, whatever older marketing
 copy elsewhere in this repository's history might have claimed. `src/dashboard`
-exists as a Next.js console but is **not yet integrated** with the assurance
+exists as a separate Vite/React admin UI that makes no calls to the assurance API and is **not yet integrated** with the assurance
 product — stated here plainly rather than glossed over.
 
 Full detail, including what is not yet claimed, is in the

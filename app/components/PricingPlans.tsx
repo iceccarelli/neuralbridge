@@ -2,89 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { DEPLOY_BLOB, QUICKSTART, SALES, SALES_SUPPLIER } from '../lib/links';
+import { FALLBACK_PLANS, type Plan } from '../lib/plans';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
-
-interface PlanLimits {
-  validations_per_day: number | null;
-  product_families: number | null;
-  cases_per_day: number | null;
-  register_access: boolean;
-  verifiable_export: boolean;
-  signed_attestation: boolean;
-  machine_verification: boolean;
-  ai_control_plane?: boolean;
-  ai_reads_per_day?: number | null;
-}
-
-interface Plan {
-  tier: 'free' | 'register' | 'cell';
-  name: string;
-  blurb: string;
-  price: string;
-  purchasable: boolean;
-  includes: string[];
-  limits: PlanLimits;
-}
-
-// Mirrors src/assurance/billing/plans.py::public_catalogue() exactly, for
-// when the live API isn't reachable — this is what GET /v1/plans returns
-// today from any deployment with no Stripe price env vars set. Not a
-// marketing guess; the field names match the enforced dataclass.
-const FALLBACK_PLANS: Plan[] = [
-  {
-    tier: 'free',
-    name: 'Validator',
-    blurb: 'The free lead magnet. No card, no account required.',
-    price: 'free',
-    purchasable: false,
-    includes: [
-      '/ai control plane: discover + read (30/day) — writes need Register or Cell',
-      'Article 14 draft validation',
-      'ISO/TS 15066 separation calculator',
-      'Manifest diff',
-      'Advisory check',
-      'Declaration check',
-      'Bundle re-verification',
-      'Attestation verification',
-      'Offline enrolment kit',
-    ],
-    limits: { validations_per_day: 20, product_families: null, cases_per_day: null, register_access: false, verifiable_export: false, signed_attestation: false, machine_verification: false, ai_control_plane: false, ai_reads_per_day: 30 },
-  },
-  {
-    tier: 'register',
-    name: 'Register',
-    blurb: 'The Article 14 register for one manufacturer.',
-    price: '€390 / month',
-    purchasable: false,
-    includes: [
-      '/ai control plane: unlimited reads, propose-and-approve writes, additional connections, full audit trail',
-      'Unlimited Article 14 cases',
-      'Both deadline clocks, computed correctly',
-      'Hash-chained ledger with verifiable export',
-      '25 product families',
-      'Everything in Validator',
-    ],
-    limits: { validations_per_day: null, product_families: 25, cases_per_day: 50, register_access: true, verifiable_export: true, signed_attestation: false, machine_verification: false, ai_control_plane: true, ai_reads_per_day: null },
-  },
-  {
-    tier: 'cell',
-    name: 'Cell',
-    blurb: 'Everything in Register, for the full cell.',
-    price: '€1,290 / month',
-    purchasable: false,
-    includes: [
-      '/ai control plane: unlimited reads, propose-and-approve writes, additional connections, full audit trail',
-      'Machine safety verification',
-      'Annex III manifests and passports',
-      'Fleet advisory fan-out',
-      'Declarations bound to a configuration hash',
-      'Counter-signed head attestation',
-      'Everything in Register',
-    ],
-    limits: { validations_per_day: null, product_families: null, cases_per_day: null, register_access: true, verifiable_export: true, signed_attestation: true, machine_verification: true, ai_control_plane: true, ai_reads_per_day: null },
-  },
-];
 
 function CheckoutForm({ tier, variant = 'primary' }: { tier: 'register' | 'cell'; variant?: 'primary' | 'secondary' }) {
   const [open, setOpen] = useState(false);
@@ -160,7 +80,7 @@ export default function PricingPlans() {
         }
       })
       .catch(() => {
-        /* stay on the static fallback — it matches plans.py exactly */
+        /* stay on the static fallback — app/lib/plans.ts, copied from plans.py */
       });
     return () => {
       cancelled = true;

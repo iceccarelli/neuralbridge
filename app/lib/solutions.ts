@@ -116,7 +116,7 @@ export const SOLUTIONS: SolutionPage[] = [
       'The compliance clocks (CRA Art. 14 since 11 Sep 2026; Machinery Reg. Annex III 1.1.9 from 20 Jan 2027) are what the assurance layer answers to. The platform layer underneath is judged by a narrower, honest standard: what is actually supported today, not the roadmap.',
     painPoints: [
       { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small supported adapter set (PostgreSQL, REST) — not a universal enterprise middleware claim.' },
-      { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard exists as a Next.js console but is not integrated with the assurance product — said plainly, not glossed over.' },
+      { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard is a separate Vite/React admin UI that makes no calls to the assurance API — it is not integrated with the assurance product. The working surfaces are /console and /ai on this site. Said plainly, not glossed over.' },
       { title: 'Broad adapter coverage is evolving, not shipped', body: 'Treat anything not marked Supported in the README as evolving. That is the honest line, and it is the one this page holds too.' },
     ],
     proof: [

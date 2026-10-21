@@ -101,8 +101,8 @@ software does not do.
 | | Price | Includes |
 |---|---|---|
 | **Validator** | free | Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, attestation verification, and the offline enrolment kit |
-| **Register** | €390 / month | The Article 14 register for one manufacturer: unlimited cases, both clocks, hash-chained ledger with verifiable export, 25 product families |
-| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, and counter-signed head attestation |
+| **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
+| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
 Verification is free at every tier and always will be: the audience for a piece
 of evidence is a regulator, an insurer or a customer's customer, none of whom
@@ -142,7 +142,7 @@ src/assurance/        the product
   bridge/             supplier advisory -> Article 14 intake
   api/                FastAPI surface, billing, entitlements
 src/neuralbridge/     the integration platform this grew out of (below)
-src/dashboard/        Next.js dashboard
+src/dashboard/        Vite/React admin UI (not wired to the assurance API)
 ```
 
 ```bash
