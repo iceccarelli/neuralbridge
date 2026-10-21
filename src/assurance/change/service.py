@@ -19,6 +19,7 @@ deciding may not.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -30,7 +31,7 @@ from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
-from assurance.machinery.record import MANIFEST_KIND
+from assurance.machinery.record import MANIFEST_KIND, manifests_from_ledger
 from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
@@ -88,6 +89,27 @@ _RESERVED_NAMES = frozenset({
 #: format characters, so a category test alone lets them through.
 _FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 _INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
+#: Letters from other scripts that read as Latin ones, mapped to the Latin
+#: letter. A short list of the common ones, not Unicode's full confusables
+#: table: it closes the obvious disguises of a reserved word, no more.
+_CONFUSABLES = str.maketrans({
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c",
+    "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0455": "s", "\u0458": "j",
+    "\u04bb": "h", "\u0501": "d", "\u0475": "v", "\u043a": "k", "\u043c": "m",
+    "\u0442": "t", "\u043d": "h",
+    "\u03b1": "a", "\u03bf": "o", "\u03c1": "p", "\u03bd": "v", "\u03b9": "i",
+    "\u03ba": "k", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x", "\u03b5": "e",
+    "\u03b7": "n", "\u03c2": "s",
+    "\u0261": "g", "\u0131": "i", "\u0237": "j",
+})
+
+
+def _skeleton(name: str) -> str:
+    """The name as it would read in Latin letters: NFKC, accents dropped,
+    lookalike letters mapped, case folded."""
+    norm = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
+    stripped = "".join(c for c in norm if not unicodedata.combining(c))
+    return stripped.casefold().translate(_CONFUSABLES)
 
 
 def _name_problem(name: str) -> str:
@@ -98,8 +120,12 @@ def _name_problem(name: str) -> str:
             return f"it contains an invisible or control character (U+{ord(ch):04X})"
     if not any(ch.isalnum() for ch in norm):
         return "it has no letter or digit in it"
-    if norm.strip().casefold() in _RESERVED_NAMES:
-        return f"{norm.strip()!r} is what an automated actor is called, not who it is"
+    # Reserved if every word in it that is not a number is a reserved word:
+    # "agent.", "system:", "bot-7", "automation bot", and the same in lookalike
+    # letters. "Agent Smith" and "Botticelli" are somebody's name and pass.
+    words = [w for w in re.findall(r"[^\W_]+", _skeleton(name)) if not w.isdigit()]
+    if words and all(w in _RESERVED_NAMES for w in words):
+        return f"{name.strip()!r} is what an automated actor is called, not who it is"
     return ""
 
 
@@ -200,6 +226,7 @@ def _carry_workflow(existing: ChangeAssuranceCase, new: ChangeAssuranceCase,
         review_started_at=existing.review_started_at,
         reverification_requested_at=existing.reverification_requested_at,
         reverified_at=existing.reverified_at, closed_at=existing.closed_at,
+        trigger_at=existing.trigger_at or new.trigger_at,
         decision=existing.decision, decision_reason=existing.decision_reason,
         decision_by=existing.decision_by,
         resolved_decisions=existing.resolved_decisions,
@@ -350,6 +377,7 @@ def _reopen(
     }
     reopened = replace(
         new, status=CaseStatus.OPEN, opened_at=now, created_at=settled.created_at,
+        trigger_at=new.trigger_at or now,
         history=settled.history,
         prior_closures=(*settled.prior_closures, prior),
         linked_evidence=(*new.linked_evidence,
@@ -418,7 +446,11 @@ def _open_or_update(
     existing = store.get(new.case_id)
     if existing is None:
         now = format_utc(utc_now())
-        opened = replace(new, opened_at=now, created_at=now, updated_at=now)
+        # The case stamps its own opening time as the trigger when the engine
+        # gave none (an advisory has no observation time): the floor for
+        # re-verification evidence is the case's, never the caller's.
+        opened = replace(new, opened_at=now, created_at=now, updated_at=now,
+                         trigger_at=new.trigger_at or now)
         return store.open(opened, actor=actor, detail=detail)
     if existing.status in (CaseStatus.CLOSED, CaseStatus.REJECTED):
         because = _recurrence(store, existing, new)
@@ -845,9 +877,30 @@ def reverify(
             f"was opened (ledger position {record.ledger_seq}, case at {start}). "
             "Evidence that already existed when the change was found cannot be "
             "evidence about it; run the checks again.")
-    floor = manifest.taken_at
-    if case.trigger_at:
-        floor = max(floor, parse_utc(case.trigger_at))
+    # Ledger truth: the machine's declared functions and checks, and its current
+    # configuration, are read from the newest manifest sealed for it, never from
+    # the manifest in the caller's hands (which only has to agree with it).
+    sealed_manifests = manifests_from_ledger(store.ledger, key)
+    if not sealed_manifests:
+        raise CaseTransitionError(
+            f"the ledger holds no manifest sealed for {key}, so there is nothing to "
+            "check a re-verification against. Record the machine's manifest first.")
+    sealed = sealed_manifests[-1]
+    allowed = {sealed.configuration_hash()}
+    if case.trigger_type is TriggerType.MACHINE_DRIFT:
+        allowed.add(case.after_hash)
+    if manifest.configuration_hash() not in allowed:
+        raise CaseTransitionError(
+            f"the manifest's configuration {manifest.configuration_hash()[:12]} is "
+            f"neither the one this case concerns nor the newest sealed for {key} "
+            f"({sealed.configuration_hash()[:12]}); a re-verification of some other "
+            "configuration is not evidence about this one.")
+    floor = parse_utc(case.trigger_at or case.opened_at)
+    if sealed.taken_at < floor:
+        raise CaseTransitionError(
+            f"the newest manifest sealed for {key} was taken {format_utc(sealed.taken_at)}, "
+            f"which predates this case's trigger ({format_utc(floor)}). Collect and seal "
+            "the machine's manifest again after the change, then re-verify.")
     if record.effective_at < floor:
         raise CaseTransitionError(
             f"verification {record.content_hash[:12]} describes a state before "
@@ -860,12 +913,12 @@ def reverify(
             f"{case_id} has nothing outstanding for {key}; it awaits "
             f"{', '.join(case.required_reverifications) or 'nothing'}.")
 
-    coverage = assess_coverage(manifest, verifications, interventions)
+    coverage = assess_coverage(sealed, verifications, interventions)
     cleared: set[str] = set()
     evidence_current = dict(case.evidence_current)
     for entry in mine:
         fid = _entry_function(case, entry)
-        fn = manifest.function(fid)
+        fn = sealed.function(fid)
         fc = next((f for f in coverage.functions if f.function_id == fid), None)
         if fn is None or fc is None:
             evidence_current[entry] = "unknown"

@@ -53,7 +53,15 @@ the CLI, API and MCP all inherit it:
   or one of the blank "filler" code points (U+115F, U+1160, U+3164, U+FFA0,
   U+2800), or is one of the labels automation goes by (`automation`, `watch`,
   `agent`, `service`, `system`, `bot`, `assistant`, `operator`, `ai`;
-  case-insensitive, trimmed). The same name rules apply to a case's `owner`.
+  case-insensitive). The same name rules apply to a case's `owner`.
+  A name is reserved when every word in it that is not a number is a reserved
+  word, after NFKC, accent stripping, case folding and mapping a short list of
+  lookalike Cyrillic/Greek/Latin letters to Latin: `agent.`, `system:`,
+  `bot-7`, `automation bot` and `аutomation` (with a Cyrillic а) are refused;
+  `Agent Smith`, `Watch Dog` and `Botticelli` are somebody's name and pass.
+  Limits: the confusables list is short, not Unicode's; a reserved word fused
+  into one token (`automationbot`) or spelled with digits (`syst3m`) is not
+  caught; and nothing here can tell that a plausible name is a real person's.
 
 The reasoning is the product's whole position: detecting and reporting can be
 automated, deciding that the evidence stands again cannot.
@@ -162,12 +170,20 @@ caller:
   machine's bundle never clears another's, and the case is ready only when
   every named machine's every function is cleared. Drift and intervention cases
   concern one machine and keep bare function ids;
+- the manifest agrees with the **ledger**. The machine's declared functions and
+  checks, and its current configuration, are read from the newest manifest
+  *sealed in the ledger* for that machine; the caller's manifest only has to
+  carry the same configuration hash (or, for a drift case, the one the case was
+  opened on). With no manifest sealed for the machine, the re-verification is
+  refused. The newest sealed manifest must also have been taken at or after the
+  case's trigger, so the machine has to be re-collected after the change;
 - the cited verification is among the ones the coverage check ran against, was
   **sealed after the case's current cycle began** (ledger position, not clock),
-  and its run describes a state at or after both the trigger (the observed
-  manifest's `taken_at`, or the intervention's `occurred_at`) and the manifest it
-  is checked against. A bundle that already existed when the change was found
-  cannot be evidence about it;
+  and its run describes a state at or after the case's trigger. The trigger is
+  the observed manifest's `taken_at` (drift), the intervention's `occurred_at`,
+  or — for an advisory, which has no observation time — **the case's own
+  opening time**, stamped by the case and never supplied by a caller. A bundle
+  that already existed when the change was found cannot be evidence about it;
 - that bundle passed **every** check the function declares; and
 - `assess_coverage` reads the function `current`.
 
