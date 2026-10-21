@@ -31,13 +31,20 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from ..core.identity import format_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
-from .plans import Plan, plan_for
+from .metering import (
+    MAX_SPEND_LIMIT_UNITS,
+    allowance_for,
+    month_bounds,
+    overage_allowed,
+    valid_idempotency_key,
+)
+from .plans import METERED_SCOPES, Plan, plan_for
 
 __all__ = [
     "ACCOUNTS_SCHEMA_VERSION",
@@ -46,9 +53,12 @@ __all__ = [
     "PENDING_KEY_TTL",
     "Account",
     "AccountStore",
+    "IdempotencyConflictError",
     "KeyLimitError",
     "Principal",
     "QuotaExceededError",
+    "SpendLimitError",
+    "UsageRecord",
 ]
 
 #: Unchanged on purpose. Every change since version 1 is additive and applied
@@ -79,6 +89,10 @@ _EVENT_RETENTION = timedelta(days=35)
 #: this long, waiting for the checkout event that creates the account.
 _ORPHAN_RETENTION = timedelta(days=7)
 
+#: Events inside the free allowance are kept this long; billable ones are never
+#: dropped by this store.
+_INCLUDED_RETENTION = timedelta(days=62)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -96,7 +110,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     created_at             TEXT NOT NULL,
     updated_at             TEXT NOT NULL,
     last_event_at          INTEGER NOT NULL DEFAULT 0,
-    past_due_since         INTEGER NOT NULL DEFAULT 0
+    past_due_since         INTEGER NOT NULL DEFAULT 0,
+    spend_limit_units      INTEGER NOT NULL DEFAULT 0,
+    budget_alert_pct       INTEGER NOT NULL DEFAULT 80
 );
 CREATE INDEX IF NOT EXISTS accounts_by_customer ON accounts (stripe_customer_id);
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -151,6 +167,31 @@ CREATE TABLE IF NOT EXISTS usage (
     count   INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0),
     PRIMARY KEY (subject, scope, day)
 );
+-- The durable record of metered work, one row per accepted operation. Written in
+-- the same transaction as the quota check (see AccountStore.record_usage); it
+-- is also the outbox the pay-as-you-go reporter reads (billing/payg.py).
+CREATE TABLE IF NOT EXISTS usage_events (
+    event_id          TEXT PRIMARY KEY,
+    account_id        TEXT NOT NULL REFERENCES accounts (id),
+    scope             TEXT NOT NULL,
+    quantity          INTEGER NOT NULL CHECK (quantity > 0),
+    billable_quantity INTEGER NOT NULL DEFAULT 0
+                        CHECK (billable_quantity >= 0 AND billable_quantity <= quantity),
+    idempotency_key   TEXT NOT NULL,
+    occurred_at       TEXT NOT NULL,
+    source            TEXT NOT NULL DEFAULT 'api',
+    billed_state      TEXT NOT NULL
+                        CHECK (billed_state IN
+                               ('included','pending','sending','billed','rejected','ambiguous')),
+    provider_event_id TEXT NOT NULL DEFAULT '',
+    first_attempt_at  TEXT NOT NULL DEFAULT '',
+    last_attempt_at   TEXT NOT NULL DEFAULT '',
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT NOT NULL DEFAULT '',
+    UNIQUE (account_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS usage_events_by_account ON usage_events (account_id, occurred_at);
+CREATE INDEX IF NOT EXISTS usage_events_by_state ON usage_events (billed_state, occurred_at);
 """
 
 
@@ -162,6 +203,54 @@ class QuotaExceededError(RuntimeError):
         super().__init__(
             f"{scope}: {used} of {limit} used today on the {tier} plan."
         )
+
+
+class SpendLimitError(RuntimeError):
+    """The allowance is spent and the account's spend limit leaves no room.
+
+    Raised only for an account that *may* be billed past its allowance
+    (:func:`~.metering.overage_allowed`) but whose per-month limit, in billable
+    units, would be exceeded. Nothing was recorded.
+    """
+
+    def __init__(self, scope: str, limit_units: int, used_units: int, requested_units: int) -> None:
+        self.scope = scope
+        self.limit_units, self.used_units, self.requested_units = (
+            limit_units, used_units, requested_units)
+        super().__init__(
+            f"{scope}: {used_units} of {limit_units} billable units used this month; "
+            f"{requested_units} more would exceed the spend limit."
+        )
+
+
+class IdempotencyConflictError(RuntimeError):
+    """An idempotency key was reused for different work. Nothing was recorded."""
+
+    def __init__(self, key: str, recorded_scope: str, recorded_quantity: int) -> None:
+        self.key = key
+        self.recorded_scope, self.recorded_quantity = recorded_scope, recorded_quantity
+        super().__init__(
+            "this idempotency key was already used for "
+            f"{recorded_quantity} x {recorded_scope}; a key identifies one operation."
+        )
+
+
+@dataclass(frozen=True)
+class UsageRecord:
+    """The outcome of :meth:`AccountStore.record_usage`."""
+
+    event_id: str
+    scope: str
+    quantity: int
+    #: The part of ``quantity`` beyond the daily allowance, to be billed.
+    billable_quantity: int
+    #: ``included`` (inside the allowance), ``pending`` (billable, not yet reported)
+    #: or the reporter's later states; ``""`` when nothing was recorded.
+    billed_state: str
+    #: True when this key was already recorded: nothing was counted this time.
+    duplicate: bool
+    #: False when the account's plan does not meter this scope (nothing written).
+    recorded: bool = True
 
 
 class KeyLimitError(RuntimeError):
@@ -188,12 +277,32 @@ class Account:
     #: time when known), or 0 if unknown or not past due. Lets reconciliation
     #: end a ``past_due`` that Stripe never resolves.
     past_due_since: int = 0
+    #: The most billable units (operations beyond the daily allowance) this
+    #: account allows itself per UTC calendar month. 0 = none: pay-as-you-go
+    #: never bills an account that has not set a limit. Enforced in
+    #: :meth:`AccountStore.record_usage`, in units because the price lives in
+    #: Stripe and this service cannot enforce a currency amount exactly.
+    spend_limit_units: int = 0
+    #: Percent of the spend limit at which ``GET /v1/usage`` raises
+    #: ``budget_alert``. A flag only: this service sends no email.
+    budget_alert_pct: int = 80
 
     @property
     def plan(self) -> Plan:
         # A lapsed subscription drops to free rather than keeping paid access.
         # ``past_due`` still counts as paying: see ENTITLED_STATUSES.
         return plan_for(self.tier if self.status in ENTITLED_STATUSES else "free")
+
+    @property
+    def ever_paid(self) -> bool:
+        """Whether this account has been a customer: Stripe bound a customer id to it.
+
+        The id is written only by a signed checkout event (or by an operator),
+        never by the account holder. It is what separates a customer whose
+        subscription ended from a caller who never paid, and so decides who may
+        still read out their own evidence (``plans.EVIDENCE_READOUT_AFTER_LAPSE``).
+        """
+        return bool(self.stripe_customer_id)
 
     @property
     def warning(self) -> str:
@@ -278,6 +387,8 @@ class AccountStore:
         additions = (
             ("last_event_at", "INTEGER NOT NULL DEFAULT 0"),
             ("past_due_since", "INTEGER NOT NULL DEFAULT 0"),
+            ("spend_limit_units", "INTEGER NOT NULL DEFAULT 0"),
+            ("budget_alert_pct", "INTEGER NOT NULL DEFAULT 80"),
         )
         # Nothing to add (the normal case): no write lock, so opening an
         # up-to-date database never queues behind a writer.
@@ -659,6 +770,10 @@ class AccountStore:
             stripe_subscription_id=row["stripe_subscription_id"],
             last_event_at=row["last_event_at"] if "last_event_at" in row.keys() else 0,
             past_due_since=row["past_due_since"] if "past_due_since" in row.keys() else 0,
+            spend_limit_units=(
+                row["spend_limit_units"] if "spend_limit_units" in row.keys() else 0),
+            budget_alert_pct=(
+                row["budget_alert_pct"] if "budget_alert_pct" in row.keys() else 80),
         )
 
     def account(self, account_id: str) -> Account | None:
@@ -1020,6 +1135,258 @@ class AccountStore:
                 (subject, scope, today),
             )
         return (used + 1, limit)
+
+    # -- durable usage ----------------------------------------------------
+    @staticmethod
+    def _usage_decision(
+        db: sqlite3.Connection, account: Account, scope: str, quantity: int,
+        moment: datetime, allowance: int,
+    ) -> tuple[int, int]:
+        """``(used_today, billable_units)`` for ``quantity`` more, or a refusal.
+
+        The one place the allowance and the spend limit are decided; both the
+        write path and the read-only pre-check call it, so they cannot disagree.
+        """
+        today = moment.date().isoformat()
+        row = db.execute(
+            "SELECT count FROM usage WHERE subject=? AND scope=? AND day=?",
+            (account.id, scope, today),
+        ).fetchone()
+        used = row["count"] if row else 0
+        if used + quantity <= allowance:
+            return used, 0
+        over = used + quantity - max(allowance, used)
+        if not overage_allowed(account):
+            raise QuotaExceededError(scope, allowance, used, account.plan.tier)
+        start, end = month_bounds(moment)
+        so_far = db.execute(
+            "SELECT COALESCE(SUM(billable_quantity), 0) FROM usage_events "
+            "WHERE account_id=? AND occurred_at >= ? AND occurred_at < ?",
+            (account.id, start, end),
+        ).fetchone()[0]
+        if so_far + over > account.spend_limit_units:
+            raise SpendLimitError(scope, account.spend_limit_units, so_far, over)
+        return used, over
+
+    @staticmethod
+    def _check_request(scope: str, quantity: int, key: str | None) -> None:
+        if scope not in METERED_SCOPES:
+            raise ValueError(f"{scope!r} is not a metered scope")
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
+            raise ValueError("quantity must be a positive integer")
+        if key is not None and not valid_idempotency_key(key):
+            raise ValueError("idempotency key must be 1-255 characters of A-Z a-z 0-9 . _ : -")
+
+    def record_usage(
+        self,
+        account_id: str,
+        scope: str,
+        quantity: int,
+        idempotency_key: str,
+        *,
+        source: str = "api",
+        now: datetime | None = None,
+    ) -> UsageRecord:
+        """Count successful metered work, atomically with the quota check.
+
+        One ``BEGIN IMMEDIATE`` transaction does all of: find a previous record
+        under this key (a retry returns it and counts nothing), read the account
+        and its plan, read today's counter, decide (inside the allowance;
+        beyond it and billable; or refuse), and write the counter and the event.
+        There is no moment at which two callers can both take the last unit of
+        an allowance or of a spend limit.
+
+        Raises :class:`QuotaExceededError` (allowance spent, billing not on for
+        this account), :class:`SpendLimitError` (billing on, limit reached) or
+        :class:`IdempotencyConflictError`; in each case nothing is written.
+        ``ValueError`` for an unmetered scope, a non-positive quantity or a
+        malformed key; ``LookupError`` for an unknown account.
+
+        A plan that does not meter the scope (Register and Cell have no daily
+        cap) records nothing and returns ``recorded=False``.
+        """
+        self._check_request(scope, quantity, idempotency_key)
+        moment = now or utc_now()
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no account {account_id!r}")
+            previous = db.execute(
+                "SELECT * FROM usage_events WHERE account_id=? AND idempotency_key=?",
+                (account_id, idempotency_key),
+            ).fetchone()
+            if previous is not None:
+                if (previous["scope"], previous["quantity"]) != (scope, quantity):
+                    raise IdempotencyConflictError(
+                        idempotency_key, previous["scope"], previous["quantity"])
+                return UsageRecord(
+                    event_id=previous["event_id"], scope=scope, quantity=quantity,
+                    billable_quantity=previous["billable_quantity"],
+                    billed_state=previous["billed_state"], duplicate=True)
+            account = self._row_to_account(row)
+            allowance = allowance_for(account.plan, scope)
+            if allowance is None:
+                return UsageRecord(event_id="", scope=scope, quantity=quantity,
+                                   billable_quantity=0, billed_state="", duplicate=False,
+                                   recorded=False)
+            used, billable = self._usage_decision(db, account, scope, quantity, moment, allowance)
+            today = moment.date().isoformat()
+            if used == 0:
+                # First spend of the day for this account and scope: drop what is
+                # old so these tables are bounded by recent activity. Billable
+                # events are never dropped here; only those inside the allowance.
+                cutoff = (moment.date() - timedelta(days=7)).isoformat()
+                db.execute("DELETE FROM usage WHERE day < ?", (cutoff,))
+                db.execute(
+                    "DELETE FROM usage_events WHERE billed_state='included' AND occurred_at < ?",
+                    (format_utc(moment - _INCLUDED_RETENTION),),
+                )
+            db.execute(
+                "INSERT INTO usage (subject, scope, day, count) VALUES (?,?,?,?) "
+                "ON CONFLICT(subject, scope, day) DO UPDATE SET count = count + ?",
+                (account_id, scope, today, quantity, quantity),
+            )
+            event_id = "uev_" + secrets.token_hex(12)
+            state = "pending" if billable else "included"
+            db.execute(
+                "INSERT INTO usage_events (event_id, account_id, scope, quantity, "
+                "billable_quantity, idempotency_key, occurred_at, source, billed_state) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (event_id, account_id, scope, quantity, billable, idempotency_key,
+                 format_utc(moment), source, state),
+            )
+            return UsageRecord(event_id=event_id, scope=scope, quantity=quantity,
+                               billable_quantity=billable, billed_state=state,
+                               duplicate=False)
+
+    def check_usage(
+        self, account_id: str, scope: str, quantity: int = 1,
+        idempotency_key: str | None = None, *, now: datetime | None = None,
+    ) -> None:
+        """Would :meth:`record_usage` refuse this? Read-only; takes no write lock.
+
+        A cheap early refusal, so a caller who is certainly over their limit
+        costs the service no computation. It is advisory: the decision that
+        counts is the one :meth:`record_usage` makes inside its transaction. A
+        retry of work already recorded under ``idempotency_key`` always passes.
+        """
+        self._check_request(scope, quantity, idempotency_key)
+        moment = now or utc_now()
+        db = self._connect()
+        try:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no account {account_id!r}")
+            account = self._row_to_account(row)
+            allowance = allowance_for(account.plan, scope)
+            if allowance is None:
+                return
+            if idempotency_key is not None and db.execute(
+                "SELECT 1 FROM usage_events WHERE account_id=? AND idempotency_key=?",
+                (account_id, idempotency_key),
+            ).fetchone():
+                return
+            self._usage_decision(db, account, scope, quantity, moment, allowance)
+        finally:
+            db.close()
+
+    def check_quota(
+        self, subject: str, scope: str, limit: int | None, tier: str = "free"
+    ) -> None:
+        """Read-only pre-check for a caller with no account (an address bucket)."""
+        if limit is None:
+            return
+        today = utc_now().date().isoformat()
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT count FROM usage WHERE subject=? AND scope=? AND day=?",
+                (subject, scope, today),
+            ).fetchone()
+        finally:
+            db.close()
+        used = row["count"] if row else 0
+        if used >= limit:
+            raise QuotaExceededError(scope, limit, used, tier)
+
+    def set_spend_limit(
+        self, account_id: str, units: int | None = None, budget_alert_pct: int | None = None,
+    ) -> Account:
+        """Set an account's monthly spend limit (billable units) and/or alert threshold.
+
+        The limit applies from the very next call. Lowering it below what has
+        already been used this month stops further billing at once; it never
+        un-bills anything. ``ValueError`` outside ``0..MAX_SPEND_LIMIT_UNITS`` or
+        ``1..100``; ``LookupError`` for an unknown account.
+        """
+        if units is not None and (
+            isinstance(units, bool) or not isinstance(units, int)
+            or not 0 <= units <= MAX_SPEND_LIMIT_UNITS
+        ):
+            raise ValueError(f"spend limit must be an integer 0..{MAX_SPEND_LIMIT_UNITS}")
+        if budget_alert_pct is not None and (
+            isinstance(budget_alert_pct, bool) or not isinstance(budget_alert_pct, int)
+            or not 1 <= budget_alert_pct <= 100
+        ):
+            raise ValueError("budget alert percentage must be an integer 1..100")
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no account {account_id!r}")
+            db.execute(
+                "UPDATE accounts SET spend_limit_units=?, budget_alert_pct=?, updated_at=? "
+                "WHERE id=?",
+                (row["spend_limit_units"] if units is None else units,
+                 row["budget_alert_pct"] if budget_alert_pct is None else budget_alert_pct,
+                 format_utc(utc_now()), account_id),
+            )
+            return self._row_to_account(
+                db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone())
+
+    def _read_events(self, sql: str, args: tuple[Any, ...]) -> list[sqlite3.Row]:
+        db = self._connect()
+        try:
+            try:
+                return db.execute(sql, args).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+                return []  # a store not yet migrated has recorded nothing
+        finally:
+            db.close()
+
+    def usage_events(
+        self, account_id: str, *, start: str = "", end: str = "9999", limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """The account's own events in ``[start, end)``, newest first. Never another account's."""
+        rows = self._read_events(
+            "SELECT event_id, scope, quantity, billable_quantity, idempotency_key, "
+            "occurred_at, source, billed_state FROM usage_events "
+            "WHERE account_id=? AND occurred_at >= ? AND occurred_at < ? "
+            "ORDER BY occurred_at DESC, rowid DESC LIMIT ?",
+            (account_id, start, end, max(1, min(int(limit), 500))),
+        )
+        return [dict(r) for r in rows]
+
+    def usage_totals(
+        self, account_id: str, *, start: str = "", end: str = "9999"
+    ) -> dict[str, dict[str, int]]:
+        """Per scope: units counted and units billable in ``[start, end)``."""
+        rows = self._read_events(
+            "SELECT scope, SUM(quantity) AS q, SUM(billable_quantity) AS b FROM usage_events "
+            "WHERE account_id=? AND occurred_at >= ? AND occurred_at < ? GROUP BY scope",
+            (account_id, start, end),
+        )
+        return {r["scope"]: {"quantity": r["q"], "billable_quantity": r["b"]} for r in rows}
+
+    def billable_by_state(self, account_id: str = "") -> dict[str, int]:
+        """Billable units by ``billed_state`` (all accounts if ``account_id`` is empty)."""
+        rows = self._read_events(
+            "SELECT billed_state, SUM(billable_quantity) AS b FROM usage_events "
+            "WHERE billable_quantity > 0 AND (? = '' OR account_id = ?) GROUP BY billed_state",
+            (account_id, account_id),
+        )
+        return {r["billed_state"]: r["b"] for r in rows}
 
     def usage_today(self, subject: str) -> dict[str, int]:
         # The UTC day, not the server's local day: a quota that rolls over at

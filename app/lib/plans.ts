@@ -23,10 +23,14 @@ export interface PlanLimits {
   supplier_publish?: boolean;
   ai_control_plane?: boolean;
   ai_reads_per_day?: number | null;
+  /** Operations past the free daily allowance are billed (pay-as-you-go). */
+  metered_overage?: boolean;
 }
 
 export interface Plan {
-  tier: 'free' | 'register' | 'cell';
+  // 'payg' is never in FALLBACK_PLANS: it exists only when the live API lists
+  // it (a deployment with a metered price and a meter configured).
+  tier: 'free' | 'register' | 'cell' | 'payg';
   name: string;
   blurb: string;
   price: string;
@@ -73,6 +77,7 @@ export const FALLBACK_PLANS: Plan[] = [
       supplier_publish: false,
       ai_control_plane: false,
       ai_reads_per_day: 30,
+      metered_overage: false,
     },
   },
   {
@@ -101,6 +106,7 @@ export const FALLBACK_PLANS: Plan[] = [
       supplier_publish: false,
       ai_control_plane: true,
       ai_reads_per_day: null,
+      metered_overage: false,
     },
   },
   {
@@ -135,6 +141,7 @@ export const FALLBACK_PLANS: Plan[] = [
       supplier_publish: false,
       ai_control_plane: true,
       ai_reads_per_day: null,
+      metered_overage: false,
     },
   },
 ];
