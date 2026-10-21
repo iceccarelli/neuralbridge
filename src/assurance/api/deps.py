@@ -54,6 +54,7 @@ that can forget a ``WHERE account_id = ?``.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -500,6 +501,9 @@ class MeterTicket:
     key: str
     #: True when the client supplied the key (so a retry can be deduplicated).
     client_key: bool
+    #: Hash of the request this ticket was issued for. A client key is bound to
+    #: it: the same key on a different request is a 409, never a free replay.
+    fingerprint: str = ""
 
     @property
     def limit(self) -> int | None:
@@ -517,11 +521,12 @@ class MeterTicket:
             account = self._account()
             if account is not None:
                 self.accounts.check_usage(
-                    account.id, self.scope, 1, self.key if self.client_key else None)
+                    account.id, self.scope, 1, self.key if self.client_key else None,
+                    fingerprint=self.fingerprint)
             else:
                 self.accounts.check_quota(
                     self.principal.subject, self.scope, limit, self.principal.tier)
-        except (QuotaExceededError, SpendLimitError) as exc:
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
             raise _metering_refusal(exc, self.principal) from exc
 
     def commit(self, response: Response | None = None) -> None:
@@ -534,7 +539,8 @@ class MeterTicket:
             if limit is None:
                 pass
             elif account is not None:
-                record = self.accounts.record_usage(account.id, self.scope, 1, self.key)
+                record = self.accounts.record_usage(
+                    account.id, self.scope, 1, self.key, fingerprint=self.fingerprint)
                 event_id, billable = record.event_id, record.billable_quantity
             else:
                 self.accounts.consume(
@@ -554,6 +560,29 @@ class MeterTicket:
             response.headers["X-Assurance-Billable-Units"] = str(billable)
 
 
+async def request_fingerprint(request: Request, scope: str) -> str:
+    """A hash of what a metered request asks for: scope, route, query, body.
+
+    The JSON body is canonicalised (sorted keys, no insignificant whitespace),
+    so a client that re-serialises the same document still replays; a body that
+    is not JSON is hashed as the bytes it is. The body is cached by Starlette,
+    so reading it here does not consume it for the route.
+    """
+    raw = await request.body()
+    try:
+        canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True).encode() if raw else b""
+    except ValueError:
+        canonical = raw
+    digest = hashlib.sha256()
+    for part in (scope, request.method, request.url.path,
+                 "&".join(sorted(f"{k}={v}" for k, v in request.query_params.multi_items()))):
+        digest.update(part.encode())
+        digest.update(b"\x00")
+    digest.update(canonical)
+    return digest.hexdigest()
+
+
 def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
     """Dependency for a route that does metered work: ``Annotated[MeterTicket, Metered("x")]``.
 
@@ -568,6 +597,7 @@ def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
     async def dependency(
         principal: Annotated[Principal, Depends(current_principal)],
         accounts: Annotated[AccountStore, Depends(get_accounts)],
+        request: Request,
         idempotency_key: Annotated[str | None, Header()] = None,
     ) -> MeterTicket:
         if idempotency_key is not None and not valid_idempotency_key(idempotency_key):
@@ -583,6 +613,8 @@ def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
             principal=principal, scope=scope, accounts=accounts,
             key=idempotency_key if idempotency_key is not None else f"auto:{uuid.uuid4().hex}",
             client_key=idempotency_key is not None,
+            fingerprint=(await request_fingerprint(request, scope)
+                         if idempotency_key is not None else ""),
         )
         ticket.precheck()
         return ticket
