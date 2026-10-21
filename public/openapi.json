@@ -338,7 +338,7 @@
             "type": "string"
           },
           "tier": {
-            "pattern": "^(register|cell)$",
+            "pattern": "^(register|cell|payg)$",
             "title": "Tier",
             "type": "string"
           }
@@ -1276,6 +1276,39 @@
         "title": "TriageIn",
         "type": "object"
       },
+      "UsageLimitsIn": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_alert_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Alert Pct"
+          },
+          "spend_limit_units": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend Limit Units"
+          }
+        },
+        "title": "UsageLimitsIn",
+        "type": "object"
+      },
       "UserNotificationIn": {
         "additionalProperties": false,
         "description": "The Article 14(8) notification to users.\n\nThe trigger is becoming aware, not the availability of a fix. Guidance\n\u00a7\u00a7219-221: this is not an obligation to publish.",
@@ -2151,7 +2184,7 @@
     },
     "/v1/cases/{case_id}/export": {
       "get": {
-        "description": "Refuses if the chain does not verify.\n\nAn export is the moment records leave the system and start being relied on.\nGated on the plan's ``export`` entitlement as well as on the register\nitself, so the ``verifiable_export`` limit on ``GET /v1/plans`` is a\nstatement about code that runs.",
+        "description": "Refuses if the chain does not verify.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
         "operationId": "get_case_export_v1_cases__case_id__export_get",
         "parameters": [
           {
@@ -4068,6 +4101,87 @@
         ]
       }
     },
+    "/v1/evidence/verify": {
+      "post": {
+        "description": "The body is the raw JSON file itself (not wrapped in anything).\n\nNothing is stored. The body is read into memory, checked and dropped; the\nonly record is the ordinary access log line (method, path, status). The\nanswer separates facts established (`verified`), what is taken on trust\n(`assumptions`) and every limit (`not_checked`); there is no bare \"valid\".",
+        "operationId": "verify_evidence_v1_evidence_verify_post",
+        "parameters": [
+          {
+            "description": "the issuer's Ed25519 public key (PEM), to check attestation signatures. Public by nature; omit for other kinds of file.",
+            "in": "query",
+            "name": "public_key_pem",
+            "required": false,
+            "schema": {
+              "default": "",
+              "description": "the issuer's Ed25519 public key (PEM), to check attestation signatures. Public by nature; omit for other kinds of file.",
+              "maxLength": 4096,
+              "title": "Public Key Pem",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Verify Evidence V1 Evidence Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check an evidence file you were handed. Free, anonymous, stores nothing.",
+        "tags": [
+          "free"
+        ]
+      }
+    },
     "/v1/fleet/advisory": {
       "post": {
         "description": "The fan-out: one advisory, every enrolled machine, down to safety functions.\n\nA machine whose coverage was already stale is reported, and is not counted\nas newly in question \u2014 an advisory does not make it worse, and mixing the two\nhides the machines that were fine until this morning.",
@@ -4148,9 +4262,25 @@
     },
     "/v1/fleet/advisory/check": {
       "post": {
-        "description": "One advisory, one manifest, no account.\n\nThe match basis is always reported. ``hash`` settles it; ``version`` rests on\na label, and this system has already shown a label can be wrong;\n``hash_mismatch`` means the machine's own label and artefact disagree against\nthe supplier's published figures, which is neither affected nor clear.",
+        "description": "One advisory, one manifest, no account.\n\nThe match basis is always reported. ``hash`` settles it; ``version`` rests on\na label, and this system has already shown a label can be wrong;\n``hash_mismatch`` means the machine's own label and artefact disagree against\nthe supplier's published figures, which is neither affected nor clear.\nCounted once the answer is complete (``billing/metering.py``).",
         "operationId": "advisory_check_v1_fleet_advisory_check_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -5230,9 +5360,25 @@
     },
     "/v1/machine/separation": {
       "post": {
-        "description": "S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.\n\nTwo things this returns that a spreadsheet usually gets wrong: Sh runs over\nthe reaction time as well as the stop time, and Ss is flagged when the\nrequested speed is above the speed the stopping distance was measured at.",
+        "description": "S(t0) = Sh + Sr + Ss + C + Zd + Zr, term by term.\n\nTwo things this returns that a spreadsheet usually gets wrong: Sh runs over\nthe reaction time as well as the stop time, and Ss is flagged when the\nrequested speed is above the speed the stopping distance was measured at.\nCounted once the answer is complete (``billing/metering.py``).",
         "operationId": "separation_v1_machine_separation_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -5464,9 +5610,25 @@
     },
     "/v1/machinery/diff": {
       "post": {
-        "description": "Compare an as-declared baseline against what was found on the machine.\n\nA version string changing while the artefact stays byte-identical is graded\nadministrative; a hash changing on an item that implements a safety function\nis the finding. An item carrying no hash is reported as uncomparable \u2014 never\nas unchanged.",
+        "description": "Compare an as-declared baseline against what was found on the machine.\n\nA version string changing while the artefact stays byte-identical is graded\nadministrative; a hash changing on an item that implements a safety function\nis the finding. An item carrying no hash is reported as uncomparable \u2014 never\nas unchanged. Counted once the answer is complete (``billing/metering.py``).",
         "operationId": "diff_v1_machinery_diff_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -6134,9 +6296,25 @@
     },
     "/v1/spec/validate": {
       "post": {
-        "description": "The free tier, and the demo that sells the register behind it.\n\nNothing is recorded. A prospect can paste a draft filing and immediately\nsee which of the 39 fields are missing, which exceed a character limit,\nand which listed territories are not EU Member States.",
+        "description": "The free tier, and the demo that sells the register behind it.\n\nNothing is recorded about the filing. A prospect can paste a draft filing\nand immediately see which of the 39 fields are missing, which exceed a\ncharacter limit, and which listed territories are not EU Member States.\nThe call is counted (see ``billing/metering.py``) once the answer is\ncomplete; a draft that is not submittable is a successful answer.",
         "operationId": "post_validate_v1_spec_validate_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
           {
             "in": "header",
             "name": "x-api-key",
@@ -6322,6 +6500,184 @@
         "summary": "Read a hosted supplier feed (free, no account, forever)",
         "tags": [
           "supplier"
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "description": "Your own metered usage: per-scope totals, allowance, remaining, pay-as-you-go\nstate and your recent events with their idempotency keys.\n\nEverything is read from the account store for the account the key belongs\nto. There is no parameter that names another account, and no total is ever\ntaken from the client. The operator and anonymous callers have no account\nusage (anonymous gets a 401).",
+        "operationId": "get_usage_v1_usage_get",
+        "parameters": [
+          {
+            "description": "'current' (this UTC month, default), 'today' or YYYY-MM",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "'current' (this UTC month, default), 'today' or YYYY-MM",
+              "title": "Period"
+            }
+          },
+          {
+            "description": "how many recent events",
+            "in": "query",
+            "name": "events",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "how many recent events",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Events",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Usage V1 Usage Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What your account has used",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/v1/usage/limits": {
+      "post": {
+        "description": "Your guard against a surprise bill, in billable units per UTC month.\n\nTakes effect on the next call. Lowering it below what you have used stops\nbilling at once. Setting a limit does not turn billing on: that needs the\npay-as-you-go plan (a free or lapsed account stays at its daily cap).",
+        "operationId": "post_usage_limits_v1_usage_limits_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Usage Limits V1 Usage Limits Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set your monthly spend limit and alert",
+        "tags": [
+          "billing"
         ]
       }
     },
