@@ -167,12 +167,17 @@ class EvidenceLedger:
         with self._lock:
             db = self._connect()
             try:
+                # Outside the rollback guard: when BEGIN itself fails (the file
+                # is locked) there is no transaction, and a ROLLBACK would raise
+                # "cannot rollback - no transaction is active" over the real error.
                 db.execute("BEGIN IMMEDIATE")
-                yield db
-                db.execute("COMMIT")
-            except Exception:
-                db.execute("ROLLBACK")
-                raise
+                try:
+                    yield db
+                    db.execute("COMMIT")
+                except Exception:
+                    if db.in_transaction:
+                        db.execute("ROLLBACK")
+                    raise
             finally:
                 db.close()
 
