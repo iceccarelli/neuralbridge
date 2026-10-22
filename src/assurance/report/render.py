@@ -70,6 +70,12 @@ class ReportInput:
     #: cannot. They join the numbered list verbatim, like every other limit.
     extra_limits: tuple[str, ...] = ()
     generated_at: datetime | None = None
+    #: The signed head attestations made for this ledger (``assurance attest``),
+    #: and the public key to check them against. The key must have reached the
+    #: reader by a route other than the attestation log; without it signatures are
+    #: reported as not checked, never as valid.
+    attestations: tuple[Any, ...] = ()
+    attestation_key: Any = None
 
 
 _CSS = """
@@ -316,6 +322,64 @@ def _impact_block(impact: ImpactReport) -> str:
     return "".join(out)
 
 
+def _attestation_block(data: ReportInput, chain_ok: bool) -> str:
+    """What, if anything, a signature says about this ledger's head.
+
+    Kept apart from the chain statement on purpose: a chain that verifies is
+    internally consistent, and whoever holds the ledger could have rewritten it
+    whole. Only a signature made with a key the holder does not control, over a
+    head the signer or the holder named earlier, says otherwise.
+    """
+    atts = list(data.attestations)
+    if not atts:
+        return (
+            "<div class='banner warn'><b>No head attestation supplied.</b> The chain "
+            "above is internally consistent; it is <b>not independently attested</b>. "
+            "Whoever holds this ledger could have rewritten it end to end and produced "
+            "a chain that verifies. A signature over the head, made with a key the "
+            "ledger's holder does not control, is what closes that "
+            "(<code>assurance attest</code>).</div>")
+    key = data.attestation_key
+    if key is None:
+        return (
+            f"<div class='banner warn'><b>{len(atts)} attestation(s) supplied; "
+            "signatures NOT checked.</b> No public key was given, and a key that "
+            "arrives with the attestations proves nothing about who signed. Obtain the "
+            "signer's fingerprint by another route and re-run with the key. Until then "
+            "this ledger is not independently attested.</div>")
+    from assurance.attest.attestation import AttestationBasis, verify_log
+
+    verdict = verify_log(atts, key, ledger=data.ledger)
+    latest = verdict.latest
+    covered_to = latest.head_seq if latest else 0
+    unsigned_tail = max(0, len(data.ledger) - (latest.ledger_length if latest else 0))
+    basis = ("a head the holder declared to the signer (the signer did not read the "
+             "ledger)" if latest and latest.basis is AttestationBasis.DECLARED_BY_HOLDER
+             else "a head the signer read from the ledger and verified")
+    if verdict.ok and chain_ok:
+        cls, head = "", "<b>Head attestation verifies.</b>"
+    else:
+        cls, head = "bad", "<b>HEAD ATTESTATION DOES NOT VERIFY.</b>"
+    body = [
+        f"<div class='banner {cls}'>{head} {verdict.checked} attestation(s) checked "
+        f"against key <span class='mono'>{e(key.fingerprint)}</span>, which the reader "
+        "supplied. Latest: "
+        + (f"#{latest.sequence} at {e(latest.attested_at)}, covering records 1–"
+           f"{e(str(latest.ledger_length))} (head seq {covered_to}); basis: {e(basis)}. "
+           if latest else "")
+        + (f"{unsigned_tail} record(s) were appended after it and are covered by no "
+           "signature. " if unsigned_tail else "")
+        + ("Problems: " + e("; ".join(verdict.problems[:4])) if verdict.problems else "")
+        + "</div>",
+        "<div class='note'><b>What a valid attestation establishes:</b> that the holder "
+        "of that key signed that head at that time, so a later rewind contradicts a "
+        "signed statement. <b>What it does not:</b> that the key belongs to whom you "
+        "think, that the underlying machines or records are true, or anything about the "
+        "physical behaviour of any machine.</div>",
+    ]
+    return "".join(body)
+
+
 def render_report(data: ReportInput) -> str:
     """Produce one self-contained HTML page. No network, no scripts."""
     fleet = Fleet.from_ledger(data.ledger)
@@ -377,6 +441,8 @@ def render_report(data: ReportInput) -> str:
             "Every statement in this report is drawn from a store whose integrity "
             "is in question. "
             + e("; ".join(fleet.chain_problems[:3])) + "</div>")
+
+    parts.append(_attestation_block(data, fleet.chain_verified))
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
@@ -440,6 +506,15 @@ def render_report(data: ReportInput) -> str:
             limits.append(c)
 
     parts.append(f"<section><h2>{n + 2} · What this report does not establish</h2>")
+    parts.append(
+        "<p class='lede'><b>Checkable offline from the ledger and this page:</b> that "
+        "every record hashes to its recorded value and links to its predecessor; that "
+        "each finding reproduces when the engines are re-run on the same records "
+        "(<code>assurance machinery check</code>); and, given a signer's key obtained "
+        "independently, that the signed head matches. <b>Not establishable from this "
+        "artefact:</b> that the records describe the machines as they physically are, "
+        "that evidence was produced on the machine it is filed under, that a missing "
+        "record never existed, or the correctness of any supplier statement.</p>")
     parts.append("<p class='lede'>Carried verbatim from the engines that produced "
                  "the findings above. A report that hides its own limits is worth "
                  "less than no report, because somebody will rely on it.</p>")

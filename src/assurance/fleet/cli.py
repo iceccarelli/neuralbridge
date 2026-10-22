@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
+    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
     if args.json:
         print(json.dumps(fleet.to_dict(), indent=2))
     else:
@@ -245,7 +245,7 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
             "override": None, "implications_reviewed": False,
         } for a in advisories}
 
-    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
+    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
     reports = [assess_impact(a, fleet, provenance=provenance.get(a.advisory_id))
                for a in advisories]
 
