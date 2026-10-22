@@ -18,6 +18,7 @@ _DOMAINS = {
     "supplier": "assurance.supplier.cli",
     "change": "assurance.change.cli",
     "evidence": "assurance.evidence.cli",
+    "value": "assurance.value.cli",
 }
 
 

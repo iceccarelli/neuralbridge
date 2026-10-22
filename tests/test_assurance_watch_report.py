@@ -1143,3 +1143,38 @@ class TestWhenTheIngestLockIsHeld:
         assert len(ledger_of(acct)) == before
         # and the same report is accepted once the lock is free (retry is safe)
         assert post(client, h, report(failed("0412", at=now() - timedelta(minutes=1)))).status_code == 200
+
+
+class TestRunSummaryReachesTheHostedRecord:
+    def test_supplier_findings_and_local_cases_are_stored_as_client_reported(
+            self, client, cell):
+        acct, h = cell
+        enroll_manifest(acct, Path(__file__).parent)  # an enrolled machine to fail against
+        summary = {
+            "stale_observations": ["Grimaldi/AR-7#0412 last seen long ago"],
+            "advisory_findings": [{
+                "advisory_id": "CTRL-2026-11", "supplier_id": "ControlCo",
+                "severity": "stop_use", "state": "new", "impact": "affected",
+                "machines": ["Grimaldi/AR-7#0412"], "functions_in_question": ["SF-01"],
+                "trust_basis": "none", "trust_state": "untrusted_unknown_key",
+                "inspect_only": True}],
+            "local_case_ids": ["case-local-1"], "checks_skipped": ["a limit"],
+        }
+        r = post(client, h, report(failed("0412", at=now()), run_summary=summary,
+                                   verdict="findings"))
+        assert r.status_code == 200, r.text
+        got = observations(client, h)["recent_reports"][-1]
+        assert got["source"] == "client_reported_watch_run"
+        rs = got["run_summary"]
+        assert rs["advisory_findings"][0]["trust_state"] == "untrusted_unknown_key"
+        assert rs["advisory_findings"][0]["inspect_only"] is True
+        assert rs["local_case_ids"] == ["case-local-1"]
+        # the summary opened no hosted case and made no machine look observed
+        assert not case_entries(ledger_of(acct))
+
+    def test_a_summary_with_an_unknown_field_is_refused_and_writes_nothing(self, client, cell):
+        acct, h = cell
+        r = post(client, h, report(failed("0412", at=now()),
+                                   run_summary={"awareness_at": "2026-10-19T05:00:00Z"}))
+        assert r.status_code == 422
+        assert len(ledger_of(acct)) == 0

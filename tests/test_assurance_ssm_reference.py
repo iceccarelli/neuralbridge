@@ -396,11 +396,11 @@ class TestWeakestInputDecidesTheTier:
                     samples=samples)
         return e, run, table
 
-    def test_a_verified_limits_table_does_not_lower_the_tier(self):
+    def test_a_verified_by_claim_without_a_signed_review_does_not_lift_the_tier(self):
         e, run, table = self._pfl_case(verified=True)
         r = verify(e, run, limits=table)
         assert r.check("pfl_contact").outcome is CheckOutcome.VERIFIED
-        assert r.tier is AssuranceTier.VALIDATED
+        assert r.tier is AssuranceTier.COMMUNITY
 
     def test_an_unverified_limits_table_caps_a_pfl_pass_at_community(self):
         e, run, table = self._pfl_case(verified=False)

@@ -174,9 +174,20 @@ standards body, they are revised, and a notified body may require a specific
 edition or a project's own biomechanical study. `examples/machine/limits.template.json`
 is the schema. Fill it from your licensed copy, then:
 
-- set `verified_by` and `verified_on` once somebody competent has checked the
-  transcription — until then every PFL pass is capped at `community` and the
-  bundle says so in words
+- `verified_by` / `verified_on` in the file are the **author's own claim** and never
+  lift the tier. A PFL pass reaches `validated` only with a signed review
+  (`assurance.machine.limits-review.v1`: Ed25519 over the table's content hash,
+  edition, date and a stated basis) from a key in a reviewer trust list that you
+  obtained independently of the table: `machine verify --limits-review r.json
+  --limits-trust trust.json`. Missing, expired, revoked, untrusted, mismatched
+  (table edited after review) or malformed reviews leave the tier at `community`
+  and the bundle says which in words. The API seals only against the reviewer
+  list the server is configured with (`ASSURANCE_LIMITS_REVIEW_TRUST`), never one
+  sent in the request. A review attests that a key holder checked those exact
+  bytes; it does not show the values are correct. `machine check --limits-trust`
+  re-assesses a sealed review under *your* trust list; without one the validated
+  tier is not reproduced. Bundles from engine 3 or earlier may have reached
+  `validated` on the free-text claim alone and are flagged as such.
 - pin the table into the envelope via `pfl_limits_hash` so a later silent edit
   makes the mismatch visible instead of changing the answer
 

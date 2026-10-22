@@ -145,7 +145,7 @@ def _cmd_diff(args: argparse.Namespace) -> int:
 
 def _cmd_coverage(args: argparse.Namespace) -> int:
     manifest = SafetyManifest.from_json(args.manifest)
-    ledger = EvidenceLedger(args.ledger)
+    ledger = EvidenceLedger.open_existing(args.ledger)
     key = manifest.machine.key
     report = assess_coverage(
         manifest,

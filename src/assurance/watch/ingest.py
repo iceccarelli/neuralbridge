@@ -56,7 +56,7 @@ from assurance.core.evidence import (
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
-from assurance.machinery.manifest import ManifestSource, SafetyManifest
+from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -676,24 +676,10 @@ NOT_A_LOOK_REASON = "manifest_not_a_look_at_the_machine"
 def _not_a_look(manifest: SafetyManifest) -> str:
     """Why this manifest cannot be a positive observation of the machine; "" if it can.
 
-    A look is an ``as_found`` manifest whose every item was hashed off the unit
-    (:attr:`HashSource.describes_this_unit`). ``configuration_hash`` deliberately
-    ignores both ``source`` and ``hash_source``, so equal hashes say nothing about
-    either; this is the same rule ``Divergence.verdict`` applies before it will
-    say ``matches``.
+    The rule lives in :func:`assurance.machinery.manifest.not_a_look`, shared with
+    the case re-verification so both judge a manifest the same way.
     """
-    reasons: list[str] = []
-    if manifest.source is not ManifestSource.AS_FOUND:
-        reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
-    not_read = _not_read_items(manifest)
-    if not_read:
-        reasons.append(
-            "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
-            "(supplied by a vendor, or declared)")
-    if not reasons:
-        return ""
-    return ("the manifest is not a record of looking at this machine: "
-            + "; ".join(reasons) + ". Equal hashes do not say what the unit holds.")
+    return not_a_look(manifest)
 
 
 def _not_read_items(manifest: SafetyManifest) -> list[str]:
@@ -807,6 +793,11 @@ def ingest_report(
                     "batch_index": report.get("batch_index"),
                     "batch_count": report.get("batch_count"),
                     "report_digest": digest,
+                    # Client-reported, verbatim from the reporter's local run. It
+                    # is a statement by the customer's own watch, not something
+                    # this service observed or verified.
+                    "run_summary": report.get("run_summary"),
+                    "run_summary_source": "client_reported_watch_run",
                     "machines": [
                         {"machine": results[i].machine_key,
                          "serial": results[i].serial,

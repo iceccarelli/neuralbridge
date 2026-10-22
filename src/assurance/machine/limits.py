@@ -27,12 +27,15 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 from assurance.core.tiers import AssuranceTier
 from assurance.machine.quantities import FORCE_MAX_N, PRESSURE_MAX_N_CM2, number
+
+if TYPE_CHECKING:
+    from assurance.machine.limits_review import LimitsReviewAssessment
 
 __all__ = ["BodyRegionLimit", "LimitsError", "LimitsTable", "SCHEMA"]
 
@@ -149,55 +152,60 @@ class LimitsTable:
         """
         return AssuranceTier.COMMUNITY
 
-    def tier_for(self, pinned_hash: str) -> tuple[AssuranceTier, str]:
+    def tier_for(
+        self, pinned_hash: str, assessment: LimitsReviewAssessment | None = None,
+    ) -> tuple[AssuranceTier, str]:
         """The ceiling this table gives a verification, and the sentence explaining it.
 
-        VALIDATED needs both a verification claim *and* an envelope that pins
-        exactly this table's content hash, so the claim is part of what the
-        manufacturer committed to and a later edit shows. That is attribution, not
-        independent verification, and the reason says so.
+        VALIDATED needs two independent facts: the envelope pins exactly this
+        table's content hash, and an independent review (a signature by a key in
+        the verifier's own trust configuration, over this table's hash) was
+        accepted. The table's ``verified_by`` / ``verified_on`` text is the
+        author's own claim and never contributes: with a pin and no accepted
+        review the tier stays COMMUNITY.
         """
         pinned = bool(pinned_hash) and pinned_hash == self.content_hash()
-        if self.claims_verification and pinned:
-            return AssuranceTier.VALIDATED, (
-                f"the limits table names {self.verified_by} as having checked it "
-                f"against a licensed copy on {self.verified_on}, and the envelope "
-                "pins this exact table. That is the table author's own claim and "
-                "cannot be checked here; it is accepted as attribution, not as "
-                "verification."
-            )
-        if not self.claims_verification:
+        if not pinned:
             return AssuranceTier.COMMUNITY, (
-                "the limits table carries no verified_by / verified_on claim, so it "
-                "is an unverified transcription and caps the tier at community."
-            )
-        return AssuranceTier.COMMUNITY, (
-            "the limits table claims to have been verified, but the envelope does not "
-            "pin this table's hash, so the claim is free text with nothing tying it "
-            "to the declared product and caps the tier at community."
-        )
+                "the envelope does not pin this table's hash, so nothing ties the "
+                "table to the declared product and the tier is capped at community."
+                + self._claim_note())
+        if (assessment is not None and assessment.table_hash == self.content_hash()
+                and assessment.validated):
+            return AssuranceTier.VALIDATED, assessment.explanation
+        why = (assessment.explanation if assessment is not None else
+               "no independent review of the limits table was supplied, so it is an "
+               "unreviewed transcription and caps the tier at community.")
+        return AssuranceTier.COMMUNITY, why + self._claim_note()
 
-    @property
-    def provenance_caveat(self) -> str:
+    def _claim_note(self) -> str:
+        if not self.claims_verification:
+            return ""
+        return (
+            f" The table's own verified_by ({self.verified_by}) / verified_on "
+            f"({self.verified_on}) text is the author's claim, written by whoever "
+            "wrote the table; it was not used.")
+
+    def provenance_caveat(self, assessment: LimitsReviewAssessment | None = None) -> str:
         """The sentence that goes into the bundle's ``checks_skipped``."""
         unused = (
             " The transient_multiplier in the file is not used by any check: every "
             "contact sample is held to the quasi-static limits."
         )
-        if self.claims_verification:
+        if assessment is not None and assessment.validated:
             return (
                 f"body-region limits are from {self.edition}, transcribed by "
-                f"{self.transcribed_by}. The file claims (verified_by: "
-                f"{self.verified_by}, verified_on: {self.verified_on}) that they were "
-                "checked against a licensed copy; that claim is free text and cannot "
-                "be checked here. The suitability of this edition for this product "
-                "was not assessed." + unused
+                f"{self.transcribed_by or 'an unnamed party'}. An independent review "
+                "signature over this exact table was accepted (see the tier reason); "
+                "that attests to the table's bytes, not to the standard's values or "
+                "to the suitability of this edition for this product." + unused
             )
         return (
-            f"body-region limits are an UNVERIFIED transcription of {self.edition} by "
-            f"{self.transcribed_by or 'an unnamed party'}. Nobody has checked them "
-            "against a licensed copy of the standard. Every pass below rests on "
-            "numbers that have not been confirmed." + unused
+            f"body-region limits are an UNREVIEWED transcription of {self.edition} by "
+            f"{self.transcribed_by or 'an unnamed party'}. No accepted independent "
+            "review covers them; the table's verified_by / verified_on text, if any, "
+            "is the author's own claim and was not used. Every pass below rests on "
+            "numbers that have not been independently confirmed." + unused
         )
 
     def limit_for(self, region: str) -> BodyRegionLimit:

@@ -24,7 +24,7 @@ shipping.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -34,6 +34,7 @@ from assurance.core.identity import utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
+from assurance.machine.limits_review import LimitsReviewAssessment, ReviewTrust, assess_reviews
 from assurance.machine.ssm import separation_required
 from assurance.machine.trace import OperatingMode, Trace
 
@@ -64,7 +65,11 @@ __all__ = [
 #:    figure each make the check unchecked. Zero stop figures are refused. The
 #:    separation statement names the computation, not the standard, and the
 #:    formula limitation is always listed.
-ENGINE_VERSION = "3"
+#: 4: a limits table reaches a validated tier only through an accepted signed
+#:    review by a key in the verifier's own trust list. The table's free-text
+#:    verified_by / verified_on claim no longer lifts the tier, and the review
+#:    assessment is sealed into the bundle.
+ENGINE_VERSION = "4"
 
 #: A sanity floor on how much trace is worth calling a verification, NOT a standard
 #: and not taken from one. A single sample, or a handful spanning a few
@@ -202,6 +207,8 @@ class VerificationResult:
     checks_skipped: tuple[str, ...]
     tier: AssuranceTier
     verified_at: str
+    #: How the limits table's review evidence was assessed; None when no table.
+    limits_review: dict[str, Any] | None = None
 
     @property
     def violations(self) -> list[Violation]:
@@ -241,6 +248,7 @@ class VerificationResult:
             "checks": [c.to_dict() for c in self.checks],
             "checks_skipped": list(self.checks_skipped),
             "verified_at": self.verified_at,
+            "limits_review": self.limits_review,
         }
 
     def summary(self) -> str:
@@ -625,8 +633,6 @@ def _pfl_contact_permitted(
                    "table would prove nothing about the declared product.",
         ), caveats
 
-    caveats.append(limits.provenance_caveat)
-
     violations: list[Violation] = []
     worst: float | None = None
     examined = 0
@@ -863,9 +869,15 @@ def verify(
     trace: Trace,
     *,
     limits: LimitsTable | None = None,
+    limits_reviews: Sequence[Any] = (),
+    review_trust: ReviewTrust | None = None,
     now: datetime | None = None,
 ) -> VerificationResult:
     """Check one run against one envelope.
+
+    ``limits_reviews`` are signed reviews of the limits table and ``review_trust``
+    the verifier's own list of reviewer keys. Only an accepted review can lift the
+    limits tier to validated; the table's own verified_by text never does.
 
     ``now`` is the moment of verification, used only to judge whether an input is
     dated in the future; it defaults to the clock.
@@ -886,6 +898,11 @@ def verify(
     pfl, pfl_caveats = _pfl_contact(envelope, trace, limits)
     checks.append(pfl)
     caveats.extend(pfl_caveats)
+    review: LimitsReviewAssessment | None = None
+    if limits is not None:
+        review = assess_reviews(limits, limits_reviews, review_trust, now=now)
+        if envelope.pfl_limits_hash == limits.content_hash():
+            caveats.append(limits.provenance_caveat(review))
     checks.append(_mode_consistency(envelope, trace))
     checks.append(_trace_coverage(envelope, trace))
     dates = _input_dates(envelope, trace, now if now is not None else utc_now())
@@ -894,7 +911,7 @@ def verify(
     # The tier is the floor of every input the verdict depends on.
     tier = min(trace.provenance.tier_ceiling, envelope.tier_ceiling)
     if limits is not None and pfl.outcome is CheckOutcome.VERIFIED:
-        limits_tier, limits_reason = limits.tier_for(envelope.pfl_limits_hash)
+        limits_tier, limits_reason = limits.tier_for(envelope.pfl_limits_hash, review)
         tier = min(tier, limits_tier)
         caveats.append(limits_reason)
     if dates.outcome is CheckOutcome.UNCHECKED:
@@ -968,5 +985,6 @@ def verify(
         checks_skipped=tuple(caveats),
         tier=tier,
         verified_at=utc_now().isoformat().replace("+00:00", "Z"),
+        limits_review=review.to_dict() if review is not None else None,
     )
 

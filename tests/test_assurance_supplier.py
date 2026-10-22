@@ -293,7 +293,7 @@ class TestCli:
         self._published(tmp_path)
         capsys.readouterr()
         rc = self._fleet("advisory", "--feed", str(tmp_path / "feed.jsonl"),
-                         "--unsigned-anyway",
+                         "--unsigned-anyway", "--override-actor", "a.engineer",
                          "--ledger", str(tmp_path / "ledger.db"))
         assert rc in (0, 1)
         assert "not signed, or its signature was not checked" in \
@@ -301,6 +301,8 @@ class TestCli:
 
     def test_an_unsigned_advisory_file_still_warns(self, tmp_path, capsys):
         (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
+        from assurance.evidence.ledger import EvidenceLedger
+        EvidenceLedger(tmp_path / "ledger.db")      # a read verb needs a ledger that exists
         capsys.readouterr()
         self._fleet("advisory", str(tmp_path / "adv.json"),
                     "--ledger", str(tmp_path / "ledger.db"))

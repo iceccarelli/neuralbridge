@@ -112,6 +112,19 @@ class LedgerEntry:
 class EvidenceLedger:
     """Durable, append-only, hash-chained store of evidence objects."""
 
+    @classmethod
+    def open_existing(cls, path: str | Path) -> EvidenceLedger:
+        """Open a ledger that must already exist; never create one.
+
+        For commands that only read: a mistyped path must be an error, not a new
+        empty ledger that reads as "no machines", "never ran" or "nothing to report".
+        """
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"{p} does not exist. Nothing was read, and no ledger was created.")
+        return cls(p)
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
