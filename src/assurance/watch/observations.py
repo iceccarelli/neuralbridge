@@ -245,8 +245,23 @@ def fleet_observations(
             "open_case_ids": sorted(open_cases.get(key, [])),
         })
 
+    recent_reports: list[dict[str, Any]] = []
+    for entry in list(ledger.entries(kind=REPORT_KIND))[-10:]:
+        ev = entry.evidence()
+        if not ev.verify():
+            continue
+        b = ev.body
+        recent_reports.append({
+            "watch_id": b.get("watch_id"), "run_started_at": b.get("run_started_at"),
+            "received_at": b.get("received_at"), "verdict": b.get("verdict"),
+            "report_digest": b.get("report_digest"),
+            "run_summary": b.get("run_summary"),
+            "source": "client_reported_watch_run" if b.get("run_summary") else "report",
+            "ledger_seq": entry.seq, "content_hash": entry.content_hash,
+        })
     return {
         "as_of": format_utc(as_of),
+        "recent_reports": recent_reports,
         "default_cadence_hours": DEFAULT_CADENCE_HOURS,
         "reporting": bool(by_machine),
         "machines": machines,

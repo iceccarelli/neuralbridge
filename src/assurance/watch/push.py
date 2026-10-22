@@ -211,6 +211,50 @@ def _entries_for(
     return entries
 
 
+def run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
+    """What the local run found beyond per-machine observations, for the hosted record.
+
+    Client-reported and labelled so on the server. Deliberately carries no Article 14
+    awareness time, classification or draft: an advisory arriving is not awareness,
+    and the drafts stay in the local ledger for a person to determine.
+    """
+    adv = run.get("advisories") or {}
+    findings = [{
+        "advisory_id": str(f.get("advisory_id", ""))[:200],
+        "supplier_id": str(f.get("supplier_id", ""))[:200],
+        "severity": str(f.get("severity", ""))[:40],
+        "state": str(f.get("state", ""))[:40],
+        "impact": str(f.get("impact", ""))[:40],
+        "machines": [str(m)[:400] for m in (f.get("machines") or [])][:200],
+        "functions_in_question": [str(m)[:200] for m in
+                                  (f.get("functions_in_question") or [])][:200],
+        "trust_basis": str(f.get("trust_basis", ""))[:60],
+        "trust_state": str(f.get("trust_state", ""))[:80],
+        "inspect_only": bool(f.get("inspect_only", False)),
+        "case_id": str(f.get("case_id", ""))[:200],
+    } for f in (adv.get("findings") or [])][:100]
+    feeds = [{"supplier_id": str(f.get("supplier_id", ""))[:200],
+              "status": str(f.get("status", ""))[:40],
+              "trust_basis": str(f.get("trust_basis", ""))[:60]}
+             for f in (adv.get("feeds") or [])][:50]
+    cases = sorted({str(o.get("case_id")) for o in run.get("outcomes", []) if o.get("case_id")}
+                   | {f["case_id"] for f in findings if f["case_id"]})[:200]
+    filings = run.get("filings") or {}
+    return {
+        "local_finished_at": str(run.get("finished_at", ""))[:40],
+        "stale_observations": [str(s)[:400] for s in (run.get("stale_observations") or [])][:100],
+        "feeds": feeds,
+        "advisory_findings": findings,
+        "local_case_ids": cases,
+        "filings_prompts": [{
+            "advisory_id": str(p.get("advisory_id", ""))[:200],
+            "state": str(p.get("state", ""))[:40],
+            "escalating": bool(p.get("escalating", False)),
+        } for p in (filings.get("prompts") or [])][:100],
+        "checks_skipped": [str(c)[:500] for c in (run.get("checks_skipped") or [])][:50],
+    }
+
+
 def _size(body: Mapping[str, Any]) -> int:
     return len(json.dumps(body, separators=(",", ":"), sort_keys=True).encode())
 
@@ -246,6 +290,7 @@ def build_plan(
     base: dict[str, Any] = {
         "watch_id": config.watch_id, "run_started_at": started_text,
         "max_age_hours": config.max_age_hours, "verdict": run.get("verdict"),
+        "run_summary": run_summary(run),
     }
     if base["verdict"] not in ("quiet", "findings", "degraded"):
         base.pop("verdict")

@@ -69,6 +69,86 @@
         "title": "AdvisoryCheckIn",
         "type": "object"
       },
+      "AdvisoryFindingIn": {
+        "additionalProperties": false,
+        "properties": {
+          "advisory_id": {
+            "maxLength": 200,
+            "title": "Advisory Id",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Case Id",
+            "type": "string"
+          },
+          "functions_in_question": {
+            "items": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Functions In Question",
+            "type": "array"
+          },
+          "impact": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Impact",
+            "type": "string"
+          },
+          "inspect_only": {
+            "default": false,
+            "title": "Inspect Only",
+            "type": "boolean"
+          },
+          "machines": {
+            "items": {
+              "maxLength": 400,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Machines",
+            "type": "array"
+          },
+          "severity": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Severity",
+            "type": "string"
+          },
+          "state": {
+            "default": "",
+            "maxLength": 40,
+            "title": "State",
+            "type": "string"
+          },
+          "supplier_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Supplier Id",
+            "type": "string"
+          },
+          "trust_basis": {
+            "default": "",
+            "maxLength": 60,
+            "title": "Trust Basis",
+            "type": "string"
+          },
+          "trust_state": {
+            "default": "",
+            "maxLength": 80,
+            "title": "Trust State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advisory_id"
+        ],
+        "title": "AdvisoryFindingIn",
+        "type": "object"
+      },
       "AttestIn": {
         "additionalProperties": false,
         "description": "Three numbers the customer reads out of their own ledger.\n\nNothing else is accepted, and nothing else is wanted. The point of this\nendpoint is that the records stay where they are.",
@@ -633,6 +713,31 @@
         "title": "EvaluateIn",
         "type": "object"
       },
+      "FeedIn": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Status",
+            "type": "string"
+          },
+          "supplier_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Supplier Id",
+            "type": "string"
+          },
+          "trust_basis": {
+            "default": "",
+            "maxLength": 60,
+            "title": "Trust Basis",
+            "type": "string"
+          }
+        },
+        "title": "FeedIn",
+        "type": "object"
+      },
       "FilingIn": {
         "additionalProperties": false,
         "description": "A submission to the reporting platform.\n\n``payload`` is keyed by platform field *name*. ``GET /v1/spec/fields``\nreturns the names, the stage at which each is required, and the length\nlimits.",
@@ -713,6 +818,30 @@
           "validation"
         ],
         "title": "FilingOut",
+        "type": "object"
+      },
+      "FilingsPromptIn": {
+        "additionalProperties": false,
+        "properties": {
+          "advisory_id": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Advisory Id",
+            "type": "string"
+          },
+          "escalating": {
+            "default": false,
+            "title": "Escalating",
+            "type": "boolean"
+          },
+          "state": {
+            "default": "",
+            "maxLength": 40,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "title": "FilingsPromptIn",
         "type": "object"
       },
       "FleetMachineCheckIn": {
@@ -1382,6 +1511,70 @@
         "title": "RotateIn",
         "type": "object"
       },
+      "RunSummaryIn": {
+        "additionalProperties": false,
+        "properties": {
+          "advisory_findings": {
+            "items": {
+              "$ref": "#/components/schemas/AdvisoryFindingIn"
+            },
+            "maxItems": 100,
+            "title": "Advisory Findings",
+            "type": "array"
+          },
+          "checks_skipped": {
+            "items": {
+              "maxLength": 500,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Checks Skipped",
+            "type": "array"
+          },
+          "feeds": {
+            "items": {
+              "$ref": "#/components/schemas/FeedIn"
+            },
+            "maxItems": 50,
+            "title": "Feeds",
+            "type": "array"
+          },
+          "filings_prompts": {
+            "items": {
+              "$ref": "#/components/schemas/FilingsPromptIn"
+            },
+            "maxItems": 100,
+            "title": "Filings Prompts",
+            "type": "array"
+          },
+          "local_case_ids": {
+            "items": {
+              "maxLength": 200,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Local Case Ids",
+            "type": "array"
+          },
+          "local_finished_at": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Local Finished At",
+            "type": "string"
+          },
+          "stale_observations": {
+            "items": {
+              "maxLength": 400,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Stale Observations",
+            "type": "array"
+          }
+        },
+        "title": "RunSummaryIn",
+        "type": "object"
+      },
       "SeparationIn": {
         "additionalProperties": false,
         "description": "The six inputs an integrator already has written down somewhere.",
@@ -1874,6 +2067,16 @@
             "minLength": 10,
             "title": "Run Started At",
             "type": "string"
+          },
+          "run_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunSummaryIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "verdict": {
             "anyOf": [

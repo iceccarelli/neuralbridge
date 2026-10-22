@@ -793,6 +793,11 @@ def ingest_report(
                     "batch_index": report.get("batch_index"),
                     "batch_count": report.get("batch_count"),
                     "report_digest": digest,
+                    # Client-reported, verbatim from the reporter's local run. It
+                    # is a statement by the customer's own watch, not something
+                    # this service observed or verified.
+                    "run_summary": report.get("run_summary"),
+                    "run_summary_source": "client_reported_watch_run",
                     "machines": [
                         {"machine": results[i].machine_key,
                          "serial": results[i].serial,
