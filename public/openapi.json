@@ -602,6 +602,37 @@
         "title": "DriftIn",
         "type": "object"
       },
+      "EvaluateIn": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_public_key_pem": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Candidate Public Key Pem",
+            "type": "string"
+          },
+          "expect_supplier": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expect Supplier",
+            "type": "string"
+          },
+          "feed": {
+            "default": "",
+            "maxLength": 4194304,
+            "title": "Feed",
+            "type": "string"
+          },
+          "hosted_feed_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Hosted Feed Id",
+            "type": "string"
+          }
+        },
+        "title": "EvaluateIn",
+        "type": "object"
+      },
       "FilingIn": {
         "additionalProperties": false,
         "description": "A submission to the reporting platform.\n\n``payload`` is keyed by platform field *name*. ``GET /v1/spec/fields``\nreturns the names, the stage at which each is required, and the length\nlimits.",
@@ -981,6 +1012,60 @@
         "title": "OperatorIn",
         "type": "object"
       },
+      "OverrideIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "advisory_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Advisory Id",
+            "type": "string"
+          },
+          "candidate_public_key_pem": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Candidate Public Key Pem",
+            "type": "string"
+          },
+          "expect_supplier": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expect Supplier",
+            "type": "string"
+          },
+          "feed": {
+            "default": "",
+            "maxLength": 4194304,
+            "title": "Feed",
+            "type": "string"
+          },
+          "hosted_feed_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Hosted Feed Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advisory_id",
+          "actor",
+          "reason"
+        ],
+        "title": "OverrideIn",
+        "type": "object"
+      },
       "PassportCheckIn": {
         "additionalProperties": false,
         "properties": {
@@ -1027,6 +1112,55 @@
           "actor"
         ],
         "title": "PassportIn",
+        "type": "object"
+      },
+      "PinIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "expected_fingerprint": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Expected Fingerprint",
+            "type": "string"
+          },
+          "obtained_via": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Obtained Via",
+            "type": "string"
+          },
+          "public_key_pem": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Public Key Pem",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Reason",
+            "type": "string"
+          },
+          "supplier_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Supplier Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "supplier_id",
+          "public_key_pem",
+          "obtained_via",
+          "actor"
+        ],
+        "title": "PinIn",
         "type": "object"
       },
       "RecordedOut": {
@@ -1146,6 +1280,106 @@
           "verification_content_hash"
         ],
         "title": "ReverificationIn",
+        "type": "object"
+      },
+      "RevokeIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "fingerprint": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "supplier_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Supplier Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "supplier_id",
+          "fingerprint",
+          "actor",
+          "reason"
+        ],
+        "title": "RevokeIn",
+        "type": "object"
+      },
+      "RotateIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "effective_at": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Effective At",
+            "type": "string"
+          },
+          "expected_fingerprint": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Expected Fingerprint",
+            "type": "string"
+          },
+          "new_public_key_pem": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "New Public Key Pem",
+            "type": "string"
+          },
+          "obtained_via": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Obtained Via",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Reason",
+            "type": "string"
+          },
+          "retire_fingerprint": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Retire Fingerprint",
+            "type": "string"
+          },
+          "supplier_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Supplier Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "supplier_id",
+          "new_public_key_pem",
+          "retire_fingerprint",
+          "effective_at",
+          "obtained_via",
+          "actor"
+        ],
+        "title": "RotateIn",
         "type": "object"
       },
       "SeparationIn": {
@@ -1277,6 +1511,46 @@
           "actor"
         ],
         "title": "SignalIn",
+        "type": "object"
+      },
+      "SignedAdvisoryIn": {
+        "additionalProperties": false,
+        "description": "A supplier feed to assess against the fleet, under the account's pinned keys.",
+        "properties": {
+          "advisory_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Advisory Ids",
+            "type": "array"
+          },
+          "candidate_public_key_pem": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Candidate Public Key Pem",
+            "type": "string"
+          },
+          "expect_supplier": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expect Supplier",
+            "type": "string"
+          },
+          "feed": {
+            "default": "",
+            "maxLength": 4194304,
+            "title": "Feed",
+            "type": "string"
+          },
+          "hosted_feed_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Hosted Feed Id",
+            "type": "string"
+          }
+        },
+        "title": "SignedAdvisoryIn",
         "type": "object"
       },
       "TriageIn": {
@@ -4407,6 +4681,84 @@
         ]
       }
     },
+    "/v1/fleet/advisory/signed": {
+      "post": {
+        "description": "The fan-out for a feed, under the account's pinned keys.\n\nEvery advisory is assessed so an operator can inspect it, and each carries\nits own trust basis. An advisory that does not meet the policy has\n``automated_consequences_permitted: false`` and a report marked\n``inspect_only``: it must not drive stop-use or open a case as a trusted\nsupplier statement. The pin store is the account's own; the operator's\nshared ledger holds none, so an operator sees every feed as untrusted.\n\n``trust`` keeps readable / signature / key / chain apart. A signed advisory\nproves who signed the bytes, not that the advisory is correct, complete or\ntimely.",
+        "operationId": "advisory_impact_signed_v1_fleet_advisory_signed_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAdvisoryIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Advisory Impact Signed V1 Fleet Advisory Signed Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assess a signed supplier feed against your fleet, with its trust state",
+        "tags": [
+          "fleet"
+        ]
+      }
+    },
     "/v1/fleet/declaration/check": {
       "post": {
         "description": "Free, because the person who most needs this is the buyer, not the seller.\n\nWhether a changed configuration amounts to a substantial modification is a\nquestion for the manufacturer and their notified body. What this settles is\nthe fact that question rests on.",
@@ -6770,6 +7122,459 @@
           }
         },
         "summary": "Read a hosted supplier feed (no account needed)",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust": {
+      "get": {
+        "operationId": "get_trust_v1_supplier_trust_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Trust V1 Supplier Trust Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pinned supplier keys and every trust decision (your account)",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/evaluate": {
+      "post": {
+        "description": "Readable / signature valid / key pinned for this supplier / chain intact,\neach on its own. Always 200: an untrusted feed is a result, not an error.",
+        "operationId": "post_evaluate_v1_supplier_trust_evaluate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Evaluate V1 Supplier Trust Evaluate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What is this feed, state by state, under your pinned keys?",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/override": {
+      "post": {
+        "operationId": "post_override_v1_supplier_trust_override_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Override V1 Supplier Trust Override Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Explicitly accept ONE untrusted advisory; attributed and written to the ledger",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/pin": {
+      "post": {
+        "operationId": "post_pin_v1_supplier_trust_pin_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Pin V1 Supplier Trust Pin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin a supplier's public key (fingerprint obtained outside the feed)",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/revoke": {
+      "post": {
+        "operationId": "post_revoke_v1_supplier_trust_revoke_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Revoke V1 Supplier Trust Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke a pinned key: everything it signed becomes untrusted",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/rotate": {
+      "post": {
+        "operationId": "post_rotate_v1_supplier_trust_rotate_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Rotate V1 Supplier Trust Rotate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin a new key and retire the old one from an effective date",
         "tags": [
           "supplier"
         ]
