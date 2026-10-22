@@ -6,9 +6,17 @@ description: Repeatable session workflow for NeuralBridge product-market-fit exe
 # NeuralBridge PMF execution loop
 
 Read `CLAUDE.md` first. Priority order is fixed unless evidence says otherwise:
-**P0** launch truth & billing/security → **P1** Continuous Machine Assurance →
-**P2** paid-pilot readiness → **P3** integrations on demand → **P4** scale.
-Do not start a later priority while an earlier one is broken.
+**P0** assurance correctness and evidence trust (no unverifiable claim can raise a
+tier, no key/name is trusted because the artefact says so, tenant isolation, claims
+match code) → **P1** complete product workflows (collect → baseline → drift/advisory →
+case → attributed human action → post-change re-verification → exportable, independently
+checkable evidence) across CLI, API, MCP and the `/assurance` workspace →
+**P2** reliability, interface parity, CLI-as-a-user tests, packaging →
+**P3** launch truth, billing and entitlement upkeep (preserve the existing checks;
+do not spend a session on payment-method lifecycle, meters or prices unless a defect
+blocks a product capability) → **P4** integrations on demand, scale.
+Do not start a later priority while an earlier one is broken. Billing, pricing and
+deployment boundaries in `CLAUDE.md` still apply unchanged.
 
 1. **Verify state.** `git status`, `git fetch origin`, current branch vs
    `origin/main`, recent merged PRs. Run the baseline (`python -m pytest tests -q
