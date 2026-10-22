@@ -8,9 +8,13 @@ import {
   type AssessAdvisoryResult,
   type Exposure,
   type ImpactReport,
+  type SignedImpactResult,
 } from '../../lib/assuranceApi';
 import { parseAdvisoryInput, type ParsedInput, type ParsedRecord } from '../../lib/advisoryInput';
+import SignedResult from './FeedTrustView';
+import { ClassificationTable } from './ImpactParts';
 import { Notice, Refusal, Skeleton } from './PanelFrame';
+import SupplierKeys from './SupplierKeys';
 import { openedOrExisting, queueIds } from './caseIds';
 import { API_BASE } from './usePanel';
 
@@ -66,8 +70,9 @@ function Provenance({ parsed, source }: { parsed: Extract<ParsedInput, { ok: tru
         {suppliers.length > 1 && <strong> It names more than one supplier.</strong>}
       </p>
       <p>
-        This workspace and the hosted API hold no supplier keys and check no signatures, so a forged or edited record
-        reads exactly like a genuine one here. To check a feed, run{' '}
+        This reading is local: it checks no signature, so a forged or edited record looks exactly like a genuine one
+        here. To have the server judge the feed under supplier keys <em>you</em> pinned, use &ldquo;Evaluate under my
+        pinned keys&rdquo; below; it reports each question on its own. You can also check offline with{' '}
         <code>assurance supplier verify --feed &lt;file&gt; --public-key &lt;supplier.pub&gt; --expect-supplier {suppliers[0] || '<id>'}</code>
         . Compare the fingerprint above with one the supplier gave you by another route
         {contacts.length ? <> (they say: {contacts.join('; ')})</> : ''} — not by a link in the advisory; a forged
@@ -78,7 +83,7 @@ function Provenance({ parsed, source }: { parsed: Extract<ParsedInput, { ok: tru
         <p>
           This copy is hosted by this service under account id <code>{source.id}</code>. On upload the host checks that
           a record parses, carries a non-empty signature and continues the chain (sequence, previous hash, one
-          supplier). It does not check the signature against any key.
+          supplier). It does not check the signature against any key; being hosted here says nothing about trust.
         </p>
       )}
     </div>
@@ -176,6 +181,7 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
           </table>
         </div>
       )}
+      <ClassificationTable report={report} />
       <h4>What this does not establish</h4>
       <ul data-testid="impact-skipped">
         {report.checks_skipped.map((s) => (
@@ -212,6 +218,11 @@ export default function AdvisoriesPanel({
   const [opening, setOpening] = useState(false);
   const [confirmWithdrawn, setConfirmWithdrawn] = useState(false);
   const [existing, setExisting] = useState<Set<string> | null>(null);
+  const [expectSupplier, setExpectSupplier] = useState('');
+  const [candidateKey, setCandidateKey] = useState('');
+  const [signed, setSigned] = useState<ApiOutcome<SignedImpactResult> | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [trustVersion, setTrustVersion] = useState(0);
 
   const reset = () => {
     setSelected(null);
@@ -220,6 +231,7 @@ export default function AdvisoriesPanel({
     setNotice('');
     setHostedOut(null);
     setConfirmWithdrawn(false);
+    setSigned(null);
   };
 
   const read = (input: string, from: Source) => {
@@ -284,17 +296,39 @@ export default function AdvisoriesPanel({
     if (out.kind === 'ok' && out.data.opened) onChanged();
   };
 
+  // The body the trust routes take: the pasted text, or the hosted feed it was read from.
+  const feedBody = (): Record<string, string> => ({
+    ...(source.kind === 'hosted' ? { hosted_feed_id: source.id } : { feed: text }),
+    ...(expectSupplier.trim() ? { expect_supplier: expectSupplier.trim() } : {}),
+    ...(candidateKey.trim() ? { candidate_public_key_pem: candidateKey.trim() } : {}),
+  });
+
+  const evaluate = async () => {
+    setEvaluating(true);
+    setSigned(null);
+    setSigned(await call<SignedImpactResult>(API_BASE, apiKey, '/v1/fleet/advisory/signed', { method: 'POST', body: feedBody() }));
+    setEvaluating(false);
+  };
+
+  const advisoryFor = (id: string): Record<string, unknown> | null => {
+    if (!parsed || !parsed.ok) return null;
+    return parsed.records.find((r) => !r.isWithdrawal && r.advisoryId === id)?.advisory ?? null;
+  };
+
   const impactOk = impact?.kind === 'ok' ? impact.data : null;
   const parsedOk = parsed && parsed.ok ? parsed : null;
 
   return (
+    <>
     <section id="aw-advisories" aria-labelledby="aw-advisories-h">
       <h2 id="aw-advisories-h">Supplier advisories and fleet impact</h2>
       <p className="aw-note">
         Paste or choose an advisory, a signed record or a supplier feed, and see which of your enrolled machines and
-        safety functions it reaches, using the same engine as <code>assurance fleet advisory</code>. This page shows where
-        the file came from as the file states it. It cannot confirm who issued it: signatures are checked with{' '}
-        <code>assurance supplier verify</code>, against a key you hold.
+        safety functions it reaches, using the same engine as <code>assurance fleet advisory</code>. Reading a file
+        here shows where it came from as the file states it and checks nothing. To judge a signed feed, pin the
+        supplier&apos;s key (Supplier keys, below) and evaluate the feed under it, or check it offline with{' '}
+        <code>assurance supplier verify</code> against a key you hold. A signed advisory proves who signed the bytes, not
+        that it is correct, complete or timely.
       </p>
       <label className="aw-field">
         Advisory or feed (JSON; a feed is one record per line)
@@ -384,14 +418,76 @@ export default function AdvisoriesPanel({
               </tbody>
             </table>
           </div>
+          <div className="aw-actions" data-testid="evaluate-block">
+            <h4>Judge this feed under your pinned supplier keys</h4>
+            <p className="aw-note">
+              Sends the feed to your account&apos;s trust check. It answers separate questions (readable, signature, key
+              trust, chain, duplicates and conflicts, withdrawals) and never as a single badge. With no key
+              pinned for the supplier, the feed is <strong>not trusted</strong>: it can be inspected, with no trusted
+              consequences.
+            </p>
+            <label className="aw-field">
+              Expect this supplier id (optional)
+              <input type="text" value={expectSupplier} onChange={(e) => setExpectSupplier(e.target.value)} />
+            </label>
+            <details>
+              <summary>Check signatures against a key you hold but have not pinned (optional)</summary>
+              <p className="aw-note">
+                Shows whether the signatures check out under that key. It never makes the feed trusted: a key that came
+                with the feed is not proof of anything.
+              </p>
+              <textarea
+                className="aw-textarea"
+                rows={4}
+                value={candidateKey}
+                onChange={(e) => setCandidateKey(e.target.value)}
+                aria-label="Candidate public key (PEM)"
+              />
+            </details>
+            <button className="btn btn-outline" disabled={evaluating || !API_BASE || !apiKey} onClick={() => void evaluate()}>
+              Evaluate under my pinned keys
+            </button>
+          </div>
         </>
+      )}
+
+      {evaluating && <Skeleton what="the feed's trust state" />}
+      {signed && signed.kind !== 'ok' && <Refusal outcome={signed} what="Feed trust" />}
+      {signed?.kind === 'ok' && (
+        <SignedResult
+          result={signed.data}
+          apiKey={apiKey}
+          feedBody={feedBody()}
+          actor={actor}
+          setActor={setActor}
+          advisoryFor={advisoryFor}
+          onOpenCase={onOpenCase}
+          onChanged={onChanged}
+          onRerun={() => {
+            setTrustVersion((v) => v + 1);
+            void evaluate();
+          }}
+        />
       )}
 
       {checking && <Skeleton what="the fleet impact" />}
       {impact && impact.kind !== 'ok' && <Refusal outcome={impact} what="Fleet impact" />}
       {impactOk && selected && parsedOk && <ImpactResult report={impactOk} parsed={parsedOk} rec={selected} />}
 
-      {impactOk && selected && impactOk.verdict !== 'clear' && impactOk.exposures.length > 0 && (
+      {impactOk && selected && selected.claims && impactOk.verdict !== 'clear' && impactOk.exposures.length > 0 && (
+        <div className="aw-actions" data-testid="signed-record-no-case">
+          <h4>Open an assurance case</h4>
+          <p className="aw-note">
+            Inspect only. This record came in a signed feed that has not been judged under your pinned keys, so no case is
+            opened from it here. Use &ldquo;Evaluate under my pinned keys&rdquo; above: a case can be opened from the
+            result only for an advisory the server says carries trusted consequences.
+          </p>
+          <button className="btn btn-primary" disabled title="Disabled: this feed is not trusted (inspect only).">
+            Open assurance case
+          </button>
+        </div>
+      )}
+      {impactOk && selected && !selected.claims && impactOk.verdict !== 'clear' && impactOk.exposures.length > 0 && (
         <div className="aw-actions">
           <h4>Open an assurance case</h4>
           <p className="aw-note">
@@ -434,5 +530,7 @@ export default function AdvisoriesPanel({
         </div>
       )}
     </section>
+    <SupplierKeys apiKey={apiKey} version={trustVersion} onChanged={() => signed?.kind === 'ok' && void evaluate()} />
+    </>
   );
 }
