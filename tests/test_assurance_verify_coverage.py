@@ -95,8 +95,8 @@ def test_the_positive_control_an_honest_covered_trace_still_passes_at_validated(
 
 
 def test_the_engine_version_was_bumped_because_the_semantics_changed():
-    assert ENGINE_VERSION == "3"
-    assert run(envelope(), good()).engine_version == "3"
+    assert ENGINE_VERSION == "4"
+    assert run(envelope(), good()).engine_version == "4"
 
 
 # -- (a) speed limit ------------------------------------------------------
@@ -375,8 +375,8 @@ class TestPflTablePinned:
     def test_the_claim_is_recorded_as_a_claim_in_the_tier_reason(self):
         table = limits()
         tier, reason = table.tier_for(table.content_hash())
-        assert tier is AssuranceTier.VALIDATED
-        assert "claim" in reason and "cannot be checked" in reason
+        assert tier is AssuranceTier.COMMUNITY
+        assert "author's claim" in reason and "was not used" in reason
 
     @pytest.mark.parametrize("pin", ["", "0" * 64])
     def test_a_claim_the_envelope_does_not_pin_is_community_and_says_why(self, pin):
@@ -389,11 +389,11 @@ class TestPflTablePinned:
         tier, reason = table.tier_for(table.content_hash())
         assert tier is AssuranceTier.COMMUNITY and reason
 
-    def test_a_pinned_table_with_a_claim_reaches_validated_and_says_why(self):
+    def test_a_pinned_table_with_only_a_claim_stays_community_and_says_why(self):
         table = limits()
         r = run(pfl_envelope(table), trace(pfl_samples([10.0] * 40)), limits=table)
         assert r.check("pfl_contact").outcome is CheckOutcome.VERIFIED
-        assert r.tier is AssuranceTier.VALIDATED
+        assert r.tier is AssuranceTier.COMMUNITY
         assert any("verified_by" in c and "claim" in c for c in r.checks_skipped)
 
     def test_a_pinned_table_without_a_claim_is_community(self):

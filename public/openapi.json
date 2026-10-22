@@ -296,6 +296,19 @@
             "description": "the body-region limits table the bundle was verified against, if its envelope names one; without it a power-and-force bundle cannot be replayed and is reported as integrity-only",
             "title": "Limits"
           },
+          "limits_trust": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "YOUR reviewer trust list (format assurance.machine.limits-trust.v1), obtained independently of the bundle, to re-assess the limits review sealed in it. Without it a validated limits tier is not reproduced",
+            "title": "Limits Trust"
+          },
           "trace": {
             "anyOf": [
               {
@@ -1699,6 +1712,16 @@
               }
             ],
             "title": "Limits"
+          },
+          "limits_reviews": {
+            "description": "signed reviews of the limits table. They are assessed against the reviewer trust list the SERVER is configured with (ASSURANCE_LIMITS_REVIEW_TRUST); a caller cannot supply its own trust, which would let a table's author vouch for the table",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 32,
+            "title": "Limits Reviews",
+            "type": "array"
           },
           "role": {
             "default": "verification engineer",

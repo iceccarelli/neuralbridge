@@ -30,6 +30,7 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.bundle import build_bundle, check_bundle
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
+from assurance.machine.limits_review import ReviewTrust
 from assurance.machine.ssm import separation_required
 from assurance.machine.trace import Trace
 from assurance.machine.verify import Verdict
@@ -59,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
     ver.add_argument("--trace", required=True, type=Path)
     ver.add_argument("--limits", type=Path, default=None,
                      help="body-region limits table for a power-and-force claim")
+    ver.add_argument("--limits-review", type=Path, action="append", default=[],
+                     help="signed review of the limits table (repeatable); only an "
+                          "accepted review lifts the limits tier above community")
+    ver.add_argument("--limits-trust", type=Path, default=None,
+                     help="reviewer trust list obtained independently of the table; "
+                          "without it no review can be accepted")
     ver.add_argument("--actor", required=True,
                      help="who is signing this verification, e.g. 'v.grimaldi'")
     ver.add_argument("--role", default="verification engineer")
@@ -75,6 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("bundle", type=Path)
     chk.add_argument("--envelope", type=Path, default=None)
     chk.add_argument("--trace", type=Path, default=None)
+    chk.add_argument("--limits-trust", type=Path, default=None,
+                     help="your own reviewer trust list, to re-assess the limits "
+                          "review sealed in the bundle")
     chk.add_argument("--limits", type=Path, default=None,
                      help="the body-region limits table the bundle was verified "
                           "against, if it used one")
@@ -118,11 +128,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     trace = Trace.from_json(args.trace)
     limits = LimitsTable.from_json(args.limits) if args.limits else None
     ledger = EvidenceLedger(args.ledger) if args.ledger else None
+    reviews = [json.loads(p.read_text(encoding="utf-8")) for p in args.limits_review]
+    trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
 
     bundle = build_bundle(
         envelope, trace,
         actor=Actor(identifier=args.actor, role=args.role, kind="person"),
-        limits=limits, ledger=ledger, subject=args.subject,
+        limits=limits, limits_reviews=reviews, review_trust=trust, ledger=ledger, subject=args.subject,
     )
     if args.out:
         bundle.write(args.out)
@@ -147,11 +159,14 @@ def _cmd_check(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope) if args.envelope else None
     trace = Trace.from_json(args.trace) if args.trace else None
     limits = LimitsTable.from_json(args.limits) if args.limits else None
-    result = check_bundle(args.bundle, envelope=envelope, trace=trace, limits=limits)
+    trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
+    result = check_bundle(args.bundle, envelope=envelope, trace=trace, limits=limits,
+                          review_trust=trust)
     if args.json:
         print(json.dumps({"ok": result.ok, "level": result.level,
                           "reproduced": result.reproduced,
-                          "problems": result.notes}, indent=2))
+                          "problems": result.notes,
+                          "limitations": list(result.limitations)}, indent=2))
     else:
         if not result.ok:
             verdict = "REJECTED"

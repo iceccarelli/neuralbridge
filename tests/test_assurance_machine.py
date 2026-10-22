@@ -327,7 +327,7 @@ class TestPowerAndForce:
                           contact_force=100.0, contact_area=4.0, body_region="hand")])
         r = verify(env, t, limits=lt)
         assert r.tier is AssuranceTier.COMMUNITY
-        assert any("UNVERIFIED" in c for c in r.checks_skipped)
+        assert any("UNREVIEWED" in c for c in r.checks_skipped)
 
     def test_a_limits_table_from_a_different_edition_is_refused(self):
         env = envelope(pfl_limits_hash="a" * 64)
