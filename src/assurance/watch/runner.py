@@ -333,19 +333,26 @@ def _advisories_by_id(
 
     out: list[tuple[Any, Any]] = []
     wanted = {f.advisory_id for f in advisories.findings}
+    trusted_ids = {f.advisory_id for f in advisories.findings if not f.inspect_only}
     for sub in config.feeds:
         try:
             records = AdvisoryFeed(sub.feed).read()
+        except (AssuranceError, OSError):
+            continue  # the advisory pass already reported why this feed was unusable
+        try:
             verdict = verify_feed(records, VerifyingKey.from_file(sub.public_key),
                                   expect_supplier=sub.supplier_id)
+            live = list(verdict.live) if verdict.ok else []
         except (AssuranceError, OSError):
-            # The advisory pass has already read this feed and reported exactly
-            # why it could not be used, and that report is what degrades the
-            # run. Reporting it a second time here would double every message.
-            continue
-        if not verdict.ok:
-            continue
-        for record in verdict.live:
+            live = []
+        if not live:
+            # Trusted under the account's pinned key (a rotated key, or no config key
+            # file): the advisory pass already evaluated trust and kept only advisories
+            # the policy accepted, so take the intake's advisory from those records.
+            live = [r for r in records
+                    if r.advisory_id in trusted_ids and not r.withdraws
+                    and r.supplier.supplier_id == sub.supplier_id]
+        for record in live:
             if record.advisory_id in wanted:
                 finding = next(f for f in advisories.findings
                                if f.advisory_id == record.advisory_id)

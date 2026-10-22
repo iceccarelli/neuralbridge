@@ -1807,3 +1807,32 @@ class TestCConfusableNames:
         case, _ = drive(ledger, store, CaseStatus.READY_TO_CLOSE)
         assert decide(store, case.case_id, disposition="closed", reason="r",
                       actor=Actor(name, "reviewer")).status is CaseStatus.CLOSED
+
+
+class TestOperatorBootstrapAndLimits:
+    def test_concurrent_first_operators_cannot_both_succeed_and_names_are_unique(
+            self, client, account_store):
+        import threading
+        headers = keyed(account_store, "cell")
+        results = []
+
+        def go(name):
+            results.append(client.post("/v1/operators", json={"name": name, "role": "decider"},
+                                       headers=headers).status_code)
+
+        ts = [threading.Thread(target=go, args=(f"Person {i}",)) for i in range(4)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert sorted(results).count(201) == 1 and results.count(403) == 3
+        account = account_store.account(_account_ids(account_store)[0])
+        assert len(account_store.operators_for(account.id)) == 1
+        boss = {"X-API-Key": account_store.keys_for(account.id)[-1]["prefix"]}  # noqa: F841
+        with pytest.raises(ValueError, match="already exists"):
+            name = account_store.operators_for(account.id)[0]["name"]
+            account_store.create_operator(account.id, name.upper(), "contributor")
+
+    def test_the_platform_operator_credential_cannot_manage_operators(self, client, monkeypatch):
+        monkeypatch.setenv("ASSURANCE_API_KEYS", "platform-key")
+        r = client.post("/v1/operators", json={"name": "X", "role": "decider"},
+                        headers={"X-API-Key": "platform-key"})
+        assert r.status_code == 403 and r.json()["detail"]["error"] == "account_required"
