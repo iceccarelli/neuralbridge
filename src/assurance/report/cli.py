@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     bd.add_argument("--declaration", type=Path, action="append", default=[],
                     help="repeatable: check these declarations against the machines")
     bd.add_argument("--notice", default="")
+    bd.add_argument("--attestations", type=Path, default=None,
+                    help="the head-attestation log (JSONL from `assurance attest`)")
+    bd.add_argument("--attest-key", type=Path, default=None,
+                    help="the signer's public key, obtained by a route other than the "
+                         "log; without it signatures are reported as not checked")
 
     return p
 
@@ -90,6 +95,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 if args.advisory else None)
     declarations = tuple(DeclarationOfConformity.from_json(p)
                          for p in args.declaration)
+    from assurance.attest.attestation import AttestationLog
+    from assurance.attest.keys import VerifyingKey
+
+    attestations = tuple(AttestationLog(args.attestations).read()) if args.attestations else ()
+    key = VerifyingKey.from_file(args.attest_key) if args.attest_key else None
     html = render_report(ReportInput(
         ledger=EvidenceLedger(args.ledger),
         organisation=args.organisation,
@@ -97,6 +107,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         advisory=advisory,
         declarations=declarations,
         notice=args.notice,
+        attestations=attestations,
+        attestation_key=key,
     ))
     Path(args.out).write_text(html, encoding="utf-8")
     print(f"report written to {args.out}")

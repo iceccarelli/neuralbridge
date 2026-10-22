@@ -301,6 +301,8 @@ class TestCli:
 
     def test_an_unsigned_advisory_file_still_warns(self, tmp_path, capsys):
         (tmp_path / "adv.json").write_text(json.dumps(_advisory().to_dict()))
+        from assurance.evidence.ledger import EvidenceLedger
+        EvidenceLedger(tmp_path / "ledger.db")      # a read verb needs a ledger that exists
         capsys.readouterr()
         self._fleet("advisory", str(tmp_path / "adv.json"),
                     "--ledger", str(tmp_path / "ledger.db"))
