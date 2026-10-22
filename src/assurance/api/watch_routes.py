@@ -106,12 +106,6 @@ class FeedIn(_Short):
     trust_basis: str = Field(default="", max_length=60)
 
 
-class FilingsPromptIn(_Short):
-    advisory_id: str = Field(default="", max_length=200)
-    state: str = Field(default="", max_length=40)
-    escalating: bool = False
-
-
 class RunSummaryIn(_Short):
     local_finished_at: str = Field(default="", max_length=40)
     stale_observations: list[Annotated[str, Field(max_length=400)]] = Field(
@@ -120,7 +114,6 @@ class RunSummaryIn(_Short):
     advisory_findings: list[AdvisoryFindingIn] = Field(default_factory=list, max_length=100)
     local_case_ids: list[Annotated[str, Field(max_length=200)]] = Field(
         default_factory=list, max_length=200)
-    filings_prompts: list[FilingsPromptIn] = Field(default_factory=list, max_length=100)
     checks_skipped: list[Annotated[str, Field(max_length=500)]] = Field(
         default_factory=list, max_length=50)
 

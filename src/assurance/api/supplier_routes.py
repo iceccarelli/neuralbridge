@@ -274,7 +274,7 @@ class PinIn(BaseModel):
     expected_fingerprint: str = Field(default="", max_length=64)
     #: Required: how the fingerprint was learned.
     obtained_via: str = Field(min_length=1, max_length=500)
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
     reason: str = Field(default="", max_length=1000)
 
 
@@ -287,7 +287,7 @@ class RotateIn(BaseModel):
     effective_at: str = Field(min_length=1, max_length=40)
     expected_fingerprint: str = Field(default="", max_length=64)
     obtained_via: str = Field(min_length=1, max_length=500)
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
     reason: str = Field(default="", max_length=1000)
 
 
@@ -296,7 +296,7 @@ class RevokeIn(BaseModel):
 
     supplier_id: str = Field(min_length=1, max_length=200)
     fingerprint: str = Field(min_length=1, max_length=64)
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -315,7 +315,7 @@ class EvaluateIn(BaseModel):
 
 class OverrideIn(EvaluateIn):
     advisory_id: str = Field(min_length=1, max_length=200)
-    actor: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -336,8 +336,26 @@ def account_trust_store(principal: Principal, register: Any) -> SupplierTrustSto
 
 
 def _actor(body_actor: str, principal: Principal) -> str:
+    """Who made a trust decision: an operator with the ``decider`` role, by credential.
+
+    Pinning, rotating, revoking a supplier key and overriding an advisory are human
+    decisions with automated consequences (stop-use, cases), so they are held to the
+    same rule as closing a case: an account-level key, a contributor, or a name typed
+    into the body is not enough. The identifier comes from the operator, never the body.
+    """
     assert principal.account is not None
-    return f"{body_actor.strip()} (account {principal.account.id})"
+    if not principal.operator_id or principal.operator_role != "decider":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "error": "operator_required",
+            "detail": "supplier trust decisions need a key issued to an individual "
+                      "operator with the 'decider' role (POST /v1/operators); an "
+                      "account-level key cannot pin, rotate, revoke or override."})
+    if body_actor.strip() and body_actor.strip() != principal.operator_name:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "error": "actor_mismatch",
+            "detail": f"this key belongs to operator {principal.operator_name!r}."})
+    return (f"{principal.operator_name} (operator {principal.operator_id}, "
+            f"account {principal.account.id})")
 
 
 def _trust_refusal(exc: SupplierTrustError) -> HTTPException:

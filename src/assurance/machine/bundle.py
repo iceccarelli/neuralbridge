@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -466,13 +466,9 @@ def _coherence_problems(
         problems.append(
             "the bundle records tier 'validated' on a contact check against a limits "
             "table, but records no accepted independent review of that table. A "
-            "table's own verified_by text does not earn a validated tier.")
-    elif body.get("engine_version") != ENGINE_VERSION and body.get("limits_hash") \
-            and tier is AssuranceTier.VALIDATED:
-        limits.append(
-            "NOT CHECKED: this bundle was produced by an earlier engine that let a "
-            "limits table's free-text verified_by claim lift the tier. Its validated "
-            "tier may rest on an unreviewed table; re-verify it with a signed review.")
+            "table's own verified_by text does not earn a validated tier. (Bundles "
+            "from engine 3 or earlier, which let that text lift the tier, are rejected "
+            "here for the same reason.)")
     elif _review_accepted(body):
         accepted = review.get("accepted_review") if isinstance(review, dict) else None
         if not (isinstance(accepted, dict)
@@ -622,8 +618,14 @@ def check_bundle(
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
     review_trust: ReviewTrust | None = None,
+    as_of: datetime | None = None,
 ) -> BundleCheck:
-    """:func:`verify_bundle` with the full answer: ``level`` and what ran."""
+    """:func:`verify_bundle` with the full answer: ``level`` and what ran.
+
+    ``as_of`` is the moment the *verifier* judges a limits review's expiry against
+    (default: now). The date a bundle records for itself is never used: a sealed
+    claim about when it was assessed could be set to a day the review was still valid.
+    """
     path = Path(bundle_path)
     if path.stat().st_size > MAX_FILE_BYTES:
         return _rejected(f"{path.name} is larger than the {MAX_FILE_BYTES} bytes this "
@@ -698,6 +700,7 @@ def check_bundle_data(
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
     review_trust: ReviewTrust | None = None,
+    as_of: datetime | None = None,
 ) -> BundleCheck:
     """The one implementation: library, CLI and HTTP routes all end up here."""
     if not isinstance(raw, dict):
@@ -792,7 +795,7 @@ def check_bundle_data(
                 replay = verify(
                     envelope, trace, limits=limits,
                     limits_reviews=_recorded_reviews(body), review_trust=review_trust,
-                    now=_assessed_on(body))
+                    now=as_of)
             except AssuranceError as exc:
                 problems.append(f"re-running the engine on the supplied inputs failed: "
                                 f"{exc}")
@@ -831,13 +834,12 @@ def _review_accepted(body: dict[str, Any]) -> bool:
     return isinstance(rec, dict) and rec.get("status") == "accepted"
 
 
-def _assessed_on(body: dict[str, Any]) -> datetime | None:
+def _without_assessed_on(body: dict[str, Any]) -> dict[str, Any]:
+    """The body minus the day a review was assessed: shown, never compared or trusted."""
     rec = body.get("limits_review")
-    try:
-        d = date.fromisoformat(str(rec.get("assessed_on"))) if isinstance(rec, dict) else None
-    except ValueError:
-        return None
-    return datetime(d.year, d.month, d.day, tzinfo=UTC) if d else None
+    if not isinstance(rec, dict):
+        return body
+    return {**body, "limits_review": {k: v for k, v in rec.items() if k != "assessed_on"}}
 
 
 def _replay_differences(
@@ -854,6 +856,8 @@ def _replay_differences(
     body = evidence.body
     out: list[str] = []
     expected = _body(replay, envelope, limits, trace)
+    expected = _without_assessed_on(expected)
+    body = _without_assessed_on(body)
     for key in sorted(set(expected) | set(body), key=str):
         if key == "checks":
             continue

@@ -27,7 +27,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Machine, get_accounts
-from assurance.billing.accounts import AccountStore, Principal
+from assurance.billing.accounts import (
+    MAX_ACTIVE_KEYS,
+    AccountStore,
+    KeyLimitError,
+    OperatorsExistError,
+    Principal,
+)
 
 __all__ = ["operator_router"]
 
@@ -42,10 +48,13 @@ class OperatorIn(BaseModel):
 
 
 def _account_id(principal: Principal) -> str:
-    if principal.account is None or principal.key_prefix in ("open-mode", "operator"):
+    if principal.account is None or principal.key_prefix in ("open-mode", "operator") \
+            or principal.account.id == "operator":
         raise HTTPException(status_code=403, detail={
             "error": "account_required",
-            "detail": "operators belong to a customer account; this credential has none."})
+            "detail": "operators belong to a customer account; this credential has none "
+                      "(the platform operator key and open mode cannot make or disable "
+                      "operators, and cannot make hosted case decisions)."})
     return principal.account.id
 
 
@@ -74,20 +83,26 @@ async def create_operator(
     accounts: Annotated[AccountStore, Depends(get_accounts)],
 ) -> dict[str, Any]:
     account_id = _account_id(principal)
-    existing = [o for o in accounts.operators_for(account_id) if not o["disabled"]]
-    if existing:
+    created_by = principal.operator_id or f"account-key:{principal.key_prefix}"
+    bootstrap = not principal.operator_id and principal.operator_role == ""
+    if principal.operator_id:
         _require_decider(principal)
     elif body.role != "decider":
         raise HTTPException(status_code=422, detail={
             "error": "first_operator_must_decide",
             "detail": "the first operator of an account must be a 'decider'; "
                       "otherwise nobody could ever close a case."})
-    elif principal.operator_id:
-        _require_decider(principal)
-    created_by = principal.operator_id or f"account-key:{principal.key_prefix}"
     try:
         op_id, key = accounts.create_operator(
-            account_id, body.name, body.role, created_by=created_by)
+            account_id, body.name, body.role, created_by=created_by,
+            only_if_none=bootstrap, max_active_keys=MAX_ACTIVE_KEYS)
+    except OperatorsExistError as exc:
+        # An account-level key may only create the very first operator, atomically.
+        raise HTTPException(status_code=403, detail={
+            "error": "decider_role_required", "detail": str(exc)}) from exc
+    except KeyLimitError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "key_limit", "detail": str(exc)}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"operator_id": op_id, "name": body.name.strip(), "role": body.role,
