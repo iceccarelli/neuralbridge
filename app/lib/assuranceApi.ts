@@ -42,6 +42,11 @@ export type ObservationRow = {
   cadence_declared: boolean;
   consecutive_failed_attempts: number;
   open_case_ids: string[];
+  // Optional: older servers omit them. Hours between a manifest's date and the look that used it,
+  // as reported by the client, and whether the client marked it as sealed earlier and relayed.
+  last_successful_manifest_age_hours?: number | null;
+  last_successful_manifest_relayed?: boolean | null;
+  last_attempt_manifest_age_hours?: number | null;
 };
 
 export type Observations = {
@@ -201,6 +206,31 @@ export type ImpactReport = {
   functions_newly_in_question: number;
   exposures: Exposure[];
   checks_skipped: string[];
+  // Per-machine classification (fleet/impact.py). Optional: an older server omits them, and an
+  // absent field is never read as "nothing unknown".
+  machine_classification?: MachineClassification[];
+  unknown_machines?: string[];
+  unknown_functions?: { machine?: string; function_id?: string; item_id?: string; reason?: string }[];
+  prior_evidence_in_question?: Record<string, unknown>[];
+  clear_is_complete?: boolean;
+  provenance?: Record<string, unknown>;
+};
+
+export type MachineClassification = {
+  machine: string;
+  site: string;
+  classification:
+    | 'match_by_hash'
+    | 'match_by_version_only'
+    | 'possible_match_name_only'
+    | 'contradictory_label_vs_hash'
+    | 'unknown'
+    | 'no_match_found'
+    | string;
+  basis: string;
+  uncertainty: string;
+  item_ids: string[];
+  unknown_reasons: string[];
 };
 
 // POST /v1/change/assess/advisory
@@ -222,7 +252,7 @@ export type ApiOutcome<T> =
   // 402: authenticated, not entitled (plan or account state).
   | { kind: 'upgrade'; status: 402; tier: string; accountStatus: string; code: string; remedy: string }
   // 403: refused for a reason that is not payment.
-  | { kind: 'forbidden'; status: 403; message: string }
+  | { kind: 'forbidden'; status: 403; message: string; code?: string }
   // 404: nothing by that id in the caller's own ledger/store.
   | { kind: 'notfound'; status: 404; message: string }
   // 409: the request is well-formed but the resource's state does not allow it.
@@ -330,7 +360,12 @@ export function classify(status: number, body: unknown, retryAfter = ''): ApiOut
       };
     }
     case 403:
-      return { kind: 'forbidden', status, message: d.remedy ? `${d.message} ${d.remedy}`.trim() : d.message };
+      return {
+        kind: 'forbidden',
+        status,
+        message: d.remedy ? `${d.message} ${d.remedy}`.trim() : d.message,
+        code: d.code,
+      };
     case 404:
       return { kind: 'notfound', status, message: d.message };
     case 409:
@@ -458,3 +493,145 @@ export function keepsLastGood(outcome: Exclude<ApiOutcome<unknown>, { kind: 'ok'
     (outcome.kind === 'error' && outcome.status >= 500)
   );
 }
+
+// ---------------------------------------------------------------------------
+// Operators (src/assurance/api/operator_routes.py)
+// ---------------------------------------------------------------------------
+
+export type Operator = {
+  id: string;
+  name: string;
+  role: 'contributor' | 'decider' | string;
+  created_at?: string;
+  created_by?: string;
+  disabled: boolean;
+  disabled_at?: string | null;
+};
+
+export type OperatorList = { operators: Operator[]; you: { operator_id: string | null; role: string } };
+
+// POST /v1/operators — `api_key` is shown once and is never requested again.
+export type CreatedOperator = { operator_id: string; name: string; role: string; api_key: string; note: string };
+
+// The refusals a case action can meet, each with what the person can do about it. Matched on the
+// server's own error code; the server's wording follows, not replaced.
+const FORBIDDEN_ACTIONS: Record<string, string> = {
+  operator_required:
+    'This step is a human decision and needs a key issued to an individual operator with the decider role. An account key cannot make it. Create an operator below (if the account has none) or paste that operator\u2019s key as the decision credential.',
+  decider_role_required:
+    'The key you used belongs to an operator who is not a decider. Use a decider operator\u2019s key, or ask an existing decider to create one for you.',
+  actor_mismatch:
+    'The name sent does not match the operator this key was issued to. An action is attributed to the credential that made it; use that operator\u2019s own key and do not type a different name.',
+  account_required: 'This credential is not tied to a customer account, so it has no operators.',
+};
+
+export function explainForbidden(outcome: Extract<ApiOutcome<unknown>, { kind: 'forbidden' }>): string {
+  return (outcome.code && FORBIDDEN_ACTIONS[outcome.code]) || '';
+}
+
+// What a ledger actor's role string says about how the name was established. The role string
+// is sealed with the entry: `... attribution=authenticated_operator` (a credential bound to a
+// named operator was presented), `declared_by_account_key` (the account key holder typed the
+// name) or `declared_open_mode` (no accounts configured). Anything else, including entries
+// written before attribution was recorded, is reported as not recorded and never upgraded.
+export type Attribution = {
+  basis: 'authenticated_operator' | 'declared_by_account_key' | 'declared_open_mode' | 'not_recorded';
+  label: string;
+};
+
+export function parseAttribution(role: string | undefined): Attribution {
+  const m = /attribution=([a-z_]+)/.exec(role || '');
+  switch (m?.[1]) {
+    case 'authenticated_operator':
+      return { basis: 'authenticated_operator', label: 'operator credential presented (not identity proof)' };
+    case 'declared_by_account_key':
+      return { basis: 'declared_by_account_key', label: 'name declared by the holder of an account key (not authenticated)' };
+    case 'declared_open_mode':
+      return { basis: 'declared_open_mode', label: 'name declared, server in open mode (not authenticated)' };
+    default:
+      return { basis: 'not_recorded', label: 'attribution not recorded' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Supplier trust (src/assurance/api/supplier_routes.py, supplier/trust.py)
+// ---------------------------------------------------------------------------
+
+export type KeyPin = {
+  supplier_id: string;
+  fingerprint: string;
+  status: string;
+  effective_from: string;
+  retired_at: string;
+  revoked_at: string;
+  pinned_by: string;
+  obtained_via: string;
+  pinned_at: string;
+  reason: string;
+};
+
+export type SupplierTrust = {
+  pins: KeyPin[];
+  history: Record<string, unknown>[];
+  overrides: { supplier_id: string; advisory_id: string; advisory_hash: string; actor: string; reason: string; at: string }[];
+  integrity_problems: string[];
+  trust_statement: string;
+};
+
+export type RecordTrust = {
+  sequence: number;
+  advisory_id: string;
+  is_withdrawal: boolean;
+  key_fingerprint: string;
+  signature: string;
+  key_trust: string;
+  authentic: boolean;
+  signature_valid_under_candidate: boolean | null;
+};
+
+export type TrustedAdvisoryRow = {
+  advisory_id: string;
+  supplier_id: string;
+  sequence: number;
+  severity: string;
+  title: string;
+  advisory_hash: string;
+  record_authentic: boolean;
+  trust_basis: string;
+  automated_consequences_permitted: boolean;
+  override: { actor: string; reason: string; at: string; advisory_hash: string } | null;
+  override_refused: string;
+  implications_reviewed: boolean;
+  case_opened: string;
+  evaluated_at: string;
+};
+
+export type FeedTrust = {
+  trust_state: string;
+  policy_satisfied: boolean;
+  inspect_only: boolean;
+  structurally_readable: boolean;
+  record_count: number;
+  signature_state: string;
+  key_trust_state: string;
+  chain_valid: boolean;
+  chain_problems: string[];
+  duplicate_advisories: string[];
+  conflicting_advisories: string[];
+  supplier_id: string;
+  key_fingerprints: string[];
+  records: RecordTrust[];
+  advisories: TrustedAdvisoryRow[];
+  withdrawn: string[];
+  unauthenticated_withdrawals: string[];
+  problems: string[];
+  trust_statement: string;
+};
+
+// POST /v1/fleet/advisory/signed
+export type SignedImpactResult = {
+  trust: FeedTrust;
+  advisories: (TrustedAdvisoryRow & { impact: ImpactReport | null; error?: string })[];
+  inspect_only: boolean;
+  trust_statement: string;
+};

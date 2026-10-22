@@ -221,7 +221,7 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(panel(page).getByTestId('impact-provenance')).toContainText(/signature not verified/i);
   });
 
-  test('a withdrawn advisory cannot open a case without an explicit confirmation', async ({ page, request }) => {
+  test('a withdrawn advisory in a signed feed cannot open a case from the local reading at all', async ({ page, request }) => {
     const s = seed.supplier;
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
@@ -230,11 +230,12 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await orig.getByRole('button', { name: /Check fleet impact/ }).click();
     await expect(panel(page).getByTestId('impact-verdict')).toBeVisible({ timeout: 10_000 });
     await expect(panel(page).getByTestId('impact-result')).toContainText(/withdrawn later in this file/i);
-    await panel(page).getByLabel(/Your name/).fill('v.grimaldi');
+    // A record that came in a signed feed nobody has judged under pinned keys is inspect-only here:
+    // the case control is disabled whatever else is ticked, and it points at the trust evaluation.
     const open = panel(page).getByRole('button', { name: 'Open assurance case' });
     await expect(open).toBeDisabled();
-    await panel(page).getByLabel(/open a case on it anyway/i).check();
-    await expect(open).toBeEnabled();
+    await expect(panel(page).getByTestId('signed-record-no-case')).toContainText(/Inspect only/);
+    await expect(panel(page).getByTestId('signed-record-no-case')).toContainText(/Evaluate under my pinned keys/);
     const cases = await (await request.get(`${apiBase}/v1/change/cases`, { headers: { 'X-API-Key': seed.key_g } })).json();
     expect(JSON.stringify(cases)).not.toContain(s.withdrawn_advisory_id);
   });
