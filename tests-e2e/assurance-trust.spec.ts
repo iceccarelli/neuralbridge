@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { operatorKey } from './support/operators';
+import { operatorKey, useDecisionCredential } from './support/operators';
 
 // Supplier trust, impact classification, fleet record sources and the decision credential in the
 // /assurance workspace, against the REAL local API and real tenant ledgers
@@ -136,7 +136,14 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     await expect(form).toContainText(/Do not copy a key or fingerprint out of the feed/);
     await form.locator('[name="pin-supplier_id"]').fill(seed.supplier.supplier_id);
     await form.locator('[name="pin-public_key_pem"]').fill(pem);
-    await form.locator('[name="pin-actor"]').fill('v.grimaldi');
+
+    // No decision credential: the form says why it is disabled and nothing can be sent.
+    await expect(form.getByRole('button', { name: 'Pin key' })).toBeDisabled();
+    await expect(form.getByTestId('trust-pin-disabled-why')).toContainText(/decision credential/);
+    // The first operator of the account is created with the real account key (POST /v1/operators).
+    const decider = await operatorKey(request, seed.key_g, 'v.grimaldi');
+    await useDecisionCredential(keys(page), decider);
+    await expect(form.getByRole('button', { name: 'Pin key' })).toBeEnabled();
 
     // No "obtained via": nothing is sent.
     await form.getByRole('button', { name: 'Pin key' }).click();
@@ -156,7 +163,8 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     const row = keys(page).getByTestId('pin-row');
     await expect(row).toHaveCount(1);
     await expect(row).toContainText('e2e: read out over the phone');
-    await expect(row).toContainText('v.grimaldi');
+    // Recorded as the operator the credential was issued to, not a typed name.
+    await expect(row).toContainText(/v\.grimaldi \(operator /);
     await expect(row).toContainText(seed.supplier.fingerprint);
   });
 
@@ -204,7 +212,8 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     await expect(adv(page).getByTestId('override-flow')).toHaveCount(0);
   });
 
-  test('a manual override asks for who and why, and is shown as an attributed override, not as trust', async ({ page, request }) => {
+  test('a manual override asks for the decider credential and a reason, and is shown as an attributed override, not as trust', async ({ page, request }) => {
+    const decider = await operatorKey(request, seed.key_g, 'v.grimaldi');
     await enter(page, seed.key_g);
     await expect(keys(page).getByTestId('pin-row')).toHaveCount(1, { timeout: 15_000 });
     // Pinned key, valid signatures, but the caller expected a different supplier: policy not met.
@@ -218,8 +227,10 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     await expect(target.getByTestId('override-flow')).toContainText(/does not make the feed\s+trusted|does not make the feed trusted/);
 
     await target.getByRole('button', { name: 'Record override' }).click();
-    await expect(target.getByRole('alert')).toContainText(/name and a reason/);
-    await target.locator('[name="override-actor"]').fill('v.grimaldi');
+    await expect(target.getByRole('alert')).toContainText(/decision credential/);
+    await target.locator('[name="override-credential"]').fill(decider);
+    await target.getByRole('button', { name: 'Record override' }).click();
+    await expect(target.getByRole('alert')).toContainText(/needs a reason/);
     await target.locator('[name="override-reason"]').fill('Supplier confirmed this advisory by phone; feed id mismatch is ours.');
     await target.getByRole('button', { name: 'Record override' }).click();
 
@@ -236,18 +247,18 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     // The override is on the ledger, attributed.
     const t = await (await request.get(`${apiBase}/v1/supplier/trust`, { headers: { 'X-API-Key': seed.key_g } })).json();
     expect(t.overrides).toHaveLength(1);
-    expect(t.overrides[0].actor).toContain('v.grimaldi');
+    expect(t.overrides[0].actor).toMatch(/^v\.grimaldi \(operator /);
     await expect(keys(page).getByTestId('overrides-list')).toContainText('v.grimaldi', { timeout: 10_000 });
   });
 
-  test('revoking the key makes the feed untrusted again and an override is refused with the server\'s reason', async ({ page }) => {
+  test('revoking the key makes the feed untrusted again and an override is refused with the server\'s reason', async ({ page, request }) => {
     await enter(page, seed.key_g);
+    await useDecisionCredential(keys(page), await operatorKey(request, seed.key_g, 'v.grimaldi'));
     await expect(keys(page).getByTestId('pin-row')).toHaveCount(1, { timeout: 15_000 });
     const form = keys(page).getByTestId('trust-form-revoke');
     await form.locator('summary').click();
     await form.locator('[name="revoke-supplier_id"]').fill(seed.supplier.supplier_id);
     await form.locator('[name="revoke-fingerprint"]').fill(seed.supplier.fingerprint);
-    await form.locator('[name="revoke-actor"]').fill('v.grimaldi');
     await form.getByRole('button', { name: 'Revoke key' }).click();
     await expect(form.getByRole('alert')).toContainText(/Why \(required\)/);
     await form.locator('[name="revoke-reason"]').fill('e2e: key compromised');

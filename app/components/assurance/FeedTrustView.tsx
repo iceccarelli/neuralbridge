@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import {
   call,
+  explainForbidden,
   type ApiOutcome,
   type AssessAdvisoryResult,
   type FeedTrust,
   type SignedImpactResult,
   type TrustedAdvisoryRow,
 } from '../../lib/assuranceApi';
+import { useOperatorKey } from './DecisionCredential';
 import { ClassificationTable } from './ImpactParts';
 import { Notice, Refusal } from './PanelFrame';
 import { API_BASE } from './usePanel';
@@ -226,17 +228,16 @@ function OverrideForm({
   apiKey,
   row,
   feedBody,
-  actor,
-  setActor,
   onDone,
 }: {
   apiKey: string;
   row: TrustedAdvisoryRow;
   feedBody: Record<string, string>;
-  actor: string;
-  setActor: (v: string) => void;
   onDone: () => void;
 }) {
+  // The override is a trust decision: it needs the decider operator's key (the shared decision
+  // credential), and the server records that operator as the actor. No name is typed.
+  const [opKey, setOpKey] = useOperatorKey();
   const [reason, setReason] = useState('');
   const [notice, setNotice] = useState('');
   const [out, setOut] = useState<ApiOutcome<unknown> | null>(null);
@@ -245,17 +246,20 @@ function OverrideForm({
   const submit = async () => {
     setNotice('');
     setOut(null);
-    if (!actor.trim() || !reason.trim()) {
-      setNotice('An override needs your name and a reason. It is recorded in your ledger under both.');
+    if (!opKey.trim()) {
+      setNotice('An override is a human decision and needs a decision credential: the key of a decider operator.');
+      return;
+    }
+    if (!reason.trim()) {
+      setNotice('An override needs a reason. It is recorded in your ledger with the operator it was made by.');
       return;
     }
     setBusy(true);
-    const res = await call<unknown>(API_BASE, apiKey, '/v1/supplier/trust/override', {
+    const res = await call<unknown>(API_BASE, opKey.trim(), '/v1/supplier/trust/override', {
       method: 'POST',
       body: {
         ...feedBody,
         advisory_id: row.advisory_id,
-        actor: actor.trim(),
         reason: reason.trim(),
       },
     });
@@ -276,12 +280,19 @@ function OverrideForm({
               <h4>Manual override of {row.advisory_id}</h4>
               <p className="aw-note">
                 This accepts ONE advisory from a feed that did not meet policy. It is recorded in your ledger as an
-                override by the name below, with your reason, bound to the advisory&apos;s content hash. It does not
-                make the feed trusted, does not pin the key, and is the person&apos;s decision, not a signature check.
+                override by the operator this key was issued to, with your reason, bound to the advisory&apos;s content
+                hash. It does not make the feed trusted, does not pin the key, and is the person&apos;s decision, not a
+                signature check.
               </p>
               <label className="aw-field">
-                Your name (recorded; declared, not authenticated)
-                <input type="text" value={actor} onChange={(e) => setActor(e.target.value)} name="override-actor" />
+                Decision credential (decider operator key; the server records that operator, not a typed name)
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={opKey}
+                  onChange={(e) => setOpKey(e.target.value)}
+                  name="override-credential"
+                />
               </label>
               <label className="aw-field">
                 Why accept it
@@ -298,6 +309,9 @@ function OverrideForm({
               </button>
               {notice && <Notice>{notice}</Notice>}
               {out && out.kind !== 'ok' && <Refusal outcome={out} what="Override" />}
+              {out && out.kind === 'forbidden' && explainForbidden(out) && (
+                <p className="aw-note">{explainForbidden(out)}</p>
+              )}
             </div>
           )}
         </div>
@@ -451,14 +465,7 @@ export default function SignedResult({
                   </p>
                 )}
                 {!a.automated_consequences_permitted && !a.override_refused && (
-                  <OverrideForm
-                    apiKey={apiKey}
-                    row={a}
-                    feedBody={feedBody}
-                    actor={actor}
-                    setActor={setActor}
-                    onDone={onRerun}
-                  />
+                  <OverrideForm apiKey={apiKey} row={a} feedBody={feedBody} onDone={onRerun} />
                 )}
               </div>
               {co && co.kind !== 'ok' && <Refusal outcome={co} what="Open case" />}

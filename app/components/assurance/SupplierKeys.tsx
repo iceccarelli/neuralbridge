@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { call, type ApiOutcome, type KeyPin, type SupplierTrust } from '../../lib/assuranceApi';
+import { call, explainForbidden, type ApiOutcome, type KeyPin, type SupplierTrust } from '../../lib/assuranceApi';
+import DecisionCredential, { useOperatorKey } from './DecisionCredential';
 import { Notice, PanelFrame, Refusal } from './PanelFrame';
 import { API_BASE, usePanel } from './usePanel';
 
@@ -36,11 +37,6 @@ const PIN_FIELDS: Field[] = [
     required: true,
     placeholder: 'e.g. signed contract annex 4, or a call to the supplier’s published number',
   },
-  {
-    name: 'actor',
-    label: 'Your name (recorded; declared, not authenticated)',
-    required: true,
-  },
   { name: 'reason', label: 'Reason' },
 ];
 
@@ -71,14 +67,12 @@ const ROTATE_FIELDS: Field[] = [
     label: 'How you obtained the new key, independently of the feed',
     required: true,
   },
-  { name: 'actor', label: 'Your name (recorded)', required: true },
   { name: 'reason', label: 'Reason' },
 ];
 
 const REVOKE_FIELDS: Field[] = [
   { name: 'supplier_id', label: 'Supplier id', required: true },
   { name: 'fingerprint', label: 'Fingerprint to revoke', required: true },
-  { name: 'actor', label: 'Your name (recorded)', required: true },
   { name: 'reason', label: 'Why (required)', required: true },
 ];
 
@@ -87,6 +81,7 @@ function TrustForm({
   title,
   fields,
   apiKey,
+  opKey,
   warning,
   submit,
   onDone,
@@ -95,6 +90,7 @@ function TrustForm({
   title: string;
   fields: Field[];
   apiKey: string;
+  opKey: string;
   warning: string;
   submit: string;
   onDone: () => void;
@@ -115,7 +111,12 @@ function TrustForm({
     const body: Record<string, string> = {};
     for (const f of fields) body[f.name] = (vals[f.name] || '').trim();
     setBusy(true);
-    const res = await call<{ pin: KeyPin }>(API_BASE, apiKey, `/v1/supplier/trust/${kind}`, { method: 'POST', body });
+    // A trust decision is a human decision: it goes with the decider operator's key, and the server
+    // records that operator as the actor. No name is typed or sent.
+    const res = await call<{ pin: KeyPin }>(API_BASE, opKey.trim(), `/v1/supplier/trust/${kind}`, {
+      method: 'POST',
+      body,
+    });
     setBusy(false);
     setOut(res);
     if (res.kind === 'ok') {
@@ -150,11 +151,18 @@ function TrustForm({
           )}
         </label>
       ))}
-      <button className="btn btn-outline" disabled={busy} onClick={() => void send()}>
+      <button className="btn btn-outline" disabled={busy || !opKey.trim()} onClick={() => void send()}>
         {submit}
       </button>
+      {!opKey.trim() && (
+        <p className="aw-note" data-testid={`trust-${kind}-disabled-why`}>
+          Disabled: this is a human decision and needs a decision credential (the key of a decider operator). Enter it
+          under Decision credential above.
+        </p>
+      )}
       {notice && <Notice>{notice}</Notice>}
       {out && out.kind !== 'ok' && <Refusal outcome={out} what={title} />}
+      {out && out.kind === 'forbidden' && explainForbidden(out) && <p className="aw-note">{explainForbidden(out)}</p>}
       {out?.kind === 'ok' && (
         <p className="aw-prov" role="status" data-testid={`trust-${kind}-done`}>
           Recorded: key <code>{out.data.pin.fingerprint}</code> for {out.data.pin.supplier_id} is now{' '}
@@ -186,6 +194,7 @@ export default function SupplierKeys({
   version?: number;
 }) {
   const trust = usePanel<SupplierTrust>(apiKey, '/v1/supplier/trust');
+  const [opKey, setOpKey] = useOperatorKey();
   const reloadTrust = trust.reload;
   useEffect(() => {
     if (version > 0) void reloadTrust();
@@ -205,6 +214,7 @@ export default function SupplierKeys({
     >
       {(t) => (
         <div data-testid="supplier-keys">
+          <DecisionCredential apiKey={apiKey} opKey={opKey} setOpKey={setOpKey} />
           <p className="aw-prov" data-testid="key-not-proof">
             <strong>A key inside an advisory, or beside a feed, is not proof.</strong> A forged feed carries its own
             key. Pin a key only with a fingerprint you obtained by another route (a contract, a call to a number you
@@ -285,6 +295,7 @@ export default function SupplierKeys({
             title="Pin a supplier key"
             fields={PIN_FIELDS}
             apiKey={apiKey}
+            opKey={opKey}
             submit="Pin key"
             warning="A pin records that you were told this key belongs to this supplier, and how. It does not check that you were told the truth. Do not copy a key or fingerprint out of the feed you are trying to judge."
             onDone={done}
@@ -294,6 +305,7 @@ export default function SupplierKeys({
             title="Rotate a supplier key"
             fields={ROTATE_FIELDS}
             apiKey={apiKey}
+            opKey={opKey}
             submit="Pin new key and retire the old"
             warning="Pins the new key and retires the old one from the effective date. Records signed by the old key before that date stay in force; records after it are not trusted under it."
             onDone={done}
@@ -303,6 +315,7 @@ export default function SupplierKeys({
             title="Revoke a supplier key"
             fields={REVOKE_FIELDS}
             apiKey={apiKey}
+            opKey={opKey}
             submit="Revoke key"
             warning="Everything signed by this key stops being trusted, including advisories already assessed. Use it when a key may be compromised."
             onDone={done}
