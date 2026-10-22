@@ -10,21 +10,28 @@ import { API_BASE, usePanel } from './usePanel';
 // and never sent anywhere but the configured API as the X-API-Key of a request.
 const STORAGE = 'nb-assurance-decision-credential';
 
+const SYNC = 'nb-decision-credential-changed';
+
 export function useOperatorKey(): [string, (v: string) => void] {
   const [key, setKeyState] = useState('');
   useEffect(() => {
-    try {
-      const v = window.sessionStorage.getItem(STORAGE);
-      if (v) setKeyState(v);
-    } catch {
-      /* storage blocked: the key then lives in memory only */
-    }
+    const read = () => {
+      try {
+        setKeyState(window.sessionStorage.getItem(STORAGE) || '');
+      } catch {
+        /* storage blocked: the key then lives in memory only */
+      }
+    };
+    read();
+    window.addEventListener(SYNC, read);
+    return () => window.removeEventListener(SYNC, read);
   }, []);
   const setKey = (v: string) => {
     setKeyState(v);
     try {
       if (v) window.sessionStorage.setItem(STORAGE, v);
       else window.sessionStorage.removeItem(STORAGE);
+      window.dispatchEvent(new Event(SYNC));
     } catch {
       /* ignore */
     }
