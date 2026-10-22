@@ -7,6 +7,10 @@
     list       what stands in a feed, and what was withdrawn
     fetch      download a hosted feed (GET /v1/supplier/feed/{id}) to a local
                file — the path a ``watch`` config's ``feed:`` field names
+    trust      the account's pinned supplier keys, kept in its own ledger:
+               pin | rotate | revoke | list | check | override. ``check`` says,
+               state by state, what a feed is: readable, signature valid, key
+               pinned for THIS supplier, chain intact. It never says "verified"
 
 Exit codes: 0 fine, 1 a finding — a bad signature, a gap, a feed that must not
 be acted on — and 2 the command could not run.
@@ -27,6 +31,7 @@ from pathlib import Path
 
 from assurance.attest.keys import SigningKey, VerifyingKey
 from assurance.core.errors import AssuranceError
+from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.supplier.publish import (
     AdvisoryFeed,
@@ -37,6 +42,12 @@ from assurance.supplier.publish import (
     publish,
     verify_feed,
     withdraw,
+)
+from assurance.supplier.trust import (
+    TRUST_STATEMENT,
+    SupplierTrustError,
+    SupplierTrustStore,
+    evaluate_feed,
 )
 
 __all__ = ["build_parser", "main"]
@@ -113,6 +124,65 @@ def build_parser() -> argparse.ArgumentParser:
                           "this key")
     ft.add_argument("--expect-supplier", default="")
     ft.add_argument("--timeout", type=float, default=10.0)
+
+    tr = verbs.add_parser(
+        "trust", help="pin, rotate, revoke and check supplier keys (per account)")
+    tv = tr.add_subparsers(dest="trust_command", required=True)
+
+    def _ledger(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--ledger", required=True, type=Path,
+                        help="the ACCOUNT's evidence ledger, never a shared one")
+
+    tp = tv.add_parser("pin", help="trust this key for this supplier")
+    _ledger(tp)
+    tp.add_argument("--supplier-id", required=True)
+    tp.add_argument("--public-key", required=True, type=Path)
+    tp.add_argument("--fingerprint", default="",
+                    help="the fingerprint you were given by another route; the "
+                         "key must match it")
+    tp.add_argument("--obtained-via", required=True,
+                    help="how you learned the fingerprint (not: from the feed)")
+    tp.add_argument("--actor", required=True)
+    tp.add_argument("--reason", default="")
+
+    tro = tv.add_parser("rotate", help="pin a new key, retire the old from a date")
+    _ledger(tro)
+    tro.add_argument("--supplier-id", required=True)
+    tro.add_argument("--new-public-key", required=True, type=Path)
+    tro.add_argument("--retire-fingerprint", required=True)
+    tro.add_argument("--effective-at", required=True, help="ISO-8601 with timezone")
+    tro.add_argument("--fingerprint", default="")
+    tro.add_argument("--obtained-via", required=True)
+    tro.add_argument("--actor", required=True)
+    tro.add_argument("--reason", default="")
+
+    trv = tv.add_parser("revoke", help="stop trusting a key")
+    _ledger(trv)
+    trv.add_argument("--supplier-id", required=True)
+    trv.add_argument("--fingerprint", required=True)
+    trv.add_argument("--actor", required=True)
+    trv.add_argument("--reason", required=True)
+
+    tl = tv.add_parser("list", help="pinned keys and the decision history")
+    _ledger(tl)
+    tl.add_argument("--json", action="store_true")
+
+    tc = tv.add_parser("check", help="what is this feed, state by state")
+    _ledger(tc)
+    tc.add_argument("--feed", required=True, type=Path)
+    tc.add_argument("--expect-supplier", default="")
+    tc.add_argument("--public-key", type=Path, default=None,
+                    help="an UNPINNED key to test signatures against; it can show "
+                         "that signatures are valid, never that they are trusted")
+    tc.add_argument("--json", action="store_true")
+
+    to = tv.add_parser("override", help="accept ONE advisory despite the policy")
+    _ledger(to)
+    to.add_argument("--feed", required=True, type=Path)
+    to.add_argument("--expect-supplier", default="")
+    to.add_argument("--advisory-id", required=True)
+    to.add_argument("--actor", required=True)
+    to.add_argument("--reason", required=True)
 
     return p
 
@@ -267,14 +337,87 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trust(args: argparse.Namespace) -> int:
+    from assurance.core.identity import parse_utc
+
+    store = SupplierTrustStore(EvidenceLedger(args.ledger))
+    cmd = args.trust_command
+    if cmd == "pin":
+        pin = store.pin(
+            args.supplier_id, Path(args.public_key).read_text(encoding="utf-8"),
+            actor=args.actor, obtained_via=args.obtained_via,
+            expected_fingerprint=args.fingerprint, reason=args.reason)
+        print(f"pinned {pin.fingerprint} for {pin.supplier_id} (by {pin.pinned_by})")
+        print(f"  learned via: {pin.obtained_via}")
+        return 0
+    if cmd == "rotate":
+        pin = store.rotate(
+            args.supplier_id, Path(args.new_public_key).read_text(encoding="utf-8"),
+            retire_fingerprint=args.retire_fingerprint,
+            effective_at=parse_utc(args.effective_at), actor=args.actor,
+            obtained_via=args.obtained_via, expected_fingerprint=args.fingerprint,
+            reason=args.reason)
+        print(f"pinned {pin.fingerprint} for {pin.supplier_id} from {pin.effective_from}; "
+              f"{args.retire_fingerprint} retired from the same moment")
+        return 0
+    if cmd == "revoke":
+        pin = store.revoke(args.supplier_id, args.fingerprint, actor=args.actor,
+                           reason=args.reason)
+        print(f"revoked {pin.fingerprint} for {pin.supplier_id}: every record it "
+              "signed is now untrusted")
+        return 0
+    if cmd == "list":
+        pins = [p.to_dict() for p in store.pins()]
+        if args.json:
+            print(json.dumps({"pins": pins, "history": store.history(),
+                              "overrides": store.overrides(),
+                              "integrity_problems": store.integrity_problems()},
+                             indent=2, sort_keys=True))
+            return 0
+        if not pins:
+            print("no supplier key is pinned in this ledger")
+        for p in pins:
+            print(f"{p['supplier_id']:<16} {p['fingerprint']}  {p['status']:<8} "
+                  f"from {p['effective_from']}  pinned by {p['pinned_by']} via "
+                  f"{p['obtained_via']}")
+        return 0
+
+    records = AdvisoryFeed(args.feed).read()
+    candidate = (VerifyingKey.from_file(args.public_key)
+                 if getattr(args, "public_key", None) else None)
+    trust = evaluate_feed(records, store, expect_supplier=args.expect_supplier,
+                          candidate_key=candidate)
+    if cmd == "override":
+        done = store.override(trust, args.advisory_id, actor=args.actor,
+                              reason=args.reason)
+        print(f"override recorded for {done['advisory_id']} by {done['actor']}")
+        print("  This accepts ONE advisory as it is now (bound to its content hash). "
+              "It does not pin the key, and it is in the ledger for audit.")
+        return 0
+    if args.json:
+        print(json.dumps(trust.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(trust.summary())
+        print(f"  1 readable          {trust.structurally_readable} "
+              f"({trust.record_count} record(s))")
+        print(f"  2 signatures        {trust.signature_state}")
+        print(f"  3 key trusted for   {trust.key_trust_state} "
+              f"{', '.join(trust.key_fingerprints)}")
+        print(f"  4 chain             {'intact' if trust.chain_valid else 'BROKEN'}")
+        for problem in trust.problems:
+            print(f"  ! {problem}")
+        print(f"\n  {TRUST_STATEMENT}")
+    return 0 if trust.policy_satisfied else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {"keygen": _cmd_keygen, "publish": _cmd_publish,
                 "withdraw": _cmd_withdraw, "verify": _cmd_verify, "list": _cmd_list,
-                "fetch": _cmd_fetch}
+                "fetch": _cmd_fetch, "trust": _cmd_trust}
     try:
         return handlers[args.command](args)
-    except PublishError as exc:
+    except (PublishError, SupplierTrustError) as exc:
         print(f"finding: {exc}", file=sys.stderr)
         return 1
     except FileNotFoundError as exc:

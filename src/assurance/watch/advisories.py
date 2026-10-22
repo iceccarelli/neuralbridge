@@ -56,6 +56,7 @@ from ..supplier.publish import (
     SignedAdvisory,
     verify_feed,
 )
+from ..supplier.trust import FeedTrust, SupplierTrustStore, evaluate_feed
 from .config import FeedSubscription
 
 __all__ = [
@@ -81,6 +82,13 @@ class FeedOutcome:
     newly_withdrawn: tuple[str, ...] = ()
     problems: tuple[str, ...] = ()
     detail: str = ""
+    #: ``config_key`` — verified under the key file named in the watch config
+    #: (an operator decision made out of band, not an auditable pin);
+    #: ``pinned_key_policy`` — under a key pinned in the account's trust store.
+    trust_basis: str = ""
+    #: The trust store's evaluation of this feed (see ``supplier.trust``), when
+    #: one was consulted. Empty otherwise.
+    trust: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_degraded(self) -> bool:
@@ -98,6 +106,7 @@ class FeedOutcome:
             "records": self.records, "new": list(self.new),
             "newly_withdrawn": list(self.newly_withdrawn),
             "problems": list(self.problems), "detail": self.detail,
+            "trust_basis": self.trust_basis, "trust": dict(self.trust),
         }
 
 
@@ -122,6 +131,18 @@ class AdvisoryFinding:
     #: The change-assurance case the runner opened or updated for this finding.
     #: Empty until the runner has done so (and always empty in a dry run).
     case_id: str = ""
+    #: ``config_key`` | ``pinned_key_policy`` | ``manual_override`` | ``none``.
+    trust_basis: str = "config_key"
+    #: True for an advisory that did not meet the trust policy. It is shown so an
+    #: operator can inspect it, and it carries NO consequence: ``machines`` is
+    #: empty (so no stop-use and no regulatory intake is drafted), ``report`` is
+    #: ``None`` (so no case is opened) and ``state`` is ``untrusted``.
+    inspect_only: bool = False
+    #: Machines the advisory would touch if it were trusted. For inspection only.
+    inspect_machines: tuple[str, ...] = ()
+    #: Whether a person has reviewed the implications. Software never sets it.
+    implications_reviewed: bool = False
+    trust_state: str = ""
     #: The impact engine's own report, kept in memory so the runner can hand it
     #: to :func:`assurance.change.service.assess_advisory` without asking the
     #: engine twice. Never serialised: the sealed run carries the finding, and
@@ -142,6 +163,11 @@ class AdvisoryFinding:
             "functions_in_question": list(self.functions_in_question),
             "withdrawal_reason": self.withdrawal_reason,
             "case_id": self.case_id,
+            "trust_basis": self.trust_basis,
+            "trust_state": self.trust_state,
+            "inspect_only": self.inspect_only,
+            "inspect_machines": list(self.inspect_machines),
+            "implications_reviewed": self.implications_reviewed,
         }
 
 
@@ -164,6 +190,11 @@ class AdvisoryPass:
     @property
     def withdrawn(self) -> tuple[AdvisoryFinding, ...]:
         return tuple(f for f in self.findings if f.state == "withdrawn")
+
+    @property
+    def untrusted(self) -> tuple[AdvisoryFinding, ...]:
+        """Advisories shown for inspection that carry no consequence."""
+        return tuple(f for f in self.findings if f.inspect_only)
 
     @property
     def stop_use(self) -> tuple[AdvisoryFinding, ...]:
@@ -192,9 +223,13 @@ class AdvisoryPass:
             parts.append(f"{len(self.new)} new")
         if self.withdrawn:
             parts.append(f"{len(self.withdrawn)} withdrawn")
+        if self.untrusted:
+            parts.append(
+                f"{len(self.untrusted)} advisory(ies) NOT TRUSTED (inspect only, "
+                "no consequence)")
         if self.degraded:
             parts.append(
-                f"{len(self.degraded)} feed(s) could not be checked")
+                f"{len(self.degraded)} feed(s) could not be checked or are untrusted")
         return "; ".join(parts) if parts else (
             f"{len(self.feeds)} feed(s) checked, nothing new")
 
@@ -237,12 +272,34 @@ def _read_feed(
     return list(records), None, list(verdict.checks_skipped)
 
 
+def _read_feed_pinned(
+    supplier_id: str, feed_path: str, store: SupplierTrustStore,
+) -> tuple[list[SignedAdvisory], FeedOutcome | None, list[str], FeedTrust | None]:
+    """Read one feed and judge it under the account's pinned keys."""
+    path = Path(feed_path)
+    if not path.exists():
+        return [], FeedOutcome(
+            supplier_id=supplier_id, status="absent",
+            detail=f"{path} does not exist. The watch is blind to this supplier; "
+                   "that is not the same as this supplier having nothing to say."
+        ), [], None
+    try:
+        records = AdvisoryFeed(path).read()
+    except (PublishError, OSError) as exc:
+        return [], FeedOutcome(
+            supplier_id=supplier_id, status="unreadable",
+            detail=f"{path} could not be read: {exc}"), [], None
+    trust = evaluate_feed(records, store, expect_supplier=supplier_id)
+    return records, None, [trust.trust_statement], trust
+
+
 def check_feeds(
     subscriptions: Sequence[FeedSubscription],
     fleet: Fleet,
     *,
     previously_seen: dict[str, str] | None = None,
     now: datetime | None = None,
+    trust_store: SupplierTrustStore | None = None,
 ) -> AdvisoryPass:
     """Look at every subscribed feed and say what is new for *this* fleet.
 
@@ -250,6 +307,14 @@ def check_feeds(
     so that an advisory already known is carried as ``outstanding`` rather than
     announced twice — and so that a withdrawal of something this fleet was told
     about is announced exactly once.
+
+    ``trust_store`` is the account's pinned-key store. For a supplier with a pin
+    in it the feed is judged by :func:`assurance.supplier.trust.evaluate_feed`:
+    only a feed that meets the policy (or an advisory with a recorded manual
+    override) drives cases, stop-use and intakes; anything else is listed as
+    ``untrusted`` for inspection and does nothing. A supplier with no pin falls
+    back to the key file in the watch configuration, as before, and is labelled
+    ``config_key`` so the two are never confused.
     """
     seen = dict(previously_seen or {})
     outcomes: list[FeedOutcome] = []
@@ -257,8 +322,16 @@ def check_feeds(
     caveats: list[str] = []
 
     for sub in subscriptions:
-        records, failure, notes = _read_feed(
-            sub.supplier_id, sub.feed, sub.public_key)
+        pinned = (trust_store is not None
+                  and bool(trust_store.pins(sub.supplier_id)))
+        trust: FeedTrust | None = None
+        if pinned:
+            assert trust_store is not None
+            records, failure, notes, trust = _read_feed_pinned(
+                sub.supplier_id, sub.feed, trust_store)
+        else:
+            records, failure, notes = _read_feed(
+                sub.supplier_id, sub.feed, sub.public_key)
         caveats.extend(notes)
         if failure is not None:
             outcomes.append(failure)
@@ -266,12 +339,20 @@ def check_feeds(
 
         standing: dict[str, SignedAdvisory] = {}
         withdrawals: dict[str, str] = {}
-        for record in records:
-            if record.is_withdrawal:
-                standing.pop(record.withdraws, None)
-                withdrawals[record.withdraws] = record.withdrawal_reason
-            else:
-                standing[record.advisory_id] = record
+        if trust is not None:
+            first = {r.advisory_id: r for r in records if not r.is_withdrawal}
+            standing = {a["advisory_id"]: first[a["advisory_id"]]
+                        for a in trust.advisories}
+            if trust.policy_satisfied:
+                withdrawals = {r.withdraws: r.withdrawal_reason for r in records
+                               if r.is_withdrawal and r.withdraws in trust.withdrawn}
+        else:
+            for record in records:
+                if record.is_withdrawal:
+                    standing.pop(record.withdraws, None)
+                    withdrawals[record.withdraws] = record.withdrawal_reason
+                else:
+                    standing[record.advisory_id] = record
 
         new_ids: list[str] = []
         withdrawn_ids: list[str] = []
@@ -285,7 +366,18 @@ def check_feeds(
                     f"advisory ({exc}); it was skipped, and skipping is not "
                     "clearing.")
                 continue
-            report = assess_impact(advisory, fleet)
+            provenance = (trust.provenance_for(advisory_id) if trust is not None
+                          else {"source": "supplier_feed", "trust_basis": "config_key",
+                                "trust_state": "config_key_verified"})
+            report = assess_impact(advisory, fleet, provenance=provenance)
+            if trust is not None and not trust.permitted(advisory_id):
+                # Inspectable, consequence-free: no machines (so no stop-use and
+                # no intake), no report (so no case), not counted as new.
+                findings.append(_finding(
+                    advisory, sub.supplier_id, "untrusted", report,
+                    trust_basis="none", trust_state=trust.trust_state,
+                    inspect_only=True))
+                continue
             if report.verdict == "clear":
                 # Not carried as a finding, and deliberately not silent either:
                 # the feed outcome still counts it, so "we checked and it does
@@ -295,7 +387,9 @@ def check_feeds(
             if state == "new":
                 new_ids.append(advisory_id)
             findings.append(_finding(
-                advisory, sub.supplier_id, state, report))
+                advisory, sub.supplier_id, state, report,
+                trust_basis=str(provenance.get("trust_basis", "config_key")),
+                trust_state=str(provenance.get("trust_state", ""))))
 
         for advisory_id, reason in withdrawals.items():
             if advisory_id not in seen:
@@ -317,9 +411,21 @@ def check_feeds(
                 withdrawal_reason=reason,
             ))
 
+        if trust is not None and not trust.policy_satisfied:
+            outcomes.append(FeedOutcome(
+                supplier_id=sub.supplier_id, status="untrusted", records=len(records),
+                problems=tuple(trust.problems), trust_basis="none",
+                trust=trust.to_dict(), new=tuple(new_ids),
+                detail="this feed does not meet the trust policy for the pinned key(s). "
+                       "Its advisories are listed for inspection only; nothing in it "
+                       "opened a case, stopped use or drafted an intake except an "
+                       "advisory carrying a recorded manual override."))
+            continue
         outcomes.append(FeedOutcome(
             supplier_id=sub.supplier_id, status="verified", records=len(records),
             new=tuple(new_ids), newly_withdrawn=tuple(withdrawn_ids),
+            trust_basis="pinned_key_policy" if trust is not None else "config_key",
+            trust=trust.to_dict() if trust is not None else {},
             detail=f"{len(standing)} advisory(ies) stand in this feed"))
 
     if outcomes:
@@ -345,8 +451,18 @@ def check_feeds(
 
 def _finding(
     advisory: ComponentAdvisory, supplier_id: str, state: str,
-    report: ImpactReport,
+    report: ImpactReport, *, trust_basis: str = "config_key", trust_state: str = "",
+    inspect_only: bool = False,
 ) -> AdvisoryFinding:
+    if inspect_only:
+        return AdvisoryFinding(
+            advisory_id=advisory.advisory_id, supplier_id=supplier_id,
+            severity=advisory.severity.value, title=advisory.title,
+            remedy=advisory.remedy, reference=advisory.reference, state=state,
+            impact=report.verdict, machines=(), functions_in_question=(),
+            trust_basis=trust_basis, trust_state=trust_state, inspect_only=True,
+            inspect_machines=tuple(report.machines_affected), report=None,
+        )
     machines = list(report.machines_affected)
     functions: list[str] = []
     for exposure in report.exposures:
@@ -364,5 +480,7 @@ def _finding(
         impact=report.verdict,
         machines=tuple(machines),
         functions_in_question=tuple(functions),
+        trust_basis=trust_basis,
+        trust_state=trust_state,
         report=report,
     )
