@@ -493,6 +493,24 @@ def keyed(account_store, tier):
     return {"X-API-Key": account_store.issue_key(account.id)}
 
 
+_DECIDERS: dict[tuple[str, str], str] = {}
+
+
+def as_decider(headers, name="v.grimaldi"):
+    """Headers for a key issued to a ``decider`` operator of the caller's account.
+
+    Decisions are refused to account-level keys; this is how a test acts as the
+    named human who is allowed to make one. Cached per account and name.
+    """
+    from assurance.api import deps
+    store = deps.get_accounts()
+    principal = store.peek_key(headers["X-API-Key"])
+    cache_key = (str(store.path), principal.account.id, name)
+    if cache_key not in _DECIDERS:
+        _DECIDERS[cache_key] = store.create_operator(principal.account.id, name, "decider")[1]
+    return {"X-API-Key": _DECIDERS[cache_key]}
+
+
 def _account_ids(store):
     import sqlite3
     db = sqlite3.connect(store.path)
@@ -546,7 +564,7 @@ class TestHttp:
         r = client.post(f"/v1/change/cases/{case_id}/decision",
                         json={"disposition": "closed", "reason": "too early",
                               "actor": "v.grimaldi"},
-                        headers=headers)
+                        headers=as_decider(headers))
         assert r.status_code == 409  # not ready_to_close yet
 
     def test_a_human_step_needs_a_named_actor_bound_to_the_account(self, client, account_store):
@@ -561,7 +579,6 @@ class TestHttp:
         for path, body in (
             ("claim", {"owner": "o"}),
             ("advance", {}),
-            ("decision", {"disposition": "closed", "reason": "r"}),
         ):
             assert client.post(f"{base}/{path}", json=body, headers=headers).status_code == 422
             assert client.post(f"{base}/{path}", json={**body, "actor": "  "},
@@ -576,6 +593,8 @@ class TestHttp:
         recorded = json.dumps([e.payload for e in ledger.entries()])
         assert "v.grimaldi" in recorded
         assert f"via account {account.id}" in recorded
+        # An account-level key proves the account, not the person: it is recorded as such.
+        assert "attribution=declared_by_account_key" in recorded
 
     def test_an_unknown_case_is_a_404(self, client, account_store):
         r = client.get("/v1/change/cases/case-doesnotexist", headers=keyed(account_store, "cell"))
@@ -1139,31 +1158,105 @@ class TestCliS2:
 
 
 class TestHttpDecisionsNeedAPerson:
-    def test_an_anonymous_decision_is_refused_and_a_named_one_is_not(
-            self, client, account_store):
-        headers = keyed(account_store, "cell")
+    def _open_case(self, client, headers):
         r = client.post("/v1/change/assess/drift",
                         json={"baseline": manifest(manifest_id="BASE").to_dict(),
                               "observed": manifest(item(content_hash="d" * 64),
                                                    manifest_id="NOW").to_dict()},
                         headers=headers)
-        case_id = r.json()["case"]["case_id"]
+        return r.json()["case"]["case_id"]
 
-        # No actor, or a blank one, never reaches the domain: the API refuses it
-        # at the door (422). The domain's own refusal of a non-person actor is
-        # tested at service level (TestGuards), so CLI and MCP inherit it too.
-        for actor in ({}, {"actor": ""}, {"actor": "   "}):
+    def test_an_account_level_key_cannot_decide_whatever_name_it_sends(
+            self, client, account_store):
+        headers = keyed(account_store, "cell")
+        case_id = self._open_case(client, headers)
+        for actor in ({}, {"actor": ""}, {"actor": "Dr. Anna Keller"}):
             r = client.post(f"/v1/change/cases/{case_id}/decision",
                             json={"disposition": "rejected", "reason": "not real", **actor},
                             headers=headers)
-            assert r.status_code == 422, actor
-        still_open = client.get(f"/v1/change/cases/{case_id}", headers=headers).json()
-        assert still_open["status"] == "open"
+            assert r.status_code == 403, actor
+            assert r.json()["detail"]["error"] == "operator_required"
+        assert client.get(f"/v1/change/cases/{case_id}",
+                          headers=headers).json()["status"] == "open"
 
+    def test_an_operator_key_decides_as_that_operator_and_cannot_be_someone_else(
+            self, client, account_store):
+        headers = keyed(account_store, "cell")
+        case_id = self._open_case(client, headers)
+        mine = as_decider(headers, "v.grimaldi")
+        # Naming another person in the body is impersonation: refused.
         r = client.post(f"/v1/change/cases/{case_id}/decision",
                         json={"disposition": "rejected", "reason": "not real",
-                              "actor": "v.grimaldi"}, headers=headers)
+                              "actor": "Dr. Anna Keller"}, headers=mine)
+        assert r.status_code == 403 and r.json()["detail"]["error"] == "actor_mismatch"
+        assert client.get(f"/v1/change/cases/{case_id}",
+                          headers=headers).json()["status"] == "open"
+        # With no actor, or the right one, the server attributes it to the operator.
+        r = client.post(f"/v1/change/cases/{case_id}/decision",
+                        json={"disposition": "rejected", "reason": "not real"}, headers=mine)
         assert r.status_code == 200 and r.json()["status"] == "rejected"
+        from assurance.api import deps
+        account = account_store.account(_account_ids(account_store)[0])
+        ledger = deps._tenant_register_for(str(deps.tenant_ledger_path(account.id))).ledger
+        actor = ledger.entries(subject=case_id)[-1].evidence().actor
+        assert actor.identifier == "v.grimaldi" and actor.kind == "person"
+        assert "attribution=authenticated_operator" in actor.role
+        assert f"via account {account.id}" in actor.role and "operator=op_" in actor.role
+
+    def test_the_export_states_how_each_action_was_attributed(self, client, account_store):
+        headers = keyed(account_store, "cell")
+        case_id = self._open_case(client, headers)
+        assert client.post(f"/v1/change/cases/{case_id}/claim",
+                           json={"owner": "o", "actor": "declared.person"},
+                           headers=headers).status_code == 200
+        r = client.post(f"/v1/change/cases/{case_id}/decision",
+                        json={"disposition": "rejected", "reason": "not real"},
+                        headers=as_decider(headers, "v.grimaldi"))
+        assert r.status_code == 200
+        bundle = client.get(f"/v1/change/cases/{case_id}/export", headers=headers).json()
+        roles = [e["evidence"]["actor"]["role"] for e in bundle["entries"]]
+        assert any("attribution=declared_by_account_key" in x for x in roles)
+        assert "attribution=authenticated_operator" in roles[-1]
+        # an operator-attributed action never claims identity proofing
+        assert not any("proof" in x for x in roles)
+
+    def test_a_contributor_operator_cannot_decide_and_a_disabled_one_cannot_act(
+            self, client, account_store):
+        headers = keyed(account_store, "cell")
+        case_id = self._open_case(client, headers)
+        account = account_store.account(_account_ids(account_store)[0])
+        # bootstrap: the first operator must be a decider
+        r = client.post("/v1/operators", json={"name": "Lena", "role": "contributor"},
+                        headers=headers)
+        assert r.status_code == 422
+        r = client.post("/v1/operators", json={"name": "Boss", "role": "decider"},
+                        headers=headers)
+        assert r.status_code == 201
+        boss = {"X-API-Key": r.json()["api_key"]}
+        # an account-level key can no longer mint operators
+        assert client.post("/v1/operators", json={"name": "Mallory", "role": "decider"},
+                           headers=headers).status_code == 403
+        r = client.post("/v1/operators", json={"name": "Lena", "role": "contributor"},
+                        headers=boss)
+        lena, lena_id = {"X-API-Key": r.json()["api_key"]}, r.json()["operator_id"]
+        r = client.post(f"/v1/change/cases/{case_id}/decision",
+                        json={"disposition": "rejected", "reason": "x"}, headers=lena)
+        assert r.status_code == 403 and r.json()["detail"]["error"] == "decider_role_required"
+        # the contributor may still take a workflow step, attributed to her
+        assert client.post(f"/v1/change/cases/{case_id}/claim", json={"owner": "Lena"},
+                           headers=lena).status_code == 200
+        # a contributor cannot manage operators
+        assert client.post(f"/v1/operators/{lena_id}/disable", headers=lena).status_code == 403
+        # a decider disables her; her key stops authenticating at all
+        assert client.post(f"/v1/operators/{lena_id}/disable",
+                           headers=boss).json()["outcome"] == "disabled"
+        assert client.get("/v1/change/cases", headers=lena).status_code == 401
+        # another account cannot see or disable this account's operators
+        other = keyed(account_store, "register")
+        assert account.id != account_store.peek_key(other["X-API-Key"]).account.id
+        assert client.post(f"/v1/operators/{lena_id}/disable", headers=other).status_code in (
+            402, 403, 404)
+        assert client.get(f"/v1/change/cases/{case_id}", headers=headers).status_code == 200
 
 
 # =====================================================================

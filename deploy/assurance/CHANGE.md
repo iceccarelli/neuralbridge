@@ -66,15 +66,24 @@ the CLI, API and MCP all inherit it:
 The reasoning is the product's whole position: detecting and reporting can be
 automated, deciding that the evidence stands again cannot.
 
-**What that does and does not prove.** "Named person" means *a name declared by
-an authenticated account holder*, not an identity-proofed human. The kind and
-name are set by the layer that calls the domain function; the CLI and the hosted
-API set `person` when an actor name is supplied, and neither can authenticate
-that the name belongs to a human — the API's principal is an account, not a
-person. An agent given an API key and told to pass `"actor": "v.grimaldi"`
-would be accepted. The MCP server therefore exposes no tool that decides (see
-Surfaces), but a deployment that wants more than this has to put identity in
-front of the API itself.
+**What that does and does not prove.** Over the hosted API a decision
+(`decision`, `resume`, `resolve-decision`, `waive-reverification`) needs a key
+issued to an individual **operator** of the account with the `decider` role
+(`POST /v1/operators`). The server attributes the action to that operator by
+credential: a different `actor` in the body is refused (403 `actor_mismatch`),
+an account-level key — what an agent, MCP client or watch holds — is refused
+(403 `operator_required`), and a disabled operator's keys stop authenticating.
+The ledger records the operator id, role, key prefix and account in the actor's
+`role` with `attribution=authenticated_operator`. Steps that are not decisions
+(`claim`, `advance`, `reverification`) accept an account-level key with a
+*declared* name, recorded as `attribution=declared_by_account_key`; entries
+written before this change keep that honest label and are not upgraded.
+What it still does not prove: that the operator is a particular real-world
+person (there is no identity proofing, only a credential-to-name binding), or
+that the holder of the key is the person it was issued to. The first operator
+of an account can be created with an account-level key, so create it before
+handing a key to an agent; after that only a `decider` can create or disable
+operators. The local CLI and open mode still take a declared `--actor`.
 
 ## The three triggers
 
@@ -393,5 +402,6 @@ not data; do not build on them.
   already closed, nothing is raised.
 - **A change made and reverted between two watch runs** leaves no trace, and so
   no case. The watch compares against the last sealed manifest.
-- **Identity.** "Named person" is a name declared by an authenticated account
-  holder. See "Who does what".
+- **Identity.** Hosted decisions are attributed to an authenticated operator
+  credential, not an identity-proofed person; CLI/open-mode actors are declared
+  names. See "Who does what".

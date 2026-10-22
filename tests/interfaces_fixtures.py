@@ -44,6 +44,11 @@ class LiveApi:
         acct = self.accounts.upsert_account(email=email, tier=tier)
         return acct.id, {"X-API-Key": self.accounts.issue_key(acct.id)}
 
+    def operator_headers(self, account_id: str, name: str) -> dict[str, str]:
+        """The header of a key issued to a ``decider`` operator called ``name``."""
+        _, key = self.accounts.create_operator(account_id, name, "decider")
+        return {"X-API-Key": key}
+
     def tenant_ledger(self, account_id: str):
         from assurance.api import deps
 

@@ -29,6 +29,7 @@ from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
+from .operator_routes import operator_router
 from .routes import evidence_router, free_router, public_router, router
 from .supplier_routes import supplier_router
 from .watch_routes import watch_router
@@ -146,6 +147,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(machine_router)
     application.include_router(machinery_router)
     application.include_router(change_router)
+    application.include_router(operator_router)
     application.include_router(watch_router)
     application.include_router(fleet_router)
     application.include_router(check_router)

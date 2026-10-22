@@ -74,7 +74,9 @@ class TestTheSameSequenceOnEveryInterface:
         drivers = {
             "library": LibraryDriver(lib),
             "cli": CliDriver(cli),
-            "api": ApiDriver(api, live.url, world["headers"]),
+            "api": ApiDriver(
+                api, live.url, world["headers"],
+                operator_for=lambda who: live.operator_headers(world["account"], who)),
         }
         results = {name: run_sequence(d, drift_id) for name, d in drivers.items()}
 
@@ -142,7 +144,7 @@ class TestHostedRefusalsAndMcp:
         live = world["live"]
         drift_id = world["lib"].expected_drift_case_id()
         a_headers = world["headers"]
-        _, b_headers = live.account("other-cell@example.de", "cell")
+        b_account_id, b_headers = live.account("other-cell@example.de", "cell")
         _, r_headers = live.account("register-only@example.de", "register")
 
         bodies = [
@@ -177,9 +179,12 @@ class TestHostedRefusalsAndMcp:
 
             # Another account: an empty queue, and every verb on A's case is a 404.
             assert call("GET", "/v1/change/cases", None, b_headers).json()["cases"] == []
+            b_decider = live.operator_headers(b_account_id, PERSON)
             for method, path, body in bodies:
                 if drift_id in path:
-                    r = call(method, path, body, b_headers)
+                    human = path.rsplit("/", 1)[-1] in (
+                        "decision", "resume", "resolve-decision", "waive-reverification")
+                    r = call(method, path, body, b_decider if human else b_headers)
                     assert r.status_code == 404, (path, r.status_code, r.text)
                     assert r.json()["detail"]["case_id"] == drift_id
 

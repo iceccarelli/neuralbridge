@@ -79,6 +79,8 @@ def _advisory_case(client, headers, *, contradictory: bool):
 
 
 def _post(client, headers, case_id, verb, body):
+    if verb in ("decision", "resume", "resolve-decision", "waive-reverification"):
+        headers = _change.as_decider(headers, body.get("actor") or PERSON)
     return client.post(f"/v1/change/cases/{case_id}/{verb}", json=body, headers=headers)
 
 
@@ -157,13 +159,17 @@ class TestTheNewRoutesAreCellOnly:
 
 class TestActorIsRequiredAndBoundToTheAccount:
     @pytest.mark.parametrize("verb,body", CELL_ONLY_POSTS)
-    def test_a_missing_or_blank_actor_is_refused_at_the_door(
+    def test_an_account_level_key_is_refused_a_human_decision_whatever_it_names(
             self, client, account_store, verb, body):
         headers = keyed(account_store, "cell")
         case_id = _drift(client, headers)
         no_actor = {k: v for k, v in body.items() if k != "actor"}
-        for candidate in (no_actor, {**no_actor, "actor": ""}, {**no_actor, "actor": "   "}):
-            assert _post(client, headers, case_id, verb, candidate).status_code == 422
+        for candidate in (no_actor, {**no_actor, "actor": ""}, {**no_actor, "actor": "   "},
+                          body):
+            r = client.post(f"/v1/change/cases/{case_id}/{verb}", json=candidate,
+                            headers=headers)
+            assert r.status_code == 403, candidate
+            assert r.json()["detail"]["error"] == "operator_required"
 
     def test_the_ledger_records_the_declared_person_and_the_vouching_account(
             self, client, account_store):
