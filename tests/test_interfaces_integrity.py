@@ -136,7 +136,8 @@ class TestTheHostedApiRefusesATamperedLedger:
               "observed": _change.manifest(_change.item(content_hash="e" * 64),
                                            manifest_id="NOW2").to_dict()}),
         ):
-            r = client.request(method, url, json=body, headers=headers)
+            r = client.request(method, url, json=body, headers=(
+                _change.as_decider(headers) if url.endswith("/decision") else headers))
             assert r.status_code == 500, (url, r.status_code, r.text)
             assert r.json()["detail"]["error"] == "ledger_integrity"
             assert "does not verify" in r.json()["detail"]["detail"]
