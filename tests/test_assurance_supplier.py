@@ -293,7 +293,7 @@ class TestCli:
         self._published(tmp_path)
         capsys.readouterr()
         rc = self._fleet("advisory", "--feed", str(tmp_path / "feed.jsonl"),
-                         "--unsigned-anyway",
+                         "--unsigned-anyway", "--override-actor", "a.engineer",
                          "--ledger", str(tmp_path / "ledger.db"))
         assert rc in (0, 1)
         assert "not signed, or its signature was not checked" in \
