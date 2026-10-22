@@ -7758,6 +7758,73 @@
         ]
       }
     },
+    "/v1/value": {
+      "get": {
+        "operationId": "position_v1_value_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Position V1 Value Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Your assurance position, derived from your own ledger",
+        "tags": [
+          "value"
+        ]
+      }
+    },
     "/v1/watch/report": {
       "post": {
         "description": "Opt-in and idempotent. Records observations; derives no finding of its own.\n\nThe response says, per machine, whether the entry was ``recorded``,\n``already_recorded`` (a retry: nothing was written) or ``refused`` and why,\nwhich case a drift opened or found, and what this does not establish.\n\nA plain ``def`` on purpose: FastAPI runs it in the threadpool, so a large report\nfrom one tenant cannot hold the event loop and stall every other caller.",
