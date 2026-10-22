@@ -110,7 +110,7 @@ def intervention(**over):
     return Intervention(**kw)
 
 
-def seal_a_real_verification(ledger, *, when, subject=None):
+def _inputs(when, subject=None):
     env = SafetyEnvelope(
         envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
         workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
@@ -119,12 +119,27 @@ def seal_a_real_verification(ledger, *, when, subject=None):
                              FigureBasis("measured", "STOP-11", "2026-01-18")),
         uncertainty=SensingUncertainty(100.0, 50.0, FigureBasis("measured", "CAL-003")),
         intrusion_distance_mm=850.0)
-    run = Trace(trace_id=f"RUN-{when:%Y%m%d}", provenance=Provenance.FIELD,
+    run = Trace(trace_id=f"RUN-{when:%Y%m%d}" + (f"-{subject}" if subject else ""),
+                provenance=Provenance.FIELD,
                 source_system="AR-7 fw", started_at=when, sample_rate_hz=50.0,
                 samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0), tcp_speed=400.0,
                                      mode=OperatingMode.SSM, separation=2200.0)
                              for i in range(10)))
-    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
+    return env, run
+
+
+_INPUTS: dict[str, tuple] = {}
+
+
+def seal_a_real_verification(ledger, *, when, subject=None):
+    env, run = _inputs(when, subject)
+    bundle = build_bundle(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
+    _INPUTS[bundle.content_hash] = (env, run)
+    return bundle
+
+
+def _same_inputs_as(bundle):
+    return _INPUTS[bundle.content_hash]
 
 
 @pytest.fixture
@@ -1323,6 +1338,35 @@ class TestF1ReverifyAcceptsOnlyTheRightEvidence:
         assert c.status is CaseStatus.READY_TO_CLOSE
         assert c.required_reverifications == ()
         assert reconstruct_case(ledger, c.case_id).ok
+
+    def test_a_declared_manifest_with_the_right_hash_is_not_a_look_at_the_machine(
+            self, ledger, store):
+        case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
+        bundle = seal_a_real_verification(ledger, when=LATER)
+        # Nothing was read off the machine: a person typed the configuration in. Its
+        # configuration hash is identical to the real one, which ignores the source.
+        declared = manifest(item(content_hash="d" * 64), manifest_id="PAPER",
+                            source=ManifestSource.AS_DECLARED, taken_at=LATER)
+        record_manifest(ledger, declared)
+        with pytest.raises(CaseTransitionError, match="not a record of looking"):
+            reverify(store, case.case_id, declared, verifs(ledger, MACHINE.key), [],
+                     verification_content_hash=bundle.content_hash, actor=REVIEWER)
+        assert store.get(case.case_id).status is CaseStatus.AWAITING_REVERIFICATION
+
+    def test_one_recording_cannot_be_evidence_for_two_machines(self, ledger, store):
+        case = two_machine_advisory_case(ledger, store)
+        after = utc_now() + timedelta(hours=1)
+        m1 = manifest(fw(), manifest_id="AFTER-0412", taken_at=after)
+        m2 = manifest(fw(), manifest_id="AFTER-0413", taken_at=after, machine=OTHER)
+        record_manifest(ledger, m1)
+        record_manifest(ledger, m2)
+        mine = seal_a_real_verification(ledger, when=after + timedelta(minutes=5))
+        # the very same trace, filed under the second machine's key
+        borrowed = build_bundle(
+            *_same_inputs_as(mine), actor=ENG, ledger=ledger, subject=OTHER.key)
+        with pytest.raises(CaseTransitionError, match="also filed as evidence"):
+            reverify(store, case.case_id, m2, verifs(ledger, OTHER.key), [],
+                     verification_content_hash=borrowed.content_hash, actor=REVIEWER)
 
     def test_a_bundle_sealed_before_the_case_cannot_clear_it(self, ledger, store):
         case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)

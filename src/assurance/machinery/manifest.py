@@ -456,3 +456,27 @@ class SafetyManifest:
     @classmethod
     def from_json(cls, path: str | Path) -> SafetyManifest:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def not_a_look(manifest: SafetyManifest) -> str:
+    """Why this manifest cannot be a positive observation of the machine; "" if it can.
+
+    A look is an ``as_found`` manifest whose every item was hashed off the unit
+    (:attr:`HashSource.describes_this_unit`). ``configuration_hash`` deliberately
+    ignores both ``source`` and ``hash_source``, so equal hashes say nothing about
+    either: a *declared* manifest carrying the old baseline hash has the same
+    configuration hash as the machine really reverting.
+    """
+    reasons: list[str] = []
+    if manifest.source is not ManifestSource.AS_FOUND:
+        reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
+    not_read = sorted(i.item_id for i in manifest.items
+                      if not i.hash_source.describes_this_unit)
+    if not_read:
+        reasons.append(
+            "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
+            "(supplied by a vendor, or declared)")
+    if not reasons:
+        return ""
+    return ("the manifest is not a record of looking at this machine: "
+            + "; ".join(reasons) + ". Equal hashes do not say what the unit holds.")

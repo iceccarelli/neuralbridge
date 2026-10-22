@@ -34,7 +34,7 @@ from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -936,6 +936,23 @@ def _validated_or_better(tier: str) -> bool:
         return False
 
 
+def _trace_filed_elsewhere(ledger: object, verification_hash: str, key: str) -> str:
+    """The other subject the same trace is filed under, or "" if there is none."""
+    from assurance.machine.bundle import BUNDLE_KIND
+
+    entries = list(ledger.entries(kind=BUNDLE_KIND))  # type: ignore[attr-defined]
+    trace_hash = next(
+        (str(e.payload.get("body", {}).get("trace_hash", "")) for e in entries
+         if e.content_hash == verification_hash), "")
+    if not trace_hash:
+        return ""
+    for e in entries:
+        if (e.subject != key
+                and str(e.payload.get("body", {}).get("trace_hash", "")) == trace_hash):
+            return e.subject
+    return ""
+
+
 def reverify(
     store: CaseStore, case_id: str,
     manifest: SafetyManifest, verifications: list[VerificationRecord],
@@ -1002,6 +1019,23 @@ def reverify(
             f"the ledger holds no manifest sealed for {key}, so there is nothing to "
             "check a re-verification against. Record the machine's manifest first.")
     sealed = sealed_manifests[-1]
+    not_looked = not_a_look(sealed)
+    if not_looked:
+        raise CaseTransitionError(
+            f"the newest manifest sealed for {key} cannot show the machine after the "
+            f"change: {not_looked} Collect it from the machine and seal it, then "
+            "re-verify.")
+    if record.date_suspect:
+        raise CaseTransitionError(
+            f"verification {record.content_hash[:12]} cannot be dated: its trace start "
+            "is unreadable or later than the moment it was filed, so it cannot be shown "
+            "to postdate the change.")
+    other = _trace_filed_elsewhere(store.ledger, record.content_hash, key)
+    if other:
+        raise CaseTransitionError(
+            f"verification {record.content_hash[:12]} rests on a trace that is also "
+            f"filed as evidence for {other}. One recording is not evidence about two "
+            "machines; run the verification on this machine's own trace.")
     allowed = {sealed.configuration_hash()}
     if case.trigger_type is TriggerType.MACHINE_DRIFT:
         allowed.add(case.after_hash)
