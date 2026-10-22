@@ -48,7 +48,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/fleet/report', tier: 'cell', summary: 'The whole fleet on one page a plant manager can read' },
   { method: 'POST', path: '/v1/fleet/advisory', tier: 'cell', summary: 'Fan an advisory out across the whole fleet' },
   { method: 'POST', path: '/v1/fleet/advisory/signed', tier: 'cell', summary: 'Fan out a signed feed, with its trust state and matching basis' },
-  { method: 'GET', path: '/v1/operators', tier: 'cell', summary: 'The account's individual operators' },
+  { method: 'GET', path: '/v1/operators', tier: 'cell', summary: "The account's individual operators" },
   { method: 'POST', path: '/v1/operators', tier: 'cell', summary: 'Create an operator and issue its key (decider role makes case decisions)' },
   { method: 'POST', path: '/v1/operators/{operator_id}/disable', tier: 'cell', summary: 'Disable an operator and revoke its keys' },
   { method: 'GET', path: '/v1/supplier/trust', tier: 'cell', summary: 'Pinned supplier keys and their history' },
