@@ -19,8 +19,9 @@ marketing.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ from assurance.machine.envelope import (
     Workspace,
 )
 from assurance.machine.limits import LimitsTable
+from assurance.machine.limits_review import ReviewTrust
 from assurance.machine.trace import (
     MAX_FILE_BYTES,
     OperatingMode,
@@ -135,6 +137,9 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         "provenance": result.provenance,
         "engine_version": result.engine_version,
         "limits_hash": limits.content_hash() if limits else "",
+        # How the table's review evidence was assessed, with the reviews themselves,
+        # so a verifier can re-assess them under its own trust list.
+        "limits_review": result.limits_review,
         "verdict": result.verdict.value,
         "tier": result.tier.value,
         "checks": [c.to_dict() for c in result.checks],
@@ -184,6 +189,8 @@ def build_bundle(
     *,
     actor: Actor,
     limits: LimitsTable | None = None,
+    limits_reviews: Sequence[Any] = (),
+    review_trust: ReviewTrust | None = None,
     ledger: EvidenceLedger | None = None,
     result: VerificationResult | None = None,
     subject: str = "",
@@ -205,7 +212,9 @@ def build_bundle(
     claiming a tier its inputs cannot support, is refused rather than sealed under
     a trace it says nothing about.
     """
-    res = result if result is not None else verify(envelope, trace, limits=limits)
+    res = result if result is not None else verify(
+        envelope, trace, limits=limits, limits_reviews=limits_reviews,
+        review_trust=review_trust)
     if result is not None:
         _refuse_foreign_result(result, envelope, trace)
 
@@ -448,6 +457,29 @@ def _coherence_problems(
             f"recorded provenance {provenance!r} (not 'certified', not above that "
             "provenance's ceiling)")
 
+    review = body.get("limits_review")
+    pfl_check = next((c for c in checks if isinstance(c, dict)
+                      and c.get("name") == "pfl_contact"), None)
+    if (tier is AssuranceTier.VALIDATED and body.get("limits_hash") and pfl_check
+            and pfl_check.get("outcome") == "verified"
+            and not _review_accepted(body)):
+        problems.append(
+            "the bundle records tier 'validated' on a contact check against a limits "
+            "table, but records no accepted independent review of that table. A "
+            "table's own verified_by text does not earn a validated tier.")
+    elif body.get("engine_version") != ENGINE_VERSION and body.get("limits_hash") \
+            and tier is AssuranceTier.VALIDATED:
+        limits.append(
+            "NOT CHECKED: this bundle was produced by an earlier engine that let a "
+            "limits table's free-text verified_by claim lift the tier. Its validated "
+            "tier may rest on an unreviewed table; re-verify it with a signed review.")
+    elif _review_accepted(body):
+        accepted = review.get("accepted_review") if isinstance(review, dict) else None
+        if not (isinstance(accepted, dict)
+                and accepted.get("table_hash") == body.get("limits_hash")):
+            problems.append("the bundle records an accepted limits review that does "
+                            "not name the limits table it records.")
+
     state = evidence.validation_state.value
     if verdict in _STATE_FOR_VERDICT and state != _STATE_FOR_VERDICT[verdict]:
         problems.append(
@@ -589,6 +621,7 @@ def check_bundle(
     envelope: SafetyEnvelope | None = None,
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
+    review_trust: ReviewTrust | None = None,
 ) -> BundleCheck:
     """:func:`verify_bundle` with the full answer: ``level`` and what ran."""
     path = Path(bundle_path)
@@ -599,7 +632,8 @@ def check_bundle(
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         return _rejected(f"the file is not readable JSON: {exc}")
-    return check_bundle_data(raw, envelope=envelope, trace=trace, limits=limits)
+    return check_bundle_data(raw, envelope=envelope, trace=trace, limits=limits,
+                             review_trust=review_trust)
 
 
 def verify_bundle(
@@ -608,6 +642,7 @@ def verify_bundle(
     envelope: SafetyEnvelope | None = None,
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
+    review_trust: ReviewTrust | None = None,
 ) -> tuple[bool, list[str]]:
     """Check a bundle without trusting whoever produced it.
 
@@ -639,7 +674,8 @@ def verify_bundle(
     limitation, not a pass: integrity alone does not make a claim true. A file
     that cannot be read is reported as a problem; this never raises on content.
     """
-    result = check_bundle(bundle_path, envelope=envelope, trace=trace, limits=limits)
+    result = check_bundle(bundle_path, envelope=envelope, trace=trace, limits=limits,
+                          review_trust=review_trust)
     return result.ok, result.notes
 
 
@@ -661,6 +697,7 @@ def check_bundle_data(
     envelope: SafetyEnvelope | None = None,
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
+    review_trust: ReviewTrust | None = None,
 ) -> BundleCheck:
     """The one implementation: library, CLI and HTTP routes all end up here."""
     if not isinstance(raw, dict):
@@ -737,6 +774,13 @@ def check_bundle_data(
                 f"this is engine {ENGINE_VERSION!r}; a re-run under different rules is "
                 "not a reproduction. Check it with the engine that produced it."
             )
+        elif _review_accepted(body) and review_trust is None:
+            limitations.insert(0, (
+                "NOT CHECKED: the bundle's validated tier rests on a signed review of "
+                "the limits table, and no reviewer trust list was supplied, so the "
+                "re-run was not performed and the review was not assessed. Supply "
+                "--limits-trust with keys you obtained independently of this bundle."
+            ))
         elif recorded_limits and limits is None:
             limitations.insert(0, (
                 "NOT CHECKED: the bundle was produced against a body-region limits "
@@ -745,7 +789,10 @@ def check_bundle_data(
             ))
         else:
             try:
-                replay = verify(envelope, trace, limits=limits)
+                replay = verify(
+                    envelope, trace, limits=limits,
+                    limits_reviews=_recorded_reviews(body), review_trust=review_trust,
+                    now=_assessed_on(body))
             except AssuranceError as exc:
                 problems.append(f"re-running the engine on the supplied inputs failed: "
                                 f"{exc}")
@@ -771,6 +818,26 @@ def check_bundle_data(
         seal_intact=seal_intact,
         internally_consistent=not coherence,
         replayed=replayed)
+
+
+def _recorded_reviews(body: dict[str, Any]) -> list[Any]:
+    rec = body.get("limits_review")
+    reviews = rec.get("reviews") if isinstance(rec, dict) else None
+    return list(reviews) if isinstance(reviews, list) else []
+
+
+def _review_accepted(body: dict[str, Any]) -> bool:
+    rec = body.get("limits_review")
+    return isinstance(rec, dict) and rec.get("status") == "accepted"
+
+
+def _assessed_on(body: dict[str, Any]) -> datetime | None:
+    rec = body.get("limits_review")
+    try:
+        d = date.fromisoformat(str(rec.get("assessed_on"))) if isinstance(rec, dict) else None
+    except ValueError:
+        return None
+    return datetime(d.year, d.month, d.day, tzinfo=UTC) if d else None
 
 
 def _replay_differences(

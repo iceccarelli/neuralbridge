@@ -20,6 +20,7 @@ is what makes the sealed bundle worth buying.
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -40,6 +41,7 @@ from assurance.core.evidence import Actor
 from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
+from assurance.machine.limits_review import ReviewTrust
 from assurance.machine.ssm import separation_required
 from assurance.machine.trace import Trace
 
@@ -79,6 +81,12 @@ class VerifyIn(BaseModel):
     envelope: dict[str, Any]
     trace: dict[str, Any]
     limits: dict[str, Any] | None = None
+    limits_reviews: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=32,
+        description="signed reviews of the limits table. They are assessed against "
+                    "the reviewer trust list the SERVER is configured with "
+                    "(ASSURANCE_LIMITS_REVIEW_TRUST); a caller cannot supply its own "
+                    "trust, which would let a table's author vouch for the table")
     actor: str = Field(min_length=1, max_length=200,
                        description="who is signing this verification")
     role: str = Field(default="verification engineer", max_length=200)
@@ -99,11 +107,38 @@ class BundleCheckIn(BaseModel):
     bundle: dict[str, Any]
     envelope: dict[str, Any] | None = None
     trace: dict[str, Any] | None = None
+    limits_trust: dict[str, Any] | None = Field(
+        default=None,
+        description="YOUR reviewer trust list (format assurance.machine.limits-trust.v1), "
+                    "obtained independently of the bundle, to re-assess the limits "
+                    "review sealed in it. Without it a validated limits tier is not "
+                    "reproduced")
     limits: dict[str, Any] | None = Field(
         default=None,
         description="the body-region limits table the bundle was verified against, "
                     "if its envelope names one; without it a power-and-force bundle "
                     "cannot be replayed and is reported as integrity-only")
+
+
+def _server_review_trust() -> ReviewTrust | None:
+    """The reviewer keys this deployment trusts, from its own configuration.
+
+    Never from the request: whoever supplies the table must not also supply the
+    list of reviewers who vouch for it.
+    """
+    path = os.environ.get("ASSURANCE_LIMITS_REVIEW_TRUST", "")
+    if not path:
+        return None
+    try:
+        return ReviewTrust.from_json(path)
+    except AssuranceError:
+        return None  # fail closed: a broken trust file trusts nobody
+
+
+def _review_summary(rec: Any) -> dict[str, Any] | None:
+    if not isinstance(rec, dict):
+        return None
+    return {k: rec.get(k) for k in ("status", "validated", "explanation", "assessed_on")}
 
 
 def _bad(exc: Exception, what: str) -> HTTPException:
@@ -246,6 +281,8 @@ async def verify_run(
         envelope, trace,
         actor=Actor(identifier=body.actor, role=body.role, kind="person"),
         limits=limits,
+        limits_reviews=body.limits_reviews,
+        review_trust=_server_review_trust(),
         ledger=register.ledger if (body.seal and register is not None) else None,
         subject=body.subject,
     )
@@ -290,7 +327,14 @@ def _check_bundle_sync(body: BundleCheckIn) -> BundleCheck:
             limits = LimitsTable.from_dict(body.limits)
         except (AssuranceError, KeyError, ValueError, TypeError) as exc:
             raise _bad(exc, "limits") from exc
-    return check_bundle_data(body.bundle, envelope=envelope, trace=trace, limits=limits)
+    trust = None
+    if body.limits_trust is not None:
+        try:
+            trust = ReviewTrust.from_dict(body.limits_trust)
+        except AssuranceError as exc:
+            raise _bad(exc, "limits_trust") from exc
+    return check_bundle_data(body.bundle, envelope=envelope, trace=trace, limits=limits,
+                             review_trust=trust)
 
 
 @machine_router.post(
@@ -341,10 +385,16 @@ async def check_bundle(
             "against_original_envelope": result.reproduced,
             "against_original_trace": result.reproduced,
             "against_limits": result.reproduced and bool(recorded.get("limits_hash")),
+            "limits_review": result.reproduced and isinstance(
+                recorded.get("limits_review"), dict) and bool(
+                recorded["limits_review"].get("validated")),
             "reproduced": result.reproduced,
         },
         "recorded_verdict": recorded.get("verdict"),
         "recorded_tier": recorded.get("tier"),
+        # What the sealed bundle says about the review of its limits table (status
+        # and explanation); whether THIS check accepted it is `checked.limits_review`.
+        "recorded_limits_review": _review_summary(recorded.get("limits_review")),
         "product": recorded.get("product"),
         "product_version": recorded.get("product_version"),
     }
