@@ -48,6 +48,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/fleet/report', tier: 'cell', summary: 'The whole fleet on one page a plant manager can read' },
   { method: 'POST', path: '/v1/fleet/advisory', tier: 'cell', summary: 'Fan an advisory out across the whole fleet' },
   { method: 'POST', path: '/v1/fleet/advisory/signed', tier: 'cell', summary: 'Fan out a signed feed, with its trust state and matching basis' },
+  { method: 'GET', path: '/v1/value', tier: 'cell', summary: 'Your assurance position, derived from your own ledger' },
   { method: 'GET', path: '/v1/operators', tier: 'cell', summary: 'The account's individual operators' },
   { method: 'POST', path: '/v1/operators', tier: 'cell', summary: 'Create an operator and issue its key (decider role makes case decisions)' },
   { method: 'POST', path: '/v1/operators/{operator_id}/disable', tier: 'cell', summary: 'Disable an operator and revoke its keys' },
@@ -116,8 +117,9 @@ export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'change', verbs: ['assess-drift', 'assess-advisory', 'assess-intervention', 'list', 'show', 'claim', 'advance', 'reverify', 'resolve-decision', 'waive-reverification', 'decide', 'resume', 'replay', 'export'], summary: 'Change-assurance cases: open from drift, an advisory or an intervention; claim, re-verify, and close, defer or resume by a named human decision.', apiTier: 'cell' },
   { domain: 'attest', verbs: ['keygen', 'sign', 'verify', 'log'], summary: 'Counter-signed head attestation — catches deletion, not just editing.', apiTier: 'cell' },
   { domain: 'watch', verbs: ['run', 'status', 'push'], summary: 'Scheduled drift checks — run in your own kit or cron, never hosted. run and status are offline; push is the one opt-in command that reports the latest run to your own hosted ledger.' },
-  { domain: 'supplier', verbs: ['keygen', 'publish', 'withdraw', 'verify', 'list'], summary: 'Sign and publish advisories to a hosted feed.', apiTier: 'supplier' },
+  { domain: 'supplier', verbs: ['keygen', 'publish', 'withdraw', 'verify', 'list', 'trust'], summary: 'Sign and publish advisories to a hosted feed, and pin the supplier keys you trust.', apiTier: 'supplier' },
   { domain: 'art14', verbs: ['signal', 'awareness', 'triage', 'availability', 'measure', 'file', 'notify-users', 'validate', 'fields', 'case', 'register', 'verify', 'export'], summary: 'Case triage and the two Article 14 deadline clocks.', apiTier: 'register' },
+  { domain: 'value', verbs: ['report'], summary: 'Your assurance position, derived from your own ledger: facts, unknowns, assumptions and ranked work. No score.', apiTier: 'cell' },
   { domain: 'bridge', verbs: ['art14'], summary: 'Assembles the Article 14 export from local case state — local only.' },
   { domain: 'collect', verbs: ['check-plan', 'probe', 'run'], summary: 'Finds the vendor tool’s own volatile headers before they produce a year of false drift alarms.' },
 ];
