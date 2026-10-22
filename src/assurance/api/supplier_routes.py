@@ -29,12 +29,13 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Supplying, supplier_feeds_dir
+from assurance.api.deps import Machine, Supplying, get_register, supplier_feeds_dir
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc
@@ -42,7 +43,15 @@ from assurance.fleet.advisory import ComponentAdvisory
 from assurance.supplier.publish import (
     FEED_FORMAT,
     AdvisoryFeed,
+    PublishError,
     SignedAdvisory,
+    _parse_feed_text,
+)
+from assurance.supplier.trust import (
+    TRUST_STATEMENT,
+    SupplierTrustError,
+    SupplierTrustStore,
+    evaluate_feed,
 )
 
 __all__ = ["supplier_router"]
@@ -240,3 +249,250 @@ def get_feed(supplier_account_id: str) -> Response:
         media_type="application/x-ndjson",
         headers={"X-Content-Type-Options": "nosniff"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Trust: which supplier keys THIS account has pinned, and what a feed is under
+# them. Per account, in the account's own ledger. These routes never touch the
+# shared operator ledger: an operator key is refused (403), because a pin the
+# operator made would be a pin on behalf of every tenant.
+#
+# The states are reported separately and there is no `verified` field:
+#   structurally_readable | signature_state | key_trust_state | chain_valid
+# and `trust_state` / `policy_satisfied` summarise them. See supplier/trust.py.
+# ---------------------------------------------------------------------------
+_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+MAX_FEED_TEXT = 4 * 1024 * 1024
+
+
+class PinIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_id: str = Field(min_length=1, max_length=200)
+    public_key_pem: str = Field(min_length=1, max_length=4096)
+    #: What the person was told, by a route that is not the feed. The key must match it.
+    expected_fingerprint: str = Field(default="", max_length=64)
+    #: Required: how the fingerprint was learned.
+    obtained_via: str = Field(min_length=1, max_length=500)
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(default="", max_length=1000)
+
+
+class RotateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_id: str = Field(min_length=1, max_length=200)
+    new_public_key_pem: str = Field(min_length=1, max_length=4096)
+    retire_fingerprint: str = Field(min_length=1, max_length=64)
+    effective_at: str = Field(min_length=1, max_length=40)
+    expected_fingerprint: str = Field(default="", max_length=64)
+    obtained_via: str = Field(min_length=1, max_length=500)
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(default="", max_length=1000)
+
+
+class RevokeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_id: str = Field(min_length=1, max_length=200)
+    fingerprint: str = Field(min_length=1, max_length=64)
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class EvaluateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The feed as served: one JSON record per line.
+    feed: str = Field(default="", max_length=MAX_FEED_TEXT)
+    #: Or the id of a feed hosted here (GET /v1/supplier/feed/{id}).
+    hosted_feed_id: str = Field(default="", max_length=128)
+    expect_supplier: str = Field(default="", max_length=200)
+    #: A key the caller holds and has NOT pinned. It can show that signatures are
+    #: valid under it; it can never make the feed trusted.
+    candidate_public_key_pem: str = Field(default="", max_length=4096)
+
+
+class OverrideIn(EvaluateIn):
+    advisory_id: str = Field(min_length=1, max_length=200)
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+def account_trust_store(principal: Principal, register: Any) -> SupplierTrustStore:
+    """The trust store in this caller's OWN ledger, or a 403.
+
+    The operator (and open mode) is served from the shared ledger; a pin made
+    there would apply to every tenant, so it is refused here rather than allowed.
+    """
+    account = principal.account
+    if account is None or account.id == "operator":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "supplier_trust_is_per_account",
+                    "detail": "Supplier keys are pinned in a customer account's own "
+                              "ledger. The operator's shared ledger holds no pins."})
+    return SupplierTrustStore(register.ledger)
+
+
+def _actor(body_actor: str, principal: Principal) -> str:
+    assert principal.account is not None
+    return f"{body_actor.strip()} (account {principal.account.id})"
+
+
+def _trust_refusal(exc: SupplierTrustError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"error": "trust_decision_refused", "detail": str(exc)})
+
+
+def load_feed_records(body: EvaluateIn) -> tuple[list[SignedAdvisory], str]:
+    """Records from the body (or a hosted feed), and a parse error if any."""
+    text = body.feed
+    if body.hosted_feed_id:
+        if not _ID.match(body.hosted_feed_id):
+            raise _unprocessable("invalid_feed_id", "not a feed id.")
+        path = supplier_feeds_dir() / f"{body.hosted_feed_id}.jsonl"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="No feed has been published "
+                                                        "under this id.")
+        text = path.read_text("utf-8")
+    try:
+        return _parse_feed_text(text, source="the submitted feed"), ""
+    except (PublishError, *_PARSE_ERRORS) as exc:
+        return [], str(exc) or repr(exc)
+
+
+def unreadable_payload(error: str) -> dict[str, Any]:
+    """The shape of a trust evaluation for a feed that does not even parse."""
+    return {
+        "trust_state": "untrusted_unreadable", "policy_satisfied": False,
+        "inspect_only": True, "structurally_readable": False, "record_count": 0,
+        "signature_state": "none", "key_trust_state": "none", "chain_valid": False,
+        "chain_problems": [], "duplicate_advisories": [], "conflicting_advisories": [],
+        "supplier_id": "", "key_fingerprints": [], "records": [], "advisories": [],
+        "withdrawn": [], "unauthenticated_withdrawals": [], "problems": [error],
+        "trust_statement": TRUST_STATEMENT,
+    }
+
+
+def _candidate(pem: str) -> Any:
+    if not pem.strip():
+        return None
+    from assurance.attest.keys import SigningKeyError, VerifyingKey
+
+    try:
+        return VerifyingKey.from_pem(pem)
+    except SigningKeyError as exc:
+        raise _unprocessable("invalid_public_key", str(exc)) from exc
+
+
+@supplier_router.get("/trust", summary="Pinned supplier keys and every trust decision (your account)")
+def get_trust(
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    store = account_trust_store(principal, register)
+    return {
+        "pins": [p.to_dict() for p in store.pins()],
+        "history": store.history(),
+        "overrides": store.overrides(),
+        "integrity_problems": store.integrity_problems(),
+        "trust_statement": TRUST_STATEMENT,
+    }
+
+
+@supplier_router.post("/trust/pin", status_code=201,
+                      summary="Pin a supplier's public key (fingerprint obtained outside the feed)")
+def post_pin(
+    body: PinIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    store = account_trust_store(principal, register)
+    try:
+        pin = store.pin(body.supplier_id, body.public_key_pem,
+                        actor=_actor(body.actor, principal),
+                        obtained_via=body.obtained_via,
+                        expected_fingerprint=body.expected_fingerprint, reason=body.reason)
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"pin": pin.to_dict()}
+
+
+@supplier_router.post("/trust/rotate", status_code=201,
+                      summary="Pin a new key and retire the old one from an effective date")
+def post_rotate(
+    body: RotateIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    store = account_trust_store(principal, register)
+    try:
+        when = parse_utc(body.effective_at)
+    except ValueError as exc:
+        raise _unprocessable("invalid_effective_at", str(exc)) from exc
+    try:
+        pin = store.rotate(body.supplier_id, body.new_public_key_pem,
+                           retire_fingerprint=body.retire_fingerprint, effective_at=when,
+                           actor=_actor(body.actor, principal),
+                           obtained_via=body.obtained_via,
+                           expected_fingerprint=body.expected_fingerprint,
+                           reason=body.reason)
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"pin": pin.to_dict()}
+
+
+@supplier_router.post("/trust/revoke", summary="Revoke a pinned key: everything it signed becomes untrusted")
+def post_revoke(
+    body: RevokeIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    store = account_trust_store(principal, register)
+    try:
+        pin = store.revoke(body.supplier_id, body.fingerprint,
+                           actor=_actor(body.actor, principal), reason=body.reason)
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"pin": pin.to_dict()}
+
+
+@supplier_router.post(
+    "/trust/evaluate",
+    summary="What is this feed, state by state, under your pinned keys?",
+)
+def post_evaluate(
+    body: EvaluateIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Readable / signature valid / key pinned for this supplier / chain intact,
+    each on its own. Always 200: an untrusted feed is a result, not an error."""
+    store = account_trust_store(principal, register)
+    records, error = load_feed_records(body)
+    if error:
+        return {"trust": unreadable_payload(error)}
+    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
+                          candidate_key=_candidate(body.candidate_public_key_pem))
+    return {"trust": trust.to_dict()}
+
+
+@supplier_router.post(
+    "/trust/override",
+    summary="Explicitly accept ONE untrusted advisory; attributed and written to the ledger",
+)
+def post_override(
+    body: OverrideIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    store = account_trust_store(principal, register)
+    records, error = load_feed_records(body)
+    if error:
+        raise _unprocessable("unreadable_feed", error)
+    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
+                          candidate_key=_candidate(body.candidate_public_key_pem))
+    try:
+        done = store.override(trust, body.advisory_id,
+                              actor=_actor(body.actor, principal), reason=body.reason)
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"override": done, "note": "Bound to this advisory's content hash. It does "
+            "not pin the key, and a changed advisory is not covered."}
