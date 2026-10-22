@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { operatorKey, useDecisionCredential } from './support/operators';
 
 // The human decisions on a change-assurance case, in the workspace, against the REAL API
 // and a real tenant ledger: answer a human question, waive a re-verification (which reads
@@ -57,22 +58,48 @@ test.describe('Assurance workspace — case lifecycle', () => {
     await expect(detail.getByRole('button', { name: /^verify$/i })).toHaveCount(0);
   });
 
-  test('an automated name cannot answer a question: the server\'s 409 is shown in its words', async ({ page }) => {
+  test('an automated name cannot answer a question: the server\'s 409 is shown in its words, beside the action', async ({ page, request }) => {
+    // Two deciders: the person, and an operator credential that carries an automated name.
+    await operatorKey(request, seed.key_k, 'v.grimaldi');
+    const automation = await operatorKey(request, seed.key_k, 'automation');
     const detail = await openCase(page);
-    await detail.getByLabel('Your name').fill('automation');
+    await useDecisionCredential(detail, automation);
     await detail.getByLabel('Question').selectOption({ index: 0 });
     await detail.getByLabel('Answer').fill('Checked on site.');
     await detail.getByRole('button', { name: 'Record answer' }).click();
     const alert = detail.getByRole('alert');
     await expect(alert).toContainText('(409)', { timeout: 10_000 });
     await expect(alert).toContainText(/needs a named person/);
+    // The refusal sits next to the action that was refused, and says nothing changed.
+    await expect(detail.getByTestId('action-refusal')).toContainText(/changed nothing/);
     await expect(detail).not.toContainText('Resolved human decisions');
+  });
+
+  test('a human decision without a decision credential is not sent, and says why', async ({ page, request }) => {
+    const before = await (await request.get(`${apiBase}/v1/change/cases/${caseId}`, { headers: h() })).json();
+    const detail = await openCase(page);
+    await detail.getByLabel('Your name').fill('v.grimaldi');
+    await detail.getByLabel('Answer').fill('Should not be sent.');
+    await detail.getByRole('button', { name: 'Record answer' }).click();
+    await expect(detail.getByRole('alert')).toContainText(/decision credential/i);
+    await expect(detail.getByRole('alert')).toContainText(/Nothing was sent/);
+    const after = await (await request.get(`${apiBase}/v1/change/cases/${caseId}`, { headers: h() })).json();
+    expect(after.history.length).toBe(before.history.length);
+  });
+
+  test('an account key is refused for a decision by the server (operator_required), with what to do about it', async ({ request }) => {
+    const r = await request.post(`${apiBase}/v1/change/cases/${caseId}/decision`, {
+      headers: h(),
+      data: { disposition: 'closed', reason: 'x', actor: 'v.grimaldi' },
+    });
+    expect(r.status()).toBe(403);
+    expect((await r.json()).detail.error).toBe('operator_required');
   });
 
   test('a named person answers the human question; it is recorded and no longer outstanding', async ({ page, request }) => {
     const detail = await openCase(page);
     const question = await detail.getByLabel('Question').locator('option').first().textContent();
-    await detail.getByLabel('Your name').fill('v.grimaldi');
+    await useDecisionCredential(detail, await operatorKey(request, seed.key_k, 'v.grimaldi'));
     await detail.getByLabel('Answer').fill('Hash recomputed on site; supplier figure is the one in error.');
     await detail.getByRole('button', { name: 'Record answer' }).click();
     await expect(detail.getByTestId('resolved-decisions')).toContainText('supplier figure is the one in error', { timeout: 10_000 });
@@ -86,7 +113,7 @@ test.describe('Assurance workspace — case lifecycle', () => {
     const detail = await openCase(page);
     await expect(detail.getByTestId('waive-warning')).toContainText(/without evidence/i);
     const entry = await detail.getByLabel('Re-verification entry').locator('option').first().textContent();
-    await detail.getByLabel('Your name').fill('v.grimaldi');
+    await useDecisionCredential(detail, await operatorKey(request, seed.key_k, 'v.grimaldi'));
     await detail.getByLabel('Why closing it without evidence is acceptable').fill('Function not in use on this cell.');
     await detail.getByRole('button', { name: 'Waive without evidence' }).click();
     const row = detail.locator(`[data-testid="evidence-row"][data-entry="${entry}"]`);
@@ -115,9 +142,9 @@ test.describe('Assurance workspace — case lifecycle', () => {
     await expect(res).toContainText(/does not show|not .*proof|a person still decides/i);
   });
 
-  test('defer then resume: resume needs a name and a reason, and puts the case back in review', async ({ page, request }) => {
+  test('defer then resume: resume needs a decider credential and a reason, and puts the case back in review', async ({ page, request }) => {
     const detail = await openCase(page);
-    await detail.getByLabel('Your name').fill('v.grimaldi');
+    await useDecisionCredential(detail, await operatorKey(request, seed.key_k, 'v.grimaldi'));
     await detail.getByLabel('Decision reason').fill('Waiting for the supplier to confirm.');
     await detail.getByRole('button', { name: 'Defer', exact: true }).click();
     await expect(detail.getByRole('heading', { name: new RegExp(`${caseId} — deferred`) })).toBeVisible({ timeout: 10_000 });
@@ -132,8 +159,11 @@ test.describe('Assurance workspace — case lifecycle', () => {
     await expect(detail.getByRole('heading', { name: new RegExp(`${caseId} — in_review`) })).toBeVisible({ timeout: 10_000 });
     const c = await (await request.get(`${apiBase}/v1/change/cases/${caseId}`, { headers: h() })).json();
     expect(c.status).toBe('in_review');
-    // History keeps both, with who.
+    // History keeps both, with who, and says the name rests on an operator credential.
     await expect(detail.getByTestId('case-history')).toContainText('resumed by v.grimaldi');
+    await expect(
+      detail.getByTestId('history-row').filter({ hasText: 'resumed by v.grimaldi' }).getByTestId('history-attribution'),
+    ).toContainText(/operator credential presented \(not identity proof\)/);
     await expect(detail.getByTestId('case-history')).toHaveAttribute('data-who', 'ready');
   });
 

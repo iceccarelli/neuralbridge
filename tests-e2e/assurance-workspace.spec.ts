@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { operatorKey, useDecisionCredential } from './support/operators';
 
 // /assurance workspace against the REAL local Assurance API and real,
 // per-account ledgers seeded by scripts/e2e_seed_assurance.py (real engines:
@@ -154,7 +155,7 @@ test.describe('Assurance workspace', () => {
     expect(JSON.stringify(a)).not.toContain('#7001');
   });
 
-  test('case detail shows source evidence, limits and history; the server refuses an early close', async ({ page }) => {
+  test('case detail shows source evidence, limits and history; the server refuses an early close', async ({ page, request }) => {
     await enter(page, seed.key_a);
     await page.getByRole('button', { name: seed.case_id }).click();
     const detail = page.getByTestId('case-detail');
@@ -162,7 +163,7 @@ test.describe('Assurance workspace', () => {
     await expect(detail).toContainText('What this does not establish');
     await expect(page.getByTestId('case-history').getByTestId('history-row').first()).toBeVisible();
 
-    await detail.getByLabel('Your name').fill('v.grimaldi');
+    await useDecisionCredential(detail, await operatorKey(request, seed.key_a, 'v.grimaldi'));
     await detail.getByLabel('Decision reason').fill('Looks fine to me');
     await detail.getByRole('button', { name: 'Close', exact: true }).click();
     // The API, not the page, decides: closing before re-verification is a 409.
