@@ -71,6 +71,7 @@ from assurance.machinery.staleness import (
     VerificationRecord,
     assess_coverage,
 )
+from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
@@ -609,6 +610,7 @@ def run_watch(
             Fleet.from_ledger(ledger),
             previously_seen=_previously_reported(previous),
             now=started,
+            trust_store=SupplierTrustStore(ledger),
         )
         caveats.extend(advisories.checks_skipped)
         if seal:
