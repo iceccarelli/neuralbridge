@@ -56,9 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "not this feed")
     ad.add_argument("--expect-supplier", default="")
     ad.add_argument("--unsigned-anyway", action="store_true",
-                    help="act on an unverified advisory. Recorded in the output; "
-                         "you are choosing to modify a safety system on the word "
-                         "of an unauthenticated file")
+                    help="act on an advisory that did not meet the trust policy. "
+                         "Needs --override-actor: the override is recorded in the "
+                         "ledger against that name. A record whose signature FAILED "
+                         "is never admitted this way")
+    ad.add_argument("--override-actor", default="",
+                    help="who is accepting the risk (recorded in the ledger)")
+    ad.add_argument("--override-reason", default="",
+                    help="why (recorded in the ledger)")
     ad.add_argument("--ledger", required=True, type=Path)
     ad.add_argument("--json", action="store_true")
 
@@ -90,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
+    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
     if args.json:
         print(json.dumps(fleet.to_dict(), indent=2))
     else:
@@ -114,41 +119,108 @@ _UNSIGNED_WARNING = (
 )
 
 
-def _advisories_from_feed(args: argparse.Namespace) -> tuple[list, list[str]]:
-    """Every standing advisory in a feed, refusing the feed if it does not hold up."""
+def _advisories_from_feed(
+    args: argparse.Namespace,
+) -> tuple[list, list[str], dict[str, dict], dict]:
+    """Every standing advisory in a feed that may be assessed, with its provenance.
+
+    Returns ``(advisories, notes, provenance_by_advisory_id, feed_trust)``. A feed
+    is trusted when its signatures verify under a key PINNED for that supplier in
+    the ledger's trust store; a key handed over with ``--supplier-key`` is
+    reported as exactly that (signature valid, key not pinned). Anything else is
+    refused unless ``--unsigned-anyway`` carries a named actor, and even then a
+    record whose signature FAILED is excluded.
+    """
     from assurance.attest.keys import VerifyingKey
     from assurance.supplier.publish import AdvisoryFeed, verify_feed
+    from assurance.supplier.trust import (
+        TRUST_STATEMENT,
+        SupplierTrustError,
+        SupplierTrustStore,
+        evaluate_feed,
+    )
 
     records = AdvisoryFeed(args.feed).read()
     if not records:
         raise AssuranceError(f"{args.feed} holds no records.")
 
-    if args.supplier_key is None:
-        if not args.unsigned_anyway:
-            raise AssuranceError(
-                f"{args.feed} was not checked against a key. Pass --supplier-key "
-                "with the public key you obtained from the supplier by some route "
-                "other than this feed, or --unsigned-anyway if you accept that "
-                "you are acting on an unauthenticated file."
-            )
-        return ([r.component() for r in records if not r.is_withdrawal],
-                [_UNSIGNED_WARNING])
+    store = SupplierTrustStore(EvidenceLedger(args.ledger))
+    key = VerifyingKey.from_file(args.supplier_key) if args.supplier_key else None
+    trust = evaluate_feed(records, store, expect_supplier=args.expect_supplier,
+                          candidate_key=key)
+    by_id = {}
+    for r in records:
+        if not r.is_withdrawal:
+            by_id.setdefault(r.advisory_id, r)
 
-    verdict = verify_feed(records, VerifyingKey.from_file(args.supplier_key),
-                          expect_supplier=args.expect_supplier)
-    if not verdict.ok and not args.unsigned_anyway:
+    if trust.policy_satisfied:
+        return ([by_id[a["advisory_id"]].component() for a in trust.advisories],
+                [TRUST_STATEMENT],
+                {a["advisory_id"]: trust.provenance_for(a["advisory_id"])
+                 for a in trust.advisories},
+                trust.to_dict())
+
+    if key is not None:
+        verdict = verify_feed(records, key, expect_supplier=args.expect_supplier)
+        if verdict.ok:
+            prov = {
+                "source": "supplier_feed", "trust_state": "key_supplied_not_pinned",
+                "trust_basis": "operator_supplied_key",
+                "signature_state": "all_valid", "key_trust_state": "not_pinned",
+                "chain_valid": True, "automated_consequences_permitted": False,
+                "inspect_only": False, "override": None,
+                "implications_reviewed": False, "problems": [],
+                "trust_statement": TRUST_STATEMENT,
+            }
+            notes = list(verdict.checks_skipped) + [
+                f"key {key.fingerprint} was supplied on the command line and is NOT "
+                "pinned for this supplier in the ledger's trust store; signatures "
+                "verify under it, which proves who signed the bytes only if that "
+                "key really is the supplier's. `assurance supplier trust pin` "
+                "records the decision."]
+            return ([r.component() for r in verdict.live], notes,
+                    {r.advisory_id: prov for r in verdict.live}, trust.to_dict())
+
+    if not args.unsigned_anyway:
+        why = ("\n  ".join(trust.problems) if trust.problems
+               else "it was not checked against a pinned or supplied key")
+        unchecked = ("" if key is not None else
+                     f"{args.feed} was not checked against a key (pass --supplier-key) "
+                     "and no key pinned in the ledger covers it.\n")
         raise AssuranceError(
-            f"refusing to act on {args.feed}:\n  "
-            + "\n  ".join(verdict.problems)
-            + "\n\nA change to a safety system driven by an advisory that does "
-              "not verify is exactly what signing is for. Use --unsigned-anyway "
-              "only if you have decided, deliberately, to proceed."
+            unchecked + f"refusing to act on {args.feed} (trust state "
+            f"{trust.trust_state}):\n  "
+            + why
+            + "\n\nPin the supplier's key (`assurance supplier trust pin`, with the "
+              "fingerprint you obtained by a route that is not this feed), pass "
+              "--supplier-key, or use --unsigned-anyway with --override-actor if you "
+              "have decided, deliberately, to proceed."
         )
-    notes = list(verdict.checks_skipped)
-    if not verdict.ok:
-        notes.insert(0, "PROCEEDED ON A FEED THAT DOES NOT VERIFY: "
-                        + "; ".join(verdict.problems))
-    return ([r.component() for r in verdict.live], notes)
+    if not args.override_actor.strip():
+        raise AssuranceError(
+            "--unsigned-anyway needs --override-actor: an override of the trust "
+            "policy is recorded in the ledger against a name, and an anonymous one "
+            "is not accepted.")
+
+    admitted: list = []
+    provenance: dict[str, dict] = {}
+    notes = [_UNSIGNED_WARNING, "PROCEEDED UNDER MANUAL OVERRIDE by "
+             f"{args.override_actor.strip()} on a feed in trust state {trust.trust_state}: "
+             + "; ".join(trust.problems[:5])]
+    for row in trust.advisories:
+        try:
+            store.override(trust, row["advisory_id"], actor=args.override_actor,
+                           reason=args.override_reason or "no reason given")
+        except SupplierTrustError as exc:
+            notes.append(f"EXCLUDED {row['advisory_id']}: {exc}")
+            continue
+    final = evaluate_feed(records, store, expect_supplier=args.expect_supplier,
+                          candidate_key=key)
+    for row in final.advisories:
+        if row["automated_consequences_permitted"]:
+            admitted.append(by_id[row["advisory_id"]].component())
+            provenance[row["advisory_id"]] = final.provenance_for(row["advisory_id"])
+    return admitted, notes, provenance, final.to_dict()
 
 
 def _cmd_advisory(args: argparse.Namespace) -> int:
@@ -159,19 +231,29 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
         print("error: give an advisory file or --feed.", file=sys.stderr)
         return 2
 
+    feed_trust: dict = {}
+    provenance: dict[str, dict] = {}
     if args.feed:
-        advisories, notes = _advisories_from_feed(args)
+        advisories, notes, provenance, feed_trust = _advisories_from_feed(args)
     else:
         advisories = [ComponentAdvisory.from_json(args.advisory)]
         notes = [_UNSIGNED_WARNING]
+        provenance = {a.advisory_id: {
+            "source": "bare_file", "trust_state": "unauthenticated_file",
+            "trust_basis": "none", "signature_state": "none",
+            "automated_consequences_permitted": False, "inspect_only": True,
+            "override": None, "implications_reviewed": False,
+        } for a in advisories}
 
-    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
-    reports = [assess_impact(a, fleet) for a in advisories]
+    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
+    reports = [assess_impact(a, fleet, provenance=provenance.get(a.advisory_id))
+               for a in advisories]
 
     if args.json:
         print(json.dumps({
             "advisories": [r.to_dict() for r in reports],
             "provenance_notes": notes,
+            "feed_trust": feed_trust,
         }, indent=2))
     else:
         for advisory, report in zip(advisories, reports, strict=True):

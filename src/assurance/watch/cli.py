@@ -220,7 +220,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     config = WatchConfig.from_json(args.config)
-    body = last_run(EvidenceLedger(args.ledger), config.watch_id)
+    body = last_run(EvidenceLedger.open_existing(args.ledger), config.watch_id)
     if body is None:
         print(f"{config.watch_id}: this watch has never run against this ledger.",
               file=sys.stderr)

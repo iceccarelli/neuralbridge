@@ -81,6 +81,50 @@ class MachineReportIn(BaseModel):
         return _timestamp(value)
 
 
+class _Short(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AdvisoryFindingIn(_Short):
+    advisory_id: str = Field(max_length=200)
+    supplier_id: str = Field(default="", max_length=200)
+    severity: str = Field(default="", max_length=40)
+    state: str = Field(default="", max_length=40)
+    impact: str = Field(default="", max_length=40)
+    machines: list[Annotated[str, Field(max_length=400)]] = Field(default_factory=list, max_length=200)
+    functions_in_question: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=200)
+    trust_basis: str = Field(default="", max_length=60)
+    trust_state: str = Field(default="", max_length=80)
+    inspect_only: bool = False
+    case_id: str = Field(default="", max_length=200)
+
+
+class FeedIn(_Short):
+    supplier_id: str = Field(default="", max_length=200)
+    status: str = Field(default="", max_length=40)
+    trust_basis: str = Field(default="", max_length=60)
+
+
+class FilingsPromptIn(_Short):
+    advisory_id: str = Field(default="", max_length=200)
+    state: str = Field(default="", max_length=40)
+    escalating: bool = False
+
+
+class RunSummaryIn(_Short):
+    local_finished_at: str = Field(default="", max_length=40)
+    stale_observations: list[Annotated[str, Field(max_length=400)]] = Field(
+        default_factory=list, max_length=100)
+    feeds: list[FeedIn] = Field(default_factory=list, max_length=50)
+    advisory_findings: list[AdvisoryFindingIn] = Field(default_factory=list, max_length=100)
+    local_case_ids: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=200)
+    filings_prompts: list[FilingsPromptIn] = Field(default_factory=list, max_length=100)
+    checks_skipped: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list, max_length=50)
+
+
 class WatchReportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +136,10 @@ class WatchReportIn(BaseModel):
     max_age_hours: float | None = Field(
         default=None, ge=MIN_CADENCE_HOURS, le=MAX_CADENCE_HOURS)
     verdict: Literal["quiet", "findings", "degraded"] | None = None
+    #: What the local run found beyond per-machine looks (supplier findings and their
+    #: trust state, local case ids, stale observations, what it skipped). Recorded
+    #: as client-reported; carries no Article 14 awareness or classification.
+    run_summary: RunSummaryIn | None = None
     #: Set by ``watch push`` when it split a large fleet over several requests.
     batch_index: int | None = Field(default=None, ge=1, le=10_000)
     batch_count: int | None = Field(default=None, ge=1, le=10_000)

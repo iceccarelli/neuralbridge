@@ -38,6 +38,7 @@ from .test_assurance_change import (
     BOT,
     REVIEWER,
     advisory,
+    as_decider,
     case_entries,
     drift,
     drive,
@@ -337,7 +338,8 @@ class TestConflictOverHttp:
             return real(self, evidence, subject, **kw)
 
         monkeypatch.setattr(EvidenceLedger, "append", append)
-        r = client.post(f"/v1/change/cases/{case_id}/decision", headers=headers,
+        r = client.post(f"/v1/change/cases/{case_id}/decision",
+                        headers=as_decider(headers),
                         json={"disposition": "rejected", "reason": "not real",
                               "actor": "v.grimaldi"})
         monkeypatch.setattr(EvidenceLedger, "append", real)

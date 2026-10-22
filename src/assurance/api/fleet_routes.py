@@ -33,6 +33,7 @@ from assurance.fleet.registry import Fleet
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord, assess_coverage
+from assurance.supplier.trust import TRUST_STATEMENT, SupplierTrustStore, evaluate_feed
 
 __all__ = ["fleet_router"]
 
@@ -50,6 +51,19 @@ class AdvisoryIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     advisory: dict[str, Any]
+
+
+class SignedAdvisoryIn(BaseModel):
+    """A supplier feed to assess against the fleet, under the account's pinned keys."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    feed: str = Field(default="", max_length=4 * 1024 * 1024)
+    hosted_feed_id: str = Field(default="", max_length=128)
+    expect_supplier: str = Field(default="", max_length=200)
+    candidate_public_key_pem: str = Field(default="", max_length=4096)
+    #: Limit to these advisory ids. Empty: every standing advisory.
+    advisory_ids: list[str] = []
 
 
 class DeclarationCheckIn(BaseModel):
@@ -160,6 +174,7 @@ async def advisory_check(
         "matches": matches,
         "remedy": advisory.remedy,
         "checks_skipped": skipped,
+        "provenance": _BARE_ADVISORY,
     }
     meter.commit(response)
     return result
@@ -212,7 +227,78 @@ async def advisory_impact(
     """
     advisory = _advisory(body.advisory)
     fleet = Fleet.from_ledger(register.ledger)
-    return assess_impact(advisory, fleet).to_dict()
+    return assess_impact(advisory, fleet, provenance=_BARE_ADVISORY).to_dict()
+
+
+#: An advisory handed over as a JSON body has no signature to check and no key to
+#: pin. It can be assessed; it is not a trusted supplier statement.
+_BARE_ADVISORY = {
+    "source": "request_body", "trust_state": "unauthenticated_input",
+    "trust_basis": "none", "signature_state": "none",
+    "automated_consequences_permitted": False, "inspect_only": True,
+    "override": None, "implications_reviewed": False,
+    "trust_statement": TRUST_STATEMENT,
+}
+
+
+@fleet_router.post(
+    "/advisory/signed",
+    summary="Assess a signed supplier feed against your fleet, with its trust state",
+)
+async def advisory_impact_signed(
+    body: SignedAdvisoryIn,
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """The fan-out for a feed, under the account's pinned keys.
+
+    Every advisory is assessed so an operator can inspect it, and each carries
+    its own trust basis. An advisory that does not meet the policy has
+    ``automated_consequences_permitted: false`` and a report marked
+    ``inspect_only``: it must not drive stop-use or open a case as a trusted
+    supplier statement. The pin store is the account's own; the operator's
+    shared ledger holds none, so an operator sees every feed as untrusted.
+
+    ``trust`` keeps readable / signature / key / chain apart. A signed advisory
+    proves who signed the bytes, not that the advisory is correct, complete or
+    timely.
+    """
+    from assurance.api.supplier_routes import (
+        EvaluateIn,
+        _candidate,
+        load_feed_records,
+        unreadable_payload,
+    )
+
+    account = principal.account
+    store = (SupplierTrustStore(register.ledger)
+             if account is not None and account.id != "operator" else None)
+    records, error = load_feed_records(EvaluateIn(
+        feed=body.feed, hosted_feed_id=body.hosted_feed_id,
+        expect_supplier=body.expect_supplier,
+        candidate_public_key_pem=body.candidate_public_key_pem))
+    if error:
+        return {"trust": unreadable_payload(error), "advisories": [],
+                "inspect_only": True, "trust_statement": TRUST_STATEMENT}
+    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
+                          candidate_key=_candidate(body.candidate_public_key_pem))
+    first = {r.advisory_id: r for r in records if not r.is_withdrawal}
+    fleet = Fleet.from_ledger(register.ledger)
+    out: list[dict[str, Any]] = []
+    for row in trust.advisories:
+        aid = row["advisory_id"]
+        if body.advisory_ids and aid not in body.advisory_ids:
+            continue
+        try:
+            advisory = first[aid].component()
+        except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+            out.append({**row, "impact": None, "error": f"unreadable advisory: {exc}"})
+            continue
+        prov = trust.provenance_for(aid)
+        out.append({**row, "impact": assess_impact(
+            advisory, fleet, provenance=prov).to_dict()})
+    return {"trust": trust.to_dict(), "advisories": out,
+            "inspect_only": trust.inspect_only, "trust_statement": TRUST_STATEMENT}
 
 
 @fleet_router.get(

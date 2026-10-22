@@ -59,18 +59,63 @@ def _bad(exc: Exception, what: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"error": f"invalid_{what}", "detail": str(exc)})
 
 
-def _actor(name: str, role: str, principal: Principal) -> Actor:
-    """The recorded actor: the declared person, bound to the authenticated account.
+def _actor(name: str, role: str, principal: Principal, *, human: bool = False,
+           named: bool = False) -> Actor:
+    """The recorded actor, and how far it is established.
 
-    ``identifier`` is the name the caller says acted. ``role`` carries the
-    authenticated account that asserted it, taken from the principal and never
-    from the request body, so the ledger shows both who the account says acted
-    and which account vouched for it. An empty name (allowed only on the
-    ``assess/*`` routes) is recorded as automation, not as a person.
+    * An **operator key** (a credential bound to an individual operator of the
+      account) attributes the action to that operator: the identifier is the
+      operator's name from the account store, never from the request. A different
+      ``actor`` in the body is refused, so a client cannot act as someone else by
+      changing a string.
+    * An **account-level key** proves only the account. Its caller may *declare* a
+      name, which is recorded as declared, with the key prefix. It cannot make a
+      human decision (``human=True``): that needs an operator whose role is
+      ``decider``. An agent, MCP client or watch holding such a key therefore
+      cannot close, reject, defer, resume, resolve or waive.
+    * Open mode (no account store configured) keeps declared names, and says so.
+
+    ``attribution=authenticated_operator`` means a credential bound to a named
+    operator was presented; it is not identity-proofing of a real-world person.
+    ``named`` demands a name from a caller that has no operator (the human-workflow
+    steps); the ``assess/*`` routes leave it off and record automation.
     """
     account = principal.account.id if principal.account else "open-mode"
-    return Actor(identifier=name or "operator", role=f"{role} via account {account}",
-                kind="person" if name else "automation")
+    if principal.operator_id:
+        if name and name.strip() != principal.operator_name:
+            raise HTTPException(status_code=403, detail={
+                "error": "actor_mismatch",
+                "detail": "this key belongs to operator "
+                          f"{principal.operator_name!r}; the request names {name!r}. "
+                          "An action is attributed to the credential that made it."})
+        if human and principal.operator_role != "decider":
+            raise HTTPException(status_code=403, detail={
+                "error": "decider_role_required",
+                "detail": f"operator {principal.operator_name!r} has role "
+                          f"{principal.operator_role!r}; a decision needs 'decider'."})
+        return Actor(
+            identifier=principal.operator_name,
+            role=f"{role} via account {account}; operator={principal.operator_id} "
+                 f"({principal.operator_role}); key={principal.key_prefix}; "
+                 "attribution=authenticated_operator",
+            kind="person")
+    open_mode = principal.key_prefix == "open-mode"
+    if human and not open_mode:
+        raise HTTPException(status_code=403, detail={
+            "error": "operator_required",
+            "detail": "closing, rejecting, deferring, resuming, resolving a question or "
+                      "waiving re-verification is a human decision. It needs a key "
+                      "issued to an individual operator with the 'decider' role "
+                      "(POST /v1/operators); an account-level key cannot make it."})
+    if (human or named) and not name.strip():
+        raise HTTPException(status_code=422, detail={
+            "error": "actor_required", "detail": "name the person taking this step."})
+    basis = "declared_open_mode" if open_mode else "declared_by_account_key"
+    return Actor(
+        identifier=name or "operator",
+        role=f"{role} via account {account}; key={principal.key_prefix}; "
+             f"attribution={basis}",
+        kind="person" if name else "automation")
 
 
 class DriftIn(BaseModel):
@@ -92,15 +137,15 @@ class ClaimIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     owner: str = Field(min_length=1, max_length=200)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class AdvanceIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class ReverificationIn(BaseModel):
@@ -108,8 +153,8 @@ class ReverificationIn(BaseModel):
 
     manifest: dict[str, Any]
     verification_content_hash: str = Field(min_length=1, max_length=128)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class DecisionIn(BaseModel):
@@ -117,16 +162,16 @@ class DecisionIn(BaseModel):
 
     disposition: str = Field(pattern="^(closed|rejected|deferred)$")
     reason: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class ResumeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class ResolveDecisionIn(BaseModel):
@@ -138,8 +183,8 @@ class ResolveDecisionIn(BaseModel):
     #: wrong one.
     decision: str = Field(min_length=1, max_length=2000)
     resolution: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class WaiveIn(BaseModel):
@@ -149,8 +194,8 @@ class WaiveIn(BaseModel):
     #: (``machine/function`` on an advisory case).
     entry: str = Field(min_length=1, max_length=400)
     reason: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(min_length=1, max_length=200, pattern=r"\S",
-                       description="the named person taking this step")
+    actor: str = Field(default="", max_length=200,
+                       description="optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps")
 
 
 class InterventionAssessIn(BaseModel):
@@ -338,7 +383,7 @@ async def claim_case_route(
 ) -> dict[str, Any]:
     try:
         case = claim(CaseStore(register.ledger), case_id, owner=body.owner,
-                    actor=_actor(body.actor, "reviewer", principal))
+                    actor=_actor(body.actor, "reviewer", principal, named=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -351,7 +396,7 @@ async def advance_case_route(
 ) -> dict[str, Any]:
     try:
         case = advance(CaseStore(register.ledger), case_id,
-                       actor=_actor(body.actor, "reviewer", principal))
+                       actor=_actor(body.actor, "reviewer", principal, named=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -372,7 +417,8 @@ async def reverify_case_route(
     try:
         case = reverify(CaseStore(register.ledger), case_id, manifest, verifications,
                         interventions, verification_content_hash=body.verification_content_hash,
-                        actor=_actor(body.actor, "verification engineer", principal))
+                        actor=_actor(body.actor, "verification engineer", principal,
+                                     named=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -385,7 +431,8 @@ async def decide_case_route(
 ) -> dict[str, Any]:
     try:
         case = decide(CaseStore(register.ledger), case_id, disposition=body.disposition,
-                     reason=body.reason, actor=_actor(body.actor, "reviewer", principal))
+                     reason=body.reason,
+                     actor=_actor(body.actor, "reviewer", principal, human=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -398,7 +445,7 @@ async def resume_case_route(
 ) -> dict[str, Any]:
     try:
         case = resume(CaseStore(register.ledger), case_id, reason=body.reason,
-                      actor=_actor(body.actor, "reviewer", principal))
+                      actor=_actor(body.actor, "reviewer", principal, human=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -413,7 +460,7 @@ async def resolve_decision_route(
     try:
         case = resolve_decision(CaseStore(register.ledger), case_id, decision=body.decision,
                                 resolution=body.resolution,
-                                actor=_actor(body.actor, "reviewer", principal))
+                                actor=_actor(body.actor, "reviewer", principal, human=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()
@@ -430,7 +477,8 @@ async def waive_reverification_route(
     try:
         case = waive_reverification(CaseStore(register.ledger), case_id, entry=body.entry,
                                     reason=body.reason,
-                                    actor=_actor(body.actor, "reviewer", principal))
+                                    actor=_actor(body.actor, "reviewer", principal,
+                                                 human=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return case.to_dict()

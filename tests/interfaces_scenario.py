@@ -407,20 +407,34 @@ class CliDriver(Driver):
 class ApiDriver(Driver):
     name = "api"
 
-    def __init__(self, plant: Plant, base_url: str, headers: dict[str, str]) -> None:
+    HUMAN_VERBS = ("decision", "resume", "resolve-decision", "waive-reverification")
+
+    def __init__(self, plant: Plant, base_url: str, headers: dict[str, str],
+                 operator_for: Any = None) -> None:
         import httpx
 
+        # name -> headers of a key issued to a decider operator of that name. A
+        # decision over HTTP is attributed to the key's operator, so each person
+        # the scenario names acts with their own credential.
+        self._operator_for = operator_for
+        self._operators: dict[str, dict[str, str]] = {}
         self.plant = plant
         self.http = httpx.Client(base_url=base_url, headers=headers, timeout=60.0)
 
     def _out(self, r) -> Out:
         kind = {200: "ok", 409: "refused", 404: "notfound", 422: "invalid",
-                401: "unauthenticated", 402: "unentitled"}.get(r.status_code)
+                401: "unauthenticated", 402: "unentitled",
+                403: "forbidden"}.get(r.status_code)
         assert kind, f"unexpected status {r.status_code}: {r.text}"
         return Out(kind, r.json() if kind == "ok" else None, r.text)
 
     def _post(self, cid: str, verb: str, body: dict[str, Any]) -> Out:
-        return self._out(self.http.post(f"/v1/change/cases/{cid}/{verb}", json=body))
+        headers = None
+        if verb in self.HUMAN_VERBS and self._operator_for is not None:
+            who = body["actor"]
+            headers = self._operators.setdefault(who, self._operator_for(who))
+        return self._out(self.http.post(
+            f"/v1/change/cases/{cid}/{verb}", json=body, headers=headers))
 
     def get(self, cid):
         r = self.http.get(f"/v1/change/cases/{cid}")

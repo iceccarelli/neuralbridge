@@ -140,6 +140,19 @@ CREATE TABLE IF NOT EXISTS api_keys (
     revoked_at TEXT
 );
 CREATE INDEX IF NOT EXISTS keys_by_account ON api_keys (account_id);
+-- Individual operators of an account: a named credential holder with a role. A key
+-- bound to an operator (api_keys.operator_id) attributes its actions to that operator.
+-- This is a credential-to-user binding inside the account; it is not identity proofing.
+CREATE TABLE IF NOT EXISTS operators (
+    id          TEXT PRIMARY KEY,
+    account_id  TEXT NOT NULL REFERENCES accounts (id),
+    name        TEXT NOT NULL,
+    role        TEXT NOT NULL CHECK (role IN ('contributor','decider')),
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL DEFAULT '',
+    disabled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS operators_by_account ON operators (account_id);
 CREATE TABLE IF NOT EXISTS pending_keys (
     session_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -340,6 +353,12 @@ class Principal:
     key_prefix: str
     #: Set when the caller presented no key (the free, address-limited path).
     anonymous_subject: str = ""
+    #: Set when the key is bound to an individual operator of the account. An
+    #: account-level (service) key leaves these empty: it proves the account, not a
+    #: person, and cannot make a human decision on a case.
+    operator_id: str = ""
+    operator_name: str = ""
+    operator_role: str = ""
 
     @property
     def plan(self) -> Plan:
@@ -408,6 +427,8 @@ class AccountStore:
             # What request an Idempotency-Key was first used for ('' = unknown,
             # a row an older build wrote: the key alone decides, as it did).
             ("usage_events", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
+            # The operator a key belongs to ('' = an account-level service key).
+            ("api_keys", "operator_id", "TEXT NOT NULL DEFAULT ''"),
         )
 
         def present(table: str) -> set[str]:
@@ -1017,18 +1038,20 @@ class AccountStore:
         digest = hash_key(key)
         with self._txn() as db:
             row = db.execute(
-                "SELECT k.prefix, k.account_id, a.* FROM api_keys k "
-                "JOIN accounts a ON a.id = k.account_id "
+                "SELECT k.prefix, k.account_id, k.operator_id AS op_id, "
+                "o.name AS op_name, o.role AS op_role, o.disabled_at AS op_off, a.* "
+                "FROM api_keys k JOIN accounts a ON a.id = k.account_id "
+                "LEFT JOIN operators o ON o.id = k.operator_id "
                 "WHERE k.key_hash = ? AND k.revoked_at IS NULL",
                 (digest,),
             ).fetchone()
-            if row is None:
+            if row is None or self._operator_off(row):
                 return None
             db.execute(
                 "UPDATE api_keys SET last_used=? WHERE key_hash=?",
                 (format_utc(utc_now()), digest),
             )
-        return Principal(account=self._row_to_account(row), key_prefix=row["prefix"])
+        return self._principal(row)
 
     def peek_key(self, key: str) -> Principal | None:
         """Like :meth:`resolve_key` but read-only: no write lock, no ``last_used``.
@@ -1040,16 +1063,85 @@ class AccountStore:
         db = self._connect()
         try:
             row = db.execute(
-                "SELECT k.prefix, k.account_id, a.* FROM api_keys k "
-                "JOIN accounts a ON a.id = k.account_id "
+                "SELECT k.prefix, k.account_id, k.operator_id AS op_id, "
+                "o.name AS op_name, o.role AS op_role, o.disabled_at AS op_off, a.* "
+                "FROM api_keys k JOIN accounts a ON a.id = k.account_id "
+                "LEFT JOIN operators o ON o.id = k.operator_id "
                 "WHERE k.key_hash = ? AND k.revoked_at IS NULL",
                 (hash_key(key),),
             ).fetchone()
         finally:
             db.close()
-        if row is None:
+        if row is None or self._operator_off(row):
             return None
-        return Principal(account=self._row_to_account(row), key_prefix=row["prefix"])
+        return self._principal(row)
+
+    @staticmethod
+    def _operator_off(row: sqlite3.Row) -> bool:
+        """A key bound to an operator who has been disabled authenticates nobody."""
+        return bool(row["op_id"]) and (row["op_name"] is None or row["op_off"] is not None)
+
+    def _principal(self, row: sqlite3.Row) -> Principal:
+        return Principal(
+            account=self._row_to_account(row), key_prefix=row["prefix"],
+            operator_id=row["op_id"] or "", operator_name=row["op_name"] or "",
+            operator_role=row["op_role"] or "")
+
+    # -- operators --------------------------------------------------------
+    def create_operator(
+        self, account_id: str, name: str, role: str, *, created_by: str = "",
+    ) -> tuple[str, str]:
+        """A new operator and its first key (returned once). ``(operator_id, key)``."""
+        if role not in ("contributor", "decider"):
+            raise ValueError("role must be 'contributor' or 'decider'")
+        if not name.strip():
+            raise ValueError("an operator needs a name")
+        op_id = _new_id("op")
+        with self._txn() as db:
+            db.execute(
+                "INSERT INTO operators (id, account_id, name, role, created_at, created_by)"
+                " VALUES (?,?,?,?,?,?)",
+                (op_id, account_id, name.strip(), role, format_utc(utc_now()), created_by))
+            key = self._issue_key_db(db, account_id, f"operator {name.strip()}")
+            db.execute("UPDATE api_keys SET operator_id=? WHERE key_hash=?",
+                       (op_id, hash_key(key)))
+        return op_id, key
+
+    def operators_for(self, account_id: str) -> list[dict[str, Any]]:
+        db = self._connect()
+        try:
+            return [
+                {"id": r["id"], "name": r["name"], "role": r["role"],
+                 "created_at": r["created_at"], "created_by": r["created_by"],
+                 "disabled": r["disabled_at"] is not None,
+                 "disabled_at": r["disabled_at"]}
+                for r in db.execute(
+                    "SELECT * FROM operators WHERE account_id=? ORDER BY created_at, id",
+                    (account_id,))
+            ]
+        finally:
+            db.close()
+
+    def disable_operator(self, account_id: str, operator_id: str) -> str:
+        """Disable an operator of this account and revoke every key bound to it.
+
+        Scoped by account in the query itself. Returns ``disabled``,
+        ``already_disabled`` or ``not_found``.
+        """
+        now = format_utc(utc_now())
+        with self._txn() as db:
+            row = db.execute(
+                "SELECT disabled_at FROM operators WHERE id=? AND account_id=?",
+                (operator_id, account_id)).fetchone()
+            if row is None:
+                return "not_found"
+            if row["disabled_at"] is not None:
+                return "already_disabled"
+            db.execute("UPDATE operators SET disabled_at=? WHERE id=?", (now, operator_id))
+            db.execute(
+                "UPDATE api_keys SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",
+                (now, operator_id))
+            return "disabled"
 
     def keys_for(self, account_id: str) -> list[dict[str, Any]]:
         """The account's keys by prefix. Never a hash and never a key."""

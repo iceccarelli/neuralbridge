@@ -347,7 +347,7 @@ def _cmd_resume(args: argparse.Namespace) -> int:
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
-    replay = reconstruct_case(EvidenceLedger(args.ledger), args.case_id)
+    replay = reconstruct_case(EvidenceLedger.open_existing(args.ledger), args.case_id)
     if replay.entries == 0:
         raise CaseNotFoundError(args.case_id)
     if args.json:
@@ -360,7 +360,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 def _cmd_export(args: argparse.Namespace) -> int:
     # The ledger refuses to export a chain that does not verify (a
     # LedgerIntegrityError, an AssuranceError: exit 2, nothing written).
-    bundle = EvidenceLedger(args.ledger).export(subject=args.case_id)
+    bundle = EvidenceLedger.open_existing(args.ledger).export(subject=args.case_id)
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
         raise CaseNotFoundError(args.case_id)
     text = json.dumps(bundle, indent=2, ensure_ascii=False)

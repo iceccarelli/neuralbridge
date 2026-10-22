@@ -118,7 +118,7 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def _cmd_sign(args: argparse.Namespace) -> int:
-    ledger = EvidenceLedger(args.ledger)
+    ledger = EvidenceLedger.open_existing(args.ledger)
     key = SigningKey.load(args.key, passphrase=_passphrase(args))
     log = AttestationLog(args.log)
     record = attest(ledger, key, log, note=args.note, rotating=args.rotating)
