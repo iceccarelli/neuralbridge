@@ -530,6 +530,10 @@ class FeedVerdict:
     checks_skipped: list[str] = field(default_factory=list)
     live: tuple[SignedAdvisory, ...] = ()
     withdrawn: tuple[str, ...] = ()
+    #: Sequence numbers whose signature FAILED. These records never reach
+    #: ``live`` and a failed withdrawal never cancels anything, whether or not
+    #: the caller chooses to proceed on a feed that did not verify.
+    failed_signatures: tuple[int, ...] = ()
 
     def summary(self) -> str:
         if self.checked == 0:
@@ -580,6 +584,7 @@ def verify_feed(
     fingerprints: set[str] = set()
     live: dict[str, SignedAdvisory] = {}
     withdrawn: list[str] = []
+    failed: list[int] = []
 
     for record in items:
         where = f"record {record.sequence}"
@@ -603,7 +608,9 @@ def verify_feed(
                 f"{expected_previous[:12] or '(none)'} — a record was withdrawn "
                 "from the file rather than withdrawn in it"
             )
-        if not record.verified_by(key):
+        signature_ok = record.verified_by(key)
+        if not signature_ok:
+            failed.append(record.sequence)
             problems.append(
                 f"{where} ({record.advisory_id}): signature does not verify "
                 f"against key {key.fingerprint}. Do not act on this advisory."
@@ -611,7 +618,12 @@ def verify_feed(
         suppliers.add(record.supplier.supplier_id)
         fingerprints.add(record.key_fingerprint)
 
-        if record.is_withdrawal:
+        if not signature_ok:
+            # A record that failed its signature is evidence of nothing: it
+            # neither stands as an advisory nor cancels one. Proceeding past a
+            # failed feed (an explicit override) must not smuggle it back in.
+            pass
+        elif record.is_withdrawal:
             if record.withdraws not in live:
                 problems.append(
                     f"{where}: withdraws {record.withdraws}, which this feed "
@@ -674,4 +686,5 @@ def verify_feed(
         checks_skipped=skipped,
         live=tuple(live.values()),
         withdrawn=tuple(withdrawn),
+        failed_signatures=tuple(failed),
     )
