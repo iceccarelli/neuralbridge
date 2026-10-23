@@ -34,7 +34,10 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Iterable
+import os
+import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -245,6 +248,10 @@ class HeadAttestation:
         return key.verify(self.signed_payload(), self.signature_bytes())
 
 
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
 class AttestationLog:
     """An append-only JSONL file of attestations, one per line.
 
@@ -279,12 +286,42 @@ class AttestationLog:
         records = self.read()
         return records[-1] if records else None
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Serialise read-decide-append across threads and processes.
+
+        ``attest`` derives the next sequence and ``previous`` hash from the last
+        record, so two writers that read the same tail would sign two records
+        with the same sequence: a forked log that ``verify_log`` rightly refuses
+        but that has already handed a signed record to somebody. One in-process
+        lock per real path plus ``flock`` on a sidecar file covers both.
+        """
+        key = os.path.realpath(self.path)
+        with _LOCKS_GUARD:
+            thread_lock = _LOCKS.setdefault(key, threading.Lock())
+        with thread_lock:
+            try:
+                import fcntl
+            except ImportError:  # pragma: no cover - not POSIX: one process only
+                yield
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(str(self.path) + ".lock", "a+") as handle:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
     def append(self, attestation: HeadAttestation) -> HeadAttestation:
+        """Append one record. Call inside :meth:`locked` when the record's
+        sequence was derived from a prior :meth:`read`."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(attestation.to_dict(), sort_keys=True, separators=(",", ":"))
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
             handle.flush()
+            os.fsync(handle.fileno())
         return attestation
 
     def __len__(self) -> int:
@@ -312,82 +349,83 @@ def attest(
     last attestation, when an already-attested link has changed, or when a
     different key is being used without ``rotating=True``.
     """
-    head: LedgerHead
-    by_seq: dict[int, str] | None
-    if isinstance(source, EvidenceLedger):
-        head = head_of(source)
-        by_seq = {e.seq: e.link_hash for e in source.entries()}
-    else:
-        head = source
-        by_seq = None
+    with log.locked():
+        head: LedgerHead
+        by_seq: dict[int, str] | None
+        if isinstance(source, EvidenceLedger):
+            head = head_of(source)
+            by_seq = {e.seq: e.link_hash for e in source.entries()}
+        else:
+            head = source
+            by_seq = None
 
-    history = log.read()
-    previous = history[-1] if history else None
+        history = log.read()
+        previous = history[-1] if history else None
 
-    if previous is not None:
-        if head.length < previous.ledger_length:
-            raise AttestationError(
-                f"refusing to attest: the ledger holds {head.length} record(s), but "
-                f"attestation {previous.sequence} signed for {previous.ledger_length} "
-                f"at {previous.attested_at}. An append-only ledger does not get "
-                "shorter. Records were removed after they were attested — this is "
-                "the event this whole mechanism exists to catch. Preserve the "
-                "database and the attestation log as they are."
-            )
-        if head.head_seq < previous.head_seq:
-            raise AttestationError(
-                f"refusing to attest: head seq {head.head_seq} is behind the "
-                f"{previous.head_seq} signed at {previous.attested_at}."
-            )
-        for earlier in history:
-            if earlier.head_seq == 0:
-                continue
-            if by_seq is not None:
-                current = by_seq.get(earlier.head_seq)
-                if current is None:
-                    raise AttestationError(
-                        f"refusing to attest: seq {earlier.head_seq} was attested at "
-                        f"{earlier.attested_at} and is no longer in the ledger."
-                    )
-            elif earlier.head_seq == head.head_seq:
-                current = head.head_link_hash
-            else:
-                continue
-            if current != earlier.head_link_hash:
+        if previous is not None:
+            if head.length < previous.ledger_length:
                 raise AttestationError(
-                    f"refusing to attest: seq {earlier.head_seq} now links as "
-                    f"{current[:12]} but was attested as "
-                    f"{earlier.head_link_hash[:12]} at {earlier.attested_at}. The "
-                    "chain was rebuilt — same position, different history. This is "
-                    "a fork, not a gap, and it will not show up in verify_chain."
+                    f"refusing to attest: the ledger holds {head.length} record(s), but "
+                    f"attestation {previous.sequence} signed for {previous.ledger_length} "
+                    f"at {previous.attested_at}. An append-only ledger does not get "
+                    "shorter. Records were removed after they were attested — this is "
+                    "the event this whole mechanism exists to catch. Preserve the "
+                    "database and the attestation log as they are."
                 )
-        if previous.key_fingerprint != key.fingerprint and not rotating:
-            raise AttestationError(
-                f"refusing to attest: this log was signed by key "
-                f"{previous.key_fingerprint} and the key offered is "
-                f"{key.fingerprint}. If this is a deliberate rotation, say so "
-                "explicitly; otherwise somebody is continuing your attestation log "
-                "with a key of their own, which is exactly what a rewind looks "
-                "like when nobody checks the fingerprint."
-            )
+            if head.head_seq < previous.head_seq:
+                raise AttestationError(
+                    f"refusing to attest: head seq {head.head_seq} is behind the "
+                    f"{previous.head_seq} signed at {previous.attested_at}."
+                )
+            for earlier in history:
+                if earlier.head_seq == 0:
+                    continue
+                if by_seq is not None:
+                    current = by_seq.get(earlier.head_seq)
+                    if current is None:
+                        raise AttestationError(
+                            f"refusing to attest: seq {earlier.head_seq} was attested at "
+                            f"{earlier.attested_at} and is no longer in the ledger."
+                        )
+                elif earlier.head_seq == head.head_seq:
+                    current = head.head_link_hash
+                else:
+                    continue
+                if current != earlier.head_link_hash:
+                    raise AttestationError(
+                        f"refusing to attest: seq {earlier.head_seq} now links as "
+                        f"{current[:12]} but was attested as "
+                        f"{earlier.head_link_hash[:12]} at {earlier.attested_at}. The "
+                        "chain was rebuilt — same position, different history. This is "
+                        "a fork, not a gap, and it will not show up in verify_chain."
+                    )
+            if previous.key_fingerprint != key.fingerprint and not rotating:
+                raise AttestationError(
+                    f"refusing to attest: this log was signed by key "
+                    f"{previous.key_fingerprint} and the key offered is "
+                    f"{key.fingerprint}. If this is a deliberate rotation, say so "
+                    "explicitly; otherwise somebody is continuing your attestation log "
+                    "with a key of their own, which is exactly what a rewind looks "
+                    "like when nobody checks the fingerprint."
+                )
 
-    attestation = HeadAttestation(
-        format=ATTESTATION_FORMAT,
-        sequence=(previous.sequence + 1) if previous else 1,
-        ledger_length=head.length,
-        head_seq=head.head_seq,
-        head_link_hash=head.head_link_hash,
-        basis=head.basis,
-        attested_at=format_utc(now if now is not None else utc_now()),
-        key_fingerprint=key.fingerprint,
-        previous=previous.content_hash() if previous else "",
-        note=note,
-    )
-    signed = replace(
-        attestation,
-        signature=base64.b64encode(key.sign(attestation.signed_payload())).decode("ascii"),
-    )
-    return log.append(signed)
+        attestation = HeadAttestation(
+            format=ATTESTATION_FORMAT,
+            sequence=(previous.sequence + 1) if previous else 1,
+            ledger_length=head.length,
+            head_seq=head.head_seq,
+            head_link_hash=head.head_link_hash,
+            basis=head.basis,
+            attested_at=format_utc(now if now is not None else utc_now()),
+            key_fingerprint=key.fingerprint,
+            previous=previous.content_hash() if previous else "",
+            note=note,
+        )
+        signed = replace(
+            attestation,
+            signature=base64.b64encode(key.sign(attestation.signed_payload())).decode("ascii"),
+        )
+        return log.append(signed)
 
 
 @dataclass(frozen=True)
