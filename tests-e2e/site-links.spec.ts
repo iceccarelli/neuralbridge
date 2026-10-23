@@ -39,6 +39,8 @@ test('every internal link, anchor and sitemap entry on the site resolves', async
   expect(sitemap.status()).toBe(200);
   for (const m of (await sitemap.text()).matchAll(/<loc>([^<]+)<\/loc>/g)) {
     const u = new URL(m[1], origin);
+    // noindex pages must not be advertised to crawlers
+    expect(u.pathname, 'noindex page listed in sitemap').not.toMatch(/^\/(checkout|assurance)(\/|$)/);
     queue.push(u.pathname + u.search);
   }
 
