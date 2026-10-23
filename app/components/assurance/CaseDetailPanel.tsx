@@ -636,13 +636,18 @@ export default function CaseDetailPanel({
                   verified when it built the file). Anyone can check it offline, without an account:{' '}
                   <code>python -m assurance evidence verify {exported.file}</code>. That shows the file is internally
                   consistent and untampered; it does not show that it matches the ledger as held. For that, check a signed
-                  head attestation.
+                  head attestation. This file names no other case, so it cannot show that none of this case&apos;s
+                  records was removed: the check reports completeness as not checked. An export that can show it (
+                  <code>?skeleton=true</code>) lists the id, kind and time of every other entry in your ledger, so
+                  ask for it only for someone who may see those. If the server refuses the export as contradicting a
+                  signed head it read from your ledger, keep the ledger and its attestation log as they are.
                 </p>
               )}
               {!exported && (
                 <p className="aw-note">
                   The offline check shows an export is internally consistent and untampered. It does not show that the
-                  export matches the ledger as held; that needs a signed head attestation.
+                  export matches the ledger as held; that needs a signed head attestation. This download names no
+                  other case, so completeness is reported as not checked.
                 </p>
               )}
             </div>

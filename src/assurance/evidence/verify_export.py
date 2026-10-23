@@ -17,8 +17,10 @@ What a pass establishes, and what it cannot:
   head the bundle's own attestation names (that attestation is the exporter's
   own unsigned statement and is **not** an anchor);
 * for a subject bundle that carries its ``skeleton`` of the ledger's other
-  entries: the subject's entries and the skeleton chain together from genesis
-  with nothing missing, so a record removed from inside the chain is a gap.
+  entries (opt-in at export: it names every other subject's id, kind and time):
+  the subject's entries and the skeleton chain together from genesis with nothing
+  missing, so a record removed from inside the chain is a gap, and the bundle's own
+  unsigned head agrees with where that chain ends.
 
 None of that shows the bundle is **complete**. Anyone who controls the file can
 rebuild a consistent chain with entries left out (the hashes are unkeyed) or cut
@@ -29,6 +31,16 @@ With one, a bundle shorter than the signed length, or whose link at the signed
 sequence differs, is rejected. Without one, ``completeness`` is ``not_checked``
 and says so in words; a pass is never a bare pass. Supplying a trusted key asks
 for the check, so a bundle that then cannot be shown complete is not ``ok``.
+
+``completeness`` has four values and ``ok`` is none of them:
+
+* ``anchored``: a signed anchor covering at least one record agrees with the
+  bundle, and it signs the bundle's last record;
+* ``anchored_partial``: the same, but ``records_after_anchor`` records follow the
+  signed head and no signature covers them (a cut of those is not detected);
+* ``not_checked``: nothing could be checked against, or the only anchor signs an
+  empty ledger (it covers no record, so it shows nothing was kept or removed);
+* ``failed``: an anchor was checked and the bundle does not match it.
 
 What an anchor does not cover: records after it; and, when the party holding the
 ledger also holds the signing key (a hosted account ledger), anything that party
@@ -54,11 +66,14 @@ from assurance.evidence.ledger import GENESIS, LEDGER_SCHEMA_VERSION, LedgerEntr
 if TYPE_CHECKING:  # the Ed25519 dependency is only needed when a key is supplied
     from assurance.attest.keys import VerifyingKey
 
-__all__ = ["ANCHORED", "ASSUMPTIONS", "FAILED", "MAX_PROBLEMS", "NOT_CHECKED",
+__all__ = ["ANCHORED", "ANCHORED_PARTIAL", "ASSUMPTIONS", "FAILED", "MAX_PROBLEMS",
+           "NOT_CHECKED",
            "ExportVerification", "verify_export", "verify_export_file"]
 
 #: ``ExportVerification.completeness``: is it shown that nothing was removed?
-ANCHORED = "anchored"        # a signed anchor, under a trusted key, agrees with the chain
+ANCHORED = "anchored"        # a signed anchor, under a trusted key, covers the whole chain
+#: A signed anchor agrees with the chain but records follow it that no signature covers.
+ANCHORED_PARTIAL = "anchored_partial"
 NOT_CHECKED = "not_checked"  # nothing was available to check it against
 FAILED = "failed"            # an anchor was checked and the bundle does not match it
 
@@ -119,10 +134,12 @@ class ExportVerification:
     #: ``None`` unless the bundle verified and holds the whole ledger.
     head: dict[str, Any] | None = None
     #: Is it shown that no entry was removed? ``anchored`` only when a signed
-    #: anchor under a trusted key agreed with a complete chain; ``not_checked``
-    #: otherwise; ``failed`` when an anchor was checked and the bundle did not match.
+    #: anchor (covering at least one record) under a trusted key agreed with a
+    #: complete chain and signs its last record; ``anchored_partial`` when records
+    #: follow the signed head; ``not_checked`` otherwise; ``failed`` when an anchor
+    #: was checked and the bundle did not match.
     completeness: str = NOT_CHECKED
-    #: The signed anchor completeness rests on, when ``anchored``.
+    #: The signed anchor completeness rests on, when ``anchored`` or partial.
     anchor: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -140,6 +157,11 @@ class ExportVerification:
             head = "DOES NOT VERIFY"
         elif self.completeness == ANCHORED:
             head = "VERIFIED — anchored to a signed head"
+        elif self.completeness == ANCHORED_PARTIAL and self.anchor:
+            after = self.anchor["records_after_anchor"]
+            head = (f"VERIFIED (internally consistent; signed only up to seq "
+                    f"{self.anchor['head_seq']} — {after} record(s) after it are "
+                    "covered by no signature)")
         else:
             head = "VERIFIED (internal consistency only; completeness NOT CHECKED)"
         lines = [f"{head} — {self.entries} entries, scope: {self.scope}"]
@@ -293,6 +315,7 @@ def verify_export(
     links: dict[int, str] | None = None
     why_unknown = ""
     skeleton_used = False
+    head_agrees: int | None = None
     head: dict[str, Any] | None = None
     if whole:
         for key in ("skeleton", "skeleton_truncated"):
@@ -334,6 +357,23 @@ def verify_export(
                          "there is nothing to verify (the subject may not exist)")
         links, why_unknown, skeleton_used = _merge_skeleton(
             bundle, entries, subject, bad, failed)
+        if links is not None and isinstance(bundle.get("attestation"), dict):
+            # The chain's end is now known, so the exporter's own head claim can be
+            # held against it, as a whole-ledger bundle's is. Still unsigned.
+            att = bundle["attestation"]
+            end = max(links) if links else 0
+            end_link = links[end] if links else GENESIS
+            extra_att = sorted(k for k in att if k not in _ATTESTATION_FIELDS)
+            if extra_att:
+                bad("extra", "the bundle's attestation carries field(s) the exporter "
+                             f"does not write: {', '.join(extra_att[:5])}")
+            if att.get("head_link_hash") != end_link or att.get("head_seq") != end \
+                    or att.get("length") != end:
+                bad("head", "the bundle's attestation names a different head than "
+                            f"the end of its chain (seq {end}) — records were cut "
+                            "from the end")
+            else:
+                head_agrees = end
         if "attestation" in bundle and not skeleton_used:
             skipped.append(
                 "the bundle's ledger-wide attestation, if any, was not compared with "
@@ -348,12 +388,13 @@ def verify_export(
     completeness, anchor_info, anchor_facts, anchor_assumptions = _check_anchors(
         bundle, anchors, trusted_key, links, known, chain_len, why_unknown, bad, skipped)
 
+    anchored = completeness in (ANCHORED, ANCHORED_PARTIAL)
     if whole:
         skipped.insert(0, "this checks the bundle's internal consistency, not that it "
                           "matches the ledger its operator holds. Its tail is checked "
                           "only against its own unsigned `attestation`, which the "
                           "exporter wrote and anyone who rewrites the file can "
-                          "rewrite: that is not an anchor." if completeness != ANCHORED
+                          "rewrite: that is not an anchor." if not anchored
                        else "this checks the bundle against a signed head, not that it "
                             "matches the ledger its operator holds today.")
     else:
@@ -409,6 +450,11 @@ def verify_export(
                     f"entries chain together from genesis through seq {chain_len} "
                     "with nothing missing, each skeleton link matching its own "
                     "content")
+                if head_agrees is not None:
+                    verified.append(
+                        f"the bundle's own unsigned attestation agrees with where "
+                        f"that chain ends (seq {head_agrees}); that is the exporter "
+                        "agreeing with itself, not an anchor")
         verified.append(f"the bundle declares ledger format {LEDGER_SCHEMA_VERSION}, "
                         "the one this verifier implements")
         verified.extend(anchor_facts)
@@ -423,7 +469,7 @@ def verify_export(
     if total > len(problems):
         problems.append(f"… and {total - len(problems)} more problem(s) not listed")
     ok = total == 0
-    if not ok and completeness == ANCHORED:
+    if not ok and completeness in (ANCHORED, ANCHORED_PARTIAL):
         completeness = NOT_CHECKED  # a bundle with problems is not shown complete
         anchor_info = None
     return ExportVerification(
@@ -455,8 +501,10 @@ def _merge_skeleton(
                       "so removed entries of this subject cannot be seen", False)
     if raw is None:
         return (None, "the bundle carries no skeleton of the ledger's other entries "
-                      "(an older exporter, or it was removed), so removed entries of "
-                      "this subject cannot be seen", False)
+                      "(it is opt-in at export, because it discloses the id, kind and time of the "
+                      "ledger's other subjects; or it was removed), so removed entries of "
+                      "this subject cannot be seen. Ask the exporter for one if that "
+                      "disclosure is acceptable (`?skeleton=true`, `--skeleton`)", False)
     if not isinstance(raw, list):
         bad("skeleton", "`skeleton` is not a list")
         return None, "the skeleton is not readable", False
@@ -632,6 +680,17 @@ def _check_anchors(
         return NOT_CHECKED, None, [], []
 
     best = max(passed, key=lambda a: (a.head_seq, a.sequence))
+    if best.head_seq < 1 or best.ledger_length < 1:
+        # Genuine, and it contradicts nothing -- because it says nothing. A signed
+        # empty head can be had by anyone entitled to attest (it is three numbers),
+        # and attached to a ledger they invented it would read as a signed record.
+        reason = ("the strongest signed anchor signs an empty ledger (0 records), so "
+                  "it covers no record in this bundle and shows nothing was kept or "
+                  "removed")
+        bad("anchor", f"completeness could not be established: {reason}.")
+        skipped.insert(0, f"COMPLETENESS NOT CHECKED: {reason}. Only an anchor over "
+                          "at least one record can anchor a bundle.")
+        return NOT_CHECKED, None, [], []
     after = chain_len - best.head_seq
     info = {
         "sequence": best.sequence, "key_fingerprint": best.key_fingerprint,
@@ -642,18 +701,13 @@ def _check_anchors(
     facts = [
         f"{len(passed)} signed anchor(s) verify against the public key you supplied "
         f"(fingerprint {key.fingerprint})",
+        f"the bundle's chain runs to seq {chain_len}, at least the "
+        f"{best.ledger_length} record(s) signed for, and its link at seq "
+        f"{best.head_seq} ({_short(best.head_link_hash)}) is the signed head — so "
+        f"nothing up to seq {best.head_seq} was removed or rewritten",
     ]
-    if best.head_seq == 0:
-        facts.append("the strongest anchor signs an empty ledger: it covers no record "
-                     "in this bundle")
-    else:
-        facts.append(
-            f"the bundle's chain runs to seq {chain_len}, at least the "
-            f"{best.ledger_length} record(s) signed for, and its link at seq "
-            f"{best.head_seq} ({_short(best.head_link_hash)}) is the signed head — so "
-            f"nothing up to seq {best.head_seq} was removed or rewritten")
     skipped.insert(0, (
-        f"records after the anchor ({after} record(s), seq {best.head_seq + 1}"
+        f"{after} record(s) after the anchor (seq {best.head_seq + 1}"
         f"–{chain_len}) are covered by no signature: a cut of those is not "
         "detected." if after else
         f"the anchor signs the bundle's last record (seq {chain_len}); anything "
@@ -664,7 +718,7 @@ def _check_anchors(
             f"Attestation {best.sequence} is a counter-signature: the signer was "
             "handed the head values and did not read the chain. It fixes what was "
             "declared and when; it does not say the chain verified at the time.")
-    return ANCHORED, info, facts, assumptions
+    return (ANCHORED_PARTIAL if after else ANCHORED), info, facts, assumptions
 
 
 def verify_export_file(

@@ -29,6 +29,9 @@ and sign the shorter head, so the ``anchor`` an export embeds from this log
 protects only a customer who **keeps their own copy** of a signed attestation
 (this endpoint's response, or ``GET /v1/ledger/attest/log``) and checks later
 exports against it (``assurance evidence verify --public-key ... --attestations``).
+An export embeds only an attestation the service *read from the ledger* it holds
+(``read_from_ledger``); the ``declared_by_holder`` records this endpoint writes are
+about the customer's own ledger and are never embedded in a hosted export.
 Records appended after the latest attestation are covered by no signature.
 
 The basis of every attestation made here is ``declared_by_holder`` and that
@@ -121,38 +124,49 @@ def _log_for(principal: Principal) -> AttestationLog:
 
 
 def latest_anchor(principal: Principal) -> dict[str, Any] | None:
-    """The newest signed attestation in this account's own log, or ``None``.
+    """The newest **server-read** attestation in this account's own log, or ``None``.
 
-    What an export embeds as its ``anchor``. Only ever this account's log
+    What a hosted export embeds as its ``anchor``. Only ever this account's log
     (:func:`_log_for` is keyed by the principal), so one tenant's attestation can
     never ride in another's bundle. A damaged log is a 500 finding, not a silently
     unanchored export.
+
+    Only attestations whose basis is ``read_from_ledger`` qualify: the service read
+    the hosted chain and signed what it saw. A ``declared_by_holder`` record (what
+    ``POST /v1/ledger/attest`` writes) is three numbers the customer typed about a
+    ledger *they* hold; it says nothing about the hosted one, and embedding it would
+    make every case export fail with ``anchor_contradicts_ledger`` for good (the log
+    is append-only). So those are never embedded, whatever their sequence.
     """
     try:
-        record = _log_for(principal).last()
+        records = _log_for(principal).read()
     except AttestationError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "attestation_log_damaged", "finding": str(exc)},
         ) from exc
-    return record.to_dict() if record is not None else None
+    for record in reversed(records):
+        if record.basis is AttestationBasis.READ_FROM_LEDGER:
+            return record.to_dict()
+    return None
 
 
 def anchor_contradiction(exc: Exception) -> HTTPException:
     """The 409 for an export whose account anchor does not match the ledger.
 
-    A finding, not a fault: the ledger is shorter than, or differs from, what the
-    account's attestation log signed for -- or the log describes a different
-    ledger (a customer-held one), in which case ``?anchor=false`` exports without it.
+    A finding, not a fault. The anchor is only ever an attestation the service read
+    from this very ledger (``read_from_ledger``), so a mismatch means the ledger is
+    now shorter than, or differs from, what was signed: a real rewind signal.
     """
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail={
             "error": "anchor_contradicts_ledger",
             "finding": str(exc),
-            "remedy": "If this account's attestation log is for a ledger held "
-                      "elsewhere, export with ?anchor=false. Otherwise preserve the "
-                      "ledger and the attestation log as they are.",
+            "remedy": "Preserve the ledger and the attestation log as they are: the "
+                      "service signed what this ledger held, and it no longer matches. "
+                      "?anchor=false exports without the anchor, but that does not "
+                      "make the finding go away.",
         },
     )
 
