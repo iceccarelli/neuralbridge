@@ -49,6 +49,12 @@ function waiverText(history: HistoryItem[], entry: string): string {
   return h ? h.detail.slice(prefix.length) : '';
 }
 
+// The sentence the server gives (blocked_reason.message) when a submission was recorded but cleared nothing.
+function blockedMessage(data: unknown): string {
+  const reason = (data as { blocked_reason?: { message?: unknown } } | null)?.blocked_reason;
+  return typeof reason?.message === 'string' ? reason.message : '';
+}
+
 export default function CaseDetailPanel({
   apiKey,
   caseId,
@@ -188,6 +194,8 @@ export default function CaseDetailPanel({
         const whoPending = bundle.outcome === null || (bundle.loading && !bundleData);
         const whoState = who ? 'ready' : whoPending ? 'loading' : 'unavailable';
         const reverifyEvents = c.history.filter((h) => h.kind === 'assurance.change.reverification');
+        // Entries a submission was recorded for but could not clear because the evidence is under the floor.
+        const belowFloor = c.required_reverifications.filter((e) => (c.evidence_current[e] ?? '').startsWith('below_validated:'));
         return (
           <div className="aw-detail" data-testid="case-detail">
             <h3>
@@ -231,6 +239,14 @@ export default function CaseDetailPanel({
                   ))}
                   {c.required_reverifications.length === 0 && <li>None outstanding.</li>}
                 </ul>
+                {belowFloor.length > 0 && (
+                  <p className="aw-note" data-testid="reverify-blocked">
+                    Not cleared: {belowFloor.join(', ')} — the evidence is below the &lsquo;validated&rsquo; floor. No
+                    verification this package can produce reaches &lsquo;validated&rsquo; until a verifiable recorder
+                    attestation exists (declared provenance is capped at &lsquo;community&rsquo;), so a decider operator
+                    may waive the entry.
+                  </p>
+                )}
                 <p className="aw-note">
                   {reverifyEvents.length === 0
                     ? 'No re-verification has been submitted for this case.'
@@ -265,7 +281,9 @@ export default function CaseDetailPanel({
                   that manifest below with the <code>content_hash</code> that call returned as{' '}
                   <code>verification_content_hash</code>. The server checks the hash against the ledger. There is no way
                   to mark an entry verified from this page; closing one without evidence is the explicit waiver, which
-                  reads &ldquo;waived&rdquo;.
+                  reads &ldquo;waived&rdquo;. Today no verification this package produces reaches &lsquo;validated&rsquo;
+                  (declared provenance is capped at &lsquo;community&rsquo;), so a submission is recorded but a required
+                  entry is closed only by a decider&apos;s waiver until a verifiable recorder attestation exists.
                 </div>
               </div>
               <div>
@@ -443,6 +461,11 @@ export default function CaseDetailPanel({
                     Submit
                   </button>
                   {refusal('reverification')}
+                  {result?.kind === 'ok' && resultAt === 'reverification' && blockedMessage(result.data) && (
+                    <p className="aw-note" data-testid="reverify-blocked-reason">
+                      Recorded, but the case is still waiting: {blockedMessage(result.data)}
+                    </p>
+                  )}
                 </details>
                 {c.human_decisions_required.length > 0 && (
                   <>

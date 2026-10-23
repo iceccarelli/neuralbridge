@@ -327,7 +327,11 @@ class CliDriver(Driver):
         self.ledger_path = plant.ledger_path
 
     def _run(self, *argv) -> subprocess.CompletedProcess[str]:
-        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root)
+        # The reader of the ledger decides which provenance bases lift a tier, so the
+        # `change` process needs the same stand-in for a verified recorder attestation
+        # as the `machine verify` process that sealed the bundle (see SHIM_DIR).
+        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root,
+                       PYTHONPATH=f"{SRC}{os.pathsep}{SHIM_DIR}")
 
     def _out(self, r: subprocess.CompletedProcess[str], cid: str = "") -> Out:
         if r.returncode == 0:

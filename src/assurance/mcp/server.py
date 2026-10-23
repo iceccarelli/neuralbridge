@@ -256,6 +256,12 @@ async def change_reverify(
     manifest and the content hash of a sealed verification bundle; the coverage engine,
     not the caller, decides which functions are current again.
 
+    A 200 means the submission was recorded, not that it cleared anything: while the
+    case still awaits re-verification the body carries ``blocked_reason`` (a ``code``
+    such as ``below_validated_tier``, the ``entries`` and a sentence). Today no
+    verification this package produces reaches ``validated``, so a person has to waive
+    the entry. Read ``blocked_reason`` before reporting the case as progressing.
+
     Cell-tier only. There is deliberately no tool here to close, reject, defer or
     resume a case, to answer its open questions or to waive a re-verification: those
     need a named person, on the CLI or the HTTP API.

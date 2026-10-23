@@ -35,6 +35,7 @@ from typing import Any
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine import provenance_trust
 from assurance.machine.bundle import BUNDLE_KIND
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
@@ -60,6 +61,40 @@ _EARLIEST = datetime(1, 1, 1, tzinfo=UTC)
 _FUTURE_TOLERANCE = timedelta(days=1)
 
 _TIER_RANK = {"profile": 0, "community": 1, "validated": 2, "certified": 3}
+
+#: The first engine whose sealed ``provenance_basis`` means anything. Engines 4 and
+#: earlier let a trace's declared provenance reach ``validated`` on the filer's word.
+_FIRST_ENGINE_WITH_A_PROVENANCE_BASIS = 5
+
+
+def tier_reaches_validated(tier: str) -> bool:
+    """Is ``tier`` at least ``validated``? A name not on the ladder is not known to be."""
+    return _TIER_RANK.get(tier, -1) >= _TIER_RANK["validated"]
+
+
+def _believed_tier(body: dict[str, Any]) -> str:
+    """The tier a sealed verification body is worth *today*, whatever it says.
+
+    The stored ``tier`` is a string the sealing engine wrote. A body sealed by an
+    engine that let a declared provenance reach ``validated`` (engine 4 and earlier,
+    which also carries no ``provenance_basis``), or whose basis is not one that may
+    lift the tier, is read at ``community`` at most; the public bundle checker
+    refuses the same bodies. Only an engine >= 5 body whose sealed basis is in
+    ``provenance_trust.LIFTING_BASES`` (empty until a recorder attestation can be
+    verified) keeps a tier above ``community``. A lower stored tier is never raised.
+    """
+    stored = str(body.get("tier", ""))
+    if not tier_reaches_validated(stored):
+        return stored
+    try:
+        engine = int(str(body.get("engine_version", "")).strip())
+    except ValueError:
+        engine = 0
+    basis = body.get("provenance_basis")
+    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS and isinstance(basis, str)
+            and basis in provenance_trust.LIFTING_BASES):
+        return stored
+    return "community"
 
 
 class VerificationRecordError(AssuranceError, ValueError):
@@ -106,6 +141,8 @@ class VerificationRecord:
     product: str
     product_version: str
     verdict: str
+    #: The tier this record is *believed* at, not necessarily the one stored in the
+    #: sealed body: see :func:`_believed_tier`. Records built by hand keep what they say.
     tier: str
     checks_verified: tuple[str, ...]
     checks_not_verified: tuple[str, ...] = ()
@@ -187,7 +224,7 @@ class VerificationRecord:
                 product=str(body.get("product", "")),
                 product_version=str(body.get("product_version", "")),
                 verdict=str(body.get("verdict", "")),
-                tier=str(body.get("tier", "")),
+                tier=_believed_tier(body),
                 checks_verified=verified,
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
@@ -257,6 +294,12 @@ class CoverageReport:
     #: Interventions that touched a safety-bearing item and re-ran nothing.
     unrevalidated_interventions: tuple[str, ...]
     checks_skipped: tuple[str, ...]
+    #: The weakest tier among the verifications the *current* functions rest on
+    #: (``profile`` | ``community`` | ``validated`` | ``certified``), or ``""`` when no
+    #: function is current. Coverage says the evidence still stands; this says how
+    #: much that evidence is worth, and a cover resting on ``community`` is about a
+    #: model or a recorded file, not a demonstration on the machine.
+    evidence_tier_floor: str = ""
 
     @property
     def verdict(self) -> str:
@@ -283,6 +326,7 @@ class CoverageReport:
             "functions": [f.to_dict() for f in self.functions],
             "unrevalidated_interventions": list(self.unrevalidated_interventions),
             "checks_skipped": list(self.checks_skipped),
+            "evidence_tier_floor": self.evidence_tier_floor,
         }
 
     def summary(self) -> str:
@@ -330,6 +374,7 @@ def assess_coverage(
     caveats: list[str] = []
     coverages: list[FunctionCoverage] = []
     weak_tiers: dict[str, list[str]] = {}
+    current_tiers: list[str] = []
 
     def latest(check: str) -> tuple[VerificationRecord, bool] | None:
         """The newest verification that ran ``check``, and whether it passed it.
@@ -404,6 +449,8 @@ def assess_coverage(
         after = [i for i in disturbing if i.occurred_at >= last_good.effective_at]
         tiers = {v.tier for v in used.values()}
         weakest = min(tiers, key=lambda t: _TIER_RANK.get(t, 0))
+        if not after:
+            current_tiers.append(weakest)
         if _TIER_RANK.get(weakest, 0) < _TIER_RANK["validated"] and not after:
             weak_tiers.setdefault(weakest, []).append(fn.function_id)
 
@@ -448,9 +495,11 @@ def assess_coverage(
     for tier_name, fids in sorted(weak_tiers.items()):
         caveats.append(
             f"{', '.join(sorted(fids))} show as current on verification at tier "
-            f"{tier_name!r}, below 'validated': a simulated trace or a datasheet "
-            "figure is evidence about a model or a number, not about the hardware, "
-            "and current here does not mean demonstrated on the machine."
+            f"{tier_name!r}, below 'validated'. No verification this package can "
+            "produce reaches 'validated' until a verifiable recorder attestation "
+            "exists (a trace's declared provenance is capped at 'community'), so "
+            "current here means the recorded evidence still stands, not that the "
+            "behaviour was demonstrated on the machine."
         )
     for v in verifs:
         if v.date_suspect:
@@ -506,4 +555,6 @@ def assess_coverage(
         functions=tuple(coverages),
         unrevalidated_interventions=unrevalidated,
         checks_skipped=tuple(dict.fromkeys(caveats)),
+        evidence_tier_floor=(min(current_tiers, key=lambda t: _TIER_RANK.get(t, 0))
+                             if current_tiers else ""),
     )

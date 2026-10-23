@@ -33,6 +33,7 @@ from assurance.change.service import (
     assess_advisory,
     assess_drift,
     assess_recorded_intervention,
+    blocked_reason,
     claim,
     decide,
     resolve_decision,
@@ -404,7 +405,7 @@ async def advance_case_route(
     return case.to_dict()
 
 
-@change_router.post("/cases/{case_id}/reverification", summary="Supply fresh verification evidence")
+@change_router.post("/cases/{case_id}/reverification", summary="Supply fresh verification evidence; blocked_reason says why a case still waits")
 async def reverify_case_route(
     case_id: str, body: ReverificationIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -423,7 +424,13 @@ async def reverify_case_route(
                                      named=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
-    return case.to_dict()
+    out = case.to_dict()
+    # 200 means the submission was accepted and recorded, not that it cleared
+    # anything. Say why when the case is still waiting (absent when nothing is).
+    reason = blocked_reason(case)
+    if reason is not None:
+        out["blocked_reason"] = reason
+    return out
 
 
 @change_router.post("/cases/{case_id}/decision", summary="Close, reject or defer — a human decision")

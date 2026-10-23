@@ -54,6 +54,7 @@ from assurance.change.service import (
     assess_advisory,
     assess_drift,
     assess_recorded_intervention,
+    blocked_reason,
     claim,
     decide,
     resolve_decision,
@@ -318,6 +319,10 @@ def _cmd_reverify(args: argparse.Namespace) -> int:
     print(f"{case.case_id}: {case.status.value}")
     if case.required_reverifications:
         print(f"  still outstanding: {', '.join(case.required_reverifications)}")
+        reason = blocked_reason(case)
+        if reason is not None:
+            print(f"  blocked: {reason['code']}")
+            print(f"  {reason['message']}")
     return 0
 
 
