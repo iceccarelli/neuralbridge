@@ -82,6 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     chk.add_argument("bundle", type=Path)
     chk.add_argument("--envelope", type=Path, default=None)
     chk.add_argument("--trace", type=Path, default=None)
+    chk.add_argument("--as-of", default="",
+                     help="ISO time to judge a limits review's expiry against "
+                          "(default: now)")
     chk.add_argument("--limits-trust", type=Path, default=None,
                      help="your own reviewer trust list, to re-assess the limits "
                           "review sealed in the bundle")
@@ -160,8 +163,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
     trace = Trace.from_json(args.trace) if args.trace else None
     limits = LimitsTable.from_json(args.limits) if args.limits else None
     trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
+    from assurance.core.identity import parse_utc
     result = check_bundle(args.bundle, envelope=envelope, trace=trace, limits=limits,
-                          review_trust=trust)
+                          review_trust=trust,
+                          as_of=parse_utc(args.as_of) if args.as_of else None)
     if args.json:
         print(json.dumps({"ok": result.ok, "level": result.level,
                           "reproduced": result.reproduced,

@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { call, callText, describeOutcome, keepsLastGood, type ApiOutcome } from '../app/lib/assuranceApi';
+import { operatorKey } from './support/operators';
+import { call, callText, describeOutcome, explainForbidden, keepsLastGood, parseAttribution, type ApiOutcome } from '../app/lib/assuranceApi';
 
 // The client the workspace uses (app/lib/assuranceApi.ts), run from Node against the REAL
 // local Assurance API. Every refusal the server can give must come back as its own kind,
@@ -59,15 +60,67 @@ test.describe('assuranceApi against the real API', () => {
     expect(describeOutcome(o).heading).toContain('404');
   });
 
-  test('409: a close the server refuses is a conflict with its reason', async () => {
+  test('409: a close the server refuses is a conflict with its reason (made with a decider operator key)', async ({ request }) => {
+    const decider = await operatorKey(request, seed.key_a, 'v.grimaldi');
+    const o = refusal(
+      await call(apiBase, decider, `/v1/change/cases/${seed.case_id}/decision`, {
+        method: 'POST',
+        body: { disposition: 'closed', reason: 'looks fine' },
+      }),
+    );
+    expect(o.kind).toBe('conflict');
+    if (o.kind === 'conflict') expect(o.message.length).toBeGreaterThan(10);
+  });
+
+  test('403: an account key cannot decide; the code survives so the page can say what to do', async () => {
     const o = refusal(
       await call(apiBase, seed.key_a, `/v1/change/cases/${seed.case_id}/decision`, {
         method: 'POST',
         body: { disposition: 'closed', reason: 'looks fine', actor: 'v.grimaldi' },
       }),
     );
-    expect(o.kind).toBe('conflict');
-    if (o.kind === 'conflict') expect(o.message.length).toBeGreaterThan(10);
+    expect(o.kind).toBe('forbidden');
+    if (o.kind === 'forbidden') {
+      expect(o.code).toBe('operator_required');
+      expect(explainForbidden(o)).toMatch(/decider/i);
+    }
+  });
+
+  test('403: a contributor operator is refused with decider_role_required, a mismatched name with actor_mismatch', async ({ request }) => {
+    await operatorKey(request, seed.key_a, 'v.grimaldi');
+    const contributor = await operatorKey(request, seed.key_a, 'c.contrib', 'contributor');
+    const noRole = refusal(
+      await call(apiBase, contributor, `/v1/change/cases/${seed.case_id}/decision`, {
+        method: 'POST',
+        body: { disposition: 'closed', reason: 'looks fine' },
+      }),
+    );
+    expect(noRole.kind).toBe('forbidden');
+    if (noRole.kind === 'forbidden') expect(noRole.code).toBe('decider_role_required');
+    const decider = await operatorKey(request, seed.key_a, 'v.grimaldi');
+    const wrongName = refusal(
+      await call(apiBase, decider, `/v1/change/cases/${seed.case_id}/decision`, {
+        method: 'POST',
+        body: { disposition: 'closed', reason: 'looks fine', actor: 'someone.else' },
+      }),
+    );
+    expect(wrongName.kind).toBe('forbidden');
+    if (wrongName.kind === 'forbidden') {
+      expect(wrongName.code).toBe('actor_mismatch');
+      expect(explainForbidden(wrongName)).toMatch(/does not match/i);
+    }
+  });
+
+  test('attribution is read from the ledger role string and never upgraded', () => {
+    expect(parseAttribution('reviewer via account acc_1; operator=op_1 (decider); key=asr_x; attribution=authenticated_operator').basis).toBe(
+      'authenticated_operator',
+    );
+    expect(parseAttribution('reviewer via account acc_1; key=asr_x; attribution=declared_by_account_key').basis).toBe('declared_by_account_key');
+    expect(parseAttribution('reviewer via account open-mode; key=open-mode; attribution=declared_open_mode').basis).toBe('declared_open_mode');
+    // An entry from before attribution was recorded, or a role string that merely mentions the words.
+    expect(parseAttribution('reviewer').label).toBe('attribution not recorded');
+    expect(parseAttribution(undefined).basis).toBe('not_recorded');
+    expect(parseAttribution('authenticated_operator').basis).toBe('not_recorded');
   });
 
   test('413: an oversized body is "too large" with the limit, not a network error', async () => {

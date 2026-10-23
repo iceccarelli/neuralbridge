@@ -1,11 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { call, type ApiOutcome, type CaseDetail, type ExportBundle, type HistoryItem, type Replay } from '../../lib/assuranceApi';
+import {
+  call,
+  explainForbidden,
+  parseAttribution,
+  type ApiOutcome,
+  type Attribution,
+  type CaseDetail,
+  type ExportBundle,
+  type HistoryItem,
+  type Replay,
+} from '../../lib/assuranceApi';
+import DecisionCredential, { useOperatorKey } from './DecisionCredential';
 import { Notice, PanelFrame, Refusal } from './PanelFrame';
 import { API_BASE, usePanel } from './usePanel';
 
-type Who = { text: string; title: string };
+type Who = { text: string; title: string; attribution: Attribution };
 
 // The case's own history says what happened and when; WHO is sealed on each event's
 // ledger entry. Every history item is exactly one ledger entry of the case's subject, in
@@ -21,8 +32,11 @@ export function attributeHistory(history: HistoryItem[], bundle: ExportBundle | 
   return entries.map((e) => {
     const a = (e as { evidence?: { actor?: { identifier?: string; role?: string; kind?: string } } }).evidence?.actor;
     const name = a?.identifier || (typeof e.actor === 'string' ? e.actor : '');
-    if (!name) return { text: 'not recorded', title: '' };
-    return { text: `${name} (${a?.kind || 'actor'})`, title: a?.role || '' };
+    // The basis is read from the role string sealed with the entry. An entry that does not carry one
+    // (written before attribution was recorded) says so; it is never upgraded to "authenticated".
+    const attribution = parseAttribution(a?.role);
+    if (!name) return { text: 'not recorded', title: '', attribution };
+    return { text: `${name} (${a?.kind || 'actor'})`, title: a?.role || '', attribution };
   });
 }
 
@@ -68,6 +82,9 @@ export default function CaseDetailPanel({
   const [resumeWhy, setResumeWhy] = useState('');
   const [replay, setReplay] = useState<ApiOutcome<Replay> | null>(null);
   const [replaying, setReplaying] = useState(false);
+  const [opKey, setOpKey] = useOperatorKey();
+  // Which action the last answer belongs to, so a refusal is shown beside the action refused.
+  const [resultAt, setResultAt] = useState('');
 
   const runReplay = async () => {
     setReplay(null);
@@ -76,11 +93,29 @@ export default function CaseDetailPanel({
     setReplaying(false);
   };
 
-  const act = async (path: string, body: Record<string, unknown>) => {
+  // `human` steps (decision, resume, resolve-decision, waive-reverification) go only with the
+  // decision credential; the server refuses an account key for them, so none is sent. For the other
+  // steps an operator key, when entered, attributes the action server-side and no name is sent.
+  const act = async (path: string, body: Record<string, unknown>, human = false) => {
     setResult(null);
     setNotice('');
+    setResultAt(path);
+    if (human && !opKey.trim()) {
+      setNotice(
+        'This step is a human decision and needs a decision credential: the key of an operator with the decider role. Enter it in the Decision credential section, or create the first operator there. Nothing was sent.',
+      );
+      return;
+    }
+    const useOp = !!opKey.trim();
+    if (!useOp && !actor.trim()) {
+      setNotice('Enter the name of the person taking this action — it is recorded as declared, not authenticated.');
+      return;
+    }
     setBusy(true);
-    const out = await call<unknown>(API_BASE, apiKey, `/v1/change/cases/${enc}/${path}`, { method: 'POST', body });
+    const out = await call<unknown>(API_BASE, useOp ? opKey.trim() : apiKey, `/v1/change/cases/${enc}/${path}`, {
+      method: 'POST',
+      body: useOp ? body : { ...body, actor: actor.trim() },
+    });
     setBusy(false);
     setResult(out);
     if (out.kind === 'ok') {
@@ -89,17 +124,27 @@ export default function CaseDetailPanel({
     }
   };
 
-  const needActor = () => {
-    if (actor.trim()) return true;
-    setResult(null);
-    setNotice('Enter the name of the person taking this action — it is recorded.');
-    return false;
+  // Where a refusal of the action `at` is shown: next to that action, with the server's own reason
+  // and, for a 403 it has a code for, what the person can do about it.
+  const refusal = (at: string) => {
+    if (!result || result.kind === 'ok' || resultAt !== at) return null;
+    const hint = result.kind === 'forbidden' ? explainForbidden(result) : '';
+    return (
+      <div data-testid="action-refusal" data-outcome={result.kind} data-code={result.kind === 'forbidden' ? (result.code ?? '') : ''}>
+        <Refusal outcome={result} what="Action" />
+        {hint && <p className="aw-note">{hint}</p>}
+        {result.kind === 'conflict' && (
+          <p className="aw-note">The server refused this and changed nothing. The reason above is the server&apos;s own.</p>
+        )}
+      </div>
+    );
   };
 
   const download = async () => {
     setExported(null);
     setNotice('');
     setResult(null);
+    setResultAt('export');
     const out = await call<ExportBundle>(API_BASE, apiKey, `/v1/change/cases/${enc}/export`);
     if (out.kind !== 'ok') {
       setResult(out);
@@ -261,12 +306,23 @@ export default function CaseDetailPanel({
                       </td>
                       <td>{h.kind.replace('assurance.change.', '')}</td>
                       <td>{h.detail}</td>
-                      <td data-testid="history-who" title={who?.[i]?.title}>
-                        {who
-                          ? who[i].text
-                          : whoPending
-                            ? 'loading…'
-                            : 'not available — the evidence export that carries it was not received'}
+                      <td data-testid="history-who" title={who?.[i]?.title} data-attribution={who?.[i]?.attribution.basis}>
+                        {who ? (
+                          <>
+                            {who[i].text}
+                            <br />
+                            <span
+                              className={who[i].attribution.basis === 'authenticated_operator' ? 'aw-note' : 'aw-note aw-bad'}
+                              data-testid="history-attribution"
+                            >
+                              {who[i].attribution.label}
+                            </span>
+                          </>
+                        ) : whoPending ? (
+                          'loading…'
+                        ) : (
+                          'not available — the evidence export that carries it was not received'
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -285,8 +341,10 @@ export default function CaseDetailPanel({
               </>
             )}
             <p className="aw-note">
-              &ldquo;Who&rdquo; is the name the account holder declared for that step, sealed on its ledger entry. It is
-              not identity-proofed.
+              &ldquo;Who&rdquo; is the name sealed on that step&apos;s ledger entry, with the basis it was sealed under.
+              &ldquo;Operator credential presented&rdquo; means a key issued to that named operator was used; &ldquo;name
+              declared&rdquo; means whoever held the account key typed it. Neither is identity proof. An entry that does
+              not record a basis says &ldquo;attribution not recorded&rdquo;; older entries are not upgraded.
             </p>
             {c.decision && (
               <p>
@@ -301,10 +359,7 @@ export default function CaseDetailPanel({
                   A person decided not to act yet. The case still needs its eventual decision. Resuming puts it back in
                   review and must be advanced again; it needs a named person and a reason.
                 </p>
-                <label>
-                  Your name
-                  <input value={actor} onChange={(e) => setActor(e.target.value)} />
-                </label>
+                <DecisionCredential apiKey={apiKey} opKey={opKey} setOpKey={setOpKey} />
                 <label>
                   Why resume
                   <textarea rows={2} value={resumeWhy} onChange={(e) => setResumeWhy(e.target.value)} />
@@ -313,26 +368,32 @@ export default function CaseDetailPanel({
                   className="btn btn-outline"
                   disabled={busy}
                   onClick={() => {
-                    if (!needActor()) return;
                     if (!resumeWhy.trim()) {
                       setResult(null);
                       setNotice('Resuming a case needs a reason.');
                       return;
                     }
-                    void act('resume', { reason: resumeWhy.trim(), actor: actor.trim() });
+                    void act('resume', { reason: resumeWhy.trim() }, true);
                   }}
                 >
                   Resume case
                 </button>
+                {refusal('resume')}
               </div>
             )}
             {!settled && !deferred && (
               <div className="aw-actions">
-                <h4>Actions (recorded under your name)</h4>
+                <h4>Actions</h4>
+                <DecisionCredential apiKey={apiKey} opKey={opKey} setOpKey={setOpKey} />
                 <label>
                   Your name
                   <input value={actor} onChange={(e) => setActor(e.target.value)} />
                 </label>
+                <p className="aw-note" data-testid="attribution-note">
+                  {opKey.trim()
+                    ? 'The operator key above attributes claim, advance and re-verification to that operator; the name field is not sent.'
+                    : 'Without an operator key, claim, advance and re-verification are recorded under the name you declare, marked as declared by the account key. That is not authentication.'}
+                </p>
                 <div className="aw-row">
                   <label>
                     Owner
@@ -341,18 +402,16 @@ export default function CaseDetailPanel({
                   <button
                     className="btn btn-outline"
                     disabled={busy}
-                    onClick={() => needActor() && owner.trim() && void act('claim', { owner: owner.trim(), actor: actor.trim() })}
+                    onClick={() => owner.trim() && void act('claim', { owner: owner.trim() })}
                   >
                     Claim
                   </button>
-                  <button
-                    className="btn btn-outline"
-                    disabled={busy}
-                    onClick={() => needActor() && void act('advance', { actor: actor.trim() })}
-                  >
+                  <button className="btn btn-outline" disabled={busy} onClick={() => void act('advance', {})}>
                     Advance
                   </button>
                 </div>
+                {refusal('claim')}
+                {refusal('advance')}
                 <details>
                   <summary>Submit re-verification evidence</summary>
                   <label>
@@ -367,7 +426,6 @@ export default function CaseDetailPanel({
                     className="btn btn-outline"
                     disabled={busy}
                     onClick={() => {
-                      if (!needActor()) return;
                       let parsed: unknown;
                       try {
                         parsed = JSON.parse(manifest);
@@ -379,12 +437,12 @@ export default function CaseDetailPanel({
                       void act('reverification', {
                         manifest: parsed,
                         verification_content_hash: verifHash.trim(),
-                        actor: actor.trim(),
                       });
                     }}
                   >
                     Submit
                   </button>
+                  {refusal('reverification')}
                 </details>
                 {c.human_decisions_required.length > 0 && (
                   <>
@@ -407,7 +465,6 @@ export default function CaseDetailPanel({
                       className="btn btn-outline"
                       disabled={busy}
                       onClick={() => {
-                        if (!needActor()) return;
                         if (!answer.trim()) {
                           setResult(null);
                           setNotice('An answer needs the decision the person actually made.');
@@ -416,12 +473,12 @@ export default function CaseDetailPanel({
                         void act('resolve-decision', {
                           decision: c.human_decisions_required.includes(question) ? question : c.human_decisions_required[0],
                           resolution: answer.trim(),
-                          actor: actor.trim(),
-                        });
+                        }, true);
                       }}
                     >
                       Record answer
                     </button>
+                    {refusal('resolve-decision')}
                   </>
                 )}
                 {c.required_reverifications.length > 0 && (
@@ -450,7 +507,6 @@ export default function CaseDetailPanel({
                       className="btn btn-outline"
                       disabled={busy}
                       onClick={() => {
-                        if (!needActor()) return;
                         if (!waiver.trim()) {
                           setResult(null);
                           setNotice('A waiver needs a reason: why closing without evidence is acceptable.');
@@ -459,12 +515,12 @@ export default function CaseDetailPanel({
                         void act('waive-reverification', {
                           entry: c.required_reverifications.includes(entry) ? entry : c.required_reverifications[0],
                           reason: waiver.trim(),
-                          actor: actor.trim(),
-                        });
+                        }, true);
                       }}
                     >
                       Waive without evidence
                     </button>
+                    {refusal('waive-reverification')}
                   </>
                 )}
                 <h4>Decide</h4>
@@ -479,19 +535,19 @@ export default function CaseDetailPanel({
                       className="btn btn-outline"
                       disabled={busy}
                       onClick={() => {
-                        if (!needActor()) return;
                         if (!reason.trim()) {
                           setResult(null);
                           setNotice('A decision needs a reason.');
                           return;
                         }
-                        void act('decision', { disposition: d, reason: reason.trim(), actor: actor.trim() });
+                        void act('decision', { disposition: d, reason: reason.trim() }, true);
                       }}
                     >
                       {d === 'closed' ? 'Close' : d === 'deferred' ? 'Defer' : 'Reject'}
                     </button>
                   ))}
                 </div>
+                {refusal('decision')}
                 <p className="aw-note">
                   The server decides whether a case may close: it refuses until the underlying evidence is current and
                   every human question is answered, whatever this page sends.
@@ -499,7 +555,7 @@ export default function CaseDetailPanel({
               </div>
             )}
             {notice && <Notice>{notice}</Notice>}
-            {result && result.kind !== 'ok' && <Refusal outcome={result} what="Action" />}
+            {refusal('export')}
 
             <div className="aw-export">
               <h4>Check this case against the ledger</h4>

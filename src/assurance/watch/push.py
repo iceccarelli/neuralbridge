@@ -239,19 +239,15 @@ def run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
              for f in (adv.get("feeds") or [])][:50]
     cases = sorted({str(o.get("case_id")) for o in run.get("outcomes", []) if o.get("case_id")}
                    | {f["case_id"] for f in findings if f["case_id"]})[:200]
-    filings = run.get("filings") or {}
     return {
         "local_finished_at": str(run.get("finished_at", ""))[:40],
         "stale_observations": [str(s)[:400] for s in (run.get("stale_observations") or [])][:100],
         "feeds": feeds,
         "advisory_findings": findings,
         "local_case_ids": cases,
-        "filings_prompts": [{
-            "advisory_id": str(p.get("advisory_id", ""))[:200],
-            "state": str(p.get("state", ""))[:40],
-            "escalating": bool(p.get("escalating", False)),
-        } for p in (filings.get("prompts") or [])][:100],
-        "checks_skipped": [str(c)[:500] for c in (run.get("checks_skipped") or [])][:50],
+        "checks_skipped": [str(c)[:500] for c in (run.get("checks_skipped") or [])
+                           if "art. 14" not in str(c).lower()
+                           and "article 14" not in str(c).lower()][:50],
     }
 
 

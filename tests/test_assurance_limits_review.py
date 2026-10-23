@@ -367,3 +367,23 @@ def test_api_check_reports_the_review_and_seal_ignores_caller_trust(monkeypatch)
     assert "limits_trust" not in __import__(
         "assurance.api.machine_routes", fromlist=["VerifyIn"]).VerifyIn.model_fields
     del seal
+
+
+def test_an_expired_review_cannot_be_replayed_as_valid_by_a_forged_assessed_on():
+    t = table()
+    rv = review(t, expires_on="2026-09-30")
+    early = datetime(2026, 9, 15, tzinfo=UTC)
+    res = verify(env(t), tr(), limits=t, limits_reviews=[rv], review_trust=trust(REVIEWER),
+                 now=early)
+    assert res.tier is AssuranceTier.VALIDATED          # valid on the day it was sealed
+    b = build_bundle(env(t), tr(), actor=ACTOR, limits=t, result=res)
+    d = b.to_dict()
+    # judged today (after expiry) by the verifier: not reproduced as validated
+    today = check_bundle_data(d, envelope=env(t), trace=tr(), limits=t,
+                              review_trust=trust(REVIEWER),
+                              as_of=datetime(2026, 10, 22, tzinfo=UTC))
+    assert not today.ok
+    # judged as of the sealing day, by the verifier's own choice, it reproduces
+    then = check_bundle_data(d, envelope=env(t), trace=tr(), limits=t,
+                             review_trust=trust(REVIEWER), as_of=early)
+    assert then.ok and then.reproduced

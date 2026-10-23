@@ -21,6 +21,61 @@ function when(iso: string | null): string {
   return iso ? `${ageLabel(iso)} (${iso})` : '';
 }
 
+function hours(h: number | null | undefined): string {
+  return typeof h === 'number' ? `${h} h` : 'not stated';
+}
+
+// Where the record behind a machine's row comes from, how complete the look was and how far it can
+// be trusted. All of it is the customer's own report: no field here is independent telemetry.
+function SourceCell({ row }: { row: ObservationRow | undefined }) {
+  if (!row || !row.reported) {
+    return (
+      <td data-testid="obs-source" data-source="manifest-only">
+        <strong>Source: sealed manifest only.</strong> No Watch observation was reported for this machine. A missing
+        report is not evidence the machine is unchanged.
+      </td>
+    );
+  }
+  const status = row.last_attempt_status ?? '';
+  const completeness =
+    status === 'incomplete'
+      ? 'INCOMPLETE — part of what the plan names was not read; it cannot say the machine is current'
+      : status === 'uncollectable'
+        ? 'NOT COLLECTED — the attempt produced nothing'
+        : status === 'manifest_stale'
+          ? 'NOT A LOOK — the manifest was too old to describe the machine at that time'
+          : row.last_attempt_succeeded
+            ? `reported as a complete look (status ${status || 'not stated'})`
+            : `not a complete look (status ${status || 'not stated'})`;
+  return (
+    <td data-testid="obs-source" data-source="client-reported-watch" data-completeness={status}>
+      <strong>Source: client-reported Watch observation</strong> (<code>assurance watch push</code>), not independent
+      telemetry.
+      <br />
+      Completeness of the latest attempt: {completeness}.
+      <br />
+      <span className="aw-note">
+        Manifest age at the last successful look: {hours(row.last_successful_manifest_age_hours)}
+        {row.last_successful_manifest_relayed ? ' (a manifest sealed earlier and relayed; its age is shown, not judged)' : ''}
+        . At the latest attempt: {hours(row.last_attempt_manifest_age_hours)}. Dates and cadence are declared by the
+        reporting client.
+      </span>
+      {row.last_attempt_detail && (
+        <>
+          <br />
+          <span className="aw-note">Detail reported: {row.last_attempt_detail}</span>
+        </>
+      )}
+      {row.open_case_ids.length > 0 && (
+        <>
+          <br />
+          <span className="aw-note">Open case(s): {row.open_case_ids.join(', ')}</span>
+        </>
+      )}
+    </td>
+  );
+}
+
 // One machine's Watch columns. A failed or incomplete attempt is shown as failed,
 // never as an observation; a machine nobody reported is not shown as current.
 function ObservationCells({ row }: { row: ObservationRow | undefined }) {
@@ -32,6 +87,7 @@ function ObservationCells({ row }: { row: ObservationRow | undefined }) {
         <td data-testid="obs-stale">
           <strong className="aw-bad">Stale</strong> — never reported
         </td>
+        <SourceCell row={row} />
       </>
     );
   }
@@ -67,9 +123,13 @@ function ObservationCells({ row }: { row: ObservationRow | undefined }) {
             {row.cadence_hours} h{row.cadence_declared ? '' : ', default'})
           </>
         ) : (
-          <>No — within {row.cadence_hours} h</>
+          <>
+            No — within {row.cadence_hours} h, the cadence the client declared. That is its report, not a check by this
+            service.
+          </>
         )}
       </td>
+      <SourceCell row={row} />
     </>
   );
 }
@@ -121,6 +181,7 @@ export default function FleetPanel({
                     <th>Last successful observation</th>
                     <th>Last attempt</th>
                     <th>Stale?</th>
+                    <th>Record source and completeness</th>
                     <th>Config</th>
                     <th>Evidence</th>
                     <th>Stale</th>
@@ -132,11 +193,15 @@ export default function FleetPanel({
                     <tr key={m.machine} data-testid="fleet-row" data-machine={m.machine}>
                       <td>{m.machine}</td>
                       <td>{m.site || '—'}</td>
-                      <td title={m.taken_at}>{ageLabel(m.taken_at)}</td>
+                      <td title={m.taken_at} data-testid="manifest-cell">
+                        {ageLabel(m.taken_at)}
+                        <br />
+                        <span className="aw-note">sealed manifest {m.taken_at}</span>
+                      </td>
                       {obsData ? (
                         <ObservationCells row={obsData.machines.find((r) => r.machine === m.machine)} />
                       ) : (
-                        <td colSpan={3} data-testid={obsPending ? 'obs-loading' : 'obs-unavailable'}>
+                        <td colSpan={4} data-testid={obsPending ? 'obs-loading' : 'obs-unavailable'}>
                           {obsPending ? 'Loading observation status…' : 'Observation status unavailable.'}
                         </td>
                       )}
@@ -172,6 +237,7 @@ export default function FleetPanel({
                           <th>Last successful observation</th>
                           <th>Last attempt</th>
                           <th>Stale?</th>
+                          <th>Record source and completeness</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -202,6 +268,19 @@ export default function FleetPanel({
             </p>
           )}
           {obs.outcome && obs.outcome.kind !== 'ok' && <Refusal outcome={obs.outcome} what="Watch observations" />}
+          <div className="aw-prov" data-testid="fleet-limits">
+            <p>
+              <strong>Limits of what this table shows.</strong> A submitted observation is not independent telemetry. A
+              missing report is not evidence the machine is unchanged. A date is when the reporting client says it looked.
+            </p>
+            {obsData && obsData.limitations.length > 0 && (
+              <ul>
+                {obsData.limitations.map((l) => (
+                  <li key={l}>{l}</li>
+                ))}
+              </ul>
+            )}
+          </div>
           <p className="aw-note">
             &ldquo;Last sealed manifest&rdquo; is the last configuration recorded in this ledger, not a live observation.
             The hosted API does not run Watch: Watch still runs in your kit or scheduler, and the observation columns show
