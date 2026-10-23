@@ -191,6 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "(`assurance attest sign`) as the bundle's anchor, so a "
                          "verifier with the signer's public key can show nothing "
                          "was removed up to it. Refuses if it contradicts the ledger.")
+    ex.add_argument("--skeleton", action="store_true",
+                    help="also list the id, kind and time of every OTHER entry in the "
+                         "ledger (no evidence), so a verifier can see a removed entry "
+                         "and check completeness. Off by default: it tells whoever "
+                         "receives the file what else the ledger holds.")
 
     return p
 
@@ -371,7 +376,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         from assurance.attest.attestation import AttestationLog
         anchor = AttestationLog(args.attestations).require_last().to_dict()
     bundle = EvidenceLedger.open_existing(args.ledger).export(
-        subject=args.case_id, anchor=anchor)
+        subject=args.case_id, anchor=anchor, skeleton=args.skeleton)
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
         raise CaseNotFoundError(args.case_id)
     text = json.dumps(bundle, indent=2, ensure_ascii=False)
@@ -387,6 +392,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
             print(f"  check it anywhere, offline: assurance evidence verify {args.out}")
             print("  not anchored: nothing in this file shows nothing was removed. "
                   "Export with --attestations <log> and verify with --public-key.")
+        if not args.skeleton:
+            print("  no skeleton: a removed entry of this case cannot be seen and "
+                  "completeness cannot be checked. --skeleton adds one, and tells "
+                  "whoever receives the file the id, kind and time of every other "
+                  "entry in the ledger.")
     else:
         print(text)
     return 0

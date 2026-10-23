@@ -16,7 +16,7 @@ outstanding, because the next question is always "and now what".
     assurance art14 case        CASE-001
     assurance art14 register
     assurance art14 verify
-    assurance art14 export      [--case CASE-001] [-o bundle.json]
+    assurance art14 export      [--case CASE-001 [--skeleton]] [-o bundle.json]
 """
 
 from __future__ import annotations
@@ -272,7 +272,9 @@ def cmd_export(args: argparse.Namespace) -> int:
             # Signing needs the Ed25519 dependency; exporting without an anchor does not.
             from ...attest.attestation import AttestationLog
             anchor = AttestationLog(args.attestations).require_last().to_dict()
-        bundle = register.ledger.export(subject=args.case_id, anchor=anchor)
+        bundle = register.ledger.export(
+            subject=args.case_id, anchor=anchor,
+            skeleton=args.skeleton and args.case_id is not None)
     except AssuranceError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -289,6 +291,11 @@ def cmd_export(args: argparse.Namespace) -> int:
         else:
             print("  not anchored: nothing in this file shows nothing was removed. "
                   "Export with --attestations <log> and verify with --public-key.")
+        if args.case_id is not None and not args.skeleton:
+            print("  no skeleton: a removed entry of this case cannot be seen and "
+                  "completeness cannot be checked. --skeleton adds one, and tells "
+                  "whoever receives the file the id, kind and time of every other "
+                  "entry in the ledger.")
     else:
         print(text)
     return 0
@@ -391,6 +398,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="embed the newest signed head attestation in this log "
                         "(`assurance attest sign`) as the bundle's anchor; refuses "
                         "if it contradicts the ledger")
+    e.add_argument("--skeleton", action="store_true",
+                   help="with --case: also list the id, kind and time of every OTHER "
+                        "entry in the ledger (no evidence), so a verifier can see a "
+                        "removed entry and check completeness. Off by default: it "
+                        "tells whoever receives the file what else the ledger holds.")
     e.set_defaults(func=cmd_export)
 
     return parser

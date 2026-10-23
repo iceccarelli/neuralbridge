@@ -200,15 +200,20 @@ async def change_case(case_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def change_export(case_id: str) -> dict[str, Any]:
+async def change_export(case_id: str, skeleton: bool = False) -> dict[str, Any]:
     """GET /v1/change/cases/{case_id}/export — the case's verifiable evidence bundle:
     every ledger entry of the case, hash-chained. Read-only. Cell-tier only.
 
     The ``body`` is what ``assurance evidence verify`` checks offline. It proves the
     bundle is internally consistent; it does not prove it is the operator's ledger.
+    ``skeleton=True`` also lists the id, kind and time of every OTHER entry in the
+    account's ledger so completeness can be checked; leave it off unless the person
+    who will receive the file may see those (it is off by default for that reason).
     """
     path = _case_path(case_id, "/export")
-    return await _call("GET", path) if path else _invalid_case_id(case_id)
+    if not path:
+        return _invalid_case_id(case_id)
+    return await _call("GET", path, params={"skeleton": "true"} if skeleton else None)
 
 
 # Write parity for the change queue — claim, advance, reverify. Deliberately NOT

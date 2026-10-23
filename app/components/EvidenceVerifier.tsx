@@ -24,8 +24,11 @@ export type VerifyResult = {
   // Attestation logs only (null otherwise): whether any signature was actually checked.
   signatures_verified: boolean | null;
   // Ledger exports only (null otherwise): did a signed anchor, under the key supplied,
-  // show nothing was removed? 'not_checked' is the default and is never a pass.
-  completeness?: 'anchored' | 'not_checked' | 'failed' | null;
+  // show nothing was removed? 'anchored' = the signed head covers the last record;
+  // 'anchored_partial' = records follow the signed head and no signature covers them;
+  // 'not_checked' is the default and is never a pass.
+  completeness?: 'anchored' | 'anchored_partial' | 'not_checked' | 'failed' | null;
+  anchor?: { head_seq: number; records_after_anchor: number } | null;
   scope: string;
   entries: number;
   verified: string[];
@@ -315,7 +318,10 @@ export default function EvidenceVerifier() {
                 {result.scope ? ` · ${result.scope}` : ''}
                 {result.signatures_verified === false ? ' · signatures NOT verified' : ''}
                 {result.signatures_verified === true ? ' · signatures verified against the key you supplied' : ''}
-                {result.completeness === 'anchored' ? ' · complete up to a signed head (key you supplied)' : ''}
+                {result.completeness === 'anchored' ? ' · matches a signed head that covers its last record (key you supplied)' : ''}
+                {result.completeness === 'anchored_partial'
+                  ? ` · matches a signed head only up to seq ${result.anchor?.head_seq ?? '?'}; ${result.anchor?.records_after_anchor ?? 'some'} later record(s) are covered by no signature`
+                  : ''}
                 {result.completeness === 'not_checked' ? ' · completeness NOT checked' : ''}
                 {result.completeness === 'failed' ? ' · does not match its signed head' : ''}
                 {result.kind !== 'unknown' && result.entries > 0 ? ` · ${result.entries} record(s)` : ''}

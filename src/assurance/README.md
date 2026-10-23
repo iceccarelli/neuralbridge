@@ -142,17 +142,23 @@ administrator with write access and time — for that, sign or publish
 **An export is not shown complete without a signed anchor.** A bundle can be cut
 short or rebuilt without entries and stay internally consistent (the hashes are
 unkeyed), and the bundle's own `attestation` is unsigned, so it anchors nothing.
-`export(anchor=...)` / `--attestations LOG` embeds the newest *signed* head
-attestation; `assurance evidence verify BUNDLE --public-key KEY.pub` checks the
-signature under a key you obtained elsewhere and rejects a bundle shorter than the
-signed length or whose link at the signed position differs. Without the key the
-result says `completeness NOT CHECKED`. A subject bundle also carries a `skeleton`
-of the account's other entries (position and hashes, no bodies) so removed entries
-are visible; past 5,000 of them it is omitted (`skeleton_truncated`) and
-completeness stays unchecked. Not covered: records after the anchor, and, for a
-hosted account ledger (the service holds both the ledger and the signing key), any
-shorter ledger the operator re-signs — keep your own copy of a signed attestation
-and pass it with `--attestations`.
+`export(anchor=...)` / `--attestations LOG` embeds a *signed* head
+attestation (the hosted API embeds only one the service read from the ledger, never a
+counter-signature the customer declared); `assurance evidence verify BUNDLE
+--public-key KEY.pub` checks the signature under a key you obtained elsewhere and
+rejects a bundle shorter than the signed length or whose link at the signed position
+differs. A head that signs an empty ledger anchors nothing. If records follow the
+signed head the result is `anchored_partial` and says how many no signature covers;
+`anchored` means the signature reaches the bundle's last record. Without the key the
+result says `completeness NOT CHECKED`. A subject bundle can carry a `skeleton`
+(`skeleton=True`, `--skeleton`, `?skeleton=true`) of the ledger's other entries
+(position, kind, subject, time and hashes, no bodies) so removed entries are visible;
+**it is off by default because it discloses the id, kind and time of every other
+subject**, which the link hash needs in the clear. Past 5,000 of them it is omitted
+(`skeleton_truncated`). Without it a subject bundle's completeness stays unchecked.
+Not covered: records after the anchor, and, for a hosted account ledger (the service
+holds both the ledger and the signing key), any shorter ledger the operator re-signs:
+keep your own copy of a signed attestation and pass it with `--attestations`.
 
 ## Sources
 
