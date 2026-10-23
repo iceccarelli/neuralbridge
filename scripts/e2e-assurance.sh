@@ -36,4 +36,5 @@ PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK
 PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test --workers=1 \
   tests-e2e/assurance-workspace.spec.ts tests-e2e/assurance-advisories.spec.ts \
   tests-e2e/assurance-checkout.spec.ts tests-e2e/assurance-outcomes.spec.ts tests-e2e/assurance-lifecycle.spec.ts \
+  tests-e2e/assurance-trust.spec.ts \
   tests-e2e/site-links.spec.ts "$@"

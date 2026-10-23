@@ -41,8 +41,9 @@ def test_no_article_14_awareness_time_classification_or_draft_leaves_the_plant()
     blob = str(s)
     assert "awareness" not in blob and "draft" not in blob and "classification" not in blob
     assert "received_at" not in blob
-    assert s["filings_prompts"] == [
-        {"advisory_id": "CTRL-2026-11", "state": "unassessed", "escalating": True}]
+    assert "filings_prompts" not in s          # not even that a prompt is overdue
+    s2 = run_summary({**RUN, "checks_skipped": ["a limit", "No Art. 14 duty declared"]})
+    assert s2["checks_skipped"] == ["a limit"]
 
 
 def test_the_summary_is_accepted_by_the_hosted_model_and_nothing_extra_is():
@@ -58,3 +59,4 @@ def test_the_summary_is_accepted_by_the_hosted_model_and_nothing_extra_is():
         assert "awareness_at" in str(exc)
     else:
         raise AssertionError("an unknown field in the summary was accepted")
+

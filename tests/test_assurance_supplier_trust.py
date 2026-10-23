@@ -783,9 +783,13 @@ def api(tmp_path, monkeypatch):
         yield client, accounts
 
 
-def _hdr(accounts, email="a@b.de", tier="cell"):
+def _hdr(accounts, email="a@b.de", tier="cell", *, role="decider"):
+    """Headers of a key issued to an operator of the account (``role=None``: account key)."""
     account = accounts.upsert_account(email=email, tier=tier)
-    return {"X-API-Key": accounts.issue_key(account.id)}, account
+    if role is None:
+        return {"X-API-Key": accounts.issue_key(account.id)}, account
+    _, key = accounts.create_operator(account.id, "a.engineer", role)
+    return {"X-API-Key": key}, account
 
 
 class TestApi:
@@ -808,7 +812,7 @@ class TestApi:
         assert before["key_trust_state"] == "unknown_key"
         r = client.post("/v1/supplier/trust/pin", headers=h, json={
             "supplier_id": "controlco", "public_key_pem": _pem(key),
-            "expected_fingerprint": key.fingerprint, "actor": "a.engineer",
+            "expected_fingerprint": key.fingerprint,
             "obtained_via": "phone"})
         assert r.status_code == 201
         after = client.post("/v1/supplier/trust/evaluate", headers=h,
@@ -824,7 +828,7 @@ class TestApi:
         h, _ = _hdr(accounts)
         r = client.post("/v1/supplier/trust/pin", headers=h, json={
             "supplier_id": "controlco", "public_key_pem": _pem(key),
-            "expected_fingerprint": "f" * 16, "actor": "a", "obtained_via": "phone"})
+            "expected_fingerprint": "f" * 16, "obtained_via": "phone"})
         assert r.status_code == 409
         assert r.json()["detail"]["error"] == "trust_decision_refused"
 
@@ -833,7 +837,7 @@ class TestApi:
         ha, _ = _hdr(accounts, "a@b.de")
         hb, _ = _hdr(accounts, "c@d.de")
         client.post("/v1/supplier/trust/pin", headers=ha, json={
-            "supplier_id": "controlco", "public_key_pem": _pem(key), "actor": "a",
+            "supplier_id": "controlco", "public_key_pem": _pem(key),
             "obtained_via": "phone"})
         assert client.get("/v1/supplier/trust", headers=hb).json()["pins"] == []
 
@@ -866,7 +870,7 @@ class TestApi:
         assert "correct, complete or timely" in r["trust_statement"]
         # pin, and the same request is now trusted
         client.post("/v1/supplier/trust/pin", headers=h, json={
-            "supplier_id": "controlco", "public_key_pem": _pem(key), "actor": "a",
+            "supplier_id": "controlco", "public_key_pem": _pem(key),
             "obtained_via": "phone"})
         r2 = client.post("/v1/fleet/advisory/signed", headers=h, json=body).json()
         assert r2["inspect_only"] is False
@@ -879,11 +883,12 @@ class TestApi:
         f = AdvisoryFeed(tmp_path / "f.jsonl")
         publish(_adv(), IDENTITY, key, f)
         r = client.post("/v1/supplier/trust/override", headers=h, json={
-            "feed": f.path.read_text(), "advisory_id": "CTRL-2026-11",
-            "actor": "m.safety", "reason": "confirmed by phone"})
+            "feed": f.path.read_text(), "advisory_id": "CTRL-2026-11", "reason": "confirmed by phone"})
         assert r.status_code == 200
         hist = client.get("/v1/supplier/trust", headers=h).json()
-        assert hist["overrides"][0]["actor"] == f"m.safety (account {account.id})"
+        assert hist["overrides"][0]["actor"] == (
+        f"a.engineer (operator {accounts.operators_for(account.id)[0]['id']}, "
+        f"account {account.id})")
 
     def test_the_operator_ledger_never_holds_pins(self, key):
         from fastapi import HTTPException
@@ -894,3 +899,46 @@ class TestApi:
         with pytest.raises(HTTPException) as exc:
             account_trust_store(Principal(account=None, key_prefix=""), object())
         assert exc.value.status_code == 403
+
+
+class TestTrustDecisionsAreHumanDecisions:
+    """Pinning a key makes a feed's advisories drive stop-use and cases, so it is held
+    to the case-decision rule: a decider operator by credential, never a typed name."""
+
+    def _body(self, key):
+        return {"supplier_id": "controlco", "public_key_pem": _pem(key),
+                "expected_fingerprint": key.fingerprint, "obtained_via": "phone"}
+
+    def test_an_account_key_or_a_contributor_cannot_pin_rotate_revoke_or_override(
+            self, api, key):
+        client, accounts = api
+        for role in (None, "contributor"):
+            h, account = _hdr(accounts, f"{role}@b.de", role=role)
+            if role == "contributor":
+                _, k = accounts.create_operator(account.id, "boss", "decider")
+            r = client.post("/v1/supplier/trust/pin", headers=h, json=self._body(key))
+            assert r.status_code == 403 and r.json()["detail"]["error"] == "operator_required"
+            for verb, body in (("rotate", {**self._body(key), "retire_fingerprint": "x"}),
+                               ("revoke", {"supplier_id": "controlco",
+                                           "fingerprint": key.fingerprint, "reason": "r"}),
+                               ("override", {"feed": "{}", "advisory_id": "A", "reason": "r"})):
+                r = client.post(f"/v1/supplier/trust/{verb}", headers=h, json=body)
+                assert r.status_code in (403, 422), (verb, r.text)
+                if r.status_code == 403:
+                    assert r.json()["detail"]["error"] == "operator_required"
+            assert client.get("/v1/supplier/trust", headers=h).json()["pins"] == []
+
+    def test_a_typed_name_is_not_the_operator(self, api, key):
+        client, accounts = api
+        h, _ = _hdr(accounts)
+        r = client.post("/v1/supplier/trust/pin", headers=h,
+                        json={**self._body(key), "actor": "Dr Keller"})
+        assert r.status_code == 403 and r.json()["detail"]["error"] == "actor_mismatch"
+
+    def test_the_pin_is_attributed_to_the_operator_credential(self, api, key):
+        client, accounts = api
+        h, _ = _hdr(accounts)
+        assert client.post("/v1/supplier/trust/pin", headers=h,
+                           json=self._body(key)).status_code == 201
+        actor = client.get("/v1/supplier/trust", headers=h).json()["history"][0]["actor"]
+        assert "a.engineer" in actor and "operator op_" in actor

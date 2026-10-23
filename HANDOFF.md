@@ -9,6 +9,56 @@ below were observed on 2026-10-21, not carried forward from older text.
 
 ---
 
+## 0.1 Changes on 2026-10-22 (supersede the lines they contradict below)
+
+Verified by running the suite against a local PostgreSQL 16: **4262 passed, 0 skipped**.
+
+- **Limits tables reach `validated` only through an independent signed review**
+  (`machine/limits_review.py`, engine 4). A table's own `verified_by` / `verified_on`
+  text is the author's claim and never lifts the tier. The review is an Ed25519
+  signature over the table's content hash and edition by a key in a trust list the
+  *verifier* supplies (`--limits-trust`; the API seals only against the server-configured
+  `ASSURANCE_LIMITS_REVIEW_TRUST`). The review is sealed into the bundle and re-assessed
+  on replay under the checker's own trust; bundles from engine 3 that carry
+  `validated` on a limits table are flagged. It attests that a key holder checked those
+  bytes, not that the values are right.
+- **Hosted case decisions need an individual operator** (`api/operator_routes.py`,
+  `AccountStore.operators`): `decider` operator keys make `decision`, `resume`,
+  `resolve-decision`, `waive-reverification`; account-level keys (agents, MCP, watch)
+  get 403; a body `actor` that differs from the key's operator is refused; disabling an
+  operator revokes its keys. Ledger actors record operator id, role, key prefix, account
+  and `attribution=` basis. Older entries keep their declared label. Still no identity
+  proofing, and the first operator can be created by an account-level key, so an
+  account holder must create it before handing a key to an agent.
+- **Trusted supplier advisories** (`supplier/trust.py`, `/v1/supplier/trust/*`,
+  `/v1/fleet/advisory/signed`): per-account pinned keys with rotation/revocation, separate
+  states (readable / signature / key trust / chain / duplicates / conflicts / withdrawals),
+  attributed manual override, classified fleet impact (hash / version-only / name-only /
+  contradictory / unknown). The watch runner passes the trust store, so an untrusted
+  advisory is inspect-only and opens no case. `fleet advisory --unsigned-anyway` now needs
+  `--override-actor` and never lets failed-signature records drive the verdict.
+- **Re-verification** refuses a newest manifest that was declared rather than read off the
+  unit, a bundle whose trace cannot be dated, and one trace filed for two machines.
+- **`assurance value report`** / `GET /v1/value`: the account's assurance position from its
+  own ledger (facts with references, unknowns, assumptions, ranked recommendations under a
+  printed fixed rule; no score or estimate).
+- **Report** states head-attestation status apart from the chain (none / unchecked without a
+  key / verified under the reader's key, basis, unsigned tail). `report build --attestations
+  --attest-key`.
+- **Watch push** carries the local run's supplier findings (with trust state), case ids,
+  stale observations and skipped checks as `client_reported_watch_run`; no Article 14
+  awareness or classification is sent. Read-only CLI verbs refuse a missing ledger (exit 2)
+  instead of creating an empty one.
+
+**Known and not fixed** (found by an adversarial review; reproduction in the commit log of this
+branch's PR): `provenance` in a trace is declared by whoever files it, so an API-sealed
+`validated` tier can rest on a synthetic trace; subject/case export bundles cannot show that
+nothing was truncated from the tail (the verifier says so in `checks_skipped`; a signed head
+anchor is the fix); `manifest_relayed` and `observed_at` are reporter-declared, so a
+compromised watch can replay an old manifest; the attestation log has no file lock.
+
+---
+
 ## 0. State on 2026-10-21 (read this first; later sections predate it)
 
 **Observed, by running it:** `python -m pytest tests/ -q --no-cov` with a local
@@ -31,7 +81,7 @@ a real local stack passes. Exact counts are in the PR description.
 | Case closure only as strong as its status field | Closure requires post-trigger re-verification evidence **for the machine and function named**, no open human question, and a human actor (`person`, a visible name, not a reserved word). The only way to close without evidence is the explicit, human-only `waive_reverification`, which reads `waived`, never `current`. A case's state is reconstructable from the ledger alone (`assurance change replay`) and the replay rejects forged transitions. Independent adversarial review found and we fixed: cross-machine and pre-change evidence clearing a case, advisory cases closing on `never_verified`, a transient partial collection reopening a human-closed case, replay accepting a forged `ready_to_close`. |
 | A hosted Cell customer could not finish a case (no API route for `resume`, `resolve-decision`, `waive-reverification`, `assess-intervention`; an unknown case was 404 on GET but 409 on POST; CLI/API `machine verify` could not file evidence under a machine, so nothing a CLI or API customer produced could clear a case) | All four routes exist (`api/change_routes.py`), plus `GET .../export` and `.../replay`; unknown case is 404 / CLI exit 2 on every verb (`CaseNotFoundError`); `machine verify --subject` / `"subject"` files a bundle under the machine key. MCP deliberately has no tool that decides, waives, resumes or resolves (`tests/test_interfaces_mcp.py` pins the tool list to `CHANGE.md`). One sequence — kit enrolment, firmware change, `watch run`/`push`, assess, claim, advance, re-verify, waive, resolve, defer/resume, close — is run through the library, the CLI, the HTTP API (two accounts) and MCP, and must agree on case id, states, refusals and evidence hashes (`tests/test_interfaces_parity.py`). Case reads and writes refuse a ledger whose chain does not verify (`CaseStore.require_intact`; API 500 `ledger_integrity`, CLI exit 2); `fleet list` leads with the failure; `evidence verify` no longer calls an empty subject bundle VERIFIED. Offline path run in a fresh interpreter under a Python audit hook: no socket, no HTTP client (`tests/test_interfaces_offline.py`). Divergences that remain on purpose are listed in `deploy/assurance/CHANGE.md` (Surfaces). |
 | `/ai` control plane had no tenancy: any caller could list and read another account's bound Postgres connection; `/api/v1/logs` was public and listed every tenant's audit events; the raw `adapters/postgres:<id>/execute` route ran SQL on another account's connection | Every connection, plan and audit entry is owned by the account that made it (`neuralbridge/ai/tenancy.py`); a foreign id is a 404 on every route, including the raw adapter routes. `/logs` needs a key and is owner-filtered (export is operator-only); the legacy `/connections` router is operator-only. The **shared seeded demo database is now read-only for paid accounts by default** (it let any paying account `DROP` tables for everyone); `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1` re-enables it for a **local** dev stack only (`scripts/verify-buyer-path.sh` needs it). The `/ai` audit log is in memory and cleared on restart; plan proposals are not audit events — the copy now says so instead of "full audit trail". |
-| No customer-facing view (§5 item 8) | `/assurance` (Next.js): fleet, evidence freshness, case queue, case detail with who/when for every history item, the human decisions (claim, advance, answer a question, waive a re-verification, decide, resume), ledger replay, a supplier-advisory panel (paste/upload an advisory or feed, or load a hosted feed; impact over the enrolled fleet; an explicit "Open assurance case"), an intervention assessment form, and a plan/usage panel from `GET /v1/me`. Every panel is its own request with its own loading, refusal (401/402/403/404/409/413/422/429/unreachable/5xx, with the server's remedy text) and "as of" state. It calls the real API with the caller's own key; the server decides what is shown or allowed. **Supplier signatures are not verified anywhere in the hosted path** (no route takes a pinned key): the panel says "signature not verified" and points at `assurance supplier verify`. The checkout success page reads the plan from `GET /v1/me` and hands the key to the workspace through sessionStorage. Browser e2e: `scripts/e2e-assurance.sh` (workspace, advisories, lifecycle, checkout hand-off, API-client outcomes, site links). |
+| No customer-facing view (§5 item 8) | `/assurance` (Next.js): fleet, evidence freshness, case queue, case detail with who/when for every history item, the human decisions (claim, advance, answer a question, waive a re-verification, decide, resume), ledger replay, a supplier-advisory panel (paste/upload an advisory or feed, or load a hosted feed; impact over the enrolled fleet; an explicit "Open assurance case"), an intervention assessment form, and a plan/usage panel from `GET /v1/me`. Every panel is its own request with its own loading, refusal (401/402/403/404/409/413/422/429/unreachable/5xx, with the server's remedy text) and "as of" state. It calls the real API with the caller's own key; the server decides what is shown or allowed. *(Superseded by §0.1: pinned supplier keys and trust-evaluated feeds exist server-side.)* The checkout success page reads the plan from `GET /v1/me` and hands the key to the workspace through sessionStorage. Browser e2e: `scripts/e2e-assurance.sh` (workspace, advisories, lifecycle, checkout hand-off, API-client outcomes, site links). |
 | No way for an outsider to check an exported bundle | `assurance evidence verify <bundle.json>` — offline, no account. Proves internal consistency; **does not** prove the bundle is the operator's ledger (that needs a signed head attestation). |
 | The free verifiers had no website path, and the offline verifier accepted evidence carrying fields outside its seal | `/verify` (Next.js) and `POST /v1/evidence/verify`: anonymous, stateless, 20/day per address (own counter), 4 MiB cap on that path only. Detects a ledger export, machine bundle or attestation log and returns `verified` facts, `assumptions` and `not_checked` limits - never a bare "valid"; attestation signatures are checked only against a public key the caller supplies (header, never the URL) - without one the result is never `ok`. An independent red-team review proved and we fixed: an 85 MB answer from a 4 MiB body (answers are now capped, 2 concurrent analyses, 503 when busy), resealed machine bundles recording tiers the engine cannot produce, and an unsigned attestation log reading as a pass. `verify_export` now also rejects unsealed extra fields, unsupported format versions and non-integer `seq`. Real-browser e2e: `tests-e2e/evidence-verify.spec.ts`. **Not hosted anywhere; the page says so when no API is configured.** Same change set, from an independent review of the SQLite first-open fix (PR #32): `restore_check backup` silently wrote empty snapshots for a data directory with `#`/`?` in its path and could wait forever on a locked source; `verify_chain` raised on damaged pages instead of reporting; the Watch ingest lock waited unboundedly and was one lock for every tenant (now per ledger, 30 s, `503 ingest_busy`). 12-32 process first-open races found nothing. |
 | Entitlements driven only by webhooks (a lost webhook silently locks out a payer or keeps a canceller) | `python -m assurance.billing.reconcile` reports drift against Stripe (categories, a drift count as the SLI) and, with `--apply`, corrects existing accounts only — never creates accounts or keys, never overrides a newer webhook. `past_due` now has a local limit it is reconciled against. **Verified against a fake Stripe transport only; never run against real Stripe — run with a test-mode key first.** |
@@ -46,8 +96,8 @@ a real local stack passes. Exact counts are in the PR description.
   only. `docs/pmf/PILOT-PROGRAMME.md` is a plan; no outreach has been sent.
 - The hosted API does not run Watch. Watch runs in the customer's kit/cron; the
   workspace's "last sealed manifest" is a record date, not a live observation.
-- "Named person" means a name declared by an authenticated account holder. It
-  is not identity-proofed.
+- Hosted decisions are attributed to an authenticated operator credential (§0.1);
+  CLI and open-mode actors are declared names. Nothing is identity-proofed.
 - A hosted deployment that previously let accounts write to the shared ledger
   would hide that data from those accounts after this change; there is no
   migration tool (no production deployment exists).

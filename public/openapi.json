@@ -820,30 +820,6 @@
         "title": "FilingOut",
         "type": "object"
       },
-      "FilingsPromptIn": {
-        "additionalProperties": false,
-        "properties": {
-          "advisory_id": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Advisory Id",
-            "type": "string"
-          },
-          "escalating": {
-            "default": false,
-            "title": "Escalating",
-            "type": "boolean"
-          },
-          "state": {
-            "default": "",
-            "maxLength": 40,
-            "title": "State",
-            "type": "string"
-          }
-        },
-        "title": "FilingsPromptIn",
-        "type": "object"
-      },
       "FleetMachineCheckIn": {
         "additionalProperties": false,
         "properties": {
@@ -1145,8 +1121,8 @@
         "additionalProperties": false,
         "properties": {
           "actor": {
+            "default": "",
             "maxLength": 200,
-            "minLength": 1,
             "title": "Actor",
             "type": "string"
           },
@@ -1189,7 +1165,6 @@
         },
         "required": [
           "advisory_id",
-          "actor",
           "reason"
         ],
         "title": "OverrideIn",
@@ -1247,8 +1222,8 @@
         "additionalProperties": false,
         "properties": {
           "actor": {
+            "default": "",
             "maxLength": 200,
-            "minLength": 1,
             "title": "Actor",
             "type": "string"
           },
@@ -1286,8 +1261,7 @@
         "required": [
           "supplier_id",
           "public_key_pem",
-          "obtained_via",
-          "actor"
+          "obtained_via"
         ],
         "title": "PinIn",
         "type": "object"
@@ -1415,8 +1389,8 @@
         "additionalProperties": false,
         "properties": {
           "actor": {
+            "default": "",
             "maxLength": 200,
-            "minLength": 1,
             "title": "Actor",
             "type": "string"
           },
@@ -1442,7 +1416,6 @@
         "required": [
           "supplier_id",
           "fingerprint",
-          "actor",
           "reason"
         ],
         "title": "RevokeIn",
@@ -1452,8 +1425,8 @@
         "additionalProperties": false,
         "properties": {
           "actor": {
+            "default": "",
             "maxLength": 200,
-            "minLength": 1,
             "title": "Actor",
             "type": "string"
           },
@@ -1505,8 +1478,7 @@
           "new_public_key_pem",
           "retire_fingerprint",
           "effective_at",
-          "obtained_via",
-          "actor"
+          "obtained_via"
         ],
         "title": "RotateIn",
         "type": "object"
@@ -1537,14 +1509,6 @@
             },
             "maxItems": 50,
             "title": "Feeds",
-            "type": "array"
-          },
-          "filings_prompts": {
-            "items": {
-              "$ref": "#/components/schemas/FilingsPromptIn"
-            },
-            "maxItems": 100,
-            "title": "Filings Prompts",
             "type": "array"
           },
           "local_case_ids": {

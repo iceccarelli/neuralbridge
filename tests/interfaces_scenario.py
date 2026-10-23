@@ -432,7 +432,9 @@ class ApiDriver(Driver):
         headers = None
         if verb in self.HUMAN_VERBS and self._operator_for is not None:
             who = body["actor"]
-            headers = self._operators.setdefault(who, self._operator_for(who))
+            if who not in self._operators:
+                self._operators[who] = self._operator_for(who)
+            headers = self._operators[who]
         return self._out(self.http.post(
             f"/v1/change/cases/{cid}/{verb}", json=body, headers=headers))
 

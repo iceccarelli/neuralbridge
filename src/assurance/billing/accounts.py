@@ -290,6 +290,10 @@ class KeyLimitError(RuntimeError):
         super().__init__(f"{limit} active keys is the maximum; revoke one first.")
 
 
+class OperatorsExistError(RuntimeError):
+    """A bootstrap was attempted on an account that already has an enabled operator."""
+
+
 @dataclass(frozen=True)
 class Account:
     id: str
@@ -1090,19 +1094,37 @@ class AccountStore:
     # -- operators --------------------------------------------------------
     def create_operator(
         self, account_id: str, name: str, role: str, *, created_by: str = "",
+        only_if_none: bool = False, max_active_keys: int | None = None,
     ) -> tuple[str, str]:
-        """A new operator and its first key (returned once). ``(operator_id, key)``."""
+        """A new operator and its first key (returned once). ``(operator_id, key)``.
+
+        ``only_if_none`` makes "the account has no enabled operator" and the insert one
+        transaction, so two concurrent bootstraps cannot both succeed. Names are unique
+        among an account's enabled operators (case-insensitively). ``max_active_keys``
+        applies the plan's live-key cap to the operator's key.
+        """
         if role not in ("contributor", "decider"):
             raise ValueError("role must be 'contributor' or 'decider'")
         if not name.strip():
             raise ValueError("an operator needs a name")
         op_id = _new_id("op")
         with self._txn() as db:
+            if db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone() is None:
+                raise ValueError("no such account")
+            rows = db.execute(
+                "SELECT name FROM operators WHERE account_id=? AND disabled_at IS NULL",
+                (account_id,)).fetchall()
+            if only_if_none and rows:
+                raise OperatorsExistError(
+                    "this account already has operators; only a decider can add more.")
+            if any(r["name"].lower() == name.strip().lower() for r in rows):
+                raise ValueError(f"an operator named {name.strip()!r} already exists")
             db.execute(
                 "INSERT INTO operators (id, account_id, name, role, created_at, created_by)"
                 " VALUES (?,?,?,?,?,?)",
                 (op_id, account_id, name.strip(), role, format_utc(utc_now()), created_by))
-            key = self._issue_key_db(db, account_id, f"operator {name.strip()}")
+            key = self._issue_key_db(db, account_id, f"operator {name.strip()}",
+                                     max_active_keys)
             db.execute("UPDATE api_keys SET operator_id=? WHERE key_hash=?",
                        (op_id, hash_key(key)))
         return op_id, key
