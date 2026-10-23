@@ -286,6 +286,22 @@ class AttestationLog:
         records = self.read()
         return records[-1] if records else None
 
+    def require_last(self) -> HeadAttestation:
+        """The newest record, for a caller that *asked* for one.
+
+        A missing or empty log is an error here, not "no anchor": an export or a
+        verification that was told to use an attestation log must not quietly
+        carry on without one.
+        """
+        if not self.path.exists():
+            raise AttestationError(
+                f"{self.path} does not exist. Nothing was read, and no attestation "
+                "was invented.")
+        latest = self.last()
+        if latest is None:
+            raise AttestationError(f"{self.path} holds no attestations.")
+        return latest
+
     @contextmanager
     def locked(self) -> Iterator[None]:
         """Serialise read-decide-append across threads and processes.

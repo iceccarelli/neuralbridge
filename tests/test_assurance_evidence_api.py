@@ -165,8 +165,10 @@ class TestGenuineLedgerExport:
         result = check(client, case_export)
         assert result["ok"] is True and result["kind"] == "ledger_export"
         assert result["scope"].startswith("subject ")
-        assert any("one subject" in n and "other subjects" in n
-                   for n in result["not_checked"])
+        assert any("one subject" in n and "skeleton" in n for n in result["not_checked"])
+        # Nothing in a key-less check shows the case is complete; it must say so first.
+        assert result["completeness"] == "not_checked"
+        assert result["not_checked"][0].startswith("COMPLETENESS NOT CHECKED")
         assert result["head"] is None  # a subject bundle has no ledger head to show
 
     def test_the_result_is_the_same_for_a_paid_key_and_is_not_capped(self, client, env):

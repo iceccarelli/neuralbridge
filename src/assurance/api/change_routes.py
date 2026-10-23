@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from assurance.api.attest_routes import anchor_contradiction, latest_anchor
 from assurance.api.deps import Machine, get_register
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -42,6 +43,7 @@ from assurance.change.service import (
 from assurance.change.store import CASE_KINDS, CaseConflictError, CaseStore, CaseStoreError
 from assurance.core.errors import AssuranceError, LedgerIntegrityError
 from assurance.core.evidence import Actor
+from assurance.evidence.ledger import AnchorContradictsLedgerError
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
@@ -489,15 +491,28 @@ async def waive_reverification_route(
 async def export_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
+    anchor: Annotated[bool, Query(
+        description="embed the newest signed attestation from this account's own "
+                    "attestation log as the bundle's `anchor`, so a verifier holding "
+                    "the signer's public key can check the bundle is complete up to "
+                    "it. Set false to export without one.")] = True,
 ) -> dict[str, Any]:
     """The case's ledger entries as ``assurance evidence verify`` expects them.
 
     Refuses (500 ``ledger_integrity``) if the account's chain does not verify,
     and says no such case (404) when the ledger holds no entry of a case kind
     under this id, so an export is never an empty bundle that reads as clean.
+    Also carries a ``skeleton`` of the account's other entries (positions and
+    hashes only) so removed entries are visible, and the account's newest signed
+    attestation as ``anchor`` when it has one; 409 ``anchor_contradicts_ledger``
+    if that attestation does not match this ledger. Records after the anchor are
+    covered by no signature.
     """
+    signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(subject=case_id, anchor=signed_anchor)
+    except AnchorContradictsLedgerError as exc:
+        raise anchor_contradiction(exc) from exc
     except LedgerIntegrityError as exc:
         raise _refused(exc) from exc
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
