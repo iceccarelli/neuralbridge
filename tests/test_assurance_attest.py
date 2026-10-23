@@ -238,6 +238,43 @@ class TestAttesting:
             LedgerHead(length=0, head_seq=3, head_link_hash="a" * 64)
 
 
+def _attest_worker(args):
+    ledger_path, log_path, key_path = args
+    return attest(
+        EvidenceLedger(ledger_path), SigningKey.load(key_path), AttestationLog(log_path)
+    ).sequence
+
+
+class TestConcurrentWriters:
+    """Read-decide-append must be atomic: a forked log has already handed a
+    signed record to somebody by the time verify_log refuses it."""
+
+    def test_threads_never_sign_the_same_sequence(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+
+        led = _ledger(tmp_path / "l.db")
+        key = SigningKey.generate()
+        log = AttestationLog(tmp_path / "att.jsonl")
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(lambda _n: attest(led, key, log), range(16)))
+        records = log.read()
+        assert [r.sequence for r in records] == list(range(1, 17))
+        assert verify_log(records, key.verifying).ok
+
+    def test_processes_never_sign_the_same_sequence(self, tmp_path):
+        import multiprocessing
+
+        _ledger(tmp_path / "l.db")
+        key = SigningKey.generate()
+        key.save(tmp_path / "k.pem")
+        log_path = tmp_path / "att.jsonl"
+        jobs = [(str(tmp_path / "l.db"), str(log_path), str(tmp_path / "k.pem"))] * 12
+        with multiprocessing.get_context("spawn").Pool(6) as pool:
+            sequences = pool.map(_attest_worker, jobs)
+        assert sorted(sequences) == list(range(1, 13))
+        assert verify_log(AttestationLog(log_path).read(), key.verifying).ok
+
+
 # --------------------------------------------------------------------------
 class TestVerifying:
     def test_a_clean_log_verifies_and_still_names_what_it_did_not_check(self, tmp_path):
