@@ -2673,7 +2673,7 @@
     },
     "/v1/cases/{case_id}/export": {
       "get": {
-        "description": "Refuses if the chain does not verify.\n\nThe bundle also carries a ``skeleton`` of the account's other entries\n(positions and hashes only, no evidence) so removed entries are visible, and\nthe account's newest signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger). Records\nafter the anchor are covered by no signature; for a hosted ledger the\nservice holds the signing key too, so the anchor helps only a customer who\nkept their own copy of a signed attestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
+        "description": "Refuses if the chain does not verify.\n\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries\n(positions, kinds, subjects, times and hashes; no evidence) so removed entries\nare visible. It is **off by default**: the link hash covers the plain subject,\nso the skeleton cannot be anonymised and names every other case and incident of\nthe account. Without it the bundle is internally consistent but its\ncompleteness cannot be checked. The bundle carries the account's newest\n*server-read* signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed\nheads the customer declared are never embedded). Records after the anchor are\ncovered by no signature; for a hosted ledger the service holds the signing key\ntoo, so the anchor helps only a customer who kept their own copy of a signed\nattestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
         "operationId": "get_case_export_v1_cases__case_id__export_get",
         "parameters": [
           {
@@ -2694,6 +2694,18 @@
               "default": true,
               "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
               "title": "Anchor",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.",
+            "in": "query",
+            "name": "skeleton",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.",
+              "title": "Skeleton",
               "type": "boolean"
             }
           },
@@ -3830,7 +3842,7 @@
     },
     "/v1/change/cases/{case_id}/export": {
       "get": {
-        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.\nAlso carries a ``skeleton`` of the account's other entries (positions and\nhashes only) so removed entries are visible, and the account's newest signed\nattestation as ``anchor`` when it has one; 409 ``anchor_contradicts_ledger``\nif that attestation does not match this ledger. Records after the anchor are\ncovered by no signature.",
+        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,\nkinds, times and hashes; no evidence) so removed entries are visible; it is off\nby default because it names every other case and incident of the account.\nThe bundle carries the account's newest *server-read* signed attestation as\n``anchor`` when it has one; 409 ``anchor_contradicts_ledger`` if that\nattestation does not match this ledger (counter-signed heads the customer\ndeclared are never embedded). Records after the anchor are covered by no\nsignature.",
         "operationId": "export_case_v1_change_cases__case_id__export_get",
         "parameters": [
           {
@@ -3851,6 +3863,18 @@
               "default": true,
               "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
               "title": "Anchor",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.",
+            "in": "query",
+            "name": "skeleton",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.",
+              "title": "Skeleton",
               "type": "boolean"
             }
           },

@@ -496,21 +496,27 @@ async def export_case(
                     "attestation log as the bundle's `anchor`, so a verifier holding "
                     "the signer's public key can check the bundle is complete up to "
                     "it. Set false to export without one.")] = True,
+    skeleton: Annotated[bool, Query(
+        description="true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.")] = False,
 ) -> dict[str, Any]:
     """The case's ledger entries as ``assurance evidence verify`` expects them.
 
     Refuses (500 ``ledger_integrity``) if the account's chain does not verify,
     and says no such case (404) when the ledger holds no entry of a case kind
     under this id, so an export is never an empty bundle that reads as clean.
-    Also carries a ``skeleton`` of the account's other entries (positions and
-    hashes only) so removed entries are visible, and the account's newest signed
-    attestation as ``anchor`` when it has one; 409 ``anchor_contradicts_ledger``
-    if that attestation does not match this ledger. Records after the anchor are
-    covered by no signature.
+    ``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,
+    kinds, times and hashes; no evidence) so removed entries are visible; it is off
+    by default because it names every other case and incident of the account.
+    The bundle carries the account's newest *server-read* signed attestation as
+    ``anchor`` when it has one; 409 ``anchor_contradicts_ledger`` if that
+    attestation does not match this ledger (counter-signed heads the customer
+    declared are never embedded). Records after the anchor are covered by no
+    signature.
     """
     signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=case_id, anchor=signed_anchor)
+        bundle = register.ledger.export(
+            subject=case_id, anchor=signed_anchor, skeleton=skeleton)
     except AnchorContradictsLedgerError as exc:
         raise anchor_contradiction(exc) from exc
     except LedgerIntegrityError as exc:

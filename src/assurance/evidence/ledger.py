@@ -521,6 +521,7 @@ class EvidenceLedger:
 
     def export(
         self, *, subject: str | None = None, anchor: Mapping[str, Any] | None = None,
+        skeleton: bool = False,
     ) -> dict[str, Any]:
         """Export a verifiable bundle, refusing if the chain does not verify.
 
@@ -536,13 +537,18 @@ class EvidenceLedger:
         ``attestation`` field is the exporter's own unsigned statement and anchors
         nothing.
 
-        A subject bundle also carries ``skeleton``: every *other* entry's position
-        and hashes (``seq, at, kind, subject, content_hash, prev_hash, link_hash``;
-        no evidence body, no actor), so a verifier can recompute the whole chain
-        and see a removed head, middle or tail entry of the subject. Ledgers are
-        per account, so the skeleton shows the same account's other subjects and
+        ``skeleton=True`` (subject bundles only; **off by default**) adds ``skeleton``:
+        every *other* entry's position and hashes (``seq, at, kind, subject,
+        content_hash, prev_hash, link_hash``; no evidence body, no actor), so a
+        verifier can recompute the whole chain and see a removed head, middle or
+        tail entry of the subject. The link hash covers the plain subject, so the
+        skeleton cannot be salted or hashed: **it discloses the id, kind and time
+        of every other subject in the ledger** (another case, an undisclosed
+        incident) to whoever receives the file. That is why it is only on request.
+        Ledgers are per account, so it shows the same account's other subjects and
         nothing of another tenant. Past :data:`MAX_SKELETON_ENTRIES` it is omitted
-        and ``skeleton_truncated`` is true.
+        and ``skeleton_truncated`` is true. Without it a subject bundle is
+        internally consistent but its completeness cannot be checked.
         """
         ok, problems = self.verify_chain()
         if not ok:
@@ -566,16 +572,16 @@ class EvidenceLedger:
                 rows = db.execute(
                     "SELECT * FROM chain WHERE subject = ? ORDER BY seq", (subject,)
                 ).fetchall()
-            skeleton: list[dict[str, Any]] = []
+            skeleton_items: list[dict[str, Any]] = []
             truncated = False
-            if subject is not None:
+            if subject is not None and skeleton:
                 others = int(db.execute(
                     "SELECT COUNT(*) FROM chain WHERE subject != ?", (subject,)
                 ).fetchone()[0])
                 if others > MAX_SKELETON_ENTRIES:
                     truncated = True
                 else:
-                    skeleton = [
+                    skeleton_items = [
                         {k: r[k] for k in ("seq", "at", "kind", "subject",
                                            "content_hash", "prev_hash", "link_hash")}
                         for r in db.execute(
@@ -615,8 +621,8 @@ class EvidenceLedger:
                 for e in entries
             ],
         }
-        if subject is not None:
-            bundle["skeleton"] = skeleton
+        if subject is not None and skeleton:
+            bundle["skeleton"] = skeleton_items
             bundle["skeleton_truncated"] = truncated
         if anchor is not None:
             bundle["anchor"] = dict(anchor)

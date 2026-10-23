@@ -9,7 +9,10 @@ Without ``--public-key`` the check is internal consistency only and the output
 says, in words, that **completeness was not checked**: a bundle cut short, or
 rebuilt without some entries, looks the same. With the signer's public key (from a
 channel other than the bundle) the bundle's embedded signed anchor is verified and
-the bundle must agree with it; a bundle that cannot be shown to is exit 1.
+the bundle must agree with it; a bundle that cannot be shown to is exit 1. If records
+follow the signed head the headline says how many no signature covers (it is never
+"anchored"), an anchor that signs an empty ledger anchors nothing, and a one-case
+export made without the opt-in skeleton cannot be shown complete.
 ``--attestations LOG`` adds the verifier's *own* copy of the signed attestations,
 which is the only thing that guards against a party that holds both the ledger and
 the signing key.

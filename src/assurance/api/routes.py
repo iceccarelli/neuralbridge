@@ -352,16 +352,24 @@ def get_case_export(
                     "attestation log as the bundle's `anchor`, so a verifier holding "
                     "the signer's public key can check the bundle is complete up to "
                     "it. Set false to export without one."),
+    skeleton: bool = Query(
+        False,
+        description="true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file."),
 ) -> dict[str, Any]:
     """Refuses if the chain does not verify.
 
-    The bundle also carries a ``skeleton`` of the account's other entries
-    (positions and hashes only, no evidence) so removed entries are visible, and
-    the account's newest signed attestation as ``anchor`` when it has one (409
-    ``anchor_contradicts_ledger`` if that does not match this ledger). Records
-    after the anchor are covered by no signature; for a hosted ledger the
-    service holds the signing key too, so the anchor helps only a customer who
-    kept their own copy of a signed attestation.
+    ``?skeleton=true`` adds a ``skeleton`` of the account's other entries
+    (positions, kinds, subjects, times and hashes; no evidence) so removed entries
+    are visible. It is **off by default**: the link hash covers the plain subject,
+    so the skeleton cannot be anonymised and names every other case and incident of
+    the account. Without it the bundle is internally consistent but its
+    completeness cannot be checked. The bundle carries the account's newest
+    *server-read* signed attestation as ``anchor`` when it has one (409
+    ``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed
+    heads the customer declared are never embedded). Records after the anchor are
+    covered by no signature; for a hosted ledger the service holds the signing key
+    too, so the anchor helps only a customer who kept their own copy of a signed
+    attestation.
 
     An export is the moment records leave the system and start being relied on.
     For a paying account it is gated on the plan's ``export`` entitlement as
@@ -383,7 +391,8 @@ def get_case_export(
         )
     signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=case_id, anchor=signed_anchor)
+        bundle = register.ledger.export(
+            subject=case_id, anchor=signed_anchor, skeleton=skeleton)
     except AnchorContradictsLedgerError as exc:
         raise anchor_contradiction(exc) from exc
     except Exception as exc:  # noqa: BLE001
