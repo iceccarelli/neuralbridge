@@ -58,6 +58,16 @@ from assurance.watch.config import WatchConfig
 from assurance.watch.runner import run_watch
 
 from .support import plan_dict, write_export
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
 
 T0 = datetime(2026, 9, 14, 6, tzinfo=UTC)
 WEEK = timedelta(days=7)

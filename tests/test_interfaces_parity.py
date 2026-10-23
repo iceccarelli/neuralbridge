@@ -30,6 +30,16 @@ from .interfaces_scenario import (
     run_cli,
     run_sequence,
 )
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
 
 live_api = fx.live_api
 

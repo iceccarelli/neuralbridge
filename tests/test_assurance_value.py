@@ -6,6 +6,8 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
+
 from assurance.change.model import CaseStatus
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.manifest import HashSource
@@ -13,6 +15,7 @@ from assurance.machinery.record import record_manifest
 from assurance.value.cli import main as value_main
 from assurance.value.position import assess_position, render_text
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_change import (
     LATER,
     drive,
@@ -22,6 +25,15 @@ from .test_assurance_change import (
 )
 from .test_assurance_change import ledger as ledger  # noqa: F401  (fixture)
 from .test_assurance_change import store as store  # noqa: F401  (fixture)
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
 
 NOW = datetime(2026, 10, 22, tzinfo=UTC)
 

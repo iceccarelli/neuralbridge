@@ -37,6 +37,19 @@ from assurance.machine.trace import (
 )
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """This module pins the OTHER inputs of the tier floor (figure bases, limits review,
+    dates, coverage). The trace's declared provenance now caps every tier at community
+    (``provenance_trust.py``), which would hide every one of them, so these tests assume
+    a verified recorder attestation, as a future signer would provide. The cap itself is
+    pinned in ``test_assurance_machine_provenance.py``, which does not assume it."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
+
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 DATASHEET = FigureBasis(kind="datasheet", reference="scanner rev D")
 
@@ -148,7 +161,7 @@ class TestProvenance:
                                      provenance=Provenance.SIMULATION))
         assert any("simulated" in c for c in r.checks_skipped)
 
-    def test_a_field_trace_against_measured_figures_reaches_validated(self):
+    def test_an_attested_field_trace_against_measured_figures_reaches_validated(self):
         r = verify(envelope(), trace([sample(i) for i in range(5)]))
         assert r.tier is AssuranceTier.VALIDATED
         assert r.may_claim_physical_behaviour
@@ -617,7 +630,7 @@ class TestVerifyEndpoint:
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["verdict"] == "pass"
-        assert d["tier"] == "validated"
+        assert d["tier"] == "validated"      # under the attestation double (see above)
         assert d["evidence"]["content_hash"]
 
     def test_an_oversized_trace_is_refused_with_the_local_alternative(

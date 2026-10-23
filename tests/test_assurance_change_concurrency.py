@@ -34,6 +34,7 @@ from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.record import record_manifest
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_change import (
     BOT,
     REVIEWER,
@@ -46,6 +47,15 @@ from .test_assurance_change import (
     item,
     manifest,
 )
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
 
 
 @pytest.fixture(autouse=True)
