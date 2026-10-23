@@ -47,10 +47,19 @@ export type ObservationRow = {
   last_successful_manifest_age_hours?: number | null;
   last_successful_manifest_relayed?: boolean | null;
   last_attempt_manifest_age_hours?: number | null;
+  // Optional: older servers omit them. Every observation is a statement by the holder of the account's
+  // key ("client_reported"); received_at is the server's clock, and a skew flag means the reporter's
+  // observed_at and that receipt differ by more than the server's bound (24 h).
+  basis?: 'client_reported';
+  last_successful_observed_at_declared?: string | null;
+  last_successful_received_at?: string | null;
+  last_successful_observed_at_skew?: boolean | null;
+  last_attempt_observed_at_skew?: boolean | null;
 };
 
 export type Observations = {
   as_of: string;
+  basis?: 'client_reported';
   default_cadence_hours: number;
   reporting: boolean;
   machines: ObservationRow[];
