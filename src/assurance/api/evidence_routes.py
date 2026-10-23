@@ -9,7 +9,10 @@ It recognises three kinds of file and calls the same domain functions the
 offline CLI uses:
 
 * a **ledger export** (``GET /v1/cases/{id}/export``, ``assurance evidence
-  export``) — :func:`assurance.evidence.verify_export.verify_export`;
+  export``) — :func:`assurance.evidence.verify_export.verify_export`. Whether
+  anything was *removed* is checked only against the export's signed ``anchor``
+  and only with the caller's public key; otherwise ``completeness`` is
+  ``not_checked`` and the answer says so;
 * a **machine verification bundle** — :func:`assurance.machine.bundle.
   check_bundle_data` (the same rules as the offline CLI, including the parts of
   the file the seal does not cover);
@@ -211,7 +214,8 @@ def _result(
     assumptions: list[str] | None = None, not_checked: list[str] | None = None,
     tier: dict[str, Any] | None = None, head: dict[str, Any] | None = None,
     summary: str = "", signatures_verified: bool | None = None,
-    level: str | None = None,
+    level: str | None = None, completeness: str | None = None,
+    anchor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _clip({
         "kind": kind,
@@ -223,6 +227,10 @@ def _result(
         # Machine bundles only: rejected | integrity_only | reproduced. This route
         # never receives the originals, so a bundle here is never "reproduced".
         "level": level,
+        # Ledger exports only: anchored | not_checked | failed. "anchored" means a
+        # signed head, under the key the caller supplied, agrees with the bundle.
+        "completeness": completeness,
+        "anchor": anchor,
         "scope": scope,
         "entries": entries,
         "verified": verified or [],
@@ -246,29 +254,49 @@ def _unreadable(problem: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # ledger export
 # ---------------------------------------------------------------------------
-def _ledger(doc: dict[str, Any]) -> dict[str, Any]:
-    if len(doc["entries"]) > MAX_ENTRIES:
+def _ledger(doc: dict[str, Any], key_pem: str = "") -> dict[str, Any]:
+    skeleton = doc.get("skeleton")
+    held = len(doc["entries"]) + (len(skeleton) if isinstance(skeleton, list) else 0)
+    if held > MAX_ENTRIES:
         return _result(
             "ledger_export", "unsupported",
-            problems=[f"{len(doc['entries']):,} entries is more than the {MAX_ENTRIES:,} "
-                      "this page checks; nothing was checked."],
+            problems=[f"{held:,} entries (with the skeleton) is more than the "
+                      f"{MAX_ENTRIES:,} this page checks; nothing was checked."],
             not_checked=["verify a file this large offline: "
                          "`python -m assurance evidence verify <file>`."],
             summary="Too many entries to check here.")
-    v = verify_export(doc)
+    trusted = None
+    if key_pem.strip():
+        try:
+            trusted = VerifyingKey.from_pem(key_pem)
+        except SigningKeyError as exc:
+            return _result(
+                "ledger_export", "unreadable",
+                problems=[f"the public key supplied cannot be read: {exc}"],
+                not_checked=["nothing was checked: completeness needs a readable key."],
+                summary="The public key could not be read, so nothing was checked.")
+    v = verify_export(doc, trusted_key=trusted)
     not_checked = list(v.checks_skipped)
-    if v.head is not None:
+    assumptions = [*v.assumptions, _SERVICE_ASSUMPTION]
+    if v.head is not None and v.completeness != "anchored":
         not_checked.append(
             f"to show this is the operator's ledger, compare its head (seq "
             f"{v.head['seq']}, link hash {v.head['link_hash']}) with a signed head "
             "attestation obtained from a channel the operator does not control. "
             "The attestation inside this file is unsigned: it is the exporter's "
             "own statement.")
-    if v.ok:
+    if v.ok and v.completeness == "anchored":
         outcome = "no_inconsistency_found"
         summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
-                   "found a problem. That is internal consistency only; read "
-                   "'Not checked'.")
+                   "found a problem, and the bundle agrees with a signed head under "
+                   "the key you supplied (nothing up to it was removed). Records "
+                   "after that head are unsigned; read 'Not checked'.")
+    elif v.ok:
+        outcome = "no_inconsistency_found"
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   "found a problem. That is internal consistency only, and "
+                   "COMPLETENESS WAS NOT CHECKED: entries cut from the end, or a "
+                   "rebuilt chain, would look the same. Read 'Not checked'.")
     else:
         outcome = "inconsistent"
         summary = (f"{len(v.problems)} problem(s) found in {v.entries} readable "
@@ -277,8 +305,8 @@ def _ledger(doc: dict[str, Any]) -> dict[str, Any]:
     return _result(
         "ledger_export", outcome, scope=v.scope, entries=v.entries,
         verified=list(v.verified), problems=list(v.problems),
-        assumptions=[*v.assumptions, _SERVICE_ASSUMPTION], not_checked=not_checked,
-        head=v.head, summary=summary)
+        assumptions=assumptions, not_checked=not_checked,
+        head=v.head, summary=summary, completeness=v.completeness, anchor=v.anchor)
 
 
 # ---------------------------------------------------------------------------
@@ -564,7 +592,7 @@ def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
 
     try:
         if isinstance(doc, dict) and isinstance(doc.get("entries"), list):
-            return _ledger(doc)
+            return _ledger(doc, public_key_pem)
         if isinstance(doc, dict) and (doc.get("schema") == BUNDLE_SCHEMA
                                       or ("evidence" in doc and "envelope" in doc)):
             return _machine(doc)
@@ -662,8 +690,9 @@ async def verify_evidence(
     accounts: Annotated[AccountStore, Depends(get_accounts)],
     x_issuer_public_key: Annotated[str | None, Header(
         description="the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to "
-                    "check attestation signatures. Never a private key: those are "
-                    "refused unread.")] = None,
+                    "check attestation signatures, or a ledger export's signed anchor "
+                    "(which is what shows nothing was removed). Never a private key: "
+                    "those are refused unread.")] = None,
 ) -> dict[str, Any]:
     """The body is the raw JSON file itself (not wrapped in anything).
 
