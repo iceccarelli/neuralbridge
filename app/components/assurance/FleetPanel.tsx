@@ -50,7 +50,12 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
   return (
     <td data-testid="obs-source" data-source="client-reported-watch" data-completeness={status}>
       <strong>Source: client-reported Watch observation</strong> (<code>assurance watch push</code>), not independent
-      telemetry.
+      telemetry. Basis: <code data-testid="obs-basis">{row.basis ?? 'client_reported'}</code>.
+      <br />
+      <span className="aw-note" data-testid="obs-replay-limit">
+        A compromised Watch holding your account key can replay a genuine earlier manifest as a look at the machine;
+        this service cannot tell that from an honest look at an unchanged machine.
+      </span>
       <br />
       Completeness of the latest attempt: {completeness}.
       <br />
@@ -58,7 +63,11 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
         Manifest age at the last successful look: {hours(row.last_successful_manifest_age_hours)}
         {row.last_successful_manifest_relayed ? ' (a manifest sealed earlier and relayed; its age is shown, not judged)' : ''}
         . At the latest attempt: {hours(row.last_attempt_manifest_age_hours)}. Dates and cadence are declared by the
-        reporting client.
+        reporting client; the server&rsquo;s own receipt time is{' '}
+        {row.last_successful_received_at ?? 'not stated'}, and a look is never counted as later than it.
+        {row.last_successful_observed_at_skew
+          ? ' The reported look date differs from the server receipt by more than 24 h (observed_at_skew); read the date with care.'
+          : ''}
       </span>
       {row.last_attempt_detail && (
         <>
