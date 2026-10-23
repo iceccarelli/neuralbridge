@@ -44,6 +44,7 @@ from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
 
 from .model import CaseStatus, ChangeAssuranceCase, TriggerType
@@ -61,6 +62,7 @@ __all__ = [
     "assess_drift",
     "assess_intervention",
     "assess_recorded_intervention",
+    "blocked_reason",
     "case_id_for",
     "claim",
     "decide",
@@ -924,16 +926,15 @@ def advance(store: CaseStore, case_id: str, *, actor: Actor) -> ChangeAssuranceC
 
 
 def _validated_or_better(tier: str) -> bool:
-    """Is a verification's recorded tier at least ``validated``?
+    """Is a verification's tier at least ``validated``?
 
-    The ladder is :class:`~assurance.core.tiers.AssuranceTier`. A tier name it
-    does not contain (empty, misspelt, from a newer build) is not known to be
-    enough, so it is not.
+    One ladder with the staleness engine that reads the tier out of the ledger
+    (:func:`assurance.machinery.staleness.tier_reaches_validated`): a name it does
+    not contain (empty, misspelt, from a newer build) is not known to be enough.
+    The tier itself is already capped there to what its sealed provenance basis
+    supports, so a legacy ``validated`` body arrives as ``community``.
     """
-    try:
-        return AssuranceTier(tier).rank >= AssuranceTier.VALIDATED.rank
-    except ValueError:
-        return False
+    return tier_reaches_validated(tier)
 
 
 def _trace_filed_elsewhere(ledger: object, verification_hash: str, key: str) -> str:
@@ -975,15 +976,18 @@ def reverify(
       found cannot be evidence about it;
     * that bundle passed every check the function declares (a newer bundle for one
       check plus an older one for another is not enough);
-    * that bundle's tier is at least ``validated``: evidence from a simulation or
-      a datasheet (``community``, ``profile``) is about a model or a figure and
-      never clears an entry, only a person's waiver does; and
+    * that bundle's tier is at least ``validated``. No verification this package
+      can produce reaches ``validated`` until a verifiable recorder attestation
+      exists (a trace's declared provenance is capped at ``community``), so today a
+      re-verification clears nothing by itself and only a person's waiver (a
+      ``decider`` operator) closes an entry; and
     * :func:`assess_coverage` reads the function ``current``.
 
     An entry that fails any of them stays required, with the reason in
-    ``evidence_current`` (``below_validated:<tier>`` for weak evidence, which the
-    case also records in ``checks_skipped``). A function the manifest no longer declares cannot be
-    shown current and stays required too.
+    ``evidence_current`` (``below_validated:<tier>`` for evidence under the floor, which the
+    case also records in ``checks_skipped``); :func:`blocked_reason` turns that into
+    the machine-readable answer the interfaces return beside the case. A function the
+    manifest no longer declares cannot be shown current and stays required too.
     """
     case = _require(store, case_id)
     if case.status is not CaseStatus.AWAITING_REVERIFICATION:
@@ -1078,9 +1082,9 @@ def reverify(
         elif not fn.verified_by or not set(fn.verified_by) <= set(record.checks_verified):
             evidence_current[entry] = "no_new_evidence"
         elif not _validated_or_better(record.tier):
-            # Current on a simulated trace or a datasheet figure is a statement
-            # about a model or a number, not about the machine. It does not clear
-            # the entry; only a person can accept it, by waiving it.
+            # Current on evidence under the 'validated' floor is a statement about
+            # a recorded file, not a demonstration on the machine. It does not
+            # clear the entry; only a person can accept it, by waiving it.
             evidence_current[entry] = f"below_validated:{record.tier or 'unknown'}"
             weak.append(entry)
         else:
@@ -1092,9 +1096,10 @@ def reverify(
         skipped = _union(skipped, [
             f"{', '.join(weak)}: the re-verification evidence "
             f"{record.content_hash[:12]} is at tier {record.tier or 'unknown'!r}, below "
-            "'validated' (it describes a model or a figure, not the physical machine), "
-            "so it did not clear the entry. Re-verify on the machine, or have a person "
-            "waive it."])
+            "'validated', so it did not clear the entry. No verification this package "
+            "can produce reaches 'validated' until a verifiable recorder attestation "
+            "exists (declared provenance is capped at 'community'); a decider "
+            "operator may waive the entry."])
 
     if still_required:
         nxt = CaseStatus.AWAITING_REVERIFICATION
@@ -1119,6 +1124,60 @@ def reverify(
               "still not current"
               + (f" ({len(weak)} on evidence below 'validated': tier "
                  f"{record.tier or 'unknown'!r})" if weak else ""))
+
+
+#: The tier a verification must reach to clear a required re-verification.
+REVERIFICATION_TIER_FLOOR = AssuranceTier.VALIDATED.value
+
+_BELOW = "below_validated:"
+
+
+def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
+    """Why a case is still waiting on re-verification, or ``None`` when nothing is.
+
+    Read from the case's own sealed ``evidence_current``, so the HTTP API, the CLI
+    and the MCP tool give the same answer for the same case. ``reverify`` answers
+    "ok" whenever the submission was *accepted*; this says whether it *cleared*
+    anything. ``code`` is ``below_validated_tier`` when a required entry was read
+    current on evidence under the floor (today that is every verification this
+    package produces from a trace) and ``evidence_not_current`` when coverage did
+    not read the entry current at all. ``entries`` maps each outstanding entry to
+    the reason recorded for it.
+    """
+    if not case.required_reverifications:
+        return None
+    entries = {e: case.evidence_current.get(e, "not_yet_re_verified")
+               for e in case.required_reverifications}
+    tiers = sorted({r[len(_BELOW):] or "unknown" for r in entries.values()
+                    if r.startswith(_BELOW)})
+    waive = ("A decider operator may waive an entry (waive-reverification); that is "
+             "recorded as a waiver and never reads as current.")
+    if tiers:
+        return {
+            "code": "below_validated_tier",
+            "tier_floor": REVERIFICATION_TIER_FLOOR,
+            "tiers": tiers,
+            "entries": entries,
+            "message": (
+                f"Not cleared: the evidence is at tier {', '.join(repr(t) for t in tiers)}, "
+                f"below the {REVERIFICATION_TIER_FLOOR!r} floor a re-verification must "
+                "reach to clear an entry. No verification this package can produce "
+                "reaches 'validated' until a verifiable recorder attestation exists "
+                "(a trace's declared provenance is capped at 'community'), so a "
+                "recorder attestation is needed to clear it by evidence. " + waive),
+        }
+    return {
+        "code": "evidence_not_current",
+        "tier_floor": REVERIFICATION_TIER_FLOOR,
+        "tiers": [],
+        "entries": entries,
+        "message": (
+            "Not cleared: the cited verification does not show these entries current "
+            "after the change (see the reason per entry). Submit a verification, "
+            "sealed after the case opened, that ran every check each function "
+            f"declares; even then it must reach {REVERIFICATION_TIER_FLOOR!r}, which "
+            "needs a verifiable recorder attestation. " + waive),
+    }
 
 
 def waive_reverification(

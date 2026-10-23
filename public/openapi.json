@@ -4245,7 +4245,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Supply fresh verification evidence",
+        "summary": "Supply fresh verification evidence; blocked_reason says why a case still waits",
         "tags": [
           "change"
         ]
