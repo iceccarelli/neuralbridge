@@ -195,21 +195,38 @@ caller:
   that already existed when the change was found cannot be evidence about it;
 - **that one bundle** passed **every** check the function declares (a newer
   bundle for one check plus an older one for another does not clear it);
-- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). A
-  simulation trace is `community` and a datasheet figure `profile`: they are
-  about a model or a number, not the machine, so they never clear an entry. It
-  stays required, reads `below_validated:<tier>` in `evidence_current`, the case
-  records why in `checks_skipped`, and only a person's waiver closes it. **Today
-  that includes every verification this package produces from a trace:** a
-  trace's provenance is declared by whoever files it and nothing signs a recording,
-  so the engine caps it at `community` (`deploy/assurance/MACHINE.md`, "Why a
-  declared provenance does not count"). Until a recorder attestation can be
-  verified, a re-verification clears no entry by itself and a person waives it; and
+- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). Below
+  it, the entry stays required, reads `below_validated:<tier>` in
+  `evidence_current`, the case records why in `checks_skipped`, and only a person's
+  waiver closes it. **Today that is every verification this package produces from a
+  trace:** a trace's provenance is declared by whoever files it and nothing signs a
+  recording, so the engine caps it at `community` (`deploy/assurance/MACHINE.md`,
+  "Why a declared provenance does not count"). No verification this package can
+  produce reaches `validated` until a verifiable recorder attestation exists, so a
+  re-verification clears no entry by itself and a `decider` operator waives it. The
+  tier is read the way the public bundle checker reads it, not from the stored word:
+  `VerificationRecord.from_ledger` takes a sealed `validated` as `validated` only
+  when the body is engine 5 or later **and** its `provenance_basis` is in
+  `provenance_trust.LIFTING_BASES` (empty today); an engine-4 `validated` bundle
+  already in a ledger, or a resealed body, is read as `community`; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,
 `no_new_evidence`, `below_validated:<tier>`, …) in `evidence_current`. A function the manifest no longer
 declares stays required.
+
+**A 200 from `reverify` means the submission was recorded, not that it cleared
+anything.** While the case still awaits re-verification the result carries a
+`blocked_reason` (`assurance.change.service.blocked_reason`, derived from the case's
+own `evidence_current`): `code` is `below_validated_tier` (the evidence is under the
+`validated` floor, which is every trace-derived verification today) or
+`evidence_not_current` (coverage does not read the entry current at all), with
+`tier_floor`, the `entries` and the reason per entry, and a sentence saying that a
+recorder attestation is what would lift the cap and that a `decider` operator may
+waive. The HTTP route returns it beside the case, the CLI prints `blocked: <code>`
+and the sentence (the exit code stays 0: the submission was accepted), the MCP tool
+relays the route's body, and `/assurance` shows the same sentence under the case. The
+key is absent when nothing is blocked.
 
 **Every function an advisory reaches needs evidence** — not only those that were
 current until now. A function that was never verified or was already stale is
@@ -320,6 +337,7 @@ GET  /v1/change/cases/{case_id}/replay             the case rebuilt from the led
 POST /v1/change/cases/{case_id}/claim              {owner, actor}
 POST /v1/change/cases/{case_id}/advance            {actor}
 POST /v1/change/cases/{case_id}/reverification     {manifest, verification_content_hash, actor}
+        # 200 = recorded. `blocked_reason` is present while the case still waits (see above).
 POST /v1/change/cases/{case_id}/resolve-decision   {decision, resolution, actor}
 POST /v1/change/cases/{case_id}/waive-reverification {entry, reason, actor}
 POST /v1/change/cases/{case_id}/decision           {disposition, reason, actor}

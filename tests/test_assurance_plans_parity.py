@@ -269,3 +269,48 @@ class TestSizingCalculatorIsDerivedFromTheGates:
         text = SIZING_TSX.read_text(encoding="utf-8")
         assert not re.search(r"\b20/day\b|\b50\b|per-case cap", text)
         assert "CASES_NOT_METERED" in text and "FALLBACK_PLANS" in text
+
+
+# ---------------------------------------------------------------------------
+# the change-assurance claim must not outrun what the code can do
+# ---------------------------------------------------------------------------
+class TestTheChangeAssuranceClaimIsHonest:
+    """No verification this package produces reaches ``validated`` (declared trace
+    provenance is capped at ``community``), so a case with a required re-verification
+    closes only through a named person's waiver. Copy that says a customer can
+    "re-verify and close" a case promises a path that does not exist."""
+
+    _OVERCLAIM = re.compile(
+        r"re-verify,? (and|&)? ?close|re-verify, close|claim, re-verify", re.I)
+
+    def _change_line(self, includes: list[str]) -> str:
+        (line,) = [i for i in includes if i.startswith("Change-assurance cases")]
+        return line
+
+    def test_the_cell_plan_does_not_promise_closing_by_re_verification(self, backend):
+        line = self._change_line(backend["cell"]["includes"])
+        assert not self._OVERCLAIM.search(line), line
+        assert "waiver" in line and "validated" in line
+
+    def test_the_page_copy_says_the_same_thing(self):
+        ts = {p["tier"]: p for p in _fallback_plans()}["cell"]
+        line = self._change_line(ts["includes"])
+        assert not self._OVERCLAIM.search(line), line
+        assert "waiver" in line and "validated" in line
+
+    @pytest.mark.parametrize("relative", [
+        "app/lib/routes.ts", "app/components/SizingCalculator.tsx", "app/page.tsx",
+        "docs/pricing.md", "docs/claims-registry.md", "README.md", "public/llms.txt",
+    ])
+    def test_no_public_copy_still_says_a_case_is_re_verified_and_closed(self, relative):
+        path = ROOT / relative
+        if not path.exists():
+            pytest.skip(f"{relative} not present")
+        match = self._OVERCLAIM.search(path.read_text(encoding="utf-8"))
+        assert match is None, f"{relative} says {match.group(0)!r}"
+
+    def test_the_registry_row_states_the_waiver_path(self):
+        text = (ROOT / "docs" / "claims-registry.md").read_text(encoding="utf-8")
+        row = next(r for r in _enforced_section(text).splitlines()
+                   if r.startswith("| Change-assurance cases"))
+        assert "waive" in row and "validated" in row
