@@ -159,13 +159,53 @@ more than two million samples (the hosted endpoint caps far lower).
 The tier on a bundle is the floor of every input the verdict rests on:
 
 - a **simulated** trace caps at `community` and can never claim physical behaviour
+- a trace whose provenance (`bench` / `field`) is only **declared by whoever filed
+  it** caps at `community` and cannot claim physical behaviour either (engine 5;
+  see below). Today every trace is in this case
 - a **datasheet** stopping distance or sensor uncertainty caps at `profile`
 - an **unverified** transcription of a body-region limits table caps at `community`
-- only a **field or bench** trace against **measured** figures reaches `validated`
+- `validated` therefore needs, in addition to **measured** figures, a provenance
+  that something other than the filer vouches for: a signed recorder attestation,
+  checked against a trust list you hold. **No such attestation exists in this
+  package yet, so no machine verification produced by it is `validated` today.**
 - `certified` is not reachable from a file at all
 
 You cannot pass a tier in. That is deliberate: a tier a caller can assert is a
 tier that will be asserted.
+
+### Why a declared provenance does not count
+
+`provenance` and `source_system` are fields in the trace the caller files. Nothing
+here signs a recording or binds it to a recorder, so a file that says `field` and
+`source_system: "python range() generator on my laptop"` is indistinguishable, to
+this engine, from one cut from a controller. Until a recorder attestation can be
+verified, the declared provenance is **recorded and sealed but not believed**: the
+bundle carries `provenance_basis: declared_by_filer` (in the sealed body, the API
+result as `provenance_basis` / `provenance_note`, the JSON of `machine verify`, and
+the stated limitations), the tier is capped at `community`, and
+`may_claim_physical_behaviour` is false. What a pass still tells you is that the
+recorded samples stayed inside the declared envelope; not that they came from a
+machine.
+
+The extension point is `machine/provenance_trust.py`, built like the limits review:
+`assess_provenance` decides the ceiling, `LIFTING_BASES` (empty) names the bases
+that may lift it, and the bundle checker believes a `validated` tier only for a
+basis in that set. A signer would be added there, with a trust list the verifier
+holds and the filer cannot supply; it does not exist yet.
+
+**Engine 5 and older bundles.** Engines 4 and earlier let a declared `field` or
+`bench` trace reach `validated`. `machine check` and `POST /v1/machine/bundle/check`
+now reject a bundle that records `validated` without a lifting `provenance_basis`
+(an engine 4 bundle has none), and a re-run under engine 5 of an engine 4 bundle is
+refused as a different engine. Re-verify the original inputs with engine 5 to get a
+bundle that says what it can support.
+
+**Who is recorded as the actor.** `POST /v1/machine/verify` attributes the sealed
+bundle to the credential, as `/v1/change` does: a key issued to an individual
+operator seals that operator (`attribution=authenticated_operator`), and a request
+naming anyone else is refused 403 `actor_mismatch`; an account-level key records
+the name sent as declared (`attribution=declared_by_account_key`); open mode and the
+CLI keep the label given. This is attribution to a credential, not identity-proofing.
 
 ## Body-region limits
 
@@ -187,7 +227,9 @@ is the schema. Fill it from your licensed copy, then:
   bytes; it does not show the values are correct. `machine check --limits-trust`
   re-assesses a sealed review under *your* trust list; without one the validated
   tier is not reproduced. Bundles from engine 3 or earlier may have reached
-  `validated` on the free-text claim alone and are flagged as such.
+  `validated` on the free-text claim alone and are flagged as such. (Independently
+  of this, a trace's declared provenance now caps every tier at `community`, above;
+  a limits review is necessary for `validated` and no longer sufficient.)
 - pin the table into the envelope via `pfl_limits_hash` so a later silent edit
   makes the mismatch visible instead of changing the answer
 
@@ -212,7 +254,7 @@ Four separate things are checked and the caller is told which failed:
 1. the sealed evidence hashes to the hash it carries — catches post-seal edits
 2. the claim is coherent on its own: the verdict agrees with the check outcomes, a
    violated check lists its violations, a simulation does not hold a `validated`
-   tier, no file holds `certified`, the validation state and confidence are
+   tier, no `validated` tier rests on a provenance the filer merely declared, no file holds `certified`, the validation state and confidence are
    consistent with the verdict and tier, and **the envelope and result printed
    beside the seal repeat what the seal says** (the seal covers the evidence only;
    those two blocks used to be unchecked). The seal is a content hash, not a

@@ -40,6 +40,19 @@ from assurance.machine.ssm import separation_required
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """This module pins the OTHER inputs of the tier floor (figure bases, limits review,
+    dates, coverage). The trace's declared provenance now caps every tier at community
+    (``provenance_trust.py``), which would hide every one of them, so these tests assume
+    a verified recorder attestation, as a future signer would provide. The cap itself is
+    pinned in ``test_assurance_machine_provenance.py``, which does not assume it."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
+
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 DATASHEET = FigureBasis(kind="datasheet", reference="scanner rev D")
 ESTIMATED = FigureBasis(kind="estimated", reference="calc note 7")

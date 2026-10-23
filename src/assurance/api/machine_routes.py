@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from assurance.api.change_routes import _actor as bound_actor
 from assurance.api.deps import (
     Anyone,
     Machine,
@@ -37,7 +38,6 @@ from assurance.api.deps import (
 )
 from assurance.billing.accounts import AccountStore, Principal
 from assurance.core.errors import AssuranceError
-from assurance.core.evidence import Actor
 from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
@@ -247,6 +247,11 @@ async def verify_run(
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     """Compare what the machine did against what its manufacturer declared."""
+    # The sealed actor follows the credential, as on /v1/change: an operator key
+    # attributes to that operator and a different `actor` is refused; an account key
+    # is recorded as declared; open mode keeps the declared label.
+    actor = bound_actor(body.actor, body.role, principal, named=True)
+
     try:
         envelope = SafetyEnvelope.from_dict(body.envelope)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
@@ -279,7 +284,7 @@ async def verify_run(
 
     bundle = build_bundle(
         envelope, trace,
-        actor=Actor(identifier=body.actor, role=body.role, kind="person"),
+        actor=actor,
         limits=limits,
         limits_reviews=body.limits_reviews,
         review_trust=_server_review_trust(),
@@ -295,6 +300,10 @@ async def verify_run(
     payload["tier"] = bundle.tier.value
     payload["may_claim_physical_behaviour"] = \
         bundle.result.may_claim_physical_behaviour
+    # Why the tier is what it is: a provenance the filer declared never lifts it.
+    payload["provenance_basis"] = bundle.result.provenance_basis
+    payload["provenance_note"] = (bundle.result.provenance_assessment or {}).get(
+        "explanation", "")
     return payload
 
 
@@ -392,6 +401,7 @@ async def check_bundle(
         },
         "recorded_verdict": recorded.get("verdict"),
         "recorded_tier": recorded.get("tier"),
+        "recorded_provenance_basis": recorded.get("provenance_basis"),
         # What the sealed bundle says about the review of its limits table (status
         # and explanation); whether THIS check accepted it is `checked.limits_review`.
         "recorded_limits_review": _review_summary(recorded.get("limits_review")),
