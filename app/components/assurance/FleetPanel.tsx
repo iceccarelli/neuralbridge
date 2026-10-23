@@ -27,6 +27,36 @@ function hours(h: number | null | undefined): string {
 
 // Where the record behind a machine's row comes from, how complete the look was and how far it can
 // be trusted. All of it is the customer's own report: no field here is independent telemetry.
+// How the last successful look became current. Labelled, never hidden: the service cannot tell a
+// manifest planted in the same report from the honest first push, so it says which it was.
+function relayBasisText(row: ObservationRow | undefined): string {
+  if (!row) return '';
+  const atReceipt = row.last_successful_manifest_age_at_receipt_hours;
+  const receiptAge =
+    row.last_successful_manifest_age_exceeds_window_at_receipt === true && typeof atReceipt === 'number'
+      ? ` The manifest was already ${Math.round(atReceipt)} h old when the server received it, past the freshness window.`
+      : '';
+  switch (row.last_successful_relay_basis) {
+    case 'planted_in_same_report':
+      return (
+        'Freshness basis: PLANTED IN THE SAME REPORT. The manifest this look relies on was first received in the same ' +
+        'report that relayed it. An honest first push looks exactly like this, and so does a fabricated one; read the ' +
+        'freshness as asserted by the reporter.' +
+        receiptAge
+      );
+    case 'held_from_earlier_report':
+      return `Freshness basis: relayed from a manifest this account already held from an earlier report (asserted by the reporter, not proof of a look).${receiptAge}`;
+    case 'same_configuration_held':
+      return `Freshness basis: relayed from a different manifest of the same configuration this account already holds (asserted by the reporter, not proof of a look).${receiptAge}`;
+    case 'relayed_basis_unrecorded':
+      return `Freshness basis: relayed; the record does not say on what basis.${receiptAge}`;
+    case 'unrelayed':
+      return `Freshness basis: the look rests on its own manifest; no relay.${receiptAge}`;
+    default:
+      return 'Freshness basis: not stated.';
+  }
+}
+
 function SourceCell({ row }: { row: ObservationRow | undefined }) {
   if (!row || !row.reported) {
     return (
@@ -53,8 +83,13 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
       telemetry. Basis: <code data-testid="obs-basis">{row.basis ?? 'client_reported'}</code>.
       <br />
       <span className="aw-note" data-testid="obs-replay-limit">
-        A compromised Watch holding your account key can replay a genuine earlier manifest as a look at the machine;
-        this service cannot tell that from an honest look at an unchanged machine.
+        Anyone holding your account key can fabricate a current-looking observation (an old manifest in one entry,
+        relayed as current in the next); this service cannot tell that from an honest look at an unchanged machine. It
+        records when it received each report and labels how a look became current.
+      </span>
+      <br />
+      <span className="aw-note" data-testid="obs-relay-basis" data-relay-basis={row.last_successful_relay_basis ?? ''}>
+        {relayBasisText(row)}
       </span>
       <br />
       Completeness of the latest attempt: {completeness}.
