@@ -5,15 +5,15 @@ ledger's operator is not. A hosted service that held both the ledger and the
 key would satisfy nothing — whoever can rewrite the records could re-sign them,
 which is precisely the decoration that module refuses to be.
 
-So the hosted product does the opposite of what is convenient. **The ledger
-never leaves the customer's premises.** They compute their own head, which
-requires no trust in anybody, and send three numbers: how many records, which
-sequence, which link hash. The service signs *that*, records it in an
-append-only log belonging to that account, and refuses the same three cases the
-local signer refuses — a shorter ledger, a head that has moved backwards, a
-previously signed position that now resolves differently.
+So the counter-signature is built for a ledger **the customer holds**, and does
+the opposite of what is convenient. They compute their own head, which requires
+no trust in anybody, and send three numbers: how many records, which sequence,
+which link hash. The service signs *that*, records it in an append-only log
+belonging to that account, and refuses the same three cases the local signer
+refuses — a shorter ledger, a head that has moved backwards, a previously signed
+position that now resolves differently.
 
-What this buys, precisely:
+What this buys for a customer-held ledger, precisely:
 
 * The customer's own administrator cannot rewind, because the removed records
   were counted in a statement signed by a key nobody at the customer holds.
@@ -21,6 +21,15 @@ What this buys, precisely:
   never had it. All it ever saw was a hash.
 * Neither party can quietly change the story, because each holds a copy of a
   log that chains to itself.
+
+**A hosted per-account ledger is different, and weaker.** A ledger this service
+holds for an account (the register, the change cases) sits beside the signing key
+and the attestation log. Whoever controls that deployment could rewind the ledger
+and sign the shorter head, so the ``anchor`` an export embeds from this log
+protects only a customer who **keeps their own copy** of a signed attestation
+(this endpoint's response, or ``GET /v1/ledger/attest/log``) and checks later
+exports against it (``assurance evidence verify --public-key ... --attestations``).
+Records appended after the latest attestation are covered by no signature.
 
 The basis of every attestation made here is ``declared_by_holder`` and that
 value is inside the signed bytes. The service did not see the chain verify. It
@@ -53,7 +62,7 @@ from assurance.attest.attestation import (
 from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
 from assurance.billing.accounts import AccountStore, Principal
 
-__all__ = ["attest_router"]
+__all__ = ["anchor_contradiction", "attest_router", "latest_anchor"]
 
 attest_router = APIRouter(prefix="/v1/ledger/attest", tags=["attestation"])
 
@@ -109,6 +118,43 @@ def _log_for(principal: Principal) -> AttestationLog:
     root = Path(os.environ.get(_LOGS_ENV, "attestations"))
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in principal.subject)
     return AttestationLog(root / f"{safe}.jsonl")
+
+
+def latest_anchor(principal: Principal) -> dict[str, Any] | None:
+    """The newest signed attestation in this account's own log, or ``None``.
+
+    What an export embeds as its ``anchor``. Only ever this account's log
+    (:func:`_log_for` is keyed by the principal), so one tenant's attestation can
+    never ride in another's bundle. A damaged log is a 500 finding, not a silently
+    unanchored export.
+    """
+    try:
+        record = _log_for(principal).last()
+    except AttestationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "attestation_log_damaged", "finding": str(exc)},
+        ) from exc
+    return record.to_dict() if record is not None else None
+
+
+def anchor_contradiction(exc: Exception) -> HTTPException:
+    """The 409 for an export whose account anchor does not match the ledger.
+
+    A finding, not a fault: the ledger is shorter than, or differs from, what the
+    account's attestation log signed for -- or the log describes a different
+    ledger (a customer-held one), in which case ``?anchor=false`` exports without it.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "anchor_contradicts_ledger",
+            "finding": str(exc),
+            "remedy": "If this account's attestation log is for a ledger held "
+                      "elsewhere, export with ?anchor=false. Otherwise preserve the "
+                      "ledger and the attestation log as they are.",
+        },
+    )
 
 
 class AttestIn(BaseModel):

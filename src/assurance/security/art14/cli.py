@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ...core.errors import AssuranceError
 from ...core.evidence import Actor
 from ...core.identity import format_utc, parse_utc, utc_now
 from ...evidence.ledger import EvidenceLedger
@@ -265,7 +266,16 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def cmd_export(args: argparse.Namespace) -> int:
     register = _register(args)
-    bundle = register.ledger.export(subject=args.case_id)
+    anchor = None
+    try:
+        if args.attestations:
+            # Signing needs the Ed25519 dependency; exporting without an anchor does not.
+            from ...attest.attestation import AttestationLog
+            anchor = AttestationLog(args.attestations).require_last().to_dict()
+        bundle = register.ledger.export(subject=args.case_id, anchor=anchor)
+    except AssuranceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if not bundle["entries"]:
         print(f"error: no case {args.case_id!r}.", file=sys.stderr)
         return 2
@@ -273,6 +283,12 @@ def cmd_export(args: argparse.Namespace) -> int:
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
         print(f"exported {len(bundle['entries'])} records to {args.output}")
+        if anchor:
+            print(f"  anchored to attestation {anchor['sequence']} (seq {anchor['head_seq']}); "
+                  "records after it are covered by no signature")
+        else:
+            print("  not anchored: nothing in this file shows nothing was removed. "
+                  "Export with --attestations <log> and verify with --public-key.")
     else:
         print(text)
     return 0
@@ -371,6 +387,10 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("export", help="export a verifiable bundle")
     e.add_argument("--case", dest="case_id", default=None)
     e.add_argument("-o", "--output")
+    e.add_argument("--attestations", type=Path, default=None, metavar="LOG",
+                   help="embed the newest signed head attestation in this log "
+                        "(`assurance attest sign`) as the bundle's anchor; refuses "
+                        "if it contradicts the ledger")
     e.set_defaults(func=cmd_export)
 
     return parser

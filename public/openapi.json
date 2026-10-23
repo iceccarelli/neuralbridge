@@ -2673,7 +2673,7 @@
     },
     "/v1/cases/{case_id}/export": {
       "get": {
-        "description": "Refuses if the chain does not verify.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
+        "description": "Refuses if the chain does not verify.\n\nThe bundle also carries a ``skeleton`` of the account's other entries\n(positions and hashes only, no evidence) so removed entries are visible, and\nthe account's newest signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger). Records\nafter the anchor are covered by no signature; for a hosted ledger the\nservice holds the signing key too, so the anchor helps only a customer who\nkept their own copy of a signed attestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
         "operationId": "get_case_export_v1_cases__case_id__export_get",
         "parameters": [
           {
@@ -2683,6 +2683,18 @@
             "schema": {
               "title": "Case Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
+            "in": "query",
+            "name": "anchor",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
+              "title": "Anchor",
+              "type": "boolean"
             }
           },
           {
@@ -3818,7 +3830,7 @@
     },
     "/v1/change/cases/{case_id}/export": {
       "get": {
-        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.",
+        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.\nAlso carries a ``skeleton`` of the account's other entries (positions and\nhashes only) so removed entries are visible, and the account's newest signed\nattestation as ``anchor`` when it has one; 409 ``anchor_contradicts_ledger``\nif that attestation does not match this ledger. Records after the anchor are\ncovered by no signature.",
         "operationId": "export_case_v1_change_cases__case_id__export_get",
         "parameters": [
           {
@@ -3828,6 +3840,18 @@
             "schema": {
               "title": "Case Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
+            "in": "query",
+            "name": "anchor",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "embed the newest signed attestation from this account's own attestation log as the bundle's `anchor`, so a verifier holding the signer's public key can check the bundle is complete up to it. Set false to export without one.",
+              "title": "Anchor",
+              "type": "boolean"
             }
           },
           {
@@ -4596,7 +4620,7 @@
         "operationId": "verify_evidence_v1_evidence_verify_post",
         "parameters": [
           {
-            "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+            "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures, or a ledger export's signed anchor (which is what shows nothing was removed). Never a private key: those are refused unread.",
             "in": "header",
             "name": "x-issuer-public-key",
             "required": false,
@@ -4609,7 +4633,7 @@
                   "type": "null"
                 }
               ],
-              "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures. Never a private key: those are refused unread.",
+              "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures, or a ledger export's signed anchor (which is what shows nothing was removed). Never a private key: those are refused unread.",
               "title": "X-Issuer-Public-Key"
             }
           },
