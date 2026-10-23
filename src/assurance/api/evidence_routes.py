@@ -11,8 +11,10 @@ offline CLI uses:
 * a **ledger export** (``GET /v1/cases/{id}/export``, ``assurance evidence
   export``) — :func:`assurance.evidence.verify_export.verify_export`. Whether
   anything was *removed* is checked only against the export's signed ``anchor``
-  and only with the caller's public key; otherwise ``completeness`` is
-  ``not_checked`` and the answer says so;
+  and only with the caller's public key, and only an anchor over at least one
+  record counts; otherwise ``completeness`` is ``not_checked`` and the answer says
+  so. ``anchored_partial`` means records follow the signed head and no signature
+  covers them;
 * a **machine verification bundle** — :func:`assurance.machine.bundle.
   check_bundle_data` (the same rules as the offline CLI, including the parts of
   the file the seal does not cover);
@@ -227,8 +229,10 @@ def _result(
         # Machine bundles only: rejected | integrity_only | reproduced. This route
         # never receives the originals, so a bundle here is never "reproduced".
         "level": level,
-        # Ledger exports only: anchored | not_checked | failed. "anchored" means a
-        # signed head, under the key the caller supplied, agrees with the bundle.
+        # Ledger exports only: anchored | anchored_partial | not_checked | failed.
+        # "anchored" means a signed head over at least one record, under the key the
+        # caller supplied, agrees with the bundle and is its last record;
+        # "anchored_partial" means records follow that head and no signature covers them.
         "completeness": completeness,
         "anchor": anchor,
         "scope": scope,
@@ -289,8 +293,16 @@ def _ledger(doc: dict[str, Any], key_pem: str = "") -> dict[str, Any]:
         outcome = "no_inconsistency_found"
         summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
                    "found a problem, and the bundle agrees with a signed head under "
-                   "the key you supplied (nothing up to it was removed). Records "
-                   "after that head are unsigned; read 'Not checked'.")
+                   "the key you supplied, which signs its last record. Anything "
+                   "appended since is unsigned; read 'Not checked'.")
+    elif v.ok and v.completeness == "anchored_partial" and v.anchor:
+        outcome = "no_inconsistency_found"
+        after = v.anchor["records_after_anchor"]
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   f"found a problem. A signed head (seq {v.anchor['head_seq']}, under "
+                   "the key you supplied) matches the bundle only up to that record: "
+                   f"{after} record(s) after it are covered by no signature, so a "
+                   "cut of those would look the same. Read 'Not checked'.")
     elif v.ok:
         outcome = "no_inconsistency_found"
         summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "

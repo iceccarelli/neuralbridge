@@ -50,11 +50,14 @@ export default function VerifyPage() {
                 <p>
                   A case or whole-ledger export. Checked: every record&apos;s evidence still matches its hash, no
                   field was added outside the seal, the actor column agrees with the sealed actor, each link matches
-                  its own content and its predecessor, and a one-case export chains to its skeleton of the
-                  ledger&apos;s other entries with nothing missing. <strong>Not shown unless you paste the signer&apos;s
+                  its own content and its predecessor, and a one-case export exported with its optional skeleton
+                  (which names every other entry&apos;s id, kind and time, so it is only there if the exporter asked
+                  for it) chains to it with nothing missing. <strong>Not shown unless you paste the signer&apos;s
                   public key:</strong> that nothing was cut from the end or removed &mdash; a bundle can be rebuilt
                   consistently, so without a signed head the result says <em>completeness not checked</em>. With the
-                  key, an export that is shorter than, or disagrees with, its signed head is rejected. Never shown:
+                  key, an export that is shorter than, or disagrees with, its signed head is rejected; a head that
+                  signs an empty ledger anchors nothing; and records after the head are counted as covered by no
+                  signature, never as complete. Never shown:
                   records after that head, that the signer did not also control the ledger (a hosted ledger&apos;s
                   operator holds both, so keep your own copy of a signed attestation), or who the named people are.
                 </p>
