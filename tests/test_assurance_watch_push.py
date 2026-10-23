@@ -460,6 +460,39 @@ class TestWhatArrives:
         good = machine_row(client, cell[1], KEY_0412)
         assert good["stale"] is False and good["last_attempt_succeeded"] is True
 
+    def test_a_first_push_of_a_configuration_older_than_the_window_sends_the_look_that_sealed_it(
+            self, plant, local, config, client, cell, hosted_key, monkeypatch, capsys):
+        """manifest_relayed is honoured only for a manifest the account already holds, so the
+        local look at which the manifest was sealed travels beside the relayed re-confirmation."""
+        run_watch(config, local, now=now() - timedelta(days=30))
+        run_watch(config, local, now=now() - timedelta(hours=1))
+        plan = push.build_plan(config, local)
+        entries = [m for b in plan.bodies for m in b["machines"] if m["serial"] == "0412"]
+        assert [(e["manifest_relayed"], e["status"]) for e in entries] == [
+            (False, "changed"), (True, "unchanged")]
+        assert entries[0]["manifest"] == entries[1]["manifest"]
+        assert entries[0]["observed_at"] < entries[1]["observed_at"]
+        rec = use(monkeypatch, Recorder(client))
+        code, out, _ = cli(capsys, plant, hosted_key)
+        assert code == 0
+        row = machine_row(client, cell[1], KEY_0412)
+        assert row["stale"] is False and row["last_successful_manifest_relayed"] is True
+        # pushing again records nothing new: the anchor is already held
+        code, out, _ = cli(capsys, plant, hosted_key)
+        assert code == 0
+        again = json.loads(rec.requests[-1][1])
+        assert {m["serial"] for m in again["machines"]} == set(SERIALS)
+
+    def test_a_relayed_entry_with_no_local_look_to_anchor_it_is_not_made_current(
+            self, plant, local, config, client, cell, hosted_key, monkeypatch, capsys):
+        run_watch(config, local, now=now() - timedelta(days=30))
+        run_watch(config, local, now=now() - timedelta(hours=1))
+        monkeypatch.setattr(push, "_anchor_entry", lambda *a, **k: None)
+        use(monkeypatch, Recorder(client))
+        code, out, _ = cli(capsys, plant, hosted_key)
+        assert code == 1 and "relayed_manifest_not_held" in out
+        assert KEY_0412 not in [m["machine"] for m in observations(client, cell[1])["machines"]]
+
     def test_a_machine_blind_from_its_first_run_is_refused_and_says_why_not_shown_as_a_ghost(
             self, plant, local, config, client, cell, hosted_key, monkeypatch, capsys):
         shutil.rmtree(plant / "0602")
