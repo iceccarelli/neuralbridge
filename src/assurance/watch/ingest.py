@@ -92,6 +92,7 @@ __all__ = [
     "MachineResult",
     "NOT_A_LOOK_REASON",
     "RELAYED_NOT_HELD_REASON",
+    "RELAY_BASES",
     "ReportResult",
     "ingest_report",
     "lock_path",
@@ -171,6 +172,21 @@ def _ingest_lock(ledger: EvidenceLedger) -> Iterator[None]:
     finally:
         thread_lock.release()
 
+#: How a counted observation's freshness was obtained, recorded on the observation and
+#: shown on every surface. None of these is a proof that anybody looked.
+#:
+#: ``unrelayed``                no relay mark was honoured (including a fresh manifest).
+#: ``held_from_earlier_report`` the exact manifest was already in the ledger before this report.
+#: ``planted_in_same_report``   the exact manifest was first received earlier in THIS report.
+#:                              An honest ``watch push`` anchor + relayed pair has this shape
+#:                              on its first push, and so does a fabricated one.
+#: ``same_configuration_held``  not the held manifest, but one of the configuration the
+#:                              ledger's current baseline already holds.
+RELAY_BASES = (
+    "unrelayed", "held_from_earlier_report", "planted_in_same_report",
+    "same_configuration_held",
+)
+
 LIMITATIONS: tuple[str, ...] = (
     "These are observations reported by the holder of this account's key "
     "(basis: client_reported). The hosted service cannot collect from a machine, "
@@ -183,9 +199,14 @@ LIMITATIONS: tuple[str, ...] = (
     "warning, not a refusal: a Watch that was offline and then pushed is late, "
     "not necessarily lying.",
     "manifest_relayed is a claim. It is honoured only when this account's ledger "
-    "already holds that exact manifest for that machine; otherwise an old manifest "
-    "is not a current look. That cannot tell a genuine earlier manifest replayed "
-    "from an honest look at an unchanged machine.",
+    "holds that exact manifest for that machine, or holds a manifest of the same "
+    "configuration as its current baseline; otherwise an old manifest is not a "
+    "current look. That is a check on a client that does not also send the "
+    "planting entry, not a barrier: a reporter holding the key can send an old "
+    "manifest in one entry and relay it in the next, and the legitimate watch "
+    "push anchor looks the same. Such an observation is recorded and labelled "
+    "with how it became current (relay_basis: unrelayed, held_from_earlier_report, "
+    "planted_in_same_report or same_configuration_held), never refused.",
     "Only the manifest (item ids, hashes, versions, provenance) is recorded. No "
     "export file, program or firmware reached this service, so nothing here can "
     "be re-derived from the machine.",
@@ -229,6 +250,12 @@ class MachineResult:
     observed_at_skew: bool = False
     #: The relayed mark was accepted: this account already held that exact manifest.
     manifest_relayed_verified: bool = False
+    #: How the freshness was obtained; one of :data:`RELAY_BASES`.
+    relay_basis: str = "unrelayed"
+    #: The honoured manifest was first received earlier in this same report.
+    manifest_first_received_in_this_report: bool = False
+    #: Hours between the manifest's ``taken_at`` and the server's receipt of the report.
+    manifest_age_at_receipt_hours: float | None = None
     case_id: str = ""
     case_status: str = ""
     case_opened: bool = False
@@ -250,6 +277,10 @@ class MachineResult:
             "received_at": self.received_at,
             "observed_at_skew": self.observed_at_skew,
             "manifest_relayed_verified": self.manifest_relayed_verified,
+            "relay_basis": self.relay_basis,
+            "manifest_first_received_in_this_report":
+                self.manifest_first_received_in_this_report,
+            "manifest_age_at_receipt_hours": self.manifest_age_at_receipt_hours,
             "case_id": self.case_id,
             "case_status": self.case_status,
             "case_opened": self.case_opened,
@@ -344,6 +375,7 @@ def _seal_observation(
     manifest_age_hours: float | None = None, manifest_relayed: bool = False,
     received_at: datetime | None = None, manifest_relayed_claimed: bool = False,
     manifest_age_at_receipt_hours: float | None = None,
+    relay_basis: str = "unrelayed", window_hours: float | None = None,
 ) -> Evidence:
     """Seal a ``watch.observation`` in exactly the shape ``run_watch`` seals.
 
@@ -382,6 +414,17 @@ def _seal_observation(
             # True only when this ledger already held that exact manifest.
             "manifest_relayed": manifest_relayed,
             "manifest_relayed_claimed": manifest_relayed_claimed,
+            # How the freshness was obtained (see RELAY_BASES). Recorded at receipt, so
+            # a reader sees a manifest first received in this very report as such.
+            "relay_basis": relay_basis,
+            "manifest_first_received_in_this_report":
+                relay_basis == "planted_in_same_report",
+            # True when the manifest was already older than the freshness window at
+            # the server's receipt. Recorded, not gating: an honest unchanged machine
+            # relays a manifest of exactly this age.
+            "manifest_age_exceeds_window_at_receipt": (
+                manifest_age_at_receipt_hours is not None and window_hours is not None
+                and manifest_age_at_receipt_hours > window_hours),
             # The server's clock, beside the reporter-declared observed_at.
             "received_at": format_utc(received_at) if received_at else "",
             "observed_at_skew": (observed_at_skewed(observed_at, received_at)
@@ -427,6 +470,13 @@ class _Account:
     known: set[str]             # machines with a manifest or an observation
     max_age_hours: float | None
     new: int = 0
+    #: ``(machine key, manifest content hash)`` written by this very report, so a later
+    #: entry relaying one of them can be labelled ``planted_in_same_report``.
+    received_here: set[tuple[str, str]] = field(default_factory=set)
+
+    def record(self, ledger: EvidenceLedger, manifest: SafetyManifest, *, actor: Actor) -> None:
+        record_manifest(ledger, manifest, actor=actor)
+        self.received_here.add((manifest.machine.key, manifest.content_hash()))
 
     def resolve_failed(self, serial: str, declared_key: str) -> tuple[str, str, str]:
         """``(key, reason, detail)``: the enrolled machine a failed look belongs to.
@@ -566,12 +616,17 @@ def _ingest_entry(
                            "already recorded.", stamp)
 
     relayed_claimed = entry.get("manifest_relayed") is True
-    #: The claim is honoured only for a manifest this account's own ledger already
-    #: holds, byte for byte (content hash includes taken_at and the manifest id), so
-    #: a relayed mark cannot be put on a manifest the account has never been given.
-    relayed = relayed_claimed and manifest is not None and any(
-        held_manifest.content_hash() == manifest.content_hash()
-        for held_manifest in manifests_from_ledger(ledger, key))
+    relay_basis = "unrelayed"
+    if relayed_claimed and manifest is not None:
+        relay_basis = _relay_basis(ledger, account, key, manifest)
+    #: A relay mark is honoured on exactly one of two grounds, and the basis is
+    #: recorded: this account's ledger holds that exact manifest (content hash, which
+    #: includes taken_at and the manifest id), or it holds a manifest of the same
+    #: configuration as the machine's current baseline. Neither is proof of a look: a
+    #: reporter holding the key can send an old manifest in one entry and relay it in
+    #: the next, and the honest `watch push` anchor has the same shape.
+    relayed = relay_basis != "unrelayed"
+    window = _freshness_window_hours(account.max_age_hours)
     if manifest is not None:
         # Before staleness and before the relayed flag: no age makes a declaration
         # a look at the machine. `configuration_hash` ignores `source` and
@@ -589,13 +644,11 @@ def _ingest_entry(
                 observed_at=observed_at, stamp=stamp, manifest_age=manifest_age,
                 received_at=now)
     if manifest is not None and manifest_age is not None and receipt_age is not None:
-        window = _freshness_window_hours(account.max_age_hours)
         # A relayed manifest is one the reporter says it sealed earlier for the
         # configuration this look re-confirmed (the `watch push` case: an
         # unchanged machine's manifest is the one from when it last changed). The
-        # claim exempts the look from the age check only if this account's ledger
-        # already holds that exact manifest; its age is recorded and shown either
-        # way.
+        # claim exempts the look from the age check only on the grounds above; its
+        # age, and how it was obtained, are recorded and shown either way.
         if manifest_age > window and not relayed:
             reason = RELAYED_NOT_HELD_REASON if relayed_claimed else "manifest_stale"
             why = _stale_detail(key, manifest, manifest_age, window)
@@ -669,7 +722,7 @@ def _ingest_entry(
         note = (f"first observation held for this machine; configuration "
                 f"{observed_hash[:12]}, {len(manifest.items)} item(s). A baseline, "
                 "not a finding.")
-        record_manifest(ledger, manifest, actor=actor)
+        account.record(ledger, manifest, actor=actor)
     else:
         try:
             divergence = compare(baseline, manifest)
@@ -708,7 +761,7 @@ def _ingest_entry(
         if case is not None:
             case_id, case_status, case_opened = case.case_id, case.status.value, not existed
         record_divergence(ledger, divergence, actor=actor)
-        record_manifest(ledger, manifest, actor=actor)
+        account.record(ledger, manifest, actor=actor)
 
     _seal_observation(
         ledger, key=key, serial=serial, status=recorded, reported=status,
@@ -717,7 +770,8 @@ def _ingest_entry(
         digest=digest, actor=actor, cadence=account.max_age_hours,
         manifest_age_hours=manifest_age, manifest_relayed=relayed,
         received_at=now, manifest_relayed_claimed=relayed_claimed,
-        manifest_age_at_receipt_hours=receipt_age)
+        manifest_age_at_receipt_hours=receipt_age,
+        relay_basis=relay_basis, window_hours=window)
     if key not in account.known:
         account.new += 1
     account.known.add(key)
@@ -730,7 +784,9 @@ def _ingest_entry(
                        "comparison is what is recorded)"),
         counts_as_observation=True, manifest_age_hours=manifest_age,
         received_at=format_utc(now), observed_at_skew=observed_at_skewed(observed_at, now),
-        manifest_relayed_verified=relayed,
+        manifest_relayed_verified=relayed, relay_basis=relay_basis,
+        manifest_first_received_in_this_report=relay_basis == "planted_in_same_report",
+        manifest_age_at_receipt_hours=receipt_age,
         case_id=case_id, case_status=case_status, case_opened=case_opened)
 
 
@@ -743,6 +799,29 @@ NOT_A_LOOK_REASON = "manifest_not_a_look_at_the_machine"
 #: freshness window that this account's ledger does not hold. Recorded as an
 #: attempt for an enrolled machine, refused for one the account has not enrolled.
 RELAYED_NOT_HELD_REASON = "relayed_manifest_not_held"
+
+
+def _relay_basis(
+    ledger: EvidenceLedger, account: _Account, key: str, manifest: SafetyManifest,
+) -> str:
+    """Why a ``manifest_relayed`` claim is honoured; ``unrelayed`` when it is not.
+
+    The exact manifest already held: ``held_from_earlier_report``, or
+    ``planted_in_same_report`` when an earlier entry of this very report wrote it.
+    Otherwise a manifest of the same configuration as the machine's current baseline
+    (an enrolled machine's newer manifest of an unchanged configuration), so that a
+    configuration this account already holds is not stranded stale. A different
+    configuration, or a machine with no manifest held, is never honoured.
+    """
+    history = manifests_from_ledger(ledger, key)
+    content = manifest.content_hash()
+    if any(held.content_hash() == content for held in history):
+        return ("planted_in_same_report" if (key, content) in account.received_here
+                else "held_from_earlier_report")
+    baseline = last_complete_manifest(history)
+    if baseline is not None and baseline.configuration_hash() == manifest.configuration_hash():
+        return "same_configuration_held"
+    return "unrelayed"
 
 
 def _not_a_look(manifest: SafetyManifest) -> str:

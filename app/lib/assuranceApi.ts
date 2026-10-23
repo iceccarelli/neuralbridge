@@ -46,6 +46,20 @@ export type ObservationRow = {
   // as reported by the client, and whether the client marked it as sealed earlier and relayed.
   last_successful_manifest_age_hours?: number | null;
   last_successful_manifest_relayed?: boolean | null;
+  // Optional: how the freshness of the last successful look was obtained. Treat planted_in_same_report
+  // (the manifest was first received in the very report that relayed it), and a relayed look whose
+  // manifest was already older than the window at the server's receipt, as freshness the reporter
+  // asserted. The service labels these; it does not refuse them.
+  last_successful_relay_basis?:
+    | 'unrelayed'
+    | 'held_from_earlier_report'
+    | 'planted_in_same_report'
+    | 'same_configuration_held'
+    | 'relayed_basis_unrecorded'
+    | null;
+  last_successful_manifest_first_received_in_this_report?: boolean | null;
+  last_successful_manifest_age_at_receipt_hours?: number | null;
+  last_successful_manifest_age_exceeds_window_at_receipt?: boolean | null;
   last_attempt_manifest_age_hours?: number | null;
   // Optional: older servers omit them. Every observation is a statement by the holder of the account's
   // key ("client_reported"); received_at is the server's clock, and a skew flag means the reporter's

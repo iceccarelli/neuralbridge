@@ -76,12 +76,16 @@ OBSERVED_AT_SKEW_BOUND = timedelta(hours=24)
 #: Said on every surface that shows an observation. It is the limit of this channel,
 #: not a defect that a later check removes.
 REPLAY_LIMIT = (
-    "A compromised Watch, or anyone holding this account's key, can replay a genuine "
-    "earlier manifest of a machine as a look at it. The service cannot tell that from "
-    "an honest look at a machine that did not change, and this channel does not "
-    "prevent it. The checks here refuse a manifest this account has never held being "
-    "presented as a relayed one, and never let a reporter's clock make a look "
-    "fresher than the server's receipt of it; neither is proof that anyone looked."
+    "Anyone holding this account's key, or a compromised Watch, can fabricate a "
+    "current-looking observation: send an old (or invented) manifest in one entry, "
+    "then relay it as current in the next. The service cannot tell that from the "
+    "honest watch push, which sends the same pair, and this channel does not prevent "
+    "it. What the service provides is a record: the time it received each report "
+    "(received_at), a flag where that differs from the reporter's date, the label "
+    "client_reported on everything, a relay_basis on each look saying how it became "
+    "current (planted_in_same_report marks a manifest first received in the same "
+    "report), and the refusal of a naive replay: an old manifest relayed with no "
+    "earlier or same-report entry holding it. None of that is proof that anyone looked."
 )
 
 
@@ -161,6 +165,21 @@ def _manifest_age_of(body: dict[str, Any]) -> float | None:
     return float(value)
 
 
+def _receipt_age_of(body: dict[str, Any]) -> float | None:
+    value = body.get("manifest_age_at_receipt_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _relay_basis_of(body: dict[str, Any]) -> str:
+    """The recorded basis; ``relayed_basis_unrecorded`` for an older relayed record."""
+    value = body.get("relay_basis")
+    if isinstance(value, str) and value:
+        return value
+    return "relayed_basis_unrecorded" if body.get("manifest_relayed") is True else "unrelayed"
+
+
 def _machine_cadence(seen: list[_Seen]) -> tuple[float, bool]:
     """The cadence that judges one machine, and whether any watch declared one.
 
@@ -195,6 +214,11 @@ class _Seen:
     #: (hosted reports only; None where the record does not carry it).
     manifest_age_hours: float | None = None
     manifest_relayed: bool = False
+    #: How the freshness was obtained (``ingest.RELAY_BASES``); empty on a record that
+    #: predates the field. And the manifest's age at the server's receipt.
+    relay_basis: str = ""
+    manifest_age_at_receipt_hours: float | None = None
+    manifest_age_exceeds_window_at_receipt: bool | None = None
     #: The reporter's own ``observed_at`` text, and the server's receipt time.
     declared_at: str = ""
     received_at: str = ""
@@ -226,6 +250,12 @@ def fleet_observations(
             cadence=_cadence_of(body) if observation_succeeded(body) else None,
             manifest_age_hours=_manifest_age_of(body),
             manifest_relayed=body.get("manifest_relayed") is True,
+            relay_basis=_relay_basis_of(body),
+            manifest_age_at_receipt_hours=_receipt_age_of(body),
+            manifest_age_exceeds_window_at_receipt=(
+                body.get("manifest_age_exceeds_window_at_receipt")
+                if isinstance(body.get("manifest_age_exceeds_window_at_receipt"), bool)
+                else None),
             declared_at=str(body.get("observed_at", "")),
             received_at=str(body.get("received_at", "")),
             observed_at_skew=body.get("observed_at_skew") is True,
@@ -293,6 +323,17 @@ def fleet_observations(
                 last_ok.manifest_age_hours if last_ok else None,
             "last_successful_manifest_relayed":
                 last_ok.manifest_relayed if last_ok else None,
+            # How this look became current. `planted_in_same_report` is a manifest first
+            # received in the very report that relayed it; `same_configuration_held` is a
+            # different manifest of the configuration the ledger already holds; an old
+            # manifest (age at receipt past the window) is shown, not hidden.
+            "last_successful_relay_basis": last_ok.relay_basis if last_ok else None,
+            "last_successful_manifest_first_received_in_this_report":
+                (last_ok.relay_basis == "planted_in_same_report") if last_ok else None,
+            "last_successful_manifest_age_at_receipt_hours":
+                last_ok.manifest_age_at_receipt_hours if last_ok else None,
+            "last_successful_manifest_age_exceeds_window_at_receipt":
+                last_ok.manifest_age_exceeds_window_at_receipt if last_ok else None,
             "last_attempt_manifest_age_hours":
                 last_attempt.manifest_age_hours if last_attempt else None,
             "age_hours": age_hours,
@@ -349,13 +390,24 @@ def fleet_observations(
             "reported it; 168 h when none declared one). A cadence is taken only "
             "from a successful look of that machine. A machine never reported is "
             "stale by definition.",
-            "A look whose manifest was taken longer before the look than that same "
-            "cadence window (measured to the look and to the server's receipt, "
-            "whichever is later) is recorded as manifest_stale and does not count, "
-            "unless the reporter marks it as relayed AND this account's ledger "
-            "already holds that exact manifest (its age is then shown, not judged). "
-            "A relayed mark on a manifest this account has never held is not "
-            "accepted. The manifest's own date is declared by the reporting client, "
-            "so this catches an old export sent as new, not a replayed genuine one.",
+            "A look whose manifest was taken longer before the look (observed_at "
+            "minus the manifest's taken_at) than that same cadence window is "
+            "recorded as manifest_stale and does not count, unless the reporter marks "
+            "it as relayed AND this account's ledger holds that exact manifest, or a "
+            "manifest of the same configuration as the machine's current baseline "
+            "(its age is then shown, not judged). The manifest's age at the server's "
+            "receipt is recorded (manifest_age_at_receipt_hours) and shown, but it "
+            "is recorded, not gating: an honest late delivery has an old manifest "
+            "at receipt. The manifest's own date is declared by the reporting "
+            "client, so this catches an old export sent as new, not a replayed or "
+            "fabricated one.",
+            "relay_basis says how a look became current: unrelayed; "
+            "held_from_earlier_report (the exact manifest was in this ledger before "
+            "the report); planted_in_same_report (it was first received earlier in "
+            "the same report, which is the shape of an honest first watch push and "
+            "of a fabricated one alike); same_configuration_held (a different "
+            "manifest of the configuration already held). A reader should treat "
+            "planted_in_same_report, and any relayed look whose manifest age at "
+            "receipt exceeds the window, as freshness the reporter asserted.",
         ],
     }
