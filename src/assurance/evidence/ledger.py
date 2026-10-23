@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,13 +44,21 @@ from ..core.identity import content_hash_of, format_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
-__all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "EvidenceLedger", "LedgerEntry"]
+__all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
+           "AnchorContradictsLedgerError", "EvidenceLedger", "LedgerEntry"]
 
 LEDGER_SCHEMA_VERSION = 1
 
 #: ``prev_hash`` of the first record. A fixed, published constant so that an
 #: empty chain and a truncated chain are distinguishable.
 GENESIS = "0" * 64
+
+#: Most other-subject entries a subject bundle carries as a skeleton (seq, at, kind,
+#: subject and three hashes: about 400 bytes each, so about 2 MB at the cap, inside
+#: the 4 MiB the public verify path accepts alongside the subject's own evidence).
+#: Past it the skeleton is left out and the bundle says so with
+#: ``skeleton_truncated``; completeness is then unchecked, never silently passed.
+MAX_SKELETON_ENTRIES = 5_000
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -72,6 +80,15 @@ CREATE INDEX IF NOT EXISTS chain_by_subject ON chain (subject, seq);
 CREATE INDEX IF NOT EXISTS chain_by_kind    ON chain (kind, seq);
 CREATE INDEX IF NOT EXISTS chain_by_content ON chain (content_hash);
 """
+
+
+class AnchorContradictsLedgerError(LedgerIntegrityError):
+    """A signed anchor offered at export does not match this ledger.
+
+    The ledger is shorter than the anchor signed for, or its link at the signed
+    position differs (or the anchor does not describe a ledger at all). It is
+    the finding the anchor exists to produce, so no bundle is written.
+    """
 
 
 @dataclass(frozen=True)
@@ -502,11 +519,30 @@ class EvidenceLedger:
             source.close()
         return dest
 
-    def export(self, *, subject: str | None = None) -> dict[str, Any]:
+    def export(
+        self, *, subject: str | None = None, anchor: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Export a verifiable bundle, refusing if the chain does not verify.
 
         An export is the moment the records leave the system and start being
         relied upon, so it is the right moment to fail loudly.
+
+        ``anchor`` is a **signed** head attestation (``HeadAttestation.to_dict()``)
+        from the account's attestation log. It is embedded as ``anchor`` so a
+        verifier holding the signer's public key can show the bundle is not shorter
+        than, and agrees with, what was signed. The export cannot check the
+        signature (it has no key) but refuses an anchor that contradicts this very
+        ledger: that is a rewind, and no bundle should paper over it. The
+        ``attestation`` field is the exporter's own unsigned statement and anchors
+        nothing.
+
+        A subject bundle also carries ``skeleton``: every *other* entry's position
+        and hashes (``seq, at, kind, subject, content_hash, prev_hash, link_hash``;
+        no evidence body, no actor), so a verifier can recompute the whole chain
+        and see a removed head, middle or tail entry of the subject. Ledgers are
+        per account, so the skeleton shows the same account's other subjects and
+        nothing of another tenant. Past :data:`MAX_SKELETON_ENTRIES` it is omitted
+        and ``skeleton_truncated`` is true.
         """
         ok, problems = self.verify_chain()
         if not ok:
@@ -514,13 +550,56 @@ class EvidenceLedger:
                 "refusing to export a ledger that does not verify:\n  "
                 + "\n  ".join(problems)
             )
-        entries = self.entries(subject=subject)
-        return {
+        subject = subject or None  # "" is the whole ledger, as the bundle labels it
+        # One read snapshot: the subject's entries, the skeleton and the head must
+        # come from the same state, or a record appended between two reads would
+        # appear in one and be missing from the other.
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            length = int(db.execute("SELECT COUNT(*) FROM chain").fetchone()[0])
+            tail = db.execute(
+                "SELECT seq, link_hash FROM chain ORDER BY seq DESC LIMIT 1").fetchone()
+            if subject is None:
+                rows = db.execute("SELECT * FROM chain ORDER BY seq").fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM chain WHERE subject = ? ORDER BY seq", (subject,)
+                ).fetchall()
+            skeleton: list[dict[str, Any]] = []
+            truncated = False
+            if subject is not None:
+                others = int(db.execute(
+                    "SELECT COUNT(*) FROM chain WHERE subject != ?", (subject,)
+                ).fetchone()[0])
+                if others > MAX_SKELETON_ENTRIES:
+                    truncated = True
+                else:
+                    skeleton = [
+                        {k: r[k] for k in ("seq", "at", "kind", "subject",
+                                           "content_hash", "prev_hash", "link_hash")}
+                        for r in db.execute(
+                            "SELECT seq, at, kind, subject, content_hash, prev_hash, "
+                            "link_hash FROM chain WHERE subject != ? ORDER BY seq",
+                            (subject,))
+                    ]
+            if anchor is not None:
+                self._refuse_contradicting_anchor(db, anchor, length, tail)
+        finally:
+            db.close()
+        entries = [self._row_to_entry(r) for r in rows]
+        bundle: dict[str, Any] = {
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             "exported_at": format_utc(utc_now()),
             "subject": subject or "",
             "chain_verified": True,
-            "attestation": self.head_attestation(),
+            "attestation": {
+                "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+                "length": length,
+                "head_seq": tail["seq"] if tail else 0,
+                "head_link_hash": tail["link_hash"] if tail else GENESIS,
+                "attested_at": format_utc(utc_now()),
+            },
             "entries": [
                 {
                     "seq": e.seq,
@@ -536,3 +615,39 @@ class EvidenceLedger:
                 for e in entries
             ],
         }
+        if subject is not None:
+            bundle["skeleton"] = skeleton
+            bundle["skeleton_truncated"] = truncated
+        if anchor is not None:
+            bundle["anchor"] = dict(anchor)
+        return bundle
+
+    @staticmethod
+    def _refuse_contradicting_anchor(
+        db: sqlite3.Connection, anchor: Mapping[str, Any], length: int,
+        tail: sqlite3.Row | None,
+    ) -> None:
+        """Raise unless this ledger could be the one *anchor* was signed over."""
+        try:
+            a_len, a_seq = int(anchor["ledger_length"]), int(anchor["head_seq"])
+            a_link = str(anchor["head_link_hash"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AnchorContradictsLedgerError(
+                "the anchor is not a head attestation (it lacks ledger_length, "
+                "head_seq or head_link_hash); nothing was exported.") from exc
+        where = f"the anchor (signed at {anchor.get('attested_at', '?')})"
+        if length < a_len or (tail["seq"] if tail else 0) < a_seq:
+            raise AnchorContradictsLedgerError(
+                f"{where} signed for {a_len} record(s) up to seq {a_seq}, but this "
+                f"ledger holds {length}. Records were removed after they were signed "
+                "for, or the anchor belongs to another ledger. Nothing was exported.")
+        if a_seq > 0:
+            row = db.execute(
+                "SELECT link_hash FROM chain WHERE seq = ?", (a_seq,)).fetchone()
+            current = row["link_hash"] if row else ""
+            if current != a_link:
+                raise AnchorContradictsLedgerError(
+                    f"{where} signed seq {a_seq} as {a_link[:12]}, but this ledger "
+                    f"links it as {current[:12] or '(nothing)'}. The history at that "
+                    "position differs from what was signed, or the anchor belongs to "
+                    "another ledger. Nothing was exported.")

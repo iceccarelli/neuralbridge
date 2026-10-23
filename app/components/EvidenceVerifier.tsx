@@ -23,6 +23,9 @@ export type VerifyResult = {
   ok: boolean;
   // Attestation logs only (null otherwise): whether any signature was actually checked.
   signatures_verified: boolean | null;
+  // Ledger exports only (null otherwise): did a signed anchor, under the key supplied,
+  // show nothing was removed? 'not_checked' is the default and is never a pass.
+  completeness?: 'anchored' | 'not_checked' | 'failed' | null;
   scope: string;
   entries: number;
   verified: string[];
@@ -115,7 +118,10 @@ export default function EvidenceVerifier() {
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
 
-  const looksLikeAttestation = /head_link_hash/.test(text) && !/"entries"\s*:/.test(text);
+  // The key box opens for an attestation log, and for a ledger export that carries a
+  // signed anchor (the only thing that can show nothing was removed from it).
+  const looksLikeAttestation =
+    (/head_link_hash/.test(text) && !/"entries"\s*:/.test(text)) || /"anchor"\s*:\s*\{/.test(text);
 
   async function load(file: File) {
     setResult(null);
@@ -246,13 +252,15 @@ export default function EvidenceVerifier() {
 
           <details open={looksLikeAttestation}>
             <summary className="ev-meta" style={{ cursor: 'pointer' }}>
-              Signed attestations only: the issuer&apos;s public key
+              Signed files: the issuer&apos;s public key (attestation logs, and whether a ledger export is complete)
             </summary>
             <p className="ev-note" style={{ margin: '0.5rem 0' }}>
               A signature can only be checked against a public key you got <em>somewhere other than the file</em> —
-              a file carries a key fingerprint, not the key. Without one, only the log&apos;s structure is checked,
-              the signatures are reported as <strong>not verified</strong>, and the result is{' '}
-              <strong>never shown as a pass</strong>. Paste a public key only: a private key is refused and never sent.
+              a file carries a key fingerprint, not the key. Without one, an attestation log&apos;s structure is
+              checked, its signatures are reported as <strong>not verified</strong>, and the result is{' '}
+              <strong>never shown as a pass</strong>. A ledger export is the same: without the key of the signed head
+              it carries, <strong>completeness is reported as not checked</strong> (entries cut from the end, or a
+              rebuilt chain, would look identical). Paste a public key only: a private key is refused and never sent.
             </p>
             <textarea
               className="ev-text"
@@ -307,6 +315,9 @@ export default function EvidenceVerifier() {
                 {result.scope ? ` · ${result.scope}` : ''}
                 {result.signatures_verified === false ? ' · signatures NOT verified' : ''}
                 {result.signatures_verified === true ? ' · signatures verified against the key you supplied' : ''}
+                {result.completeness === 'anchored' ? ' · complete up to a signed head (key you supplied)' : ''}
+                {result.completeness === 'not_checked' ? ' · completeness NOT checked' : ''}
+                {result.completeness === 'failed' ? ' · does not match its signed head' : ''}
                 {result.kind !== 'unknown' && result.entries > 0 ? ` · ${result.entries} record(s)` : ''}
               </p>
               <p className="ev-note">{result.summary}</p>

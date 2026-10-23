@@ -50,10 +50,13 @@ export default function VerifyPage() {
                 <p>
                   A case or whole-ledger export. Checked: every record&apos;s evidence still matches its hash, no
                   field was added outside the seal, the actor column agrees with the sealed actor, each link matches
-                  its own content and its predecessor, and a whole-ledger file starts at genesis with no gaps and
-                  ends at the head it names. <strong>Not shown:</strong> that this is the operator&apos;s ledger
-                  (that needs a signed head attestation), that a one-case export is complete, or who the named
-                  people are.
+                  its own content and its predecessor, and a one-case export chains to its skeleton of the
+                  ledger&apos;s other entries with nothing missing. <strong>Not shown unless you paste the signer&apos;s
+                  public key:</strong> that nothing was cut from the end or removed &mdash; a bundle can be rebuilt
+                  consistently, so without a signed head the result says <em>completeness not checked</em>. With the
+                  key, an export that is shorter than, or disagrees with, its signed head is rejected. Never shown:
+                  records after that head, that the signer did not also control the ledger (a hosted ledger&apos;s
+                  operator holds both, so keep your own copy of a signed attestation), or who the named people are.
                 </p>
               </div>
             </article>
@@ -97,7 +100,8 @@ export default function VerifyPage() {
           <p className="code-panel-label">From a checkout of the source</p>
           <pre className="code-panel">{`git clone ${REPO}.git && cd neuralbridge
 pip install -e '.[assurance-attest]'
-python -m assurance evidence verify export.json                 # ledger export
+python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
+python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head
 python -m assurance machine check bundle.json                   # machine bundle
 python -m assurance attest verify --log attestations.jsonl --public-key issuer.pub`}</pre>
           <p className="hero-panel-note" style={{ maxWidth: '72ch' }}>
