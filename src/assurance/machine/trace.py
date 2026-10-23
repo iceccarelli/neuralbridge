@@ -9,8 +9,12 @@ recorded in a simulator and a trace recorded from the cell on the shop floor
 are the same shape and are worth entirely different things. Conflating them is
 how a validation report comes to assert physical behaviour on the strength of
 a model. :class:`Provenance` carries the distinction into the type system, and
-:attr:`Provenance.tier_ceiling` stops a bundle claiming more than its input
-can support.
+:attr:`Provenance.tier_ceiling` names the most an *independently attested*
+provenance could support.
+
+The provenance is, however, a field the filer writes: nothing in this package signs
+a recording. A declared provenance is therefore recorded but does not lift the tier
+by itself (:mod:`assurance.machine.provenance_trust`).
 """
 
 from __future__ import annotations
@@ -109,7 +113,9 @@ class Provenance(StrEnum):
 
     @property
     def tier_ceiling(self) -> AssuranceTier:
-        """The highest tier a verification over this trace may reach.
+        """The highest tier this provenance could reach **if it were independently
+        attested**. The verification engine does not use it on a declared provenance:
+        see :func:`assurance.machine.provenance_trust.assess_provenance`.
 
         Simulation can never reach VALIDATED: no simulator has ever measured a
         protective stop. CERTIFIED is never reachable from a trace at all — it

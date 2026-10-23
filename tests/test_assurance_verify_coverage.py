@@ -34,6 +34,19 @@ from assurance.machine.verify import (
     verify,
 )
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """This module pins the OTHER inputs of the tier floor (figure bases, limits review,
+    dates, coverage). The trace's declared provenance now caps every tier at community
+    (``provenance_trust.py``), which would hide every one of them, so these tests assume
+    a verified recorder attestation, as a future signer would provide. The cap itself is
+    pinned in ``test_assurance_machine_provenance.py``, which does not assume it."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
+
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 FORMULA_LIMITATION = "formula and constants not verified against a licensed copy"
@@ -95,8 +108,8 @@ def test_the_positive_control_an_honest_covered_trace_still_passes_at_validated(
 
 
 def test_the_engine_version_was_bumped_because_the_semantics_changed():
-    assert ENGINE_VERSION == "4"
-    assert run(envelope(), good()).engine_version == "4"
+    assert ENGINE_VERSION == "5"
+    assert run(envelope(), good()).engine_version == "5"
 
 
 # -- (a) speed limit ------------------------------------------------------

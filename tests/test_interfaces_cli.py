@@ -16,7 +16,17 @@ from assurance.change.cli import main as change_main
 from assurance.change.model import queue_summary
 from assurance.evidence.ledger import EvidenceLedger
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_change import drive, manifest
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
 
 
 def run(*argv) -> int:

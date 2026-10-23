@@ -199,7 +199,12 @@ caller:
   simulation trace is `community` and a datasheet figure `profile`: they are
   about a model or a number, not the machine, so they never clear an entry. It
   stays required, reads `below_validated:<tier>` in `evidence_current`, the case
-  records why in `checks_skipped`, and only a person's waiver closes it; and
+  records why in `checks_skipped`, and only a person's waiver closes it. **Today
+  that includes every verification this package produces from a trace:** a
+  trace's provenance is declared by whoever files it and nothing signs a recording,
+  so the engine caps it at `community` (`deploy/assurance/MACHINE.md`, "Why a
+  declared provenance does not count"). Until a recorder attestation can be
+  verified, a re-verification clears no entry by itself and a person waives it; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,

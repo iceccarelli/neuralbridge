@@ -38,6 +38,7 @@ from assurance.core.evidence import (
 from assurance.core.identity import content_hash_of, format_utc
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine import provenance_trust
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -135,6 +136,11 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         # staleness is computed against this, never against the filing time.
         "trace_started_at": format_utc(trace.started_at),
         "provenance": result.provenance,
+        # Why that provenance is believed: today always "declared_by_filer", which
+        # caps the tier at community. Sealed so a replay and the public checker can
+        # see that a validated tier did not rest on a declared word.
+        "provenance_basis": result.provenance_basis,
+        "provenance_assessment": result.provenance_assessment,
         "engine_version": result.engine_version,
         "limits_hash": limits.content_hash() if limits else "",
         # How the table's review evidence was assessed, with the reviews themselves,
@@ -173,7 +179,7 @@ def _refuse_foreign_result(
     if (result.product, result.product_version) != (envelope.product,
                                                     envelope.product_version):
         mismatches.append("it names a different product or version")
-    ceiling = min(trace.provenance.tier_ceiling, envelope.tier_ceiling)
+    ceiling = min(provenance_trust.assess_provenance(trace).ceiling, envelope.tier_ceiling)
     if result.tier > ceiling:
         mismatches.append(f"it claims tier {result.tier.value!r}, above the "
                           f"{ceiling.value!r} these inputs can support")
@@ -358,7 +364,7 @@ def _coherence_problems(
     The seal is a content hash, not a signature: anyone with this package can
     edit a bundle and recompute it. So the checks here ask whether what the
     bundle says about itself is *possible* — a simulated trace cannot be
-    validated, a certified tier cannot come from a file, a tier cannot exceed the
+    validated, no validated tier can rest on a provenance the filer merely declared, a certified tier cannot come from a file, a tier cannot exceed the
     ceiling of the envelope printed beside it, the checks must be exactly the set
     the engine produces, a violated check must list its violations, the printed
     result must repeat the sealed one — and return ``(problems, limitations,
@@ -451,6 +457,18 @@ def _coherence_problems(
             "simulation can never exceed 'community': it says nothing about how the "
             "hardware behaves."
         )
+    if tier is AssuranceTier.VALIDATED and not _provenance_lifts_tier(body):
+        basis = body.get("provenance_basis")
+        problems.append(
+            f"the bundle records tier 'validated' on a trace whose provenance "
+            f"{provenance!r} is "
+            + (f"only {basis!r}" if isinstance(basis, str)
+               else "recorded with no provenance_basis (an engine 4 or earlier bundle)")
+            + ". A provenance the filer declared cannot lift the tier: nothing signs a "
+            "recording, so a trace is no evidence about the machine that made it, and "
+            "no verified recorder attestation backs this one. (Bundles from engine 4 "
+            "or earlier, which let a declared 'bench' or 'field' reach 'validated', "
+            "are rejected here for the same reason.)")
     if len(problems) == tier_problems:
         verified.append(
             f"the recorded tier {tier_name!r} is one the engine can produce from the "
@@ -505,8 +523,9 @@ def _coherence_problems(
         problems.append("the result block is not an object.")
     else:
         before = len(problems)
-        for key in ("verdict", "tier", "provenance", "envelope_hash", "trace_hash",
-                    "trace_id", "product", "product_version", "engine_version"):
+        for key in ("verdict", "tier", "provenance", "provenance_basis", "envelope_hash",
+                    "trace_hash", "trace_id", "product", "product_version",
+                    "engine_version"):
             if result.get(key) != body.get(key):
                 problems.append(
                     f"the printed result says {key} is {result.get(key)!r}; the sealed "
@@ -832,6 +851,18 @@ def _recorded_reviews(body: dict[str, Any]) -> list[Any]:
 def _review_accepted(body: dict[str, Any]) -> bool:
     rec = body.get("limits_review")
     return isinstance(rec, dict) and rec.get("status") == "accepted"
+
+
+def _provenance_lifts_tier(body: dict[str, Any]) -> bool:
+    """Does the sealed provenance basis let the trace reach ``validated``?
+
+    The counterpart of :func:`_review_accepted` for the trace. Only a basis in
+    ``provenance_trust.LIFTING_BASES`` does, and that set is empty until a recorder
+    attestation can be verified, so a bundle cannot carry ``validated`` from a
+    declared provenance, whatever it claims to have been sealed with.
+    """
+    basis = body.get("provenance_basis")
+    return isinstance(basis, str) and basis in provenance_trust.LIFTING_BASES
 
 
 def _without_assessed_on(body: dict[str, Any]) -> dict[str, Any]:
