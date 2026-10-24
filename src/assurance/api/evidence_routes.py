@@ -410,11 +410,15 @@ def _machine(doc: dict[str, Any], recorder_trust: RecorderTrust | None = None) -
         # What THIS check made of that claim: not_applicable | reproduced (accepted under
         # the recorder trust list the caller supplied) | unverifiable (none supplied: the
         # claim is NOT believed) | not_reproduced (rejected). `believed_tier` is the
-        # recorded tier capped at community unless it was reproduced. Neither says the
-        # recording is physically true: integrity is not recorder authenticity, which
-        # is not physical safety.
+        # recorded tier capped at community unless the check is ok, re-ran the engine on
+        # the original envelope and trace (this route is never given them, so it is
+        # community here) and reproduced the attestation. When the attestation alone was
+        # re-assessed, `reassessment_note` says "attestation re-assessed; checks not
+        # re-run" and no tier is believed. Neither says the recording is physically
+        # true: integrity is not recorder authenticity, which is not physical safety.
         "provenance_reassessed": check.provenance_reassessed,
         "believed_tier": check.believed_tier,
+        "reassessment_note": check.reassessment_note,
         "trace_started_at": body.get("trace_started_at"),
     })
 

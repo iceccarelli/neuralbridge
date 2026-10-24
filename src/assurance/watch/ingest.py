@@ -56,6 +56,7 @@ from assurance.core.evidence import (
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import Divergence, compare
 from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
@@ -524,6 +525,7 @@ class _Account:
 def _ingest_entry(
     ledger: EvidenceLedger, store: CaseStore, entry: Mapping[str, Any], *,
     watch_id: str, run_started_at: str, actor: Actor, now: datetime, account: _Account,
+    recorder_trust: RecorderTrust | None = None,
 ) -> MachineResult:
     serial = str(entry.get("serial", ""))
     status = str(entry.get("status", ""))
@@ -767,7 +769,8 @@ def _ingest_entry(
         existed = store.get(trigger_case) is not None
         case = assess_drift(
             store, divergence, manifest,
-            VerificationRecord.from_ledger(ledger, subject=key),
+            VerificationRecord.from_ledger(ledger, subject=key,
+                                           recorder_trust=recorder_trust),
             interventions_from_ledger(ledger, key), actor=actor)
         if case is not None:
             case_id, case_status, case_opened = case.case_id, case.status.value, not existed
@@ -930,7 +933,7 @@ def recorded_matches(reported: str, recorded: str) -> bool:
 
 def ingest_report(
     ledger: EvidenceLedger, report: Mapping[str, Any], *, actor: Actor,
-    now: datetime | None = None,
+    now: datetime | None = None, recorder_trust: RecorderTrust | None = None,
 ) -> ReportResult:
     """Record every entry of a validated report into ``ledger``, oldest first.
 
@@ -938,6 +941,9 @@ def ingest_report(
     ``api.watch_routes.WatchReportIn``): ``watch_id``, ``run_started_at``,
     optional ``max_age_hours`` / ``verdict`` / ``batch_index`` / ``batch_count``,
     and ``machines``.
+
+    ``recorder_trust`` is the reader's own recorder trust list, applied to the
+    verifications the drift assessment reads (the hosted route always passes one).
     """
     clock = now or utc_now()
     watch_id = str(report["watch_id"])
@@ -966,7 +972,7 @@ def ingest_report(
                 results[i] = _ingest_entry(
                     ledger, store, entries[i], watch_id=watch_id,
                     run_started_at=run_started_at, actor=actor, now=clock,
-                    account=account)
+                    account=account, recorder_trust=recorder_trust)
             except OverflowError as exc:
                 # Date arithmetic on an extreme reporter-supplied timestamp. One
                 # entry's arithmetic failing refuses that entry; it must not abort the

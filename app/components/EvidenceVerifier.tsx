@@ -63,8 +63,13 @@ export type VerifyResult = {
     // recorder trust list you supplied) | unverifiable (none supplied: not believed) |
     // not_reproduced (rejected).
     provenance_reassessed?: 'not_applicable' | 'reproduced' | 'unverifiable' | 'not_reproduced' | null;
-    // The recorded tier, read as community unless the attestation was reproduced under your list.
+    // The recorded tier, read as community unless this check re-ran the engine on the original
+    // envelope and trace and reproduced the whole result AND the attestation was reproduced
+    // under your list. The validator is never given the original trace, so here it is community.
     believed_tier?: string | null;
+    // 'attestation re-assessed; checks not re-run' when the attestation was accepted under your
+    // list but the checks were not re-run: no tier is believed, and this is shown instead.
+    reassessment_note?: string | null;
     trace_started_at?: string | null;
   } | null;
   head: { seq: number; link_hash: string; length: number } | null;
@@ -467,7 +472,18 @@ export default function EvidenceVerifier() {
                       <li data-testid="ev-recorder-reassessed" data-state={result.tier.provenance_reassessed}>
                         Recorder attestation, as this check read it:{' '}
                         <strong>{REASSESSED[result.tier.provenance_reassessed] ?? result.tier.provenance_reassessed}</strong>{' '}
-                        Tier this check believes: <strong>{result.tier.believed_tier ?? 'unknown'}</strong>.
+                        {result.tier.reassessment_note ? (
+                          <>
+                            <strong data-testid="ev-recorder-note">{result.tier.reassessment_note}.</strong>{' '}
+                            The engine was not re-run on the original envelope and trace, so this check
+                            believes no tier above community: a file whose checks were edited and resealed
+                            looks the same from here.
+                          </>
+                        ) : (
+                          <>
+                            Tier this check believes: <strong>{result.tier.believed_tier ?? 'unknown'}</strong>.
+                          </>
+                        )}
                       </li>
                     )}
                     {result.tier.provenance_basis === 'recorder_attested' && (

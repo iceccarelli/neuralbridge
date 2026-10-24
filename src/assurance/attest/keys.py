@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from cryptography.exceptions import InvalidSignature
+    from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
 except ImportError as _exc:  # pragma: no cover - environment, not logic
@@ -71,7 +71,11 @@ class VerifyingKey:
         data = text.encode("utf-8") if isinstance(text, str) else text
         try:
             key = serialization.load_pem_public_key(data)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
+            # ``UnsupportedAlgorithm`` is what ``cryptography`` raises for a well-formed
+            # key of an algorithm it does not know (an unknown OID). It is not a
+            # ``ValueError``, and a caller-supplied trust list must never be able to
+            # raise it past the route that read it.
             raise SigningKeyError(f"not a readable PEM public key: {exc}") from exc
         if not isinstance(key, ed25519.Ed25519PublicKey):
             raise SigningKeyError(
@@ -141,7 +145,7 @@ class SigningKey:
             raise SigningKeyError(
                 f"{where} is encrypted and no passphrase was given."
             ) from exc
-        except ValueError as exc:
+        except (ValueError, UnsupportedAlgorithm) as exc:
             raise SigningKeyError(
                 f"{where} could not be read: {exc}. If it is encrypted, the "
                 "passphrase is wrong."

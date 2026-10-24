@@ -44,10 +44,15 @@ from assurance.api.deps import (
     get_accounts,
     get_register,
 )
-from assurance.api.recorder_trust import server_recorder_trust
+from assurance.api.recorder_trust import server_recorder_trust_state
 from assurance.billing.accounts import AccountStore, Principal
 from assurance.core.errors import AssuranceError, EvidenceIncompleteError
-from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
+from assurance.machine.bundle import (
+    BundleCheck,
+    MachineSubjectError,
+    build_bundle,
+    check_bundle_data,
+)
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import ReviewTrust
@@ -116,9 +121,10 @@ class VerifyIn(BaseModel):
                     "these exact trace bytes; not that the recording is physically true")
     machine_serial: str = Field(
         default="", max_length=200,
-        description="the unit this verification is about; an attestation that names a "
-                    "different serial is refused. Defaults to the serial in a machine-key "
-                    "`subject` (maker/model#serial)")
+        description="the unit this verification is about; a recorder attestation that "
+                    "names a different serial is not accepted. Defaults to the serial in a "
+                    "machine-key `subject` (maker/model#serial); if both are given they "
+                    "must be the same (422 `invalid_subject` otherwise)")
     actor: str = Field(min_length=1, max_length=200,
                        description="who is signing this verification")
     role: str = Field(default="verification engineer", max_length=200)
@@ -130,7 +136,9 @@ class VerifyIn(BaseModel):
                     "machine's key (manufacturer/model#serial) for the verification "
                     "to count as evidence for that unit in coverage, re-verification "
                     "and the passport; omitted, it is filed under product@version, "
-                    "a product line")
+                    "a product line. A key is read one way: the serial is everything "
+                    "after the first '#', it must be present and must not contain "
+                    "another '#'")
 
 
 class BundleCheckIn(BaseModel):
@@ -341,6 +349,7 @@ async def verify_run(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"error": "private_key_refused", "detail": str(exc)}) from exc
 
+    server_trust = server_recorder_trust_state()
     try:
         bundle = build_bundle(
             envelope, trace,
@@ -349,11 +358,15 @@ async def verify_run(
             limits_reviews=body.limits_reviews,
             review_trust=_server_review_trust(),
             recorder_attestations=body.recorder_attestations,
-            recorder_trust=server_recorder_trust(),
+            recorder_trust=server_trust.trust,
             machine_serial=body.machine_serial,
             ledger=register.ledger if (body.seal and register is not None) else None,
             subject=body.subject,
         )
+    except MachineSubjectError as exc:
+        # One strict grammar for a unit key, and one serial per verification: the caller's
+        # input is ambiguous or contradicts itself. Nothing was verified or sealed.
+        raise _bad(exc, "subject") from exc
     except EvidenceIncompleteError as exc:
         # The seal refused a number its hash cannot protect (an integer beyond 2^53 or a
         # value finer than 6 decimals in a caller-supplied field). That is the caller's
@@ -379,6 +392,10 @@ async def verify_run(
     # bytes; it does not prove the recording is physically true.
     payload["recorder_attestation"] = _attestation_summary(
         bundle.result.recorder_attestation)
+    # Whether this server has a recorder trust list at all: unset (the default: nothing
+    # can be accepted), configured, or set but unusable (an operator fault: nobody is
+    # trusted). Never the file's path.
+    payload["recorder_trust"] = {"status": server_trust.status, "note": server_trust.note}
     return payload
 
 
@@ -497,9 +514,13 @@ async def check_bundle(
         # not_applicable | reproduced | unverifiable (no trust supplied: NOT believed) |
         # not_reproduced (rejected)
         "provenance_reassessed": result.provenance_reassessed,
-        # The recorded tier, capped at community unless the recorder attestation was
-        # reproduced under YOUR trust list. The limits review is reported separately.
+        # The recorded tier, capped at community unless this check re-ran the engine on
+        # your envelope and trace, reproduced the whole result, AND accepted the recorder
+        # attestation under YOUR trust list. The limits review is reported separately.
         "believed_tier": result.believed_tier,
+        # "attestation re-assessed; checks not re-run" when the attestation was accepted
+        # under your list but the checks were not re-run (so no tier is believed).
+        "reassessment_note": result.reassessment_note,
         "recorder_attestation": _attestation_summary(recorded.get("recorder_attestation")),
         # What the sealed bundle says about the review of its limits table (status
         # and explanation); whether THIS check accepted it is `checked.limits_review`.

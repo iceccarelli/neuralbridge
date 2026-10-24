@@ -158,11 +158,19 @@ class TestTheStandardSetOfChecks:
 
     def test_another_engine_versions_set_is_a_limitation_not_a_guess(self, tmp_path):
         _, raw, _, _ = make(tmp_path)
-        raw["evidence"]["body"]["engine_version"] = "0-old"
+        raw["evidence"]["body"]["engine_version"] = "5"
         raw["evidence"]["body"]["checks"] = raw["evidence"]["body"]["checks"][:3]
         del raw["result"]
         _, problems = verify_bundle(write(tmp_path, reseal(raw)))
-        assert any("NOT CHECKED" in p and "0-old" in p for p in problems)
+        assert any("NOT CHECKED" in p and "'5'" in p for p in problems)
+
+    def test_an_engine_that_does_not_exist_is_rejected_not_a_limitation(self, tmp_path):
+        _, raw, _, _ = make(tmp_path)
+        raw["evidence"]["body"]["engine_version"] = "0-old"
+        raw["evidence"]["body"]["checks"] = raw["evidence"]["body"]["checks"][:3]
+        del raw["result"]
+        ok, problems = verify_bundle(write(tmp_path, reseal(raw)))
+        assert not ok and any("unknown engine version" in p and "0-old" in p for p in problems)
 
 
 class TestLevel:

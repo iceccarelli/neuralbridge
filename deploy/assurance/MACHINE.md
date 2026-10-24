@@ -215,10 +215,16 @@ key. A verification may be lifted above the declared-provenance cap only when on
 
 **Proved by an accepted attestation.** The holder of a key that *this verifier* trusts,
 has not revoked and permits for this provenance class, signed, on the stated date, a
-statement binding these exact trace bytes (the trace content hash, which covers the
-trace id, the declared provenance, the source system, the start time, the sample rate,
-the conditions and every sample) to a recorder key and to a machine reference
-(product, version, optionally a serial) the recorder says it was attached to.
+statement binding these exact trace bytes to a recorder key and to a machine
+reference (product, version, optionally a serial) the recorder says it was attached
+to. "Exact" is twofold: the trace content hash (which covers the trace id, the declared
+provenance, the source system, the start time, the sample rate, the conditions and
+every sample) **rounds every number to six decimals**, so the body also carries
+`exact_samples_digest` (`Trace.exact_digest()`: every value as its exact binary float,
+`float.hex()`, plus the start time to the second and the type-tagged conditions).
+A trace that differs from the attested one by less than the rounding (a failing
+separation of S-4e-7 swapped for a passing S+4e-7) shares the hash but not the digest
+and is `trace_mismatch`. The global content-hash semantics are unchanged.
 
 **NOT proved.** That the sample values are true physical measurements; that the
 recorder or its sensors were calibrated, installed correctly or uncompromised; that
@@ -242,7 +248,8 @@ the reverse.
 {
   "format": "assurance.machine.recorder-attestation.v1",
   "attestation_id": "9f2c…  (8-128 chars of A-Za-z0-9._:-, unique per statement)",
-  "trace_hash": "64 hex = Trace.content_hash()",
+  "trace_hash": "64 hex = Trace.content_hash()  (numbers rounded to 6 decimals)",
+  "exact_samples_digest": "64 hex = Trace.exact_digest()  (every value at full precision)",
   "trace_id": "RUN-2026-09-12-A",
   "provenance": "field",
   "window": {"started_at": "2026-09-12T04:31:00Z", "sample_count": "20",
@@ -257,7 +264,10 @@ the reverse.
 ```
 
 Every key is required (`machine_serial` and `expires_on` are empty strings when
-absent). Numbers in `window` are strings in a fixed form, so no float rendering can
+absent); a v1 attestation without `exact_samples_digest` is `malformed`. The
+`signature` must be the one canonical base64 spelling of its 64 bytes (re-encoding the
+decoded bytes must give back the text): the same signature written another way is
+refused rather than read as the same attestation. Numbers in `window` are strings in a fixed form, so no float rendering can
 be reinterpreted. Unknown fields, repeated JSON keys, `NaN`, wrong types (a number
 where text is required, a boolean for an integer), malformed dates and `format`
 versions other than `v1` are refused; nothing unsigned can ride along. A file or
@@ -286,7 +296,25 @@ the trace and the bundle (read the fingerprint aloud to the recorder's operator)
   its own list only to `POST /v1/machine/bundle/check` (`recorder_trust`) and
   `POST /v1/evidence/verify` (header `X-Recorder-Trust`), to check *as themselves*;
   that never changes what the server sealed. A trust list inside a bundle is ignored.
-  With no list configured **no attestation can be accepted**.
+  With no list configured **no attestation can be accepted**. No list is configured in a
+  default deployment.
+- **The server's trust is in one of three states**, reported by `POST /v1/machine/verify`
+  as `recorder_trust.status`: `unset` (the variable is not set: nobody is trusted),
+  `configured`, or `unreadable` (the variable is set but its file is missing, malformed
+  or holds a key this service cannot use). `unreadable` **fails closed** and is an
+  operator fault, not a way to trust more: nobody is trusted, sealing yields
+  `community`, and the problem is logged once (the error class, never the file's path)
+  and returned without the path. A public key of an algorithm this service does not know
+  is an ordinary refusal (422 `invalid_recorder_trust` when a caller supplies it; an
+  `unreadable` server file), never a 500.
+- **Hosted readers apply the server's list or an empty one.** Everything that reads
+  sealed verifications back out of the ledger over HTTP (machinery coverage and passport,
+  the change routes, the fleet routes and declaration check, the watch report, the
+  value position and the fleet report) re-assesses a recorded `validated` tier against
+  the server's list: a key the operator has revoked or removed, or no usable list at all,
+  reads as `community`. They never read with *no* list, which would believe whatever
+  the sealing verifier recorded. Offline commands reading their owner's own ledger keep
+  the explicit `--recorder-trust` semantics (no list: the ledger is the reader's own).
 - **Rotation.** Add the new key, then revoke (`"revoked": true` or a `revoked_on`
   date) or remove the old one. **A revoked key rejects all of its attestations,
   including ones dated before the revocation**, because the signer chooses the
@@ -304,10 +332,10 @@ the trace and the bundle (read the fingerprint aloud to the recorder's operator)
 at most 8 attestations and returns a status per attestation and a headline:
 `accepted`, `malformed`, `unsupported_version`, `untrusted_key` (no list, or the key
 is not in it), `revoked_key`, `bad_signature`, `duplicate` (the same id or statement
-twice), `trace_mismatch` (trace hash, id, provenance, start, sample count, rate or
-duration differ), `machine_mismatch` (product or version differs from the envelope's;
-a serial the verification names, or the one in a `maker/model#serial` subject, differs
-or is absent from the attestation), `provenance_not_permitted` (the key may not attest
+twice), `trace_mismatch` (trace hash, exact sample digest, id, provenance, start, sample
+count, rate or duration differ), `machine_mismatch` (product or version differs from the
+envelope's; a serial the verification names, or the one in a `maker/model#serial`
+subject, differs or is absent from the attestation), `provenance_not_permitted` (the key may not attest
 this class), `expired`, `not_yet_valid` and `stale` (dated before the recording began,
 or more than 90 days after it; the bound exists so a key cannot be used to vouch,
 years later, for a recording nobody signed at the time). Anything but `accepted`
@@ -315,6 +343,32 @@ leaves the basis `declared_by_filer` and the tier capped at `community`, with th
 statuses in the explanation. A serial the recorder names is not required of a
 product-line verification (no serial given); it is checked as soon as the verification
 names one.
+
+**Expiry.** An attestation with no `expires_on` never expires: its bound is revocation or
+removal of its key in the verifier's trust list (and the 90-day rule above, which bounds
+only how long after the recording it may be *dated*). There is deliberately no default
+maximum validity: a silent age-out would downgrade sealed evidence on a date nobody
+chose. Set `--expires-on` when signing if an attestation should lapse; the accepted
+sentence in the report says "with no expiry date" when none is set, and a later
+`expires_on` is judged on the **checker's** day.
+
+### One serial per verification: the subject grammar
+
+A unit's ledger key is `maker/model#serial` (`MachineIdentity.key`). It is read one way
+by the library, CLI, API and MCP (`machine/bundle.py:resolve_machine_serial`):
+
+- the serial is everything after the **first** `#`. It must be present, must not itself
+  contain `#`, and must not start or end with a space or hold a control character. A
+  subject such as `Mk/Md#`, `Mk/Md#B#` or `Mk/Md#X#A` is refused (HTTP 422
+  `invalid_subject`, CLI exit 1), never read as "no unit" or as unit `A`;
+- an explicit `machine_serial` that differs from the key's is refused with a remedy
+  (omit it, or give the key of the unit the recorder was attached to). It is what let an
+  attestation made on unit A be sealed under unit B's key and read as B's by coverage,
+  re-verification and the passport;
+- a subject with no `#` (`product@version`, or none given) names a product line, not a
+  unit. It requires no serial of the attestation (a serial the recorder names is then
+  ignored and the bundle records `machine_serial: ""`); an explicit `machine_serial` is
+  matched against the attestation.
 
 Reusing an attestation for a *different* trace is impossible (the trace hash is
 signed); reusing it for the same trace is the same fact. Nothing here detects the
@@ -332,15 +386,31 @@ checker's own list and today's date (`--as-of` to pick the day):
 
 | checker has | result |
 |---|---|
-| a list that accepts the attestation | `provenance_reassessed: reproduced`, `believed_tier` as recorded; with the original envelope and trace the engine is re-run and every sealed field must match |
+| a list that accepts the attestation, **and** the original envelope and trace | the engine is re-run and every sealed field must match: `level: reproduced`, `provenance_reassessed: reproduced`, `believed_tier` as recorded |
+| a list that accepts it, without the original envelope and trace | `level: integrity_only`, `provenance_reassessed: reproduced`, `reassessment_note: "attestation re-assessed; checks not re-run"`, **`believed_tier: community`**: the attestation holds, but nothing re-ran the checks, and a bundle whose verdict was flipped and resealed looks identical from here |
 | a list that does not | rejected (`not_reproduced`), `believed_tier: community` |
 | no list | `ok` at `integrity_only` with a `NOT CHECKED` limitation, `provenance_reassessed: unverifiable`, `believed_tier: community`: the claim is **not believed**, never rejected silently and never passed as valid |
 | nothing to claim (`declared_by_filer`) | `not_applicable` |
 
+`believed_tier` is the recorded tier only when the check is `ok`, **re-ran the engine on
+the supplied envelope and trace and reproduced the whole result, and** the attestation
+holds under the checker's list. A rejected bundle is never believed at `validated`, and
+the re-assessed attestation is never called "the believed tier" (`POST
+/v1/machine/bundle/check` and the `/verify` page show `reassessment_note` instead). The
+public validator is never given the trace, so it reads `community` for a recorded
+`validated`.
+
 Without the original trace the attestation is still re-assessed from the bundle's own
-description of the trace (its hash, id, provenance and start); the recording window is
-then not compared, and the result says so. `ok` is still only "no inconsistency found",
-never recorder authenticity.
+description of the trace (its hash, id, provenance and start); the recording window and
+the exact sample digest are then not compared (the digest needs the trace bytes), and
+the result says so. `ok` is still only "no inconsistency found", never recorder
+authenticity.
+
+On replay, what is compared is what can be reproduced: the readable attestations and
+what became of each (status and hash), the accepted attestation and key, and the trace
+and window facts. An attestation that could not be read (malformed, an unsupported
+version) is sealed as a digest placeholder, is not re-fed on replay, and is not compared:
+an honest bundle that carried one unreadable attestation next to a real one reproduces.
 
 ### Using it
 
@@ -362,8 +432,10 @@ python -m assurance machine check bundle.json --envelope e.json --trace run.json
 ```
 
 Over HTTP: `POST /v1/machine/verify` accepts `recorder_attestations` (at most 8) and
-`machine_serial`; the response carries `provenance_basis`, `provenance_note` and
-`recorder_attestation` (status, findings, key fingerprint). There is no signing route:
+`machine_serial`; the response carries `provenance_basis`, `provenance_note`,
+`recorder_attestation` (status, findings, key fingerprint) and `recorder_trust` (the
+server's state: `unset`, `configured` or `unreadable`). A malformed unit `subject`, or a
+`machine_serial` that contradicts the subject's, is 422 `invalid_subject`. There is no signing route:
 a private key is never sent to this service, and one found in anything a caller
 supplies is refused unread (422 `private_key_refused`). The `/verify` page and
 `EvidenceVerifier` show the recorded basis, the re-assessed one when a trust list is
@@ -423,7 +495,9 @@ checker away is what makes the sealed bundle worth buying.
 Four separate things are checked and the caller is told which failed:
 
 1. the sealed evidence hashes to the hash it carries — catches post-seal edits
-2. the claim is coherent on its own: the verdict agrees with the check outcomes, a
+2. the claim is coherent on its own: the engine version is one that exists (plain ASCII
+   digits, `1` to the current one: `7`, `06`, ` 6` and Arabic-Indic `٦` are refused, not
+   treated as "another engine whose checks are not known" and passed), the verdict agrees with the check outcomes, a
    violated check lists its violations, a simulation does not hold a `validated`
    tier, no `validated` tier rests on a provenance the filer merely declared (a `recorder_attested` claim must carry a coherent accepted attestation), no file holds `certified`, the validation state and confidence are
    consistent with the verdict and tier, and **the envelope and result printed

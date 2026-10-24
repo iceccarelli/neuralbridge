@@ -20,7 +20,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -234,12 +234,12 @@ class TestTheBelievedTier:
 
     def test_a_replay_that_differs_is_not_believed_even_if_the_attestation_reassesses(self):
         raw, env, tr = sealed()
-        body = raw["evidence"]["body"]
-        body["limits_hash"] = "ab" * 32            # a field the inputs do not give
-        raw["result"]["limits_hash"] = "ab" * 32
+        raw["evidence"]["body"]["provenance_assessment"]["explanation"] = "edited after sealing"
         reseal(raw)
         res = check_bundle_data(raw, envelope=env, trace=tr, recorder_trust=RECORDER.trust())
-        assert not res.ok and res.believed_tier == "community"
+        assert not res.ok and res.level == LEVEL_REJECTED
+        assert res.provenance_reassessed == "reproduced"       # the attestation itself holds
+        assert res.believed_tier == "community"                # the bundle does not
 
     def test_only_a_full_reproduction_believes_validated(self):
         raw, env, tr = sealed()
@@ -266,6 +266,16 @@ class TestTheBelievedTier:
         assert d["provenance_reassessed"] == "reproduced"
         assert d["believed_tier"] == "community"
         assert d["reassessment_note"] == "attestation re-assessed; checks not re-run"
+
+    def test_the_cli_says_it_in_the_same_words(self, tmp_path, capsys):
+        raw, _, _ = sealed()
+        (tmp_path / "b.json").write_text(json.dumps(raw))
+        trust = RECORDER.write_trust(tmp_path / "trust.json")
+        code = machine_cli(["check", str(tmp_path / "b.json"), "--recorder-trust", str(trust)])
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "attestation re-assessed; checks not re-run" in out
+        assert "tier believed by this check" not in out
 
     def test_the_public_validator_says_the_same(self, client):
         raw, _, _ = sealed()
@@ -357,11 +367,15 @@ class TestExactSamples:
         assert swapped.recorder_attestation["status"] == "trace_mismatch"
         assert "exact" in swapped.recorder_attestation["findings"][0]["detail"]
 
-    def test_a_sealed_bundle_of_the_failing_run_does_not_replay_against_the_swap(self):
-        env, failing, passing = self._pair()
-        raw = _raw(build_attested_bundle(env, failing, actor=ACTOR, recorder=RECORDER))
-        res = check_bundle_data(raw, envelope=env, trace=passing,
-                                recorder_trust=RECORDER.trust())
+    def test_a_validated_bundle_does_not_replay_against_a_trace_that_differs_below_the_hash(self):
+        env, rec = envelope(), Recorder()
+        tr = make_trace()
+        near = replace(tr, samples=(replace(tr.samples[0], tcp_speed=300.0 + 4e-7),
+                                    *tr.samples[1:]))
+        assert near.content_hash() == tr.content_hash() and near.exact_digest() != tr.exact_digest()
+        raw = _raw(build_attested_bundle(env, tr, actor=ACTOR, recorder=rec))
+        assert check_bundle_data(raw, envelope=env, trace=tr, recorder_trust=rec.trust()).reproduced
+        res = check_bundle_data(raw, envelope=env, trace=near, recorder_trust=rec.trust())
         assert not res.ok and res.believed_tier == "community"
 
     def test_the_attestation_carries_the_digest_inside_the_signed_body(self):
@@ -406,8 +420,8 @@ class TestExactSamples:
                                                    *t.samples[1:])), id="human-speed"),
         pytest.param(lambda t: replace(t, sample_rate_hz=50.0 + 1e-9), id="rate"),
         pytest.param(lambda t: replace(t, conditions={"x": 1e-9}), id="conditions"),
-        pytest.param(lambda t: replace(t, started_at=t.started_at.replace(microsecond=7)),
-                     id="started-at-microseconds"),
+        pytest.param(lambda t: replace(t, started_at=t.started_at + timedelta(seconds=1)),
+                     id="started-at"),
     ])
     def test_every_field_is_inside_the_exact_digest(self, edit):
         tr = make_trace(conditions={"x": 0.0})
