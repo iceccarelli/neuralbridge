@@ -188,10 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--out", type=Path, default=None,
                     help="write the bundle here (default: print it)")
     ex.add_argument("--attestations", type=Path, default=None, metavar="LOG",
-                    help="embed the newest signed head attestation in this log "
+                    help="embed a signed head attestation from this log "
                          "(`assurance attest sign`) as the bundle's anchor, so a "
                          "verifier with the signer's public key can show nothing "
-                         "was removed up to it. Refuses if it contradicts the ledger.")
+                         "was removed up to it. The newest one the signer READ from "
+                         "a ledger is used; a head only DECLARED by a holder is used "
+                         "when there is nothing else, and is labelled as declared. "
+                         "Refuses if it contradicts the ledger.")
     ex.add_argument("--skeleton", action="store_true",
                     help="also list the id, kind and time of every OTHER entry in the "
                          "ledger (no evidence), so a verifier can see a removed entry "
@@ -379,7 +382,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if args.attestations:
         # Signing needs the Ed25519 dependency; exporting without an anchor does not.
         from assurance.attest.attestation import AttestationLog
-        anchor = AttestationLog(args.attestations).require_last().to_dict()
+        anchor = AttestationLog(args.attestations).require_anchor().to_dict()
     bundle = EvidenceLedger.open_existing(args.ledger).export(
         subject=args.case_id, anchor=anchor, skeleton=args.skeleton)
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
@@ -389,8 +392,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
         Path(args.out).write_text(text + "\n", encoding="utf-8")
         print(f"exported {len(bundle['entries'])} record(s) of {args.case_id} to {args.out}")
         if anchor:
-            print(f"  anchored to attestation {anchor['sequence']} (seq {anchor['head_seq']}); "
-                  "records after it are covered by no signature")
+            from assurance.attest.attestation import describe_anchor
+            print(f"  {describe_anchor(anchor)}")
             print(f"  check it, offline: assurance evidence verify {args.out} "
                   "--public-key <signer.pub>")
         else:

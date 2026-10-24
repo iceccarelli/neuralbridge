@@ -316,6 +316,43 @@ case since, so a close can never land on top of a move made after the person
 read the case. Machine-driven writers (assess, watch ingest, advisory
 withdrawal) re-read and recompute instead; people are told and decide again.
 
+## Exporting a case: completeness and the anchor
+
+An export is internally consistent: its chain recomputes. That does not show that
+nothing was removed. Three things decide what a verifier can say:
+
+* **`skeleton`** (off by default; `?skeleton=true`, `--skeleton`): lists the
+  position, kind, subject and time of every *other* entry of the account's ledger,
+  so a verifier can see a removed entry. It discloses those to whoever receives the
+  file, which is why it is opt-in. Without it completeness is `not_checked`.
+* **`anchor`**: a signed head attestation the verifier checks under the signer's
+  public key, which it must obtain elsewhere. Records after the anchor are covered
+  by no signature.
+* **Who made the anchor.** The hosted export embeds the newest attestation the
+  service *read from the account's own ledger* (`read_from_ledger`). **No customer
+  route creates one**: only the operator, with `assurance attest sign` against the
+  hosted ledger (procedure in `ATTEST.md`, section 3). The `declared_by_holder`
+  records a customer writes with `POST /v1/ledger/attest` describe the customer's
+  own ledger and are never embedded. So until the operator has signed an account's
+  ledger, its exports carry no `anchor` and their completeness is not checked;
+  do not tell a customer otherwise.
+
+Refusals are part of the contract (`public/openapi.json`):
+
+| status | body `error` | meaning |
+|---:|---|---|
+| 401 / 402 | | no key / the plan does not include export |
+| 404 | `case_not_found` | the ledger holds no entry of a case kind under this id |
+| 409 | `anchor_contradicts_ledger` | the embedded attestation does not match this ledger (shorter, or another history at a signed position): a rewind signal, nothing exported. `?anchor=false` exports without it and does not make the finding go away |
+| 500 | `ledger_integrity` | the account's chain does not verify |
+| 500 | `attestation_log_damaged` | the attestation log cannot be read, so the anchor cannot be chosen; the export is refused, never silently unanchored |
+
+The CLI (`assurance change export --attestations LOG`) and the API choose the
+anchor with one rule (`assurance.attest.select_anchor`): the newest
+`read_from_ledger` record. A log of only declared heads is accepted on the CLI
+because a person named it; the bundle's `anchor.basis` says `declared_by_holder` and
+the CLI says the head was declared and not read from the ledger.
+
 ## Surfaces
 
 ```
@@ -332,7 +369,8 @@ POST /v1/change/assess/advisory                    {advisory, actor?}
 POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
 GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}
-GET  /v1/change/cases/{case_id}/export             a bundle `assurance evidence verify` checks
+GET  /v1/change/cases/{case_id}/export[?skeleton=][&anchor=]
+        # a bundle `assurance evidence verify` checks. See "Exporting a case" below.
 GET  /v1/change/cases/{case_id}/replay             the case rebuilt from the ledger alone
 POST /v1/change/cases/{case_id}/claim              {owner, actor}
 POST /v1/change/cases/{case_id}/advance            {actor}

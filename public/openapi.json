@@ -162,18 +162,21 @@
           },
           "head_seq": {
             "description": "sequence number of the last record",
+            "maximum": 10000000.0,
             "minimum": 0.0,
             "title": "Head Seq",
             "type": "integer"
           },
           "ledger_length": {
             "description": "how many records the chain holds",
+            "maximum": 10000000.0,
             "minimum": 0.0,
             "title": "Ledger Length",
             "type": "integer"
           },
           "note": {
             "default": "",
+            "description": "free text, signed along with the head. It is YOUR text: verification reports it as `note_is_tenant_supplied`, not as a statement by the key holder about your ledger.",
             "maxLength": 500,
             "title": "Note",
             "type": "string"
@@ -2673,7 +2676,7 @@
     },
     "/v1/cases/{case_id}/export": {
       "get": {
-        "description": "Refuses if the chain does not verify.\n\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries\n(positions, kinds, subjects, times and hashes; no evidence) so removed entries\nare visible. It is **off by default**: the link hash covers the plain subject,\nso the skeleton cannot be anonymised and names every other case and incident of\nthe account. Without it the bundle is internally consistent but its\ncompleteness cannot be checked. The bundle carries the account's newest\n*server-read* signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed\nheads the customer declared are never embedded). Records after the anchor are\ncovered by no signature; for a hosted ledger the service holds the signing key\ntoo, so the anchor helps only a customer who kept their own copy of a signed\nattestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.",
+        "description": "Refuses if the chain does not verify.\n\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries\n(positions, kinds, subjects, times and hashes; no evidence) so removed entries\nare visible. It is **off by default**: the link hash covers the plain subject,\nso the skeleton cannot be anonymised and names every other case and incident of\nthe account. Without it the bundle is internally consistent but its\ncompleteness cannot be checked. The bundle carries the account's newest\n*server-read* signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed\nheads the customer declared are never embedded). Records after the anchor are\ncovered by no signature; for a hosted ledger the service holds the signing key\ntoo, so the anchor helps only a customer who kept their own copy of a signed\nattestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.\n\n**Completeness.** Without ``skeleton`` a bundle is internally consistent but a\nremoved entry of the case cannot be seen, and a verifier reports completeness as\n*not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the\nsigner's public key can show nothing was removed up to the anchor; records after\nit are covered by no signature.\n\n**Anchor.** ``anchor`` is the newest attestation the service *read from this\naccount's own ledger* (``read_from_ledger``). No customer route creates one: the\noperator runs ``assurance attest sign`` against the hosted ledger\n(``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and\nits completeness is not checked. Counter-signed heads you declared about your own\nledger (``POST /v1/ledger/attest``) are never embedded. If the embedded\nattestation does not match this ledger the answer is 409\n``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged\nattestation log is 500 ``attestation_log_damaged``, never a silently unanchored\nexport; ``?anchor=false`` is the explicit way to export without one.",
         "operationId": "get_case_export_v1_cases__case_id__export_get",
         "parameters": [
           {
@@ -2755,6 +2758,18 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
+          },
+          "404": {
+            "description": "`case_not_found`: the ledger holds no entry of a case kind under this id, so an export is never an empty bundle that reads clean."
+          },
+          "409": {
+            "description": "`anchor_contradicts_ledger`: the newest server-read signed attestation in this account's log does not match this ledger (shorter, or different history at a signed position). A rewind signal; nothing is exported. `?anchor=false` exports without the anchor but does not make the finding go away."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2764,6 +2779,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, so the anchor cannot be chosen; never a silently unanchored export)."
           }
         },
         "summary": "A verifiable evidence bundle for one case",
@@ -3842,7 +3860,7 @@
     },
     "/v1/change/cases/{case_id}/export": {
       "get": {
-        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,\nkinds, times and hashes; no evidence) so removed entries are visible; it is off\nby default because it names every other case and incident of the account.\nThe bundle carries the account's newest *server-read* signed attestation as\n``anchor`` when it has one; 409 ``anchor_contradicts_ledger`` if that\nattestation does not match this ledger (counter-signed heads the customer\ndeclared are never embedded). Records after the anchor are covered by no\nsignature.",
+        "description": "The case's ledger entries as ``assurance evidence verify`` expects them.\n\nRefuses (500 ``ledger_integrity``) if the account's chain does not verify,\nand says no such case (404) when the ledger holds no entry of a case kind\nunder this id, so an export is never an empty bundle that reads as clean.\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,\nkinds, times and hashes; no evidence) so removed entries are visible; it is off\nby default because it names every other case and incident of the account.\n\n**Completeness.** Without ``skeleton`` a bundle is internally consistent but a\nremoved entry of the case cannot be seen, and a verifier reports completeness as\n*not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the\nsigner's public key can show nothing was removed up to the anchor; records after\nit are covered by no signature.\n\n**Anchor.** ``anchor`` is the newest attestation the service *read from this\naccount's own ledger* (``read_from_ledger``). No customer route creates one: the\noperator runs ``assurance attest sign`` against the hosted ledger\n(``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and\nits completeness is not checked. Counter-signed heads you declared about your own\nledger (``POST /v1/ledger/attest``) are never embedded. If the embedded\nattestation does not match this ledger the answer is 409\n``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged\nattestation log is 500 ``attestation_log_damaged``, never a silently unanchored\nexport; ``?anchor=false`` is the explicit way to export without one.",
         "operationId": "export_case_v1_change_cases__case_id__export_get",
         "parameters": [
           {
@@ -3924,6 +3942,18 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
+          },
+          "404": {
+            "description": "`case_not_found`: the ledger holds no entry of a case kind under this id, so an export is never an empty bundle that reads clean."
+          },
+          "409": {
+            "description": "`anchor_contradicts_ledger`: the newest server-read signed attestation in this account's log does not match this ledger (shorter, or different history at a signed position). A rewind signal; nothing is exported. `?anchor=false` exports without the anchor but does not make the finding go away."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3933,6 +3963,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, so the anchor cannot be chosen; never a silently unanchored export)."
           }
         },
         "summary": "A verifiable evidence bundle for one case",
@@ -4191,6 +4224,7 @@
     },
     "/v1/change/cases/{case_id}/reverification": {
       "post": {
+        "description": "Submit fresh verification evidence for the entries a case is waiting on.\n\n``200`` means the submission was accepted and recorded, **not** that it cleared\nanything. When the case is still waiting the response carries ``blocked_reason``\n(absent when nothing is outstanding): ``code`` is ``below_validated_tier`` when a\nrequired entry was read current on evidence under the floor, or\n``evidence_not_current`` when coverage did not read the entry current at all;\n``entries`` maps each outstanding entry to its recorded reason and ``message``\nsays what would clear it. A decider may waive an entry\n(``waive-reverification``); a waiver is recorded as one and never reads as\ncurrent.",
         "operationId": "reverify_case_route_v1_change_cases__case_id__reverification_post",
         "parameters": [
           {
@@ -5588,7 +5622,7 @@
     },
     "/v1/ledger/attest": {
       "post": {
-        "description": "Sign three numbers, refuse the three cases that would be a lie.\n\nThe refusals return 409, not 422: a shorter ledger is not a malformed\nrequest, it is the finding. The body of the refusal is the sentence to put\nin front of whoever runs the database.",
+        "description": "Sign three numbers, refuse the three cases that would be a lie.\n\nThe refusals return 409, not 422: a shorter ledger is not a malformed\nrequest, it is the finding. The body of the refusal is the sentence to put\nin front of whoever runs the database.\n\nHeads you declare are compared only with heads you declared earlier: they\ndescribe your ledger, not any ledger this service holds. ``note`` is signed\nbut is your text; the response and every later verification say so.\n\nThis is a plain ``def`` so FastAPI runs it in its thread pool: waiting for the\nlog's lock (bounded, then 503) must never hold up the event loop.",
         "operationId": "counter_sign_v1_ledger_attest_post",
         "parameters": [
           {
@@ -5647,15 +5681,23 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
+          },
+          "409": {
+            "description": "`attestation_refused`: a finding, not a malformed request. The head is shorter than, behind, or a different history from one already signed *for the same kind of head* (your own declared heads), or a different key is signing without `rotating`. The `finding` is the sentence to show whoever runs the database."
+          },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
+            "description": "Not a ledger head (`not_a_ledger_head`), or a length or sequence beyond the declared-head bound."
+          },
+          "500": {
+            "description": "`attestation_log_damaged`: this account's attestation log cannot be read or ends in an unfinished write. A fault to repair, not a finding about your ledger; nothing was signed."
+          },
+          "503": {
+            "description": "`attestation_busy` (retry after `Retry-After`; the log's lock was not free in time, nothing was signed) or a missing or unusable service key."
           }
         },
         "summary": "Counter-sign the head of your ledger, without sending us the ledger",
@@ -5680,6 +5722,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "503": {
+            "description": "`no_attestation_key_configured` or `attestation_key_unusable`: the service has no usable signing key. The message never names a server path."
           }
         },
         "summary": "The public key this service counter-signs with. No account needed.",
@@ -5690,6 +5735,7 @@
     },
     "/v1/ledger/attest/log": {
       "get": {
+        "description": "The account's attestation log. Reads without the writer's lock, so it never\nwaits; an unfinished last line is reported in ``warnings`` and left out.",
         "operationId": "account_log_v1_ledger_attest_log_get",
         "parameters": [
           {
@@ -5738,6 +5784,12 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5747,6 +5799,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "description": "`attestation_log_damaged`: a line other than the last cannot be read. The message never names a server path."
           }
         },
         "summary": "Every attestation this service has made for your account",
@@ -5757,7 +5812,7 @@
     },
     "/v1/ledger/attest/verify": {
       "post": {
-        "description": "Verify signatures and internal consistency. No account, no quota.\n\nDeliberately free: the audience for an attestation is a regulator, an\ninsurer, or a customer's customer \u2014 none of whom will ever hold an API key\nhere, and all of whom must be able to check the thing without asking us.\n\nThis endpoint cannot see the caller's ledger, so it cannot answer the\nquestion that matters most \u2014 whether the ledger still holds what was signed\nfor. That join happens locally, with ``assurance attest verify --ledger``,\nand its absence here is named rather than glossed.",
+        "description": "Verify signatures and internal consistency. No account, no quota.\n\nDeliberately free: the audience for an attestation is a regulator, an\ninsurer, or a customer's customer \u2014 none of whom will ever hold an API key\nhere, and all of whom must be able to check the thing without asking us.\n\nThis endpoint cannot see the caller's ledger, so it cannot answer the\nquestion that matters most \u2014 whether the ledger still holds what was signed\nfor. That join happens locally, with ``assurance attest verify --ledger``,\nand its absence here is named rather than glossed.\n\n``notes`` lists every note with ``note_is_tenant_supplied``: on a counter-signature\nthe note is the requester's free text, covered by the signature but not a statement\nby the key holder about the ledger.",
         "operationId": "verify_v1_ledger_attest_verify_post",
         "parameters": [
           {
@@ -5816,15 +5871,14 @@
             },
             "description": "Successful Response"
           },
+          "413": {
+            "description": "`too_many_attestations`: verify larger logs locally."
+          },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
+            "description": "`unreadable_attestation` or `unreadable_public_key`."
+          },
+          "503": {
+            "description": "No public key was supplied and the service has no usable key."
           }
         },
         "summary": "Check an attestation log. Free and unmetered, for anyone.",
