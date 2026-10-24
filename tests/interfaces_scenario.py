@@ -47,13 +47,13 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
 from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
-from assurance.machine.bundle import build_bundle
 from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
-from .interfaces_support import envelope, envelope_dict, trace, trace_dict
+from .interfaces_support import envelope, envelope_dict, trace
+from .interfaces_support import trace_dict as trace_dict  # noqa: F401  (re-exported)
 from .support import plan_dict, write_export
-from .support_recorder_attestation import SHIM_DIR
+from .support_recorder import RECORDER, build_attested_bundle
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 KEY = "Grimaldi/AR-7#0501"         # the machine whose firmware changes
@@ -282,7 +282,9 @@ class LibraryDriver(Driver):
         return self._do(advance, cid, actor=_person(who))
 
     def verify(self, who):
-        bundle = build_bundle(envelope(), trace(run_started()), actor=Actor(
+        # The scenario needs a validated verification: a recorder the verifier trusts
+        # attested the recording (a real signature, the real assessment).
+        bundle = build_attested_bundle(envelope(), trace(run_started()), actor=Actor(
             who, "verification engineer", kind="person"), ledger=self.ledger, subject=KEY)
         return bundle.content_hash
 
@@ -327,11 +329,7 @@ class CliDriver(Driver):
         self.ledger_path = plant.ledger_path
 
     def _run(self, *argv) -> subprocess.CompletedProcess[str]:
-        # The reader of the ledger decides which provenance bases lift a tier, so the
-        # `change` process needs the same stand-in for a verified recorder attestation
-        # as the `machine verify` process that sealed the bundle (see SHIM_DIR).
-        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root,
-                       PYTHONPATH=f"{SRC}{os.pathsep}{SHIM_DIR}")
+        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root)
 
     def _out(self, r: subprocess.CompletedProcess[str], cid: str = "") -> Out:
         if r.returncode == 0:
@@ -367,13 +365,19 @@ class CliDriver(Driver):
 
     def verify(self, who):
         env, tr = self.plant.root / "envelope.json", self.plant.root / "trace.json"
+        run = trace(run_started())
         env.write_text(json.dumps(envelope_dict()), encoding="utf-8")
-        tr.write_text(json.dumps(trace_dict(run_started())), encoding="utf-8")
-        # The scenario needs a validated verification; the engine never lifts a declared
-        # provenance, so this subprocess assumes a verified recorder attestation.
+        tr.write_text(json.dumps(run.hashable_payload()), encoding="utf-8")
+        # The scenario needs a validated verification: the recorder's attestation and the
+        # verifier's own trust list are files handed to the CLI, as in the field.
+        att = RECORDER.write_attestation(
+            self.plant.root / "attestation.json", envelope(), run,
+            machine_serial=KEY.rpartition("#")[2])
+        trust = RECORDER.write_trust(self.plant.root / "recorder-trust.json")
         r = run_cli("machine", "verify", "--envelope", env, "--trace", tr, "--actor", who,
                     "--ledger", self.ledger_path, "--subject", KEY, "--json",
-                    cwd=self.plant.root, PYTHONPATH=f"{SRC}{os.pathsep}{SHIM_DIR}")
+                    "--recorder-attestation", att, "--recorder-trust", trust,
+                    cwd=self.plant.root)
         assert r.returncode == 0, r.stdout + r.stderr
         return str(json.loads(r.stdout)["evidence"]["content_hash"])
 
@@ -464,9 +468,14 @@ class ApiDriver(Driver):
         return self._post(cid, "advance", {"actor": who})
 
     def verify(self, who):
+        run = trace(run_started())
         r = self.http.post("/v1/machine/verify", json={
-            "envelope": envelope_dict(), "trace": trace_dict(run_started()), "actor": who,
-            "subject": KEY})
+            "envelope": envelope_dict(), "trace": run.hashable_payload(), "actor": who,
+            "subject": KEY,
+            # signed offline by the recorder; the SERVER's own trust list decides (the
+            # `live_api` fixture configures it)
+            "recorder_attestations": RECORDER.attestation_dicts(
+                envelope(), run, machine_serial=KEY.rpartition("#")[2])})
         assert r.status_code == 200, r.text
         return str(r.json()["content_hash"])
 

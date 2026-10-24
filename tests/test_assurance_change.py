@@ -62,16 +62,7 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import VerificationRecord
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
-
-
-@pytest.fixture(autouse=True)
-def _recorder_attestation_assumed(monkeypatch):
-    """These tests are about what happens to a validated verification afterwards,
-    not about how it is earned. The engine never lifts a declared provenance, so
-    stand in for a verified recorder attestation (see the helper's docstring)."""
-    simulate_verified_recorder_attestation(monkeypatch)
-
+from .support_recorder import build_attested_bundle
 
 ENG = Actor("a.integrator", "safety engineer")
 TECH = Actor("m.tech", "service technician")
@@ -142,9 +133,17 @@ def _inputs(when, subject=None):
 _INPUTS: dict[str, tuple] = {}
 
 
-def seal_a_real_verification(ledger, *, when, subject=None):
+def seal_a_real_verification(ledger, *, when, subject=None, attested=True):
+    """Seal a verification of a field recording.
+
+    By default a recorder the verifier trusts attested the recording (a real signature,
+    accepted by the real assessment), so the tests that import this can pin what happens
+    to a ``validated`` verification afterwards. ``attested=False`` seals the same
+    recording with only its declared provenance, which the engine caps at ``community``.
+    """
     env, run = _inputs(when, subject)
-    bundle = build_bundle(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
+    seal = build_attested_bundle if attested else build_bundle
+    bundle = seal(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
     _INPUTS[bundle.content_hash] = (env, run)
     return bundle
 

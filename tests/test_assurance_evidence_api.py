@@ -444,7 +444,8 @@ def machine_bundle(tmp_path):
     from datetime import UTC, datetime
 
     led = EvidenceLedger(tmp_path / "m" / "m.db")
-    return seal_a_real_verification(led, when=datetime(2026, 2, 9, tzinfo=UTC)).to_dict()
+    return seal_a_real_verification(
+        led, when=datetime(2026, 2, 9, tzinfo=UTC), attested=False).to_dict()
 
 
 class TestMachineBundle:

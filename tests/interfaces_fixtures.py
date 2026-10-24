@@ -19,6 +19,8 @@ import httpx
 import pytest
 import uvicorn
 
+from .support_recorder import server_trust
+
 PORT_RANGE = range(18400, 18500)
 
 
@@ -66,6 +68,8 @@ def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveAp
     monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "operator.db"))
     monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
     monkeypatch.setenv("ASSURANCE_TENANT_LEDGERS", str(tmp_path / "tenants"))
+    # the hosted service's OWN recorder trust list (a file the operator configures)
+    server_trust(monkeypatch, tmp_path)
     monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
     monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
     deps._register_for.cache_clear()
