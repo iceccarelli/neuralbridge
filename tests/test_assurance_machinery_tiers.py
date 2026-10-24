@@ -20,7 +20,6 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.record import build_passport, record_manifest, verify_passport
 from assurance.machinery.staleness import VerificationRecord, assess_coverage
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_machinery import (
     ENG,
     FUNCS,
@@ -95,10 +94,9 @@ class TestThePassportIsCappedAtTheFloor:
         assert p.evidence.validation_state is ValidationState.VERIFIED
         assert p.evidence.confidence is Confidence.HIGH
 
-    def test_an_attested_bundle_reaches_verified(self, ledger, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
+    def test_an_attested_bundle_reaches_verified(self, ledger):
         record_manifest(ledger, covered_manifest())
-        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC), attested=True)
         p = build_passport(ledger, covered_manifest(), actor=ENG, interventions=[])
         assert p.evidence.validation_state is ValidationState.VERIFIED
         assert p.evidence.confidence is Confidence.HIGH

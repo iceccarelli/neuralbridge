@@ -37,18 +37,7 @@ from assurance.machine.trace import (
 )
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
-
-
-@pytest.fixture(autouse=True)
-def _recorder_attestation_assumed(monkeypatch):
-    """This module pins the OTHER inputs of the tier floor (figure bases, limits review,
-    dates, coverage). The trace's declared provenance now caps every tier at community
-    (``provenance_trust.py``), which would hide every one of them, so these tests assume
-    a verified recorder attestation, as a future signer would provide. The cap itself is
-    pinned in ``test_assurance_machine_provenance.py``, which does not assume it."""
-    simulate_verified_recorder_attestation(monkeypatch)
-
+from .support_recorder import server_trust, verify_attested, with_attestation
 
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 DATASHEET = FigureBasis(kind="datasheet", reference="scanner rev D")
@@ -162,9 +151,14 @@ class TestProvenance:
         assert any("simulated" in c for c in r.checks_skipped)
 
     def test_an_attested_field_trace_against_measured_figures_reaches_validated(self):
-        r = verify(envelope(), trace([sample(i) for i in range(5)]))
+        r = verify_attested(envelope(), trace([sample(i) for i in range(5)]))
         assert r.tier is AssuranceTier.VALIDATED
         assert r.may_claim_physical_behaviour
+
+    def test_the_same_trace_without_an_attestation_is_capped_at_community(self):
+        r = verify(envelope(), trace([sample(i) for i in range(5)]))
+        assert r.tier is AssuranceTier.COMMUNITY
+        assert not r.may_claim_physical_behaviour
 
     def test_a_datasheet_stopping_distance_caps_the_tier_at_profile(self):
         """The verdict rests on a number nobody measured on this machine."""
@@ -630,8 +624,17 @@ class TestVerifyEndpoint:
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["verdict"] == "pass"
-        assert d["tier"] == "validated"      # under the attestation double (see above)
+        assert d["tier"] == "community"      # a declared provenance, no attestation
         assert d["evidence"]["content_hash"]
+
+    def test_the_cell_plan_reaches_validated_only_with_an_attestation_the_server_trusts(
+            self, client, store, monkeypatch, tmp_path):
+        server_trust(monkeypatch, tmp_path)
+        env, t = envelope(), trace([sample(i) for i in range(20)])
+        payload = with_attestation(self._payload(), env, t)
+        d = client.post("/v1/machine/verify", json=payload,
+                        headers=keyed(store, "cell")).json()
+        assert d["tier"] == "validated" and d["provenance_basis"] == "recorder_attested"
 
     def test_an_oversized_trace_is_refused_with_the_local_alternative(
             self, client, store, monkeypatch):
