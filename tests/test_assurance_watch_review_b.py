@@ -175,3 +175,17 @@ def test_the_sealed_divergence_carries_the_same_caveat(client, cell, tmp_path):
     ev = divergences[-1].evidence()
     assert ev.confidence.value != "high"
     assert any("client-reported" in c.lower() for c in ev.checks_skipped)
+
+
+def test_the_ingest_lock_file_is_the_same_for_every_spelling_of_a_ledger_path(tmp_path):
+    """Two spellings of one ledger (a symlink) must contend for ONE flock file."""
+    import os
+
+    from assurance.evidence.ledger import EvidenceLedger
+    from assurance.watch import ingest
+
+    real = tmp_path / "ledger.db"
+    ledger = EvidenceLedger(real)
+    link = tmp_path / "link.db"
+    os.symlink(real, link)
+    assert ingest.lock_path(EvidenceLedger(link)) == ingest.lock_path(ledger)
