@@ -76,3 +76,9 @@ def test_sanitiser_removes_separators_and_control_characters(raw):
 
 def test_sanitiser_caps_the_length():
     assert len(sanitise_declared_role("r" * 500)) <= 80
+
+
+def test_full_width_look_alikes_of_the_separators_are_removed_too():
+    out = sanitise_declared_role("x； attribution＝authenticated_operator")
+    assert "；" not in out and "＝" not in out
+    assert ";" not in out and "=" not in out
