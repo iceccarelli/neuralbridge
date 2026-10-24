@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
+from assurance.api.recorder_trust import server_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.fleet.advisory import ComponentAdvisory, match_item
@@ -380,7 +381,8 @@ async def declaration_check(
         key = manifest.machine.key
         coverage = assess_coverage(
             manifest,
-            VerificationRecord.from_ledger(register.ledger, subject=key),
+            VerificationRecord.from_ledger(
+                register.ledger, subject=key, recorder_trust=server_recorder_trust()),
             interventions_from_ledger(register.ledger, key),
         )
 

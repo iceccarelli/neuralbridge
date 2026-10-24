@@ -146,18 +146,30 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
 
 
 @mcp.tool()
-async def machine_verify(envelope: dict[str, Any], trace: dict[str, Any], actor: str) -> dict[str, Any]:
+async def machine_verify(
+    envelope: dict[str, Any], trace: dict[str, Any], actor: str,
+    recorder_attestations: list[dict[str, Any]] | None = None, machine_serial: str = "",
+) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
 
     Cell-tier only. With no ASSURANCE_API_KEY, or a key on Validator/Register,
     this returns the API's real 401/402 — a structured, parseable answer
     naming the required plan, not an error from this server.
+
+    ``recorder_attestations`` are signed attestations of the trace, produced offline by
+    the recorder operator (``assurance machine recorder-sign``). They are assessed
+    against the recorder trust list the SERVER is configured with; this tool cannot
+    supply a trust list, a private key or a provenance basis. Without an accepted
+    attestation a declared provenance is capped at ``community``; an accepted one proves
+    a trusted key signed these exact trace bytes, not that the recording is physically
+    true. ``machine_serial`` names the unit the verification is about.
     """
-    return await _call(
-        "POST",
-        "/v1/machine/verify",
-        json_body={"envelope": envelope, "trace": trace, "actor": actor},
-    )
+    body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
+    if recorder_attestations:
+        body["recorder_attestations"] = recorder_attestations
+    if machine_serial:
+        body["machine_serial"] = machine_serial
+    return await _call("POST", "/v1/machine/verify", json_body=body)
 
 
 @mcp.tool()
