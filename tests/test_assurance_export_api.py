@@ -113,23 +113,56 @@ def tenants(api):
     return api, (a, ha), (b, hb), anchor
 
 
+def _names(node, token: str) -> list[str]:
+    """Every string in a JSON document that names *token* as a whole identifier.
+
+    A raw ``token in json.dumps(doc)`` is wrong for a two-character id: an export holds
+    hashes and a base64 signature, and a random signature contains "C2" now and then (it
+    did, once, on CI). An id is named when a string IS the id, or carries it as a word
+    in prose (``"case C2 awareness"``); a long hash or signature never does.
+    """
+    import re
+
+    word = re.compile(rf"(?<![A-Za-z0-9+/=_-]){re.escape(token)}(?![A-Za-z0-9+/=_-])")
+    found: list[str] = []
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            stack.extend(cur.keys())
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+        elif isinstance(cur, str) and (cur == token or word.search(cur)):
+            found.append(cur)
+    return found
+
+
 class TestTheSkeletonIsOptInAndStaysInsideTheAccount:
+    def test_the_id_check_is_not_fooled_by_a_signature_that_contains_it(self):
+        """The CI flake: base64 'C2' inside a signature is not the case id C2."""
+        assert _names({"signature": "V4C2as0Dw=="}, "C2") == []
+        assert _names({"signature": "x" * 20 + "C2" + "y" * 20}, "C2") == []
+        assert _names({"subject": "C2"}, "C2") == ["C2"]
+        assert _names({"note": "case C2 awareness"}, "C2")
+        assert _names({"c": ["a", {"k": "C2"}]}, "C2") == ["C2"]
+
     def test_the_default_case_export_names_no_other_subject(self, tenants):
         """C2 is another case of the same account; its id must not ride along in C1's file."""
         api, (_, ha), (_, hb), _ = tenants
         for path in ("/v1/cases/C1/export", "/v1/cases/C1/export?skeleton=false"):
             mine = api.get(path, headers=ha).json()
             assert "skeleton" not in mine and "skeleton_truncated" not in mine
-            text = json.dumps(mine)
-            assert "C2" not in text and "B-SECRET-CASE" not in text
-        theirs = json.dumps(api.get("/v1/cases/B-SECRET-CASE/export", headers=hb).json())
-        assert "C1" not in theirs and "C2" not in theirs
+            assert _names(mine, "C2") == [] and _names(mine, "B-SECRET-CASE") == []
+        theirs = api.get("/v1/cases/B-SECRET-CASE/export", headers=hb).json()
+        assert _names(theirs, "C1") == [] and _names(theirs, "C2") == []
 
     def test_asking_for_the_skeleton_shows_only_this_accounts_other_entries(self, tenants):
         api, (_, ha), (_, hb), _ = tenants
         mine = api.get("/v1/cases/C1/export?skeleton=true", headers=ha).json()
         assert [s["seq"] for s in mine["skeleton"]] == [2, 4]
         assert any(s["subject"] == "C2" for s in mine["skeleton"])  # the disclosure
+        assert _names(mine, "C2")  # ... and the structural check does see a real disclosure
         text = json.dumps(mine)
         assert "B-SECRET-CASE" not in text and "B-ONLY-TEXT-77c1" not in text
         theirs = api.get("/v1/cases/B-SECRET-CASE/export?skeleton=true", headers=hb).json()
