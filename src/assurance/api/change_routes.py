@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.attest_routes import anchor_contradiction, latest_anchor
+from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from assurance.api.deps import Machine, get_register
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -410,6 +410,18 @@ async def reverify_case_route(
     case_id: str, body: ReverificationIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
+    """Submit fresh verification evidence for the entries a case is waiting on.
+
+    ``200`` means the submission was accepted and recorded, **not** that it cleared
+    anything. When the case is still waiting the response carries ``blocked_reason``
+    (absent when nothing is outstanding): ``code`` is ``below_validated_tier`` when a
+    required entry was read current on evidence under the floor, or
+    ``evidence_not_current`` when coverage did not read the entry current at all;
+    ``entries`` maps each outstanding entry to its recorded reason and ``message``
+    says what would clear it. A decider may waive an entry
+    (``waive-reverification``); a waiver is recorded as one and never reads as
+    current.
+    """
     try:
         manifest = SafetyManifest.from_dict(body.manifest)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
@@ -494,7 +506,8 @@ async def waive_reverification_route(
 
 
 @change_router.get("/cases/{case_id}/export",
-                   summary="A verifiable evidence bundle for one case")
+                   summary="A verifiable evidence bundle for one case",
+                   responses=EXPORT_RESPONSES)
 async def export_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -514,11 +527,23 @@ async def export_case(
     ``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,
     kinds, times and hashes; no evidence) so removed entries are visible; it is off
     by default because it names every other case and incident of the account.
-    The bundle carries the account's newest *server-read* signed attestation as
-    ``anchor`` when it has one; 409 ``anchor_contradicts_ledger`` if that
-    attestation does not match this ledger (counter-signed heads the customer
-    declared are never embedded). Records after the anchor are covered by no
-    signature.
+
+    **Completeness.** Without ``skeleton`` a bundle is internally consistent but a
+    removed entry of the case cannot be seen, and a verifier reports completeness as
+    *not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the
+    signer's public key can show nothing was removed up to the anchor; records after
+    it are covered by no signature.
+
+    **Anchor.** ``anchor`` is the newest attestation the service *read from this
+    account's own ledger* (``read_from_ledger``). No customer route creates one: the
+    operator runs ``assurance attest sign`` against the hosted ledger
+    (``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and
+    its completeness is not checked. Counter-signed heads you declared about your own
+    ledger (``POST /v1/ledger/attest``) are never embedded. If the embedded
+    attestation does not match this ledger the answer is 409
+    ``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged
+    attestation log is 500 ``attestation_log_damaged``, never a silently unanchored
+    export; ``?anchor=false`` is the explicit way to export without one.
     """
     signed_anchor = latest_anchor(principal) if anchor else None
     try:

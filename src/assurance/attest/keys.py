@@ -23,6 +23,7 @@ wrong, and no room for a curve or a padding mode to be selected badly.
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,11 +151,16 @@ class SigningKey:
         return cls(private=key)
 
     @classmethod
-    def load(cls, path: str | Path, *, passphrase: str = "") -> SigningKey:
+    def load(
+        cls, path: str | Path, *, passphrase: str = "", label: str | None = None,
+    ) -> SigningKey:
+        """Load a key file. *label* names it in errors: a server passes one so that
+        no message it sends to a client contains a filesystem path."""
         p = Path(path)
+        name = label or str(p)
         if not p.exists():
-            raise SigningKeyError(f"{p} does not exist.")
-        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=str(p))
+            raise SigningKeyError(f"{name} does not exist.")
+        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=name)
 
     def save(
         self, path: str | Path, *, passphrase: str = "", ledger: str | Path | None = None,
@@ -192,13 +198,30 @@ class SigningKey:
             encryption = serialization.BestAvailableEncryption(
                 passphrase.encode("utf-8"))
 
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(self.private.private_bytes(
+        pem = self.private.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=encryption,
-        ))
-        p.chmod(0o600)
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Created 0600 and exclusively, in one step: write_bytes-then-chmod leaves the
+        # key readable under the process umask (0644 by default) for an instant, and a
+        # file that appeared after the exists() check above would be written into.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(p, flags, 0o600)
+        except FileExistsError as exc:
+            raise SigningKeyError(
+                f"{p} already exists. Refusing to overwrite a signing key: every "
+                "attestation ever made with the old one becomes unverifiable, and "
+                "that is indistinguishable from the old one being repudiated."
+            ) from exc
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(pem)
+        except BaseException:
+            p.unlink(missing_ok=True)       # never leave half a key behind
+            raise
         return p
 
     @property

@@ -209,6 +209,13 @@ async def change_export(case_id: str, skeleton: bool = False) -> dict[str, Any]:
     ``skeleton=True`` also lists the id, kind and time of every OTHER entry in the
     account's ledger so completeness can be checked; leave it off unless the person
     who will receive the file may see those (it is off by default for that reason).
+
+    The bundle carries an ``anchor`` only when the operator has signed this account's
+    ledger (``assurance attest sign``): the same record the HTTP API embeds, chosen by
+    the same rule, never one the customer declared. Without one, completeness is not
+    checked. A 409 ``anchor_contradicts_ledger`` is a finding about the ledger, not a
+    fault: report it, do not retry around it. A 500 ``attestation_log_damaged`` means
+    the anchor could not be chosen; no unanchored bundle is substituted.
     """
     path = _case_path(case_id, "/export")
     if not path:

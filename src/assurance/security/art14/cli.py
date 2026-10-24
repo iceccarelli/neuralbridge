@@ -271,7 +271,7 @@ def cmd_export(args: argparse.Namespace) -> int:
         if args.attestations:
             # Signing needs the Ed25519 dependency; exporting without an anchor does not.
             from ...attest.attestation import AttestationLog
-            anchor = AttestationLog(args.attestations).require_last().to_dict()
+            anchor = AttestationLog(args.attestations).require_anchor().to_dict()
         bundle = register.ledger.export(
             subject=args.case_id, anchor=anchor,
             skeleton=args.skeleton and args.case_id is not None)
@@ -286,8 +286,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         Path(args.output).write_text(text, encoding="utf-8")
         print(f"exported {len(bundle['entries'])} records to {args.output}")
         if anchor:
-            print(f"  anchored to attestation {anchor['sequence']} (seq {anchor['head_seq']}); "
-                  "records after it are covered by no signature")
+            from ...attest.attestation import describe_anchor
+            print(f"  {describe_anchor(anchor)}")
         else:
             print("  not anchored: nothing in this file shows nothing was removed. "
                   "Export with --attestations <log> and verify with --public-key.")
