@@ -44,12 +44,42 @@ had no further independent review).
 - **Attestation log** writes are serialised (thread lock + flock) and fsynced.
 - Sitemap no longer lists the noindex `/checkout/success`.
 
-**Known and not fixed:** no recorder-attestation signer or trust format exists, so `validated`
-is unreachable; the ledger has no monotonic-timestamp check (a clock rollback gives
-out-of-order `at`); a compromised watch holding the account key can fabricate current-looking
-observations; a hosted ledger and its signing key are held by the same party; the Art. 14
-export route returns 503 rather than 401 when no operator keys are configured; nothing in this
-branch has been deployed or run against real Stripe.
+Second review round (three independent reviewers, each finding reproduced by running it, then fixed
+test-first with mutation checks; browser e2e `scripts/e2e-assurance.sh` on desktop Chromium: 101 passed,
+and it caught a regression the unit suite did not). Fixed in that round: a *declared* head attestation
+(the signer was told the head, never read the chain; any Cell tenant can obtain one) no longer reads
+`anchored` — it is `declared_head`, entries dated after the signature are refused, and only
+`read_from_ledger` heads anchor; the honest default hosted export checked with the right key is
+`not_established`, not "inconsistent"; the append-only attestation log no longer mixes declared and
+server-read bases (a tenant could brick its own hosted signing, and a customer was told "records were
+removed" falsely); attest runs off the event loop with a bounded lock and 503; a torn log tail no
+longer wedges exports or leaks a server path; the last enabled decider cannot be disabled and the
+operator bootstrap is one-shot (an agent could mint itself a decider after offboarding); operator keys
+cannot mint or revoke account keys; caller text cannot forge `attribution=` inside a sealed actor role;
+an overflowing date is a refused entry, not a 500 and a partial write; seals now refuse integers beyond
+2^53 and sub-microunit floats that the content hash cannot distinguish.
+
+**Known and not fixed** (do not claim otherwise):
+- No recorder-attestation signer or trust format exists, so `validated` is unreachable and change cases
+  needing a re-verification close only by a decider's waiver.
+- Hosted exports carry no anchor until an operator runs `assurance attest sign` against the tenant
+  ledger; there is no customer-reachable route. Whoever holds the ledger and the signing key can
+  re-sign a shorter ledger.
+- A reporter holding the account key can fabricate current-looking Watch observations (plant a
+  manifest, relay it); `relay_basis` and `received_at` label this, they do not prevent it, and `stale`
+  ignores them. The reporter-declared cadence can widen the window up to 720 h.
+- One tenant's waiting ingests can occupy the shared threadpool and slow other tenants (measured:
+  10.5 s for another tenant's read). No per-account concurrency cap exists.
+- The `/v1/cases/{id}/export` route returns 503, not 401, with no key in an unconfigured deployment.
+- `change` routes (e.g. `export_case`) run blocking SQLite work on the event loop.
+- The skeleton opt-in checkbox in the workspace has no browser test of its own; the sitemap, verifier
+  and lifecycle specs pass.
+- No monotonic-timestamp check in the ledger (a clock rollback gives out-of-order `at`).
+- A `READ_FROM_MACHINE` manifest hash source maps to `validated` on a caller-supplied label
+  (`machinery/manifest.py`); it is the same declared-word shape as trace provenance but is not a
+  verification tier. Not tested for API-posted manifests.
+- Nothing has been deployed or run against real Stripe; GitHub Actions had not run on this branch
+  when this was written (CI triggers on pull requests).
 
 ---
 
