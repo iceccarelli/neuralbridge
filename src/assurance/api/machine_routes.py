@@ -38,7 +38,7 @@ from assurance.api.deps import (
     get_register,
 )
 from assurance.billing.accounts import AccountStore, Principal
-from assurance.core.errors import AssuranceError
+from assurance.core.errors import AssuranceError, EvidenceIncompleteError
 from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
@@ -306,15 +306,23 @@ async def verify_run(
         except (AssuranceError, KeyError, ValueError, TypeError) as exc:
             raise _bad(exc, "limits") from exc
 
-    bundle = build_bundle(
-        envelope, trace,
-        actor=actor,
-        limits=limits,
-        limits_reviews=body.limits_reviews,
-        review_trust=_server_review_trust(),
-        ledger=register.ledger if (body.seal and register is not None) else None,
-        subject=body.subject,
-    )
+    try:
+        bundle = build_bundle(
+            envelope, trace,
+            actor=actor,
+            limits=limits,
+            limits_reviews=body.limits_reviews,
+            review_trust=_server_review_trust(),
+            ledger=register.ledger if (body.seal and register is not None) else None,
+            subject=body.subject,
+        )
+    except EvidenceIncompleteError as exc:
+        # The seal refused a number its hash cannot protect (an integer beyond 2^53 or a
+        # value finer than 6 decimals in a caller-supplied field). That is the caller's
+        # input, not a server fault: say which value, never a 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
     # The hash a re-verification cites (``verification_content_hash`` on
