@@ -301,9 +301,9 @@ def build_passport(
     if capped:
         skipped.append(
             f"every function reads current, but only on evidence at tier {floor!r}, below "
-            "'validated'. No verification this package can produce reaches 'validated' "
-            "until a verifiable recorder attestation exists (a trace's declared "
-            "provenance is capped at 'community'), so this passport is INDETERMINATE "
+            "'validated'. A trace's declared provenance is capped at 'community'; "
+            "'validated' needs a recorder attestation accepted under a recorder trust "
+            "list the verifier holds, so this passport is INDETERMINATE "
             "with low confidence, not verified: the behaviour was not demonstrated on "
             "the machine.")
     if not vfs:
