@@ -79,6 +79,13 @@ export default function VerifyPage() {
                   what it does and does not allow you to claim. <strong>Not shown:</strong> that the machine behaved
                   as recorded &mdash; that needs the original envelope and trace, run offline.
                 </p>
+                <p>
+                  A bundle that records a signed <strong>recorder attestation</strong> is a claim until it is
+                  re-assessed under a recorder trust list <em>you</em> hold (paste it under the file; it is never
+                  taken from the bundle). Without one the claim is reported as <strong>not checked</strong> and the
+                  tier is read as community. Even an accepted attestation shows only that a key you trust signed
+                  those trace bytes: <strong>integrity &ne; recorder authenticity &ne; physical safety</strong>.
+                </p>
               </div>
             </article>
             <article className="tile">
@@ -113,6 +120,7 @@ pip install -e '.[assurance-attest]'
 python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
 python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head (exit 0 only if anchored)
 python -m assurance machine check bundle.json                   # machine bundle
+python -m assurance machine check bundle.json --recorder-trust recorder-trust.json   # ...re-assess its recorder attestation under YOUR keys
 python -m assurance attest verify --log attestations.jsonl --public-key issuer.pub`}</pre>
           <p className="hero-panel-note" style={{ maxWidth: '72ch' }}>
             Where the file comes from: a Register or Cell account downloads a case export from the{' '}

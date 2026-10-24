@@ -249,10 +249,10 @@ export default function CaseDetailPanel({
                 </ul>
                 {belowFloor.length > 0 && (
                   <p className="aw-note" data-testid="reverify-blocked">
-                    Not cleared: {belowFloor.join(', ')} — the evidence is below the &lsquo;validated&rsquo; floor. No
-                    verification this package can produce reaches &lsquo;validated&rsquo; until a verifiable recorder
-                    attestation exists (declared provenance is capped at &lsquo;community&rsquo;), so a decider operator
-                    may waive the entry.
+                    Not cleared: {belowFloor.join(', ')} — the evidence is below the &lsquo;validated&rsquo; floor. A
+                    declared provenance is capped at &lsquo;community&rsquo;; &lsquo;validated&rsquo; needs a recorder
+                    attestation accepted under the verifier&apos;s own trust list. A decider operator may waive the
+                    entry; a waiver is recorded as a waiver and never reads as current.
                   </p>
                 )}
                 <p className="aw-note">
@@ -289,9 +289,10 @@ export default function CaseDetailPanel({
                   that manifest below with the <code>content_hash</code> that call returned as{' '}
                   <code>verification_content_hash</code>. The server checks the hash against the ledger. There is no way
                   to mark an entry verified from this page; closing one without evidence is the explicit waiver, which
-                  reads &ldquo;waived&rdquo;. Today no verification this package produces reaches &lsquo;validated&rsquo;
-                  (declared provenance is capped at &lsquo;community&rsquo;), so a submission is recorded but a required
-                  entry is closed only by a decider&apos;s waiver until a verifiable recorder attestation exists.
+                  reads &ldquo;waived&rdquo;. A verification reaches &lsquo;validated&rsquo; only if a recorder attestation
+                  of its trace is accepted under the verifier&apos;s own trust list (a declared provenance is capped at
+                  &lsquo;community&rsquo;); otherwise a submission is recorded but a required entry is closed only by
+                  a decider&apos;s waiver.
                 </div>
               </div>
               <div>
