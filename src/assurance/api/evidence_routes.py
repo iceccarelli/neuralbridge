@@ -81,6 +81,11 @@ from assurance.core.evidence import Evidence
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.verify_export import verify_export
 from assurance.machine.bundle import BUNDLE_SCHEMA, check_bundle_data
+from assurance.machine.recorder_attestation import (
+    RecorderAttestationError,
+    RecorderTrust,
+    loads_strict,
+)
 
 __all__ = ["evidence_router", "analyse"]
 
@@ -110,6 +115,8 @@ MAX_TEXT = 600
 #: Files analysed at once. The deployment runs one worker; analysis is CPU.
 MAX_ANALYSES = 2
 MAX_KEY_HEADER = 4096
+#: A recorder trust list is a few PEM keys; this is room for several, not a document.
+MAX_TRUST_HEADER = 16384
 
 SUPPORTED = (
     "a ledger export (a JSON object with an `entries` list, from "
@@ -360,11 +367,13 @@ def _ledger(doc: dict[str, Any], key_pem: str = "") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # machine verification bundle
 # ---------------------------------------------------------------------------
-def _machine(doc: dict[str, Any]) -> dict[str, Any]:
+def _machine(doc: dict[str, Any], recorder_trust: RecorderTrust | None = None) -> dict[str, Any]:
     # The one implementation of the rules (seal, coherence, the envelope's tier
     # ceiling, the engine's set of checks, the unsealed copies) is the library's;
     # the same call is behind `assurance machine check` and /v1/machine/bundle/check.
-    check = check_bundle_data(doc)
+    # `recorder_trust` is the CALLER's own list (X-Recorder-Trust); this route has no
+    # list of its own, and a list inside the file is ignored.
+    check = check_bundle_data(doc, recorder_trust=recorder_trust)
     problems = list(check.problems)
     # Only what a check actually established, and only when nothing was found.
     verified = list(check.verified) if check.ok else []
@@ -398,6 +407,14 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         # Who vouches for `provenance`: "declared_by_filer" means the filer said so and
         # nothing signed the recording (so it is capped at community).
         "provenance_basis": body.get("provenance_basis"),
+        # What THIS check made of that claim: not_applicable | reproduced (accepted under
+        # the recorder trust list the caller supplied) | unverifiable (none supplied: the
+        # claim is NOT believed) | not_reproduced (rejected). `believed_tier` is the
+        # recorded tier capped at community unless it was reproduced. Neither says the
+        # recording is physically true: integrity is not recorder authenticity, which
+        # is not physical safety.
+        "provenance_reassessed": check.provenance_reassessed,
+        "believed_tier": check.believed_tier,
         "trace_started_at": body.get("trace_started_at"),
     })
 
@@ -414,6 +431,11 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         "a bundle on its own does not show it was ever recorded in a ledger, that "
         "it is the latest verification of that machine, or that the software "
         "running on the machine today is the software it describes.",
+        "recorder authenticity: a recorded provenance_basis of 'recorder_attested' is "
+        "a claim until the attestation is re-assessed under a recorder trust list you "
+        "hold. Even then it shows only that a trusted key signed these trace bytes: "
+        "integrity is not recorder authenticity, and recorder authenticity is not "
+        "physical safety.",
     ]
     # What the checker itself said it did not do, beyond the fixed list above (the
     # missing-originals note repeats the second item there).
@@ -612,7 +634,8 @@ def _attestations(items: list[Any], key_pem: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
-def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
+def analyse(raw: bytes, public_key_pem: str = "",
+            recorder_trust: RecorderTrust | None = None) -> dict[str, Any]:
     """Classify and check one file. Never raises: every outcome is a result."""
     if not raw.strip():
         return _unreadable("the file is empty")
@@ -646,7 +669,7 @@ def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
             return _ledger(doc, public_key_pem)
         if isinstance(doc, dict) and (doc.get("schema") == BUNDLE_SCHEMA
                                       or ("evidence" in doc and "envelope" in doc)):
-            return _machine(doc)
+            return _machine(doc, recorder_trust)
         records = _attestation_records(doc)
         if records is not None:
             return _attestations(records, public_key_pem)
@@ -722,12 +745,38 @@ def _meter(principal: Principal, accounts: AccountStore) -> dict[str, str]:
     return headers
 
 
-def _guarded_analyse(raw: bytes, key_pem: str) -> dict[str, Any]:
+def _guarded_analyse(raw: bytes, key_pem: str,
+                     recorder_trust: RecorderTrust | None = None) -> dict[str, Any]:
     """Runs in a worker thread; frees the slot when the work (not the request) ends."""
     try:
-        return analyse(raw, key_pem)
+        return analyse(raw, key_pem, recorder_trust)
     finally:
         _SLOTS.release()
+
+
+def _recorder_trust_from_header(value: str | None) -> RecorderTrust | None:
+    """The caller's own recorder trust list from ``X-Recorder-Trust``, or ``None``."""
+    if value is None or not value.strip():
+        return None
+    if "PRIVATE" in value.upper():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "private_key_refused",
+                    "detail": "That looks like a private key. It was not read or kept. "
+                              "Only PUBLIC keys go in a recorder trust list; if this was a "
+                              "real key, treat it as exposed and replace it."})
+    if len(value) > MAX_TRUST_HEADER:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "recorder_trust_too_large",
+                    "detail": f"A recorder trust header is at most {MAX_TRUST_HEADER} "
+                              "characters."})
+    try:
+        return RecorderTrust.from_dict(loads_strict(value, "X-Recorder-Trust"))
+    except RecorderAttestationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_recorder_trust", "detail": str(exc)[:300]}) from exc
 
 
 @evidence_router.post(
@@ -744,6 +793,13 @@ async def verify_evidence(
                     "check attestation signatures, or a ledger export's signed anchor "
                     "(which is what shows nothing was removed). Never a private key: "
                     "those are refused unread.")] = None,
+    x_recorder_trust: Annotated[str | None, Header(
+        description="YOUR recorder trust list (JSON, format "
+                    "assurance.machine.recorder-trust.v1, on one line), to re-assess the "
+                    "recorder attestation in a machine bundle. Without it a bundle that "
+                    "claims `recorder_attested` is reported as unverifiable and its tier "
+                    "is not believed. Public keys only: a private key is refused "
+                    "unread.")] = None,
 ) -> dict[str, Any]:
     """The body is the raw JSON file itself (not wrapped in anything).
 
@@ -797,6 +853,7 @@ async def verify_evidence(
                 detail={"error": "public_key_too_large",
                         "detail": f"A public key header is at most {MAX_KEY_HEADER} characters."})
         key_pem = _pem_from_header(x_issuer_public_key)
+    recorder_trust = _recorder_trust_from_header(x_recorder_trust)
     if _SLOTS.full():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, headers={"Retry-After": "3"},
@@ -816,4 +873,4 @@ async def verify_evidence(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, headers={"Retry-After": "3"},
             detail={"error": "verifier_busy",
                     "detail": "Other files are being checked right now; try again in a moment."})
-    return await run_in_threadpool(_guarded_analyse, raw, key_pem)
+    return await run_in_threadpool(_guarded_analyse, raw, key_pem, recorder_trust)
