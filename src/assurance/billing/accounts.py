@@ -995,20 +995,22 @@ class AccountStore:
 
         Scoped by account in the query itself, so a hash or prefix belonging to
         anyone else is indistinguishable from one that does not exist. Returns
-        ``revoked``, ``already_revoked``, ``not_found`` or ``ambiguous`` (a
-        prefix shared by more than one live key of the account).
+        ``revoked``, ``already_revoked``, ``not_found``, ``ambiguous`` (a
+        prefix shared by more than one live key of the account) or ``operator_key``
+        (the key is bound to an operator: it is ended by disabling the operator,
+        which carries the last-decider guard, never by this route).
         """
         now = format_utc(utc_now())
         with self._txn() as db:
             if key_hash:
                 rows = db.execute(
-                    "SELECT key_hash, revoked_at FROM api_keys "
+                    "SELECT key_hash, revoked_at, operator_id FROM api_keys "
                     "WHERE key_hash=? AND account_id=?",
                     (key_hash, account_id),
                 ).fetchall()
             elif key_prefix:
                 rows = db.execute(
-                    "SELECT key_hash, revoked_at FROM api_keys "
+                    "SELECT key_hash, revoked_at, operator_id FROM api_keys "
                     "WHERE prefix=? AND account_id=?",
                     (key_prefix, account_id),
                 ).fetchall()
@@ -1021,6 +1023,8 @@ class AccountStore:
                 return "already_revoked"
             if len(live) > 1:
                 return "ambiguous"
+            if live[0]["operator_id"]:
+                return "operator_key"
             db.execute(
                 "UPDATE api_keys SET revoked_at=? WHERE key_hash=? AND revoked_at IS NULL",
                 (now, live[0]["key_hash"]),
@@ -1111,12 +1115,18 @@ class AccountStore:
         with self._txn() as db:
             if db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone() is None:
                 raise ValueError("no such account")
+            if only_if_none and db.execute(
+                    "SELECT 1 FROM operators WHERE account_id=? LIMIT 1",
+                    (account_id,)).fetchone() is not None:
+                # One-shot: "has ever had an operator", not "has one enabled now".
+                # Otherwise offboarding the last decider would hand an account-level
+                # key (an agent, the watch, an MCP client) a fresh bootstrap.
+                raise OperatorsExistError(
+                    "this account already has (or has had) operators; only a decider "
+                    "can add more.")
             rows = db.execute(
                 "SELECT name FROM operators WHERE account_id=? AND disabled_at IS NULL",
                 (account_id,)).fetchall()
-            if only_if_none and rows:
-                raise OperatorsExistError(
-                    "this account already has operators; only a decider can add more.")
             if any(r["name"].lower() == name.strip().lower() for r in rows):
                 raise ValueError(f"an operator named {name.strip()!r} already exists")
             db.execute(
@@ -1148,17 +1158,24 @@ class AccountStore:
         """Disable an operator of this account and revoke every key bound to it.
 
         Scoped by account in the query itself. Returns ``disabled``,
-        ``already_disabled`` or ``not_found``.
+        ``already_disabled``, ``not_found`` or ``last_decider`` (the account's only
+        enabled decider is not disabled: nobody could then close a case, and the
+        account would have no human who can create the next decider).
         """
         now = format_utc(utc_now())
         with self._txn() as db:
             row = db.execute(
-                "SELECT disabled_at FROM operators WHERE id=? AND account_id=?",
+                "SELECT disabled_at, role FROM operators WHERE id=? AND account_id=?",
                 (operator_id, account_id)).fetchone()
             if row is None:
                 return "not_found"
             if row["disabled_at"] is not None:
                 return "already_disabled"
+            if row["role"] == "decider" and db.execute(
+                    "SELECT COUNT(*) FROM operators WHERE account_id=? AND role='decider' "
+                    "AND disabled_at IS NULL AND id<>?",
+                    (account_id, operator_id)).fetchone()[0] == 0:
+                return "last_decider"
             db.execute("UPDATE operators SET disabled_at=? WHERE id=?", (now, operator_id))
             db.execute(
                 "UPDATE api_keys SET revoked_at=? WHERE operator_id=? AND revoked_at IS NULL",

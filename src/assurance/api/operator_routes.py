@@ -12,11 +12,13 @@ was presented*. What it does not: that N is a particular real-world person (ther
 is no identity proofing here), or that the holder of the key is N and not someone
 N gave it to.
 
-Bootstrapping: an account with no operators lets an account-level key create the
-first one, which must be a ``decider``. After that, creating or disabling
-operators needs a ``decider`` operator's key, so an automation holding only an
-account key cannot mint itself a decision-making identity. The account holder
-should create the first operator before handing any key to an agent.
+Bootstrapping: an account that has never had an operator lets an account-level key
+create the first one, which must be a ``decider``. The bootstrap is one-shot: once
+an operator has existed, enabled or not, creating or disabling operators needs a
+``decider`` operator's key, so an automation holding only an account key cannot mint
+itself a decision-making identity. The last enabled decider cannot be disabled
+(create another first), so offboarding never re-opens that path. The account
+holder should create the first operator before handing any key to an agent.
 """
 
 from __future__ import annotations
@@ -124,4 +126,10 @@ async def disable_operator(
     outcome = accounts.disable_operator(account_id, operator_id)
     if outcome == "not_found":
         raise HTTPException(status_code=404, detail={"error": "operator_not_found"})
+    if outcome == "last_decider":
+        raise HTTPException(status_code=409, detail={
+            "error": "last_decider",
+            "detail": "this is the account's only enabled decider. Create another decider "
+                      "first (POST /v1/operators with role 'decider'), then disable this "
+                      "one; with no decider nobody could close a case or add operators."})
     return {"operator_id": operator_id, "outcome": outcome}

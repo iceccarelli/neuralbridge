@@ -12,7 +12,8 @@ the bundle as prominently as a violation. A tool that silently skips the check
 it could not perform is worse than no tool, because it produces a clean report.
 
 **The verdict inherits the weakest input.** The tier a result may claim is the
-minimum of the trace's provenance ceiling, the envelope's figure bases, and the
+minimum of the trace's provenance ceiling (which a *declared* provenance cannot lift
+above community: nothing signs a recording), the envelope's figure bases, and the
 limits table's verification state. A perfect run against a datasheet stopping
 distance is not validated evidence, and the result says so without being asked.
 
@@ -32,6 +33,7 @@ from typing import Any
 
 from assurance.core.identity import utc_now
 from assurance.core.tiers import AssuranceTier
+from assurance.machine import provenance_trust
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import LimitsReviewAssessment, ReviewTrust, assess_reviews
@@ -69,7 +71,13 @@ __all__ = [
 #:    review by a key in the verifier's own trust list. The table's free-text
 #:    verified_by / verified_on claim no longer lifts the tier, and the review
 #:    assessment is sealed into the bundle.
-ENGINE_VERSION = "4"
+#: 5: a trace's declared provenance (bench / field) no longer lifts the tier. It is
+#:    written by whoever files the trace and nothing signs a recording, so the tier is
+#:    capped at community (``provenance_basis: declared_by_filer``, sealed and
+#:    reported) until a recorder attestation can be verified
+#:    (``machine/provenance_trust.py``). Earlier engines let ``field`` reach
+#:    ``validated``; a bundle that carries that is rejected by the checker.
+ENGINE_VERSION = "5"
 
 #: A sanity floor on how much trace is worth calling a verification, NOT a standard
 #: and not taken from one. A single sample, or a handful spanning a few
@@ -209,6 +217,10 @@ class VerificationResult:
     verified_at: str
     #: How the limits table's review evidence was assessed; None when no table.
     limits_review: dict[str, Any] | None = None
+    #: Why the trace's provenance is believed as far as it is. Today always
+    #: ``declared_by_filer``, which never lifts the tier (see provenance_trust.py).
+    provenance_basis: str = "declared_by_filer"
+    provenance_assessment: dict[str, Any] | None = None
 
     @property
     def violations(self) -> list[Violation]:
@@ -242,6 +254,8 @@ class VerificationResult:
             "product_version": self.product_version,
             "trace_id": self.trace_id,
             "provenance": self.provenance,
+            "provenance_basis": self.provenance_basis,
+            "provenance_assessment": self.provenance_assessment,
             "verdict": self.verdict.value,
             "tier": self.tier.value,
             "may_claim_physical_behaviour": self.may_claim_physical_behaviour,
@@ -255,7 +269,8 @@ class VerificationResult:
         lines = [
             f"{self.product} {self.product_version} — {self.verdict.value.upper()} "
             f"at tier {self.tier.value}",
-            f"  trace {self.trace_id} ({self.provenance}) {self.trace_hash[:12]}",
+            f"  trace {self.trace_id} ({self.provenance}, {self.provenance_basis}) "
+            f"{self.trace_hash[:12]}",
             f"  envelope {self.envelope_hash[:12]}",
         ]
         for c in self.checks:
@@ -284,6 +299,12 @@ class VerificationResult:
         if not self.may_claim_physical_behaviour:
             lines.append(
                 "  This result may NOT be used to claim how the hardware behaves."
+            )
+        if self.provenance_basis == "declared_by_filer" and self.provenance != "simulation":
+            lines.append(
+                f"  The trace's provenance ({self.provenance!r}) is the filer's own "
+                "declaration; nothing signs a recording, so it does not lift the tier "
+                "above community."
             )
         return "\n".join(lines)
 
@@ -909,7 +930,9 @@ def verify(
     checks.append(dates)
 
     # The tier is the floor of every input the verdict depends on.
-    tier = min(trace.provenance.tier_ceiling, envelope.tier_ceiling)
+    prov = provenance_trust.assess_provenance(trace)
+    tier = min(prov.ceiling, envelope.tier_ceiling)
+    caveats.append(f"provenance_basis {prov.basis.value}: {prov.explanation}")
     if limits is not None and pfl.outcome is CheckOutcome.VERIFIED:
         limits_tier, limits_reason = limits.tier_for(envelope.pfl_limits_hash, review)
         tier = min(tier, limits_tier)
@@ -986,5 +1009,7 @@ def verify(
         tier=tier,
         verified_at=utc_now().isoformat().replace("+00:00", "Z"),
         limits_review=review.to_dict() if review is not None else None,
+        provenance_basis=prov.basis.value,
+        provenance_assessment=prov.to_dict(),
     )
 

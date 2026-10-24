@@ -195,16 +195,38 @@ caller:
   that already existed when the change was found cannot be evidence about it;
 - **that one bundle** passed **every** check the function declares (a newer
   bundle for one check plus an older one for another does not clear it);
-- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). A
-  simulation trace is `community` and a datasheet figure `profile`: they are
-  about a model or a number, not the machine, so they never clear an entry. It
-  stays required, reads `below_validated:<tier>` in `evidence_current`, the case
-  records why in `checks_skipped`, and only a person's waiver closes it; and
+- that bundle's tier is **at least `validated`** (`assurance.core.tiers`). Below
+  it, the entry stays required, reads `below_validated:<tier>` in
+  `evidence_current`, the case records why in `checks_skipped`, and only a person's
+  waiver closes it. **Today that is every verification this package produces from a
+  trace:** a trace's provenance is declared by whoever files it and nothing signs a
+  recording, so the engine caps it at `community` (`deploy/assurance/MACHINE.md`,
+  "Why a declared provenance does not count"). No verification this package can
+  produce reaches `validated` until a verifiable recorder attestation exists, so a
+  re-verification clears no entry by itself and a `decider` operator waives it. The
+  tier is read the way the public bundle checker reads it, not from the stored word:
+  `VerificationRecord.from_ledger` takes a sealed `validated` as `validated` only
+  when the body is engine 5 or later **and** its `provenance_basis` is in
+  `provenance_trust.LIFTING_BASES` (empty today); an engine-4 `validated` bundle
+  already in a ledger, or a resealed body, is read as `community`; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,
 `no_new_evidence`, `below_validated:<tier>`, …) in `evidence_current`. A function the manifest no longer
 declares stays required.
+
+**A 200 from `reverify` means the submission was recorded, not that it cleared
+anything.** While the case still awaits re-verification the result carries a
+`blocked_reason` (`assurance.change.service.blocked_reason`, derived from the case's
+own `evidence_current`): `code` is `below_validated_tier` (the evidence is under the
+`validated` floor, which is every trace-derived verification today) or
+`evidence_not_current` (coverage does not read the entry current at all), with
+`tier_floor`, the `entries` and the reason per entry, and a sentence saying that a
+recorder attestation is what would lift the cap and that a `decider` operator may
+waive. The HTTP route returns it beside the case, the CLI prints `blocked: <code>`
+and the sentence (the exit code stays 0: the submission was accepted), the MCP tool
+relays the route's body, and `/assurance` shows the same sentence under the case. The
+key is absent when nothing is blocked.
 
 **Every function an advisory reaches needs evidence** — not only those that were
 current until now. A function that was never verified or was already stale is
@@ -294,6 +316,43 @@ case since, so a close can never land on top of a move made after the person
 read the case. Machine-driven writers (assess, watch ingest, advisory
 withdrawal) re-read and recompute instead; people are told and decide again.
 
+## Exporting a case: completeness and the anchor
+
+An export is internally consistent: its chain recomputes. That does not show that
+nothing was removed. Three things decide what a verifier can say:
+
+* **`skeleton`** (off by default; `?skeleton=true`, `--skeleton`): lists the
+  position, kind, subject and time of every *other* entry of the account's ledger,
+  so a verifier can see a removed entry. It discloses those to whoever receives the
+  file, which is why it is opt-in. Without it completeness is `not_checked`.
+* **`anchor`**: a signed head attestation the verifier checks under the signer's
+  public key, which it must obtain elsewhere. Records after the anchor are covered
+  by no signature.
+* **Who made the anchor.** The hosted export embeds the newest attestation the
+  service *read from the account's own ledger* (`read_from_ledger`). **No customer
+  route creates one**: only the operator, with `assurance attest sign` against the
+  hosted ledger (procedure in `ATTEST.md`, section 3). The `declared_by_holder`
+  records a customer writes with `POST /v1/ledger/attest` describe the customer's
+  own ledger and are never embedded. So until the operator has signed an account's
+  ledger, its exports carry no `anchor` and their completeness is not checked;
+  do not tell a customer otherwise.
+
+Refusals are part of the contract (`public/openapi.json`):
+
+| status | body `error` | meaning |
+|---:|---|---|
+| 401 / 402 | | no key / the plan does not include export |
+| 404 | `case_not_found` | the ledger holds no entry of a case kind under this id |
+| 409 | `anchor_contradicts_ledger` | the embedded attestation does not match this ledger (shorter, or another history at a signed position): a rewind signal, nothing exported. `?anchor=false` exports without it and does not make the finding go away |
+| 500 | `ledger_integrity` | the account's chain does not verify |
+| 500 | `attestation_log_damaged` | the attestation log cannot be read, so the anchor cannot be chosen; the export is refused, never silently unanchored |
+
+The CLI (`assurance change export --attestations LOG`) and the API choose the
+anchor with one rule (`assurance.attest.select_anchor`): the newest
+`read_from_ledger` record. A log of only declared heads is accepted on the CLI
+because a person named it; the bundle's `anchor.basis` says `declared_by_holder` and
+the CLI says the head was declared and not read from the ledger.
+
 ## Surfaces
 
 ```
@@ -310,11 +369,13 @@ POST /v1/change/assess/advisory                    {advisory, actor?}
 POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
 GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}
-GET  /v1/change/cases/{case_id}/export             a bundle `assurance evidence verify` checks
+GET  /v1/change/cases/{case_id}/export[?skeleton=][&anchor=]
+        # a bundle `assurance evidence verify` checks. See "Exporting a case" below.
 GET  /v1/change/cases/{case_id}/replay             the case rebuilt from the ledger alone
 POST /v1/change/cases/{case_id}/claim              {owner, actor}
 POST /v1/change/cases/{case_id}/advance            {actor}
 POST /v1/change/cases/{case_id}/reverification     {manifest, verification_content_hash, actor}
+        # 200 = recorded. `blocked_reason` is present while the case still waits (see above).
 POST /v1/change/cases/{case_id}/resolve-decision   {decision, resolution, actor}
 POST /v1/change/cases/{case_id}/waive-reverification {entry, reason, actor}
 POST /v1/change/cases/{case_id}/decision           {disposition, reason, actor}

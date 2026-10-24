@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from assurance.api.deps import Machine, get_register
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -32,6 +33,7 @@ from assurance.change.service import (
     assess_advisory,
     assess_drift,
     assess_recorded_intervention,
+    blocked_reason,
     claim,
     decide,
     resolve_decision,
@@ -42,6 +44,7 @@ from assurance.change.service import (
 from assurance.change.store import CASE_KINDS, CaseConflictError, CaseStore, CaseStoreError
 from assurance.core.errors import AssuranceError, LedgerIntegrityError
 from assurance.core.evidence import Actor
+from assurance.evidence.ledger import AnchorContradictsLedgerError
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
@@ -402,11 +405,23 @@ async def advance_case_route(
     return case.to_dict()
 
 
-@change_router.post("/cases/{case_id}/reverification", summary="Supply fresh verification evidence")
+@change_router.post("/cases/{case_id}/reverification", summary="Supply fresh verification evidence; blocked_reason says why a case still waits")
 async def reverify_case_route(
     case_id: str, body: ReverificationIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
+    """Submit fresh verification evidence for the entries a case is waiting on.
+
+    ``200`` means the submission was accepted and recorded, **not** that it cleared
+    anything. When the case is still waiting the response carries ``blocked_reason``
+    (absent when nothing is outstanding): ``code`` is ``below_validated_tier`` when a
+    required entry was read current on evidence under the floor, or
+    ``evidence_not_current`` when coverage did not read the entry current at all;
+    ``entries`` maps each outstanding entry to its recorded reason and ``message``
+    says what would clear it. A decider may waive an entry
+    (``waive-reverification``); a waiver is recorded as one and never reads as
+    current.
+    """
     try:
         manifest = SafetyManifest.from_dict(body.manifest)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
@@ -421,7 +436,13 @@ async def reverify_case_route(
                                      named=True))
     except _REFUSALS as exc:
         raise _refused(exc) from exc
-    return case.to_dict()
+    out = case.to_dict()
+    # 200 means the submission was accepted and recorded, not that it cleared
+    # anything. Say why when the case is still waiting (absent when nothing is).
+    reason = blocked_reason(case)
+    if reason is not None:
+        out["blocked_reason"] = reason
+    return out
 
 
 @change_router.post("/cases/{case_id}/decision", summary="Close, reject or defer — a human decision")
@@ -485,19 +506,51 @@ async def waive_reverification_route(
 
 
 @change_router.get("/cases/{case_id}/export",
-                   summary="A verifiable evidence bundle for one case")
+                   summary="A verifiable evidence bundle for one case",
+                   responses=EXPORT_RESPONSES)
 async def export_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
+    anchor: Annotated[bool, Query(
+        description="embed the newest signed attestation from this account's own "
+                    "attestation log as the bundle's `anchor`, so a verifier holding "
+                    "the signer's public key can check the bundle is complete up to "
+                    "it. Set false to export without one.")] = True,
+    skeleton: Annotated[bool, Query(
+        description="true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file.")] = False,
 ) -> dict[str, Any]:
     """The case's ledger entries as ``assurance evidence verify`` expects them.
 
     Refuses (500 ``ledger_integrity``) if the account's chain does not verify,
     and says no such case (404) when the ledger holds no entry of a case kind
     under this id, so an export is never an empty bundle that reads as clean.
+    ``?skeleton=true`` adds a ``skeleton`` of the account's other entries (ids,
+    kinds, times and hashes; no evidence) so removed entries are visible; it is off
+    by default because it names every other case and incident of the account.
+
+    **Completeness.** Without ``skeleton`` a bundle is internally consistent but a
+    removed entry of the case cannot be seen, and a verifier reports completeness as
+    *not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the
+    signer's public key can show nothing was removed up to the anchor; records after
+    it are covered by no signature.
+
+    **Anchor.** ``anchor`` is the newest attestation the service *read from this
+    account's own ledger* (``read_from_ledger``). No customer route creates one: the
+    operator runs ``assurance attest sign`` against the hosted ledger
+    (``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and
+    its completeness is not checked. Counter-signed heads you declared about your own
+    ledger (``POST /v1/ledger/attest``) are never embedded. If the embedded
+    attestation does not match this ledger the answer is 409
+    ``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged
+    attestation log is 500 ``attestation_log_damaged``, never a silently unanchored
+    export; ``?anchor=false`` is the explicit way to export without one.
     """
+    signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(
+            subject=case_id, anchor=signed_anchor, skeleton=skeleton)
+    except AnchorContradictsLedgerError as exc:
+        raise anchor_contradiction(exc) from exc
     except LedgerIntegrityError as exc:
         raise _refused(exc) from exc
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):

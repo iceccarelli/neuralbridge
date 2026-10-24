@@ -62,6 +62,17 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import VerificationRecord
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """These tests are about what happens to a validated verification afterwards,
+    not about how it is earned. The engine never lifts a declared provenance, so
+    stand in for a verified recorder attestation (see the helper's docstring)."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
+
 ENG = Actor("a.integrator", "safety engineer")
 TECH = Actor("m.tech", "service technician")
 REVIEWER = Actor("v.grimaldi", "assurance reviewer")

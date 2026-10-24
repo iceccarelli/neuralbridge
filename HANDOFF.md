@@ -9,6 +9,80 @@ below were observed on 2026-10-21, not carried forward from older text.
 
 ---
 
+## 0.0 Changes on 2026-10-23 (supersede §0.1 where they differ)
+
+Branch `claude/serene-gauss-va283c`, not merged. Verified locally against PostgreSQL 16;
+each step below was mutation-checked and then reviewed by an agent that did not write it
+(the review found real defects in the first round, fixed in the second; the second round has
+had no further independent review).
+
+- **Declared provenance can no longer lift a tier** (`machine/provenance_trust.py`, engine 5).
+  Whoever files a trace declares its `provenance`, so every verification is capped at
+  `community` with `provenance_basis: declared_by_filer`. `LIFTING_BASES` is empty: **no
+  machine verification can be `validated` today**, and the public bundle checker rejects any
+  bundle that says otherwise. A signed recorder attestation (not built) is the intended way
+  to lift it. Consequence, deliberate and a **founder decision before merge**: a required
+  re-verification can no longer clear a change case by evidence; it is closed only by a
+  named decider's `waive_reverification` (reads `waived`). `blocked_reason` explains this in
+  the service, API, CLI, MCP and workspace; plan copy and the claims registry were reworded to
+  match. Passports with community-tier cover read `INDETERMINATE`/`LOW`, and legacy
+  engine-4 `validated` rows in a ledger are read as `community`.
+- **Sealed machine-bundle actor is bound to the credential** like change routes (operator key
+  records the operator; a differing body `actor` is 403). Still attribution, not identity proofing.
+- **Exports carry a completeness check**: optional signed head anchor (server-read attestation
+  only), `verify_export(trusted_key=, anchors=)`, `completeness` = `anchored` /
+  `anchored_partial` / `not_checked` / `failed`. `ok` is never "complete". An anchor over an
+  empty head, or the exporter's own unsigned head, never anchors. Subject bundles can carry a
+  skeleton of the account's other entries (opt-in: it discloses their ids, kinds and times).
+  Same-party limit stands: whoever holds the ledger and signing key can re-sign a shorter ledger;
+  a hosted export has no anchor until an operator signs into the tenant's attestation log.
+- **Watch replay**: `manifest_relayed` is honoured only for a manifest (or same-configuration
+  baseline) the account's ledger holds; server `received_at`, `observed_at_skew`, and
+  `basis: client_reported` on every observation; `relay_basis` says how freshness was obtained.
+  **The server cannot prevent a key holder planting a manifest and relaying it** (a labelled
+  non-refusal, because the honest `watch push` does the same); copy says so.
+- **Attestation log** writes are serialised (thread lock + flock) and fsynced.
+- Sitemap no longer lists the noindex `/checkout/success`.
+
+Second review round (three independent reviewers, each finding reproduced by running it, then fixed
+test-first with mutation checks; browser e2e `scripts/e2e-assurance.sh` on desktop Chromium: 101 passed,
+and it caught a regression the unit suite did not). Fixed in that round: a *declared* head attestation
+(the signer was told the head, never read the chain; any Cell tenant can obtain one) no longer reads
+`anchored` — it is `declared_head`, entries dated after the signature are refused, and only
+`read_from_ledger` heads anchor; the honest default hosted export checked with the right key is
+`not_established`, not "inconsistent"; the append-only attestation log no longer mixes declared and
+server-read bases (a tenant could brick its own hosted signing, and a customer was told "records were
+removed" falsely); attest runs off the event loop with a bounded lock and 503; a torn log tail no
+longer wedges exports or leaks a server path; the last enabled decider cannot be disabled and the
+operator bootstrap is one-shot (an agent could mint itself a decider after offboarding); operator keys
+cannot mint or revoke account keys; caller text cannot forge `attribution=` inside a sealed actor role;
+an overflowing date is a refused entry, not a 500 and a partial write; seals now refuse integers beyond
+2^53 and sub-microunit floats that the content hash cannot distinguish.
+
+**Known and not fixed** (do not claim otherwise):
+- No recorder-attestation signer or trust format exists, so `validated` is unreachable and change cases
+  needing a re-verification close only by a decider's waiver.
+- Hosted exports carry no anchor until an operator runs `assurance attest sign` against the tenant
+  ledger; there is no customer-reachable route. Whoever holds the ledger and the signing key can
+  re-sign a shorter ledger.
+- A reporter holding the account key can fabricate current-looking Watch observations (plant a
+  manifest, relay it); `relay_basis` and `received_at` label this, they do not prevent it, and `stale`
+  ignores them. The reporter-declared cadence can widen the window up to 720 h.
+- One tenant's waiting ingests can occupy the shared threadpool and slow other tenants (measured:
+  10.5 s for another tenant's read). No per-account concurrency cap exists.
+- The `/v1/cases/{id}/export` route returns 503, not 401, with no key in an unconfigured deployment.
+- `change` routes (e.g. `export_case`) run blocking SQLite work on the event loop.
+- The skeleton opt-in checkbox in the workspace has no browser test of its own; the sitemap, verifier
+  and lifecycle specs pass.
+- No monotonic-timestamp check in the ledger (a clock rollback gives out-of-order `at`).
+- A `READ_FROM_MACHINE` manifest hash source maps to `validated` on a caller-supplied label
+  (`machinery/manifest.py`); it is the same declared-word shape as trace provenance but is not a
+  verification tier. Not tested for API-posted manifests.
+- Nothing has been deployed or run against real Stripe; GitHub Actions had not run on this branch
+  when this was written (CI triggers on pull requests).
+
+---
+
 ## 0.1 Changes on 2026-10-22 (supersede the lines they contradict below)
 
 Verified by running the suite against a local PostgreSQL 16: **4262 passed, 0 skipped**.
@@ -50,12 +124,7 @@ Verified by running the suite against a local PostgreSQL 16: **4262 passed, 0 sk
   awareness or classification is sent. Read-only CLI verbs refuse a missing ledger (exit 2)
   instead of creating an empty one.
 
-**Known and not fixed** (found by an adversarial review; reproduction in the commit log of this
-branch's PR): `provenance` in a trace is declared by whoever files it, so an API-sealed
-`validated` tier can rest on a synthetic trace; subject/case export bundles cannot show that
-nothing was truncated from the tail (the verifier says so in `checks_skipped`; a signed head
-anchor is the fix); `manifest_relayed` and `observed_at` are reporter-declared, so a
-compromised watch can replay an old manifest; the attestation log has no file lock.
+**Known and not fixed in §0.1 (see §0.0 above for what changed):** provenance, tail truncation, replayed manifests and the attestation log lock were listed here and have been addressed on the branch described in §0.0.
 
 ---
 

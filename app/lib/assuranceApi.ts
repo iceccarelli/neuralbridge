@@ -46,11 +46,34 @@ export type ObservationRow = {
   // as reported by the client, and whether the client marked it as sealed earlier and relayed.
   last_successful_manifest_age_hours?: number | null;
   last_successful_manifest_relayed?: boolean | null;
+  // Optional: how the freshness of the last successful look was obtained. Treat planted_in_same_report
+  // (the manifest was first received in the very report that relayed it), and a relayed look whose
+  // manifest was already older than the window at the server's receipt, as freshness the reporter
+  // asserted. The service labels these; it does not refuse them.
+  last_successful_relay_basis?:
+    | 'unrelayed'
+    | 'held_from_earlier_report'
+    | 'planted_in_same_report'
+    | 'same_configuration_held'
+    | 'relayed_basis_unrecorded'
+    | null;
+  last_successful_manifest_first_received_in_this_report?: boolean | null;
+  last_successful_manifest_age_at_receipt_hours?: number | null;
+  last_successful_manifest_age_exceeds_window_at_receipt?: boolean | null;
   last_attempt_manifest_age_hours?: number | null;
+  // Optional: older servers omit them. Every observation is a statement by the holder of the account's
+  // key ("client_reported"); received_at is the server's clock, and a skew flag means the reporter's
+  // observed_at and that receipt differ by more than the server's bound (24 h).
+  basis?: 'client_reported';
+  last_successful_observed_at_declared?: string | null;
+  last_successful_received_at?: string | null;
+  last_successful_observed_at_skew?: boolean | null;
+  last_attempt_observed_at_skew?: boolean | null;
 };
 
 export type Observations = {
   as_of: string;
+  basis?: 'client_reported';
   default_cadence_hours: number;
   reporting: boolean;
   machines: ObservationRow[];
@@ -255,8 +278,10 @@ export type ApiOutcome<T> =
   | { kind: 'forbidden'; status: 403; message: string; code?: string }
   // 404: nothing by that id in the caller's own ledger/store.
   | { kind: 'notfound'; status: 404; message: string }
-  // 409: the request is well-formed but the resource's state does not allow it.
-  | { kind: 'conflict'; status: 409; message: string }
+  // 409: the request is well-formed but the resource's state does not allow it. `code` is the
+  // server's error code when it gave one (e.g. anchor_contradicts_ledger); `finding` is what it
+  // found and `remedy` what to do about it, kept apart so a page can show both with the refusal.
+  | { kind: 'conflict'; status: 409; message: string; code?: string; finding?: string; remedy?: string }
   // 413: the request body is over the server's limit.
   | { kind: 'toolarge'; status: 413; limitBytes: number | null; message: string }
   // 422: the server could not use the content of the request.
@@ -268,13 +293,13 @@ export type ApiOutcome<T> =
   // Anything else, including 5xx.
   | { kind: 'error'; status: number; code: string; message: string };
 
-export type Detail = { code: string; message: string; remedy: string; extra: Record<string, unknown> };
+export type Detail = { code: string; message: string; finding: string; remedy: string; extra: Record<string, unknown> };
 
 // FastAPI shapes seen from this server: {"detail": "text"}, {"detail": {error, detail|remedy, ...}},
 // {"detail": [{loc, msg}, ...]} (request validation) and, from the ValueError handler,
 // {"error": ..., "detail": "text"}.
 export function parseDetail(body: unknown, fallback: string): Detail {
-  const out: Detail = { code: '', message: '', remedy: '', extra: {} };
+  const out: Detail = { code: '', message: '', finding: '', remedy: '', extra: {} };
   const b = body as { detail?: unknown; error?: unknown } | null;
   if (!b || typeof b !== 'object') {
     out.message = fallback;
@@ -296,9 +321,13 @@ export function parseDetail(body: unknown, fallback: string): Detail {
     const o = d as Record<string, unknown>;
     if (typeof o.error === 'string') out.code = o.error;
     if (typeof o.detail === 'string') out.message = o.detail;
+    // `finding` is what the server found (a refusal that is a finding, not a fault, e.g.
+    // anchor_contradicts_ledger); it is the message when there is no `detail` text.
+    if (typeof o.finding === 'string') out.finding = o.finding;
     if (typeof o.remedy === 'string') out.remedy = o.remedy;
     out.extra = o;
   }
+  if (!out.message && out.finding) out.message = out.finding;
   if (!out.message && !out.remedy) out.message = fallback;
   return out;
 }
@@ -373,6 +402,9 @@ export function classify(status: number, body: unknown, retryAfter = ''): ApiOut
         kind: 'conflict',
         status,
         message: d.remedy ? `${d.message} ${d.remedy}`.trim() : d.message || 'The case is not in a state that allows that.',
+        code: d.code || undefined,
+        finding: d.finding || undefined,
+        remedy: d.remedy || undefined,
       };
     case 413: {
       const limit = (d.extra as { limit_bytes?: number }).limit_bytes;
@@ -429,6 +461,18 @@ export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'o
         remedy: '',
       };
     case 'conflict':
+      if (outcome.code === 'anchor_contradicts_ledger') {
+        // A finding, not a fault: a signature the service made over this very ledger no
+        // longer matches it. The advice to keep the evidence travels with the refusal.
+        return {
+          kind: outcome.kind,
+          heading: 'The export contradicts a signed ledger head (409)',
+          text: outcome.finding || outcome.message,
+          remedy:
+            outcome.remedy ||
+            'Keep the ledger and its attestation log exactly as they are: the service signed what this ledger held, and it no longer matches. Do not repair or re-create either until this is explained.',
+        };
+      }
       return {
         kind: outcome.kind,
         heading: 'Not allowed in the current state (409)',

@@ -15,7 +15,7 @@ instance returns this same table, generated from the entitlements
 | Machine safety verification | — | — | ✓ |
 | Annex III manifests & passports | — | — | ✓ |
 | Fleet advisory fan-out | — | — | ✓ |
-| Change-assurance cases (`/v1/change/*`; closure is a named human decision) | — | — | ✓ |
+| Change-assurance cases (`/v1/change/*`; closure is a named human decision; a required re-verification is closed only by a person's waiver until a recorder attestation can be verified) | — | — | ✓ |
 | Counter-signed head attestation | — | — | ✓ |
 
 | | Price |

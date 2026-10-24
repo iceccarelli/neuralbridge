@@ -132,6 +132,47 @@ def _relayed(manifest: Mapping[str, Any], observed_at: Any) -> bool:
     return observed_at - taken > _OWN_COLLECTION_TOLERANCE
 
 
+def _anchor_entry(
+    ledger: EvidenceLedger, key: str, serial: str, manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """The local look at which this manifest was first sealed, as its own entry.
+
+    The hosted side honours ``manifest_relayed`` only for a manifest its ledger
+    already holds. An unchanged machine is reported with the manifest sealed when its
+    configuration last changed, which may be weeks old and which the hosted ledger
+    has never seen on a first push. This is that earlier look, sent as it was: its
+    own ``observed_at``, a manifest as old as the look and not a relayed one. Sent
+    beside the relayed entry, it lets the hosted ledger hold the manifest the relayed
+    entry points at; once held, the server reads it as already recorded. It adds
+    nothing the local ledger does not say, and nothing a reporter could not also
+    fabricate: it makes the honest history reachable, not the claim true.
+    """
+    try:
+        taken = parse_utc(str(manifest.get("taken_at", "")))
+    except (ValueError, TypeError):
+        return None
+    from assurance.machinery.manifest import SafetyManifest
+
+    try:
+        want = SafetyManifest.from_dict(dict(manifest)).configuration_hash()
+    except (AssuranceError, KeyError, ValueError, TypeError):
+        return None
+    for at, body in _local_observations(ledger, key):
+        if body.get("status") not in ("first_seen", "changed"):
+            continue
+        if str(body.get("configuration_hash", "")) != want or not observation_succeeded(body):
+            continue
+        if abs(at - taken) > _OWN_COLLECTION_TOLERANCE:
+            continue
+        return {
+            "serial": serial, "machine_key": key, "status": "changed",
+            "observed_at": str(body.get("observed_at")), "collection_complete": True,
+            "manifest": dict(manifest), "manifest_relayed": False,
+            "detail": str(body.get("detail", ""))[:2000], "missing_items": [],
+        }
+    return None
+
+
 def _local_observations(ledger: EvidenceLedger, key: str) -> list[tuple[Any, dict[str, Any]]]:
     out = []
     for entry in ledger.entries(subject=key, kind=OBSERVATION_KIND):
@@ -183,12 +224,16 @@ def _entries_for(
                     "has no matching manifest in this ledger, so it was not sent; "
                     "the hosted record will not show when the machine was last seen.")
             else:
+                relayed = _relayed(manifest, at)
+                anchor = _anchor_entry(ledger, key, serial, manifest) if relayed else None
+                if anchor is not None:
+                    entries.append(anchor)
                 entries.append({
                     "serial": serial, "machine_key": key,
                     "status": _wire_status(str(body.get("status", ""))),
                     "observed_at": str(body.get("observed_at")),
                     "collection_complete": True, "manifest": manifest,
-                    "manifest_relayed": _relayed(manifest, at),
+                    "manifest_relayed": relayed,
                     "detail": str(body.get("detail", ""))[:2000],
                     "missing_items": [],
                 })
@@ -202,10 +247,14 @@ def _entries_for(
             "(was the run a --dry-run?). It was not reported — a machine that is not "
             "reported will show as stale, which is the honest reading.")
         return entries
+    relayed = _relayed(manifest, started)
+    anchor = _anchor_entry(ledger, key, serial, manifest) if relayed else None
+    if anchor is not None:
+        entries.append(anchor)
     entries.append({
         "serial": serial, "machine_key": key, "status": _wire_status(status),
         "observed_at": stamp, "collection_complete": True, "manifest": manifest,
-        "manifest_relayed": _relayed(manifest, started),
+        "manifest_relayed": relayed,
         "detail": str(outcome.get("detail", ""))[:2000], "missing_items": [],
     })
     return entries

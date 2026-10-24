@@ -34,8 +34,10 @@
 //
 // This describes a 100ms-window recorded run under SSM at a constant 500mm/s
 // with 2000mm separation the whole time — a clean pass against the declared
-// envelope, tier VALIDATED, may_claim_physical_behaviour true (field
-// provenance + measured stop figures). It is a stand-in run bundled with
+// envelope. The tier is COMMUNITY and may_claim_physical_behaviour false: the
+// trace declares "field" provenance, but a declared provenance is the filer's own
+// word (nothing signs a recording), so the engine caps it (provenance_basis
+// declared_by_filer; src/assurance/machine/provenance_trust.py). It is a stand-in run bundled with
 // this page to prove the wire path end to end; the actor/role fields below
 // are overridden with what the visitor typed in the form, everything else
 // stays exactly as generated. A real integration posts the caller's own

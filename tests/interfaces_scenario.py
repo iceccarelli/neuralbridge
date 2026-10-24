@@ -53,6 +53,7 @@ from assurance.machinery.staleness import VerificationRecord
 
 from .interfaces_support import envelope, envelope_dict, trace, trace_dict
 from .support import plan_dict, write_export
+from .support_recorder_attestation import SHIM_DIR
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 KEY = "Grimaldi/AR-7#0501"         # the machine whose firmware changes
@@ -326,7 +327,11 @@ class CliDriver(Driver):
         self.ledger_path = plant.ledger_path
 
     def _run(self, *argv) -> subprocess.CompletedProcess[str]:
-        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root)
+        # The reader of the ledger decides which provenance bases lift a tier, so the
+        # `change` process needs the same stand-in for a verified recorder attestation
+        # as the `machine verify` process that sealed the bundle (see SHIM_DIR).
+        return run_cli("change", *argv, "--ledger", self.ledger_path, cwd=self.plant.root,
+                       PYTHONPATH=f"{SRC}{os.pathsep}{SHIM_DIR}")
 
     def _out(self, r: subprocess.CompletedProcess[str], cid: str = "") -> Out:
         if r.returncode == 0:
@@ -364,9 +369,11 @@ class CliDriver(Driver):
         env, tr = self.plant.root / "envelope.json", self.plant.root / "trace.json"
         env.write_text(json.dumps(envelope_dict()), encoding="utf-8")
         tr.write_text(json.dumps(trace_dict(run_started())), encoding="utf-8")
+        # The scenario needs a validated verification; the engine never lifts a declared
+        # provenance, so this subprocess assumes a verified recorder attestation.
         r = run_cli("machine", "verify", "--envelope", env, "--trace", tr, "--actor", who,
                     "--ledger", self.ledger_path, "--subject", KEY, "--json",
-                    cwd=self.plant.root)
+                    cwd=self.plant.root, PYTHONPATH=f"{SRC}{os.pathsep}{SHIM_DIR}")
         assert r.returncode == 0, r.stdout + r.stderr
         return str(json.loads(r.stdout)["evidence"]["content_hash"])
 

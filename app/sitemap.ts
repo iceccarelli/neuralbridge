@@ -7,11 +7,12 @@ const SITE_URL = 'https://neuralbridge.io';
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
 
+  // Only indexable pages belong here: /checkout/success, /assurance and /status are noindex
+  // (`robots: { index: false }`); tests-e2e/site-links.spec.ts derives that set from the pages.
   const routes: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, lastModified: now, changeFrequency: 'weekly', priority: 1 },
     { url: `${SITE_URL}/privacy`, lastModified: now, changeFrequency: 'yearly', priority: 0.3 },
     { url: `${SITE_URL}/contact`, lastModified: now, changeFrequency: 'yearly', priority: 0.5 },
-    { url: `${SITE_URL}/checkout/success`, lastModified: now, changeFrequency: 'yearly', priority: 0.1 },
     { url: `${SITE_URL}/developers`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
     { url: `${SITE_URL}/applications`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
     { url: `${SITE_URL}/cli`, lastModified: now, changeFrequency: 'monthly', priority: 0.7 },
@@ -22,7 +23,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/connectors/mcp`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/roadmap`, lastModified: now, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${SITE_URL}/security`, lastModified: now, changeFrequency: 'monthly', priority: 0.4 },
-    { url: `${SITE_URL}/status`, lastModified: now, changeFrequency: 'weekly', priority: 0.3 },
     ...SOLUTIONS.map((s) => ({
       url: `${SITE_URL}/solutions/${s.slug}`,
       lastModified: now,

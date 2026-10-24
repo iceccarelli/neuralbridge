@@ -495,6 +495,22 @@ def _own_account(principal: Principal) -> str:
     return principal.account.id
 
 
+def _require_decider_for_keys(principal: Principal) -> None:
+    """Issuing or revoking account-level keys is for account keys and deciders.
+
+    A contributor operator's key is attributed to a person with no authority over
+    the account's credentials.
+    """
+    if principal.operator_role != "decider":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "decider_role_required",
+                    "detail": f"operator {principal.operator_name!r} has role "
+                              f"{principal.operator_role!r}; issuing or revoking "
+                              "account-level API keys needs an account key or a 'decider'."},
+        )
+
+
 @billing_router.get("/keys", response_model=dict, summary="List your API keys")
 def get_keys(
     principal: Principal = Depends(current_principal),
@@ -524,6 +540,11 @@ def post_key(
     """For rotation: issue the new key, move your systems over, revoke the old."""
     account_id = _own_account(principal)
     label = (body.label if body else "") or "issued via API"
+    if principal.operator_id:
+        # A key bound to a person may not mint an unattributed account-level key (that
+        # would launder its role). A decider may; the label then says who did.
+        _require_decider_for_keys(principal)
+        label = f"{label} (issued by operator {principal.operator_name} {principal.operator_id})"
     try:
         key = accounts.issue_key(account_id, label=label, max_active=MAX_ACTIVE_KEYS)
     except KeyLimitError as exc:
@@ -561,6 +582,8 @@ def post_key_revoke(
     that does not exist.
     """
     account_id = _own_account(principal)
+    if principal.operator_id:
+        _require_decider_for_keys(principal)
     prefix = body.key_prefix if body else ""
     if prefix:
         outcome = accounts.revoke_account_key(account_id, key_prefix=prefix)
@@ -572,6 +595,14 @@ def post_key_revoke(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "no_such_key", "detail": "No key of yours matches."},
+        )
+    if outcome == "operator_key":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "operator_key",
+                    "detail": "That key belongs to an individual operator. End it with "
+                              "POST /v1/operators/{operator_id}/disable, which refuses to "
+                              "remove the account's last decider."},
         )
     if outcome == "ambiguous":
         raise HTTPException(

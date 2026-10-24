@@ -200,15 +200,27 @@ async def change_case(case_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def change_export(case_id: str) -> dict[str, Any]:
+async def change_export(case_id: str, skeleton: bool = False) -> dict[str, Any]:
     """GET /v1/change/cases/{case_id}/export — the case's verifiable evidence bundle:
     every ledger entry of the case, hash-chained. Read-only. Cell-tier only.
 
     The ``body`` is what ``assurance evidence verify`` checks offline. It proves the
     bundle is internally consistent; it does not prove it is the operator's ledger.
+    ``skeleton=True`` also lists the id, kind and time of every OTHER entry in the
+    account's ledger so completeness can be checked; leave it off unless the person
+    who will receive the file may see those (it is off by default for that reason).
+
+    The bundle carries an ``anchor`` only when the operator has signed this account's
+    ledger (``assurance attest sign``): the same record the HTTP API embeds, chosen by
+    the same rule, never one the customer declared. Without one, completeness is not
+    checked. A 409 ``anchor_contradicts_ledger`` is a finding about the ledger, not a
+    fault: report it, do not retry around it. A 500 ``attestation_log_damaged`` means
+    the anchor could not be chosen; no unanchored bundle is substituted.
     """
     path = _case_path(case_id, "/export")
-    return await _call("GET", path) if path else _invalid_case_id(case_id)
+    if not path:
+        return _invalid_case_id(case_id)
+    return await _call("GET", path, params={"skeleton": "true"} if skeleton else None)
 
 
 # Write parity for the change queue — claim, advance, reverify. Deliberately NOT
@@ -255,6 +267,12 @@ async def change_reverify(
     """POST /v1/change/cases/{case_id}/reverification — submit the machine's current
     manifest and the content hash of a sealed verification bundle; the coverage engine,
     not the caller, decides which functions are current again.
+
+    A 200 means the submission was recorded, not that it cleared anything: while the
+    case still awaits re-verification the body carries ``blocked_reason`` (a ``code``
+    such as ``below_validated_tier``, the ``entries`` and a sentence). Today no
+    verification this package produces reaches ``validated``, so a person has to waive
+    the entry. Read ``blocked_reason`` before reporting the case as progressing.
 
     Cell-tier only. There is deliberately no tool here to close, reject, defer or
     resume a case, to answer its open questions or to waive a re-verification: those

@@ -165,8 +165,10 @@ class TestGenuineLedgerExport:
         result = check(client, case_export)
         assert result["ok"] is True and result["kind"] == "ledger_export"
         assert result["scope"].startswith("subject ")
-        assert any("one subject" in n and "other subjects" in n
-                   for n in result["not_checked"])
+        assert any("one subject" in n and "skeleton" in n for n in result["not_checked"])
+        # Nothing in a key-less check shows the case is complete; it must say so first.
+        assert result["completeness"] == "not_checked"
+        assert result["not_checked"][0].startswith("COMPLETENESS NOT CHECKED")
         assert result["head"] is None  # a subject bundle has no ledger head to show
 
     def test_the_result_is_the_same_for_a_paid_key_and_is_not_capped(self, client, env):
@@ -455,6 +457,9 @@ class TestMachineBundle:
         assert isinstance(tier["as_recorded_may_claim_physical_behaviour"], bool)
         assert "may_claim_physical_behaviour" not in tier
         assert tier["evidence_required"]
+        # who vouches for the run's provenance is shown beside it (declared by the filer)
+        assert tier["provenance_basis"] == machine_bundle["evidence"]["body"]["provenance_basis"]
+        assert tier["provenance_basis"] == "declared_by_filer"
         assert any("hashes to the hash it carries" in f for f in result["verified"])
         assert any("envelope copy" in f for f in result["verified"])
         assert any("nothing here shows the machine behaved" in n
