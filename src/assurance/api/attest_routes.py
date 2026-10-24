@@ -55,6 +55,7 @@ regulator, the insurer or the buyer who is the actual audience for it.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -68,6 +69,7 @@ from assurance.attest.attestation import (
     AttestationError,
     AttestationLog,
     AttestationLogDamagedError,
+    AttestationTornTailError,
     HeadAttestation,
     LedgerHead,
     attest,
@@ -103,6 +105,13 @@ MAX_VERIFY_RECORDS = 5_000
 #: compared with.
 MAX_DECLARED_LEDGER = 10_000_000
 
+#: A torn final line is either a write in flight (milliseconds) or crash debris. An
+#: export that meets one waits this long, in this many looks, for the writer to finish
+#: before it decides. It is short on purpose: past it the answer is a 503 or a 500, not a
+#: request holding a worker.
+TORN_TAIL_RECHECKS = 3
+TORN_TAIL_RECHECK_SECONDS = 0.04
+
 _KEY_FILE_LABEL = "the configured attestation key file"
 _LOG_LABEL = "this account's attestation log"
 
@@ -124,8 +133,12 @@ EXPORT_RESPONSES: dict[int | str, dict[str, Any]] = {
                          "anchor but does not make the finding go away."},
     500: {"description": "`ledger_integrity` (the account's chain does not verify) or "
                          "`attestation_log_damaged` (the account's attestation log cannot be "
-                         "read, so the anchor cannot be chosen; never a silently unanchored "
-                         "export)."},
+                         "read, or ends in an unterminated line that may be the newest "
+                         "record, so the anchor cannot be chosen; never a silently "
+                         "unanchored export)."},
+    503: {"description": "`attestation_busy`: the attestation log ends in an unfinished line "
+                         "and a signer holds its lock right now. Retry after `Retry-After`; "
+                         "nothing was decided or exported."},
 }
 
 
@@ -208,14 +221,41 @@ def latest_anchor(principal: Principal) -> dict[str, Any] | None:
 
     The choice is :func:`assurance.attest.select_anchor`, the same rule the CLI exports
     use; this function adds only the account's log and the HTTP error. The read takes
-    no lock, so an export never waits for a signer; an unterminated final line (a
-    write in flight or a crash) is ignored, anything else damaged is a 500.
+    no lock, so an export never waits for a signer.
+
+    **A torn tail is damage here**, unlike in ``GET /log`` (which lists what it can and
+    warns). The unterminated last line may be the newest attestation; choosing the
+    record before it would anchor the export to a stale head with no sign of the gap, and
+    a ledger rewound after the lost record was signed would export cleanly. So the
+    answer is never a 200:
+
+    * the log is looked at again a few times over ~0.1s, in case a writer was mid-append;
+    * if it is still torn, the writer's lock is tried without waiting. Held: a signer is
+      writing right now, so **503 ``attestation_busy`` with ``Retry-After``** (nothing was
+      decided). Free: no writer exists, the tail is debris, and the log is looked at
+      once more *under* the lock (a writer that finished in between is then a normal
+      export): **500 ``attestation_log_damaged``**, for the operator to repair.
     """
+    log = _log_for(principal)
     try:
-        record = _log_for(principal).anchor()
+        for look in range(TORN_TAIL_RECHECKS + 1):
+            try:
+                record = log.anchor()
+                return record.to_dict() if record is not None else None
+            except AttestationTornTailError:
+                if look < TORN_TAIL_RECHECKS:
+                    time.sleep(TORN_TAIL_RECHECK_SECONDS)
+        with log.locked(timeout=0):
+            record = log.anchor()          # still torn under the lock: nobody is writing
+        return record.to_dict() if record is not None else None
+    except AttestationBusyError as exc:
+        raise _busy(exc) from exc
+    except OSError as exc:
+        # An unreadable file is a fault; the message is the OS's and may name the path.
+        raise _damaged(AttestationLogDamagedError(
+            f"{_LOG_LABEL} could not be read ({type(exc).__name__}).")) from exc
     except AttestationError as exc:
         raise _damaged(exc) from exc
-    return record.to_dict() if record is not None else None
 
 
 def anchor_contradiction(exc: Exception) -> HTTPException:
@@ -242,7 +282,10 @@ class AttestIn(BaseModel):
     """Three numbers the customer reads out of their own ledger.
 
     Nothing else is accepted, and nothing else is wanted. The point of this
-    endpoint is that the records stay where they are.
+    endpoint is that the records stay where they are. In particular there is no
+    ``rotating`` flag: acknowledging that the signing key changed is the operator's
+    act (``assurance attest sign --rotating``), and a tenant who could set it would
+    switch off the key-change guard on the log it shares with the operator.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -259,10 +302,6 @@ class AttestIn(BaseModel):
         description="free text, signed along with the head. It is YOUR text: verification "
                     "reports it as `note_is_tenant_supplied`, not as a statement by the "
                     "key holder about your ledger.")
-    rotating: bool = Field(
-        default=False,
-        description="acknowledge that this service is signing with a different key "
-                    "than it did last time. Only set this if you were told to.")
 
 
 class AttestationIn(BaseModel):
@@ -316,11 +355,13 @@ def service_key() -> dict[str, Any]:
         409: {"description": "`attestation_refused`: a finding, not a malformed request. "
                              "The head is shorter than, behind, or a different history "
                              "from one already signed *for the same kind of head* (your "
-                             "own declared heads), or a different key is signing without "
-                             "`rotating`. The `finding` is the sentence to show whoever "
-                             "runs the database."},
-        422: {"description": "Not a ledger head (`not_a_ledger_head`), or a length or "
-                             "sequence beyond the declared-head bound."},
+                             "own declared heads), or the service key is not the one that "
+                             "signed this log (only the operator can acknowledge a "
+                             "rotation, with the CLI). The `finding` is the sentence to "
+                             "show whoever runs the database."},
+        422: {"description": "Not a ledger head (`not_a_ledger_head`), a length or "
+                             "sequence beyond the declared-head bound, or a field this "
+                             "request does not take (`rotating` is not one it does)."},
         500: {"description": "`attestation_log_damaged`: this account's attestation log "
                              "cannot be read or ends in an unfinished write. A fault to "
                              "repair, not a finding about your ledger; nothing was signed."},
@@ -363,7 +404,7 @@ def counter_sign(
     log = _log_for(principal)
     key = _service_key()
     try:
-        record = attest(head, key, log, note=body.note, rotating=body.rotating)
+        record = attest(head, key, log, note=body.note, rotating=False)
     except AttestationBusyError as exc:
         raise _busy(exc) from exc
     except AttestationLogDamagedError as exc:
@@ -423,8 +464,9 @@ def account_log(
     if torn:
         warnings.append(
             "The log ends in an unterminated line (a write that did not finish, or one "
-            "in flight). It was ignored. Until the operator repairs the file, new "
-            "attestations are refused (500 attestation_log_damaged).")
+            "in flight). It was ignored here. Until the operator repairs the file, new "
+            "attestations and anchored exports are refused (500 attestation_log_damaged); "
+            "`?anchor=false` exports without an anchor.")
     return {
         "count": len(records),
         "attestations": [r.to_dict() for r in records],
