@@ -356,4 +356,3 @@ class TestTheSealedActorFollowsTheCredential:
                             "--json"]) == 0
         assert json.loads(capsys.readouterr().out)["evidence"]["actor"][
             "identifier"] == "bench.engineer"
-
