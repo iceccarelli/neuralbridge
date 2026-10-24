@@ -44,8 +44,9 @@ def main(argv: list[str] | None = None) -> int:
                         "bundle's signed anchor.")
     v.add_argument("--attestations", type=Path, default=None, metavar="LOG",
                    help="your own copy of the signed attestation log "
-                        "(`assurance attest sign`); its newest record is checked "
-                        "against the bundle as well. Needs --public-key.")
+                        "(`assurance attest sign`); the newest record the signer READ from a ledger "
+                        "(else the newest declared one) is checked against the bundle as well. "
+                        "Needs --public-key.")
     args = parser.parse_args(argv)
 
     if args.attestations and not args.public_key:
@@ -60,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 
             trusted = VerifyingKey.from_file(args.public_key)
             if args.attestations:
-                anchors.append(AttestationLog(args.attestations).require_last())
+                anchors.append(AttestationLog(args.attestations).require_anchor())
         except (ImportError, AssuranceError, OSError, ValueError) as exc:
             # Could not look: a missing key or log is never a quiet unanchored pass.
             print(f"error: {exc}", file=sys.stderr)
