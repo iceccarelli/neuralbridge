@@ -409,8 +409,9 @@ class TestExactSamples:
         assert assess(tr, [lying], rec.trust()).status is AttestationStatus.TRACE_MISMATCH
 
     @pytest.mark.parametrize("edit", [
-        pytest.param(lambda t: replace(t, samples=(replace(t.samples[0], t=t.samples[0].t - 1e-9),
-                                                   *t.samples[1:])), id="t"),
+        pytest.param(lambda t: replace(t, samples=(t.samples[0],
+                                                   replace(t.samples[1], t=t.samples[1].t + 1e-9),
+                                                   *t.samples[2:])), id="t"),
         pytest.param(lambda t: replace(t, samples=(replace(t.samples[0], tcp_speed=300.0 + 1e-9),
                                                    *t.samples[1:])), id="speed"),
         pytest.param(lambda t: replace(t, samples=(replace(t.samples[0],
@@ -473,6 +474,38 @@ class TestReplayIgnoresWhatCouldNotBeRead:
         # the placeholder of what could not be read is still sealed, for the record
         assert len(raw["evidence"]["body"]["recorder_attestation"]["attestations"]) == len(atts) \
             or case == "real+dupe"
+
+    def test_replay_does_not_feed_a_placeholder_back_to_the_assessor(self, monkeypatch):
+        from assurance.machine import bundle as bundle_module
+
+        env, tr, rec = envelope(), make_trace(), Recorder()
+        raw = _raw(build_bundle(env, tr, actor=ACTOR, recorder_trust=rec.trust(),
+                                recorder_attestations=[{"x": 1},
+                                                       rec.attest_for(env, tr).to_dict()]))
+        assert any("unreadable" in a for a in
+                   raw["evidence"]["body"]["recorder_attestation"]["attestations"])
+        seen: list = []
+        original = bundle_module.verify
+
+        def spy(*a, **kw):
+            seen.append(list(kw["recorder_attestations"]))
+            return original(*a, **kw)
+
+        monkeypatch.setattr(bundle_module, "verify", spy)
+        assert check_bundle_data(raw, envelope=env, trace=tr,
+                                 recorder_trust=rec.trust()).reproduced
+        assert len(seen) == 1 and len(seen[0]) == 1 and "unreadable" not in seen[0][0]
+
+    def test_the_headline_of_a_refusal_is_about_what_could_be_read(self):
+        env, tr, rec = envelope(), make_trace(), Recorder()
+        stranger = Recorder().attest_for(env, tr).to_dict()
+        out = assess(tr, [{"x": 1}, stranger], rec.trust())
+        assert out.status is AttestationStatus.UNTRUSTED_KEY
+        assert [f.status for f in out.findings][0] is AttestationStatus.MALFORMED
+        assert "malformed" not in out.explanation       # unreadable ones do not shape it
+        only_junk = assess(tr, [{"x": 1}], rec.trust())
+        assert only_junk.status is AttestationStatus.MALFORMED
+        assert "no readable recorder attestation" in only_junk.explanation
 
     def test_the_accepted_attestation_and_tier_are_what_replay_compares(self):
         env, tr, rec = envelope(), make_trace(), Recorder()
