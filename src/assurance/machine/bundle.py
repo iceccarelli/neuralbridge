@@ -212,6 +212,15 @@ def _refuse_foreign_result(
             + "; ".join(mismatches) + ".")
 
 
+class MachineSubjectError(BundleError):
+    """TEMP red stub."""
+
+
+def resolve_machine_serial(subject: str, machine_serial: str = "") -> str:
+    """TEMP red stub: the old, permissive rule."""
+    return machine_serial or _serial_of(subject)
+
+
 def _serial_of(subject: str) -> str:
     """The unit serial in a machine key (``maker/model#serial``), or ``""``."""
     return subject.rpartition("#")[2].strip() if "#" in subject else ""
