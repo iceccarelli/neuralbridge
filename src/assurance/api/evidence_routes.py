@@ -9,7 +9,16 @@ It recognises three kinds of file and calls the same domain functions the
 offline CLI uses:
 
 * a **ledger export** (``GET /v1/cases/{id}/export``, ``assurance evidence
-  export``) — :func:`assurance.evidence.verify_export.verify_export`;
+  export``) — :func:`assurance.evidence.verify_export.verify_export`. Whether
+  anything was *removed* is checked only against the export's signed ``anchor``
+  and only with the caller's public key, and only an anchor over at least one
+  record counts; otherwise ``completeness`` is ``not_checked`` and the answer says
+  so. ``anchored_partial`` means records follow the signed head and no signature
+  covers them. ``declared_head`` means the only signed head that agrees was
+  ``declared_by_holder``: the signer was TOLD three numbers and never read the chain,
+  so it is never ``anchored``. A one-case export made without ``?skeleton=true`` cannot
+  be shown complete even with the right key: that is outcome ``not_established`` (it
+  lists what could not be established), which is **not** a finding of tampering;
 * a **machine verification bundle** — :func:`assurance.machine.bundle.
   check_bundle_data` (the same rules as the offline CLI, including the parts of
   the file the seal does not cover);
@@ -17,16 +26,20 @@ offline CLI uses:
   public key the caller supplies, because the file carries a key *fingerprint*,
   not the key, and a key delivered with the signature proves nothing.
 
-``ok`` is true only when every check this kind of file needs was actually run and
-none found a problem. An attestation log checked without the issuer's public key
-is therefore never ``ok`` (outcome ``signatures_not_checked``): nothing about a
-signature was established.
+``ok`` is true when no inconsistency was found in the checks that ran and nothing the
+caller asked for was left undone. It is NOT "every check this kind of file could need
+was run": a ledger export checked without a key is ``ok`` with ``completeness``
+``not_checked``, and a machine bundle is ``ok`` at ``level`` ``integrity_only`` (never
+reproduced here). Read ``completeness`` (ledger exports), ``level`` (machine bundles) and
+``anchor.basis`` beside it. An attestation log checked without the issuer's public key
+is never ``ok`` (outcome ``signatures_not_checked``): nothing about a signature was
+established.
 
-The result always separates three lists that must never be merged: ``verified``
-(facts a check actually established), ``assumptions`` (what a pass still takes
-on trust) and ``not_checked`` (every limit). ``ok`` means "no check that ran
-found a problem"; it is not a statement that the evidence is true, complete or
-the operator's ledger.
+The result always separates lists that must never be merged: ``verified`` (facts a
+check actually established), ``assumptions`` (what a pass still takes on trust),
+``not_checked`` (every limit) and, for a ledger export, ``unestablished`` (something
+that was asked for and could not be established, e.g. completeness without a skeleton).
+``ok`` is not a statement that the evidence is true, complete or the operator's ledger.
 
 Metering: one unit of the free validator's daily allowance per call (scope
 ``evidence_verify``), per address; paid accounts are unmetered. The body cap on
@@ -211,18 +224,32 @@ def _result(
     assumptions: list[str] | None = None, not_checked: list[str] | None = None,
     tier: dict[str, Any] | None = None, head: dict[str, Any] | None = None,
     summary: str = "", signatures_verified: bool | None = None,
-    level: str | None = None,
+    level: str | None = None, completeness: str | None = None,
+    anchor: dict[str, Any] | None = None, unestablished: list[str] | None = None,
 ) -> dict[str, Any]:
     return _clip({
         "kind": kind,
         "outcome": outcome,
-        # True means only: every check this kind needs ran and none found a problem.
+        # True means only: no inconsistency was found in the checks that ran (read
+        # `completeness` / `level` beside it). It is not "complete" and not "reproduced".
         "ok": outcome == "no_inconsistency_found",
         # Only an attestation log has signatures; null for every other kind.
         "signatures_verified": signatures_verified,
         # Machine bundles only: rejected | integrity_only | reproduced. This route
         # never receives the originals, so a bundle here is never "reproduced".
         "level": level,
+        # Ledger exports only: anchored | anchored_partial | declared_head | not_checked
+        # | failed. "anchored" means a signed head the signer READ from the ledger, over
+        # at least one record, under the key the caller supplied, agrees with the bundle
+        # and is its last record; "anchored_partial" means records follow that head and no
+        # signature covers them; "declared_head" means the signer was only TOLD the head.
+        "completeness": completeness,
+        # The signed head completeness rests on, with its `basis`
+        # (read_from_ledger | declared_by_holder).
+        "anchor": anchor,
+        # Ledger exports only: what was asked for and could not be established. Not
+        # tampering; outcome "not_established" when this is the only open item.
+        "unestablished": unestablished or [],
         "scope": scope,
         "entries": entries,
         "verified": verified or [],
@@ -246,39 +273,88 @@ def _unreadable(problem: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # ledger export
 # ---------------------------------------------------------------------------
-def _ledger(doc: dict[str, Any]) -> dict[str, Any]:
-    if len(doc["entries"]) > MAX_ENTRIES:
+def _ledger(doc: dict[str, Any], key_pem: str = "") -> dict[str, Any]:
+    skeleton = doc.get("skeleton")
+    held = len(doc["entries"]) + (len(skeleton) if isinstance(skeleton, list) else 0)
+    if held > MAX_ENTRIES:
         return _result(
             "ledger_export", "unsupported",
-            problems=[f"{len(doc['entries']):,} entries is more than the {MAX_ENTRIES:,} "
-                      "this page checks; nothing was checked."],
+            problems=[f"{held:,} entries (with the skeleton) is more than the "
+                      f"{MAX_ENTRIES:,} this page checks; nothing was checked."],
             not_checked=["verify a file this large offline: "
                          "`python -m assurance evidence verify <file>`."],
             summary="Too many entries to check here.")
-    v = verify_export(doc)
+    trusted = None
+    if key_pem.strip():
+        try:
+            trusted = VerifyingKey.from_pem(key_pem)
+        except SigningKeyError as exc:
+            return _result(
+                "ledger_export", "unreadable",
+                problems=[f"the public key supplied cannot be read: {exc}"],
+                not_checked=["nothing was checked: completeness needs a readable key."],
+                summary="The public key could not be read, so nothing was checked.")
+    v = verify_export(doc, trusted_key=trusted)
     not_checked = list(v.checks_skipped)
-    if v.head is not None:
+    assumptions = [*v.assumptions, _SERVICE_ASSUMPTION]
+    if v.head is not None and v.completeness != "anchored":
         not_checked.append(
             f"to show this is the operator's ledger, compare its head (seq "
             f"{v.head['seq']}, link hash {v.head['link_hash']}) with a signed head "
             "attestation obtained from a channel the operator does not control. "
             "The attestation inside this file is unsigned: it is the exporter's "
             "own statement.")
-    if v.ok:
-        outcome = "no_inconsistency_found"
-        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
-                   "found a problem. That is internal consistency only; read "
-                   "'Not checked'.")
-    else:
+    basis = (v.anchor or {}).get("basis", "")
+    if v.problems:
         outcome = "inconsistent"
         summary = (f"{len(v.problems)} problem(s) found in {v.entries} readable "
                    f"entries ({v.scope}). This file is not what the exporter wrote, "
                    "or it was not written by an exporter.")
+    elif not v.ok:
+        # Nothing was found wrong; something asked for could not be established. That is
+        # not the tamper finding above, and it is not a pass.
+        outcome = "not_established"
+        first = v.unestablished[0] if v.unestablished else "a check could not be completed"
+        lead = first if first.startswith("Completeness") else f"Could not be established: {first}"
+        summary = (f"{lead} No inconsistency was found in the checks that ran, so this "
+                   "is not a finding that the file was changed"
+                   + (f"; {len(v.unestablished) - 1} further item(s) are listed below"
+                      if len(v.unestablished) > 1 else "") + ".")
+    elif v.completeness == "anchored":
+        outcome = "no_inconsistency_found"
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   "found a problem, and the bundle agrees with a signed head under "
+                   f"the key you supplied (basis {basis}: the signer read it from the "
+                   "ledger), which signs its last record. Anything appended since is "
+                   "unsigned; read 'Not checked'.")
+    elif v.completeness == "anchored_partial" and v.anchor:
+        outcome = "no_inconsistency_found"
+        after = v.anchor["records_after_anchor"]
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   f"found a problem. A signed head (seq {v.anchor['head_seq']}, basis "
+                   f"{basis}, under the key you supplied) matches the bundle only up to "
+                   f"that record: {after} record(s) after it are covered by no "
+                   "signature, so a cut of those would look the same. Read 'Not checked'.")
+    elif v.completeness == "declared_head" and v.anchor:
+        outcome = "no_inconsistency_found"
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   "found a problem, but COMPLETENESS IS NOT SHOWN. The only signed head "
+                   f"it agrees with (seq {v.anchor['head_seq']}, basis {basis}) was "
+                   "declared to the signer, who was handed three numbers and never read "
+                   "the chain; anyone entitled to ask for a counter-signature can have a "
+                   "head they invented signed. That is not an anchor. Read 'Not checked'.")
+    else:
+        outcome = "no_inconsistency_found"
+        summary = (f"{v.entries} entries, {v.scope}: none of the checks that ran "
+                   "found a problem. That is internal consistency only, and "
+                   "COMPLETENESS WAS NOT CHECKED: entries cut from the end, or a "
+                   "rebuilt chain, would look the same. Read 'Not checked'.")
     return _result(
         "ledger_export", outcome, scope=v.scope, entries=v.entries,
         verified=list(v.verified), problems=list(v.problems),
-        assumptions=[*v.assumptions, _SERVICE_ASSUMPTION], not_checked=not_checked,
-        head=v.head, summary=summary)
+        assumptions=assumptions, not_checked=not_checked,
+        head=v.head, summary=summary, completeness=v.completeness, anchor=v.anchor,
+        unestablished=list(v.unestablished))
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +395,9 @@ def _machine(doc: dict[str, Any]) -> dict[str, Any]:
         "product": body.get("product"),
         "product_version": body.get("product_version"),
         "provenance": body.get("provenance"),
+        # Who vouches for `provenance`: "declared_by_filer" means the filer said so and
+        # nothing signed the recording (so it is capped at community).
+        "provenance_basis": body.get("provenance_basis"),
         "trace_started_at": body.get("trace_started_at"),
     })
 
@@ -426,7 +505,7 @@ def _attestations(items: list[Any], key_pem: str) -> dict[str, Any]:
             if not isinstance(raw, dict):
                 raise AttestationError("not an object")
             records.append(HeadAttestation.from_dict(raw))
-        except (AttestationError, ValueError, KeyError, TypeError) as exc:
+        except (AttestationError, ValueError, KeyError, TypeError, OverflowError) as exc:
             problems.append(f"attestation {index + 1}: unreadable ({exc})")
     if problems:
         return _result(
@@ -564,7 +643,7 @@ def analyse(raw: bytes, public_key_pem: str = "") -> dict[str, Any]:
 
     try:
         if isinstance(doc, dict) and isinstance(doc.get("entries"), list):
-            return _ledger(doc)
+            return _ledger(doc, public_key_pem)
         if isinstance(doc, dict) and (doc.get("schema") == BUNDLE_SCHEMA
                                       or ("evidence" in doc and "envelope" in doc)):
             return _machine(doc)
@@ -662,8 +741,9 @@ async def verify_evidence(
     accounts: Annotated[AccountStore, Depends(get_accounts)],
     x_issuer_public_key: Annotated[str | None, Header(
         description="the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to "
-                    "check attestation signatures. Never a private key: those are "
-                    "refused unread.")] = None,
+                    "check attestation signatures, or a ledger export's signed anchor "
+                    "(which is what shows nothing was removed). Never a private key: "
+                    "those are refused unread.")] = None,
 ) -> dict[str, Any]:
     """The body is the raw JSON file itself (not wrapped in anything).
 
@@ -672,6 +752,28 @@ async def verify_evidence(
     line (method, path, status). The answer separates facts established
     (`verified`), what is taken on trust (`assumptions`) and every limit
     (`not_checked`); there is no bare "valid".
+
+    Read these beside `ok` (which means only "no inconsistency was found in the checks
+    that ran"):
+
+    * `outcome`: `no_inconsistency_found`, `signatures_not_checked`, `not_established`
+      (nothing wrong was found but a check asked for could not be completed, listed in
+      `unestablished`; not a finding of tampering), `inconsistent` (listed in `problems`),
+      `unreadable`, `unsupported`, `check_failed`.
+    * `completeness` (ledger exports): `anchored` only when the file agrees with a signed
+      head the signer READ from the ledger, over at least one record, under the public key
+      you supplied in `X-Issuer-Public-Key`, and that head signs the last record;
+      `anchored_partial` when records follow that head (`anchor.records_after_anchor`
+      are covered by no signature); `declared_head` when the only agreeing signed head was
+      `declared_by_holder` (the signer was told three numbers and never read the chain, so
+      it is not an anchor); `not_checked` (no key, no anchor, or a head over zero records);
+      `failed` (the file contradicts a signed head, or one is dated after it was signed).
+      A one-case export is checked against its anchor only if it carries the opt-in ledger
+      skeleton (`?skeleton=true` at export); otherwise a key gives `not_established`.
+    * `anchor` (ledger exports): the signed head completeness rests on, with its `basis`
+      (`read_from_ledger` or `declared_by_holder`), `head_seq` and `records_after_anchor`.
+    * `level` (machine bundles): `integrity_only` here (the original envelope and trace are
+      not supplied), never `reproduced`; `rejected` when a check failed.
     """
     # Cheap refusals first, none of which cost the caller an allowance unit.
     media = request.headers.get("content-type", "").split(";")[0].strip().lower()

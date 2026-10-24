@@ -54,6 +54,7 @@ from assurance.change.service import (
     assess_advisory,
     assess_drift,
     assess_recorded_intervention,
+    blocked_reason,
     claim,
     decide,
     resolve_decision,
@@ -186,6 +187,19 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("case_id")
     ex.add_argument("--out", type=Path, default=None,
                     help="write the bundle here (default: print it)")
+    ex.add_argument("--attestations", type=Path, default=None, metavar="LOG",
+                    help="embed a signed head attestation from this log "
+                         "(`assurance attest sign`) as the bundle's anchor, so a "
+                         "verifier with the signer's public key can show nothing "
+                         "was removed up to it. The newest one the signer READ from "
+                         "a ledger is used; a head only DECLARED by a holder is used "
+                         "when there is nothing else, and is labelled as declared. "
+                         "Refuses if it contradicts the ledger.")
+    ex.add_argument("--skeleton", action="store_true",
+                    help="also list the id, kind and time of every OTHER entry in the "
+                         "ledger (no evidence), so a verifier can see a removed entry "
+                         "and check completeness. Off by default: it tells whoever "
+                         "receives the file what else the ledger holds.")
 
     return p
 
@@ -313,6 +327,10 @@ def _cmd_reverify(args: argparse.Namespace) -> int:
     print(f"{case.case_id}: {case.status.value}")
     if case.required_reverifications:
         print(f"  still outstanding: {', '.join(case.required_reverifications)}")
+        reason = blocked_reason(case)
+        if reason is not None:
+            print(f"  blocked: {reason['code']}")
+            print(f"  {reason['message']}")
     return 0
 
 
@@ -360,14 +378,33 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 def _cmd_export(args: argparse.Namespace) -> int:
     # The ledger refuses to export a chain that does not verify (a
     # LedgerIntegrityError, an AssuranceError: exit 2, nothing written).
-    bundle = EvidenceLedger.open_existing(args.ledger).export(subject=args.case_id)
+    anchor = None
+    if args.attestations:
+        # Signing needs the Ed25519 dependency; exporting without an anchor does not.
+        from assurance.attest.attestation import AttestationLog
+        anchor = AttestationLog(args.attestations).require_anchor().to_dict()
+    bundle = EvidenceLedger.open_existing(args.ledger).export(
+        subject=args.case_id, anchor=anchor, skeleton=args.skeleton)
     if not any(e["kind"] in CASE_KINDS for e in bundle["entries"]):
         raise CaseNotFoundError(args.case_id)
     text = json.dumps(bundle, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")
         print(f"exported {len(bundle['entries'])} record(s) of {args.case_id} to {args.out}")
-        print(f"  check it anywhere, offline: assurance evidence verify {args.out}")
+        if anchor:
+            from assurance.attest.attestation import describe_anchor
+            print(f"  {describe_anchor(anchor)}")
+            print(f"  check it, offline: assurance evidence verify {args.out} "
+                  "--public-key <signer.pub>")
+        else:
+            print(f"  check it anywhere, offline: assurance evidence verify {args.out}")
+            print("  not anchored: nothing in this file shows nothing was removed. "
+                  "Export with --attestations <log> and verify with --public-key.")
+        if not args.skeleton:
+            print("  no skeleton: a removed entry of this case cannot be seen and "
+                  "completeness cannot be checked. --skeleton adds one, and tells "
+                  "whoever receives the file the id, kind and time of every other "
+                  "entry in the ledger.")
     else:
         print(text)
     return 0

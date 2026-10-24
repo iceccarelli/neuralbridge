@@ -37,6 +37,7 @@ from assurance.machinery.staleness import (
     CoverageReport,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
 
 __all__ = [
@@ -291,6 +292,20 @@ def build_passport(
                           + "; ".join(chain_problems[:3])
                           + ". Every statement below is drawn from a store whose "
                             "integrity is in question.")
+    floor = coverage.evidence_tier_floor
+    covered = coverage.verdict == "covered"
+    # A cover that rests on evidence under 'validated' is about a recorded file, not a
+    # demonstration on the machine, so the passport does not read VERIFIED / HIGH on it
+    # (see the engine's cap on declared provenance). It is capped at the tier floor.
+    capped = covered and not tier_reaches_validated(floor)
+    if capped:
+        skipped.append(
+            f"every function reads current, but only on evidence at tier {floor!r}, below "
+            "'validated'. No verification this package can produce reaches 'validated' "
+            "until a verifiable recorder attestation exists (a trace's declared "
+            "provenance is capped at 'community'), so this passport is INDETERMINATE "
+            "with low confidence, not verified: the behaviour was not demonstrated on "
+            "the machine.")
     if not vfs:
         skipped.append(
             f"no machine verification in this ledger is filed under {key!r}. A "
@@ -306,6 +321,7 @@ def build_passport(
             "manifest_hash": manifest.content_hash(),
             "configuration_hash": manifest.configuration_hash(),
             "verdict": coverage.verdict,
+            "evidence_tier_floor": floor,
             "functions": [f.to_dict() for f in coverage.functions],
             "intervention_ids": [i.intervention_id for i in ivs],
             "verification_hashes": [v.content_hash for v in vfs],
@@ -321,10 +337,10 @@ def build_passport(
                    "intervention records through declared safety functions",
         ),
         validation_state=(
-            ValidationState.VERIFIED if coverage.verdict == "covered"
+            ValidationState.VERIFIED if covered and not capped
             else ValidationState.INDETERMINATE
         ),
-        confidence=Confidence.HIGH if (chain_ok and coverage.verdict == "covered")
+        confidence=Confidence.HIGH if (chain_ok and covered and not capped)
         else Confidence.LOW,
         checks_skipped=tuple(dict.fromkeys(skipped)),
         relations=(
@@ -395,16 +411,32 @@ def _passport_coherence(
             f"the passport records verdict {body.get('verdict')!r} but its own "
             f"function list implies {implied!r} ({uncovered} not current).")
 
-    want_state = ("verified" if body.get("verdict") == "covered" else "indeterminate")
+    floor = body.get("evidence_tier_floor")
+    if floor is None:
+        if body.get("verdict") == "covered":
+            limits.append(
+                "NOT CHECKED: the passport records no evidence tier floor (it predates "
+                "the cap on declared provenance), so whether its 'verified' state rests "
+                "on evidence below 'validated' cannot be told from the file.")
+        capped = False
+    elif not isinstance(floor, str):
+        problems.append("the sealed evidence tier floor is not a string.")
+        capped = True
+    else:
+        capped = body.get("verdict") == "covered" and not tier_reaches_validated(floor)
+    want_state = ("verified" if body.get("verdict") == "covered" and not capped
+                  else "indeterminate")
     if evidence.validation_state.value != want_state:
         problems.append(
             f"the sealed validation state is {evidence.validation_state.value!r} but "
             f"the verdict {body.get('verdict')!r} requires {want_state!r}.")
     if evidence.confidence.value in ("high", "established") and not (
-            body.get("verdict") == "covered" and body.get("ledger_chain_verified") is True):
+            body.get("verdict") == "covered" and body.get("ledger_chain_verified") is True
+            and not capped):
         problems.append(
             f"the sealed confidence is {evidence.confidence.value!r}, which a passport "
-            "earns only when it is covered and the ledger chain verified.")
+            "earns only when it is covered, the ledger chain verified and the evidence "
+            "it rests on reaches 'validated'.")
 
     # -- the half of the file the seal does not cover -------------------------
     printed_cov = raw.get("coverage")

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from ..billing.accounts import AccountStore, Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
 from ..core.evidence import Actor
+from ..evidence.ledger import AnchorContradictsLedgerError
 from ..security.art14.engine import Art14Register, CaseError
 from ..security.art14.model import (
     Awareness,
@@ -30,6 +31,7 @@ from ..security.art14.model import (
 )
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
+from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from .deps import (
     Metered,
     MeterTicket,
@@ -339,13 +341,36 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     "/cases/{case_id}/export",
     response_model=dict,
     summary="A verifiable evidence bundle for one case",
+    responses=EXPORT_RESPONSES,
 )
 def get_case_export(
     case_id: str,
     register: Art14Register = Depends(get_register),
     principal: Principal = Depends(require_evidence_readout),
+    anchor: bool = Query(
+        True,
+        description="embed the newest signed attestation from this account's own "
+                    "attestation log as the bundle's `anchor`, so a verifier holding "
+                    "the signer's public key can check the bundle is complete up to "
+                    "it. Set false to export without one."),
+    skeleton: bool = Query(
+        False,
+        description="true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file."),
 ) -> dict[str, Any]:
     """Refuses if the chain does not verify.
+
+    ``?skeleton=true`` adds a ``skeleton`` of the account's other entries
+    (positions, kinds, subjects, times and hashes; no evidence) so removed entries
+    are visible. It is **off by default**: the link hash covers the plain subject,
+    so the skeleton cannot be anonymised and names every other case and incident of
+    the account. Without it the bundle is internally consistent but its
+    completeness cannot be checked. The bundle carries the account's newest
+    *server-read* signed attestation as ``anchor`` when it has one (409
+    ``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed
+    heads the customer declared are never embedded). Records after the anchor are
+    covered by no signature; for a hosted ledger the service holds the signing key
+    too, so the anchor helps only a customer who kept their own copy of a signed
+    attestation.
 
     An export is the moment records leave the system and start being relied on.
     For a paying account it is gated on the plan's ``export`` entitlement as
@@ -353,6 +378,23 @@ def get_case_export(
     ``GET /v1/plans`` is a statement about code that runs. A customer whose
     subscription has ended still gets it (``require_evidence_readout``): their
     evidence is not held hostage to a payment.
+
+    **Completeness.** Without ``skeleton`` a bundle is internally consistent but a
+    removed entry of the case cannot be seen, and a verifier reports completeness as
+    *not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the
+    signer's public key can show nothing was removed up to the anchor; records after
+    it are covered by no signature.
+
+    **Anchor.** ``anchor`` is the newest attestation the service *read from this
+    account's own ledger* (``read_from_ledger``). No customer route creates one: the
+    operator runs ``assurance attest sign`` against the hosted ledger
+    (``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and
+    its completeness is not checked. Counter-signed heads you declared about your own
+    ledger (``POST /v1/ledger/attest``) are never embedded. If the embedded
+    attestation does not match this ledger the answer is 409
+    ``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged
+    attestation log is 500 ``attestation_log_damaged``, never a silently unanchored
+    export; ``?anchor=false`` is the explicit way to export without one.
     """
     if principal.plan.register and not principal.plan.export:
         raise HTTPException(
@@ -365,8 +407,12 @@ def get_case_export(
                           "and above. GET /v1/plans, then POST /v1/checkout.",
             },
         )
+    signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(
+            subject=case_id, anchor=signed_anchor, skeleton=skeleton)
+    except AnchorContradictsLedgerError as exc:
+        raise anchor_contradiction(exc) from exc
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
     if not bundle["entries"]:

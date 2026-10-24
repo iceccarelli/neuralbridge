@@ -20,7 +20,7 @@ const NEEDS: { key: NeedKey; label: string; gate: Gate }[] = [
   { key: 'machine', gate: 'machine_verification', label: 'Machine safety verification (ISO/TS 15066 checks against a safety envelope)' },
   { key: 'annex3', gate: 'machine_verification', label: 'Machinery Annex III manifests and passports' },
   { key: 'fleet', gate: 'machine_verification', label: 'Fleet advisory fan-out across enrolled machines' },
-  { key: 'change', gate: 'machine_verification', label: 'Change-assurance cases (open, claim, re-verify, close over /v1/change/*)' },
+  { key: 'change', gate: 'machine_verification', label: 'Change-assurance cases (open, claim, submit re-verification evidence; human-decided closure, over /v1/change/*)' },
   { key: 'attest', gate: 'signed_attestation', label: 'Counter-signed head attestation' },
 ];
 

@@ -35,6 +35,19 @@ from assurance.machine.limits_review import (
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
+
+
+@pytest.fixture(autouse=True)
+def _recorder_attestation_assumed(monkeypatch):
+    """This module pins how the LIMITS table reaches or misses validated. A trace's
+    declared provenance now caps every tier at community (``provenance_trust.py``),
+    which would make every "stays community" assertion below pass for the wrong
+    reason, so the trace is assumed attested here. The provenance cap itself is pinned
+    in ``test_assurance_machine_provenance.py``."""
+    simulate_verified_recorder_attestation(monkeypatch)
+
+
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 ACTOR = Actor(identifier="v.grimaldi", role="verification engineer")
@@ -94,7 +107,7 @@ def run(t, reviews=(), tr_=None, trust_=None, **kw):
 
 
 def test_the_engine_was_bumped_because_the_tier_semantics_changed():
-    assert run(table()).engine_version == "4"
+    assert run(table()).engine_version == "5"
 
 
 # -- the original defect --------------------------------------------------

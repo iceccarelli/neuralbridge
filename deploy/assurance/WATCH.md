@@ -424,6 +424,10 @@ From the latest sealed run in your local ledger:
 * for a machine that was collected, its **SafetyManifest**: item ids, names,
   versions, content hashes, supplier names, safety-function ids, site, country,
   and the collection provenance (`method`, `notes`, who or what took it);
+* for an unchanged machine whose sealed manifest is older than the look, **also the
+  earlier local look at which that manifest was first sealed** (its own date, its
+  own manifest, not marked relayed), so the hosted ledger can hold the manifest the
+  relayed entry points at; it is the same manifest sent twice, not new information;
 * for a machine that is `uncollectable` or `incomplete`, **also the last
   observation that did succeed** (with its manifest), so the workspace can say
   how long the machine has been unobserved instead of "never".
@@ -463,7 +467,9 @@ with no or an invalid key, 402 when authenticated but not entitled) writes to
   so a crash between the two leaves a retry landing on the same case.
 * Each observation is sealed as the same `watch.observation` record the runner
   seals, so `_last_observation_at` and the stale logic read the hosted ledger
-  unchanged. `plan` and `root` are empty there.
+  unchanged. `plan` and `root` are empty there. It also records `received_at`,
+  the **server's** clock when the report arrived, beside the reporter-declared
+  `observed_at`, and `basis: "client_reported"`.
 * **A failed look is recorded as a failed look.** `uncollectable` and
   `incomplete` are never a successful observation, never advance or close a case
   (the open ones are named in the response and left exactly where they were), and
@@ -477,8 +483,14 @@ with no or an invalid key, 402 when authenticated but not entitled) writes to
   is ignored (`superseded_by_newer_observation`), so a delayed report cannot
   rewind the record; a *different* observation at an instant already recorded is
   refused. An `observed_at` more than 60 seconds ahead of the server's clock is
-  refused, and one inside that margin is read as no later than the moment it was
-  written, so it cannot outrank a real failure that follows it. Entries are
+  refused, and one inside that margin is read as no later than the moment the
+  server received it (`received_at`) or wrote it, so it cannot outrank a real
+  failure that follows it and cannot make a machine look fresher than the server's
+  clock allows. When `observed_at` and `received_at` differ by more than 24 hours
+  (`OBSERVED_AT_SKEW_BOUND`) the observation is flagged `observed_at_skew`. The
+  flag is a warning, not a refusal (a Watch that was offline and then pushed is
+  late, not necessarily lying), and a skewed look is never read as *later* than
+  the reporter said or than the server received it. Entries are
   applied in order of the instant they name, whatever offset they are spelled in.
 * **A failure never creates a machine.** A failed look is recorded only against a
   machine the account has already enrolled (a successful look with a manifest):
@@ -514,16 +526,71 @@ from a successful look of the machine it applies to; a report of failures, or of
 other machines, can never lengthen it. An account
 that has never pushed sees "No Watch report received", not a green list.
 
+The age of a look is measured from the later-bounded instant described above (never
+later than `received_at`, the server's clock). Each row carries `basis`
+(`client_reported`), the reporter's own `last_successful_observed_at_declared`,
+`last_successful_received_at` and `last_successful_observed_at_skew`.
+
 A positive look must also rest on a manifest that is not older than that same
 window at the moment of the look (`observed_at` minus the manifest's `taken_at`;
-the declared cadence, 168 h if none). Older, it is recorded as `manifest_stale`:
+the declared cadence, 168 h if none). Only that reporter-relative age gates. The
+manifest's age at the server's receipt is recorded
+(`manifest_age_at_receipt_hours`) and shown, but it is recorded, not gating: an
+honest late delivery has an old manifest at receipt. Older than the window, a
+look is recorded as `manifest_stale`:
 an attempt that does not count, opens no case and does not move the baseline, and
 for a machine the account has not enrolled it is refused rather than creating
 one. The row shows `last_attempt_manifest_age_hours` and
 `last_successful_manifest_age_hours`. `watch push` sends the manifest sealed when
 an unchanged machine's configuration last changed, so it marks that entry
-`manifest_relayed: true`: the look counts, and the age and the mark are recorded
-and shown (`last_successful_manifest_relayed`) instead of judged.
+`manifest_relayed: true`. **That mark is a claim.** The server honours it on
+exactly two grounds, and says which in `relay_basis`:
+
+* the account's own ledger holds that exact manifest for that machine (the same
+  content hash, which includes the manifest's own `taken_at`):
+  `held_from_earlier_report`, or `planted_in_same_report` when an earlier entry of
+  the same report is what put it there;
+* the account's ledger holds, as that machine's current baseline, a manifest of
+  the **same configuration** (same configuration hash) with a different content
+  hash: `same_configuration_held`. This is the honest case where the account was
+  enrolled with a newer manifest of an unchanged machine and Watch relays the
+  older one it sealed when the configuration last changed. A relayed manifest of a
+  *different* configuration, or for a machine with no manifest held, is never
+  honoured.
+
+A look made current this way is shown with its age and its basis instead of being
+judged. For any other manifest the mark is not accepted: an older-than-window
+manifest is recorded as `manifest_stale` with reason `relayed_manifest_not_held`
+and a remedy (a machine the account has not enrolled is refused, not created).
+So that an honest first push can be accepted, `watch push` also sends the local
+look at which that manifest was first sealed, as its own entry with its own
+date, ahead of the relayed one; the server reads it as already recorded on every
+later push. If the local ledger holds no such look and the account holds nothing
+of the same configuration, the relayed entry is not made current.
+
+**This is a label, not a barrier.** A reporter holding the account key can
+fabricate a current-looking observation: one entry carries an old or invented
+manifest (with an `observed_at` just after its `taken_at`, which is recorded and
+counted), the next relays it as current. That is also exactly what the honest
+`watch push` anchor and relayed pair look like, so the server cannot prevent the
+one without refusing the other, and it does not refuse. It labels. Each counted
+look carries `relay_basis` (`unrelayed`, `held_from_earlier_report`,
+`planted_in_same_report`, `same_configuration_held`) in `POST /v1/watch/report`,
+in `GET /v1/fleet/observations` as `last_successful_relay_basis`, and in the
+`/assurance` panel, beside
+`last_successful_manifest_first_received_in_this_report`,
+`last_successful_manifest_age_at_receipt_hours` and
+`last_successful_manifest_age_exceeds_window_at_receipt`. An honest first push
+reads `planted_in_same_report`; every later push of an unchanged machine reads
+`held_from_earlier_report`. A person who sees `planted_in_same_report`, or a
+relayed look whose manifest age at receipt is far past the window, is reading
+freshness the reporter asserted.
+
+Remedy for a refused relay: report a manifest taken inside the freshness window.
+A machine whose configuration has not changed seals no new manifest locally, so
+until the local Watch seals a fresh one, a relayed old manifest is made current
+only through the local look that first sealed it (sent as the anchor) or through
+a manifest of the same configuration this account already holds.
 
 One behaviour change in the local watch, made so both sides agree: an
 `incomplete` look (the plan named items it did not find) no longer counts as a
@@ -533,13 +600,47 @@ look for `stale_observations`. It never was an observation of the whole machine.
 
 * The hosted service **cannot tell a true report from a false one**. These are
   observations reported by the holder of your key; it did not watch any machine.
-  The workspace shows them as *reported by the customer, not independently
-  observed*. Both `observed_at` and the cadence are declared by the client: a
-  client could replay an old manifest with `observed_at` set to now and
-  `manifest_relayed: true` and make a machine look freshly looked at. The
-  staleness check above catches an old manifest sent as new by mistake, and the
-  age stays visible, but it cannot catch that. It is a stated limit of an opt-in
-  reporting channel, not a proof of observation.
+  Every observation `GET /v1/fleet/observations` serves, and the `/assurance`
+  workspace, carries `basis: "client_reported"` and is shown as *reported by the
+  customer, not independently observed*. `observed_at` and the cadence are
+  declared by the client.
+* **Anyone holding the account key, or a compromised Watch, can fabricate a
+  current-looking observation, and nothing here prevents it.** An old, replayed or
+  invented manifest sent in one entry and relayed in the next reads as current,
+  and the service cannot tell that from an honest look at a machine that did not
+  change. What the server provides is: a record of when it *received* each
+  report (`received_at`), which the reporter's `observed_at` is never read as
+  later than; a flag (`observed_at_skew`) where the two differ by more than
+  24 h; the label `client_reported` on everything; the `relay_basis` and
+  manifest ages above, so a human can see how a look became current; and refusal
+  of a naive replay: an old manifest relayed with no earlier or same-report entry
+  of that configuration holding it. A manifest freshly fabricated, or a held one
+  re-presented, defeats all of it. It is a stated limit of an opt-in reporting
+  channel, not a proof of observation.
+* **Cases and divergences opened from a hosted report are capped at medium
+  confidence** and carry a `checks_skipped` line saying both manifests were
+  client-reported through hosted ingest and the service did not observe the
+  machine. The hash sources the reporter declares would otherwise let a
+  reporter-built manifest read as `validated` and the case as `high`. The verdict,
+  changed items and case id are unchanged. A retry of a `manifest_stale` or failed
+  attempt answers `already_recorded` with `counts_as_observation` taken from the
+  held record, not from the retried entry.
+* A timestamp that cannot be expressed in UTC (for example
+  `0001-01-01T00:00:00+01:00`) is `422` in a report's own `observed_at` /
+  `run_started_at`, and `refused` (`invalid_manifest`) for one entry's manifest
+  date: the rest of the report is recorded. It is never a `500` or a partial write.
+* **Remaining limits, not fixed here.**
+  (1) *Threadpool.* The wait for the per-ledger ingest lock (up to 30 s) holds a
+  request thread, so one tenant sending many concurrent reports can occupy the
+  worker's threadpool and delay other tenants until they answer `503 ingest_busy`.
+  There is no per-account concurrency cap yet.
+  (2) *Cadence window.* The freshness window uses the `max_age_hours` the report
+  declares (1 to 720 h, the only ceiling in the code; there is no per-account
+  configured ceiling to cap it by), so a reporter can widen what counts as a fresh
+  manifest up to 30 days. `stale` does not look at `relay_basis`: a look that was
+  honoured on a relay is as current as any other until the cadence passes. Both
+  are visible on the record (`relay_basis`, `manifest_age_*`,
+  `cadence_hours`) but not refused.
 * It is as good as the export and the plan, exactly as the local watch is.
 * A machine omitted from a report is not reported as anything; its silence shows
   as staleness once the cadence has passed.

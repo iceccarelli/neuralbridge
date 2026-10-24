@@ -87,7 +87,15 @@ def parse_utc(text: str) -> datetime:
             f"{text!r} has no timezone. Deadlines are computed in UTC; supply an "
             "offset (e.g. '2026-09-19T06:30:00Z') rather than letting this be guessed."
         )
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except OverflowError as exc:
+        # '0001-01-01T00:00:00+01:00' / '9999-12-31T23:59:59-01:00' parse, but have no
+        # UTC equivalent inside datetime's range. Callers catch ValueError for a bad
+        # timestamp; an OverflowError escaped them as an HTTP 500.
+        raise ValueError(
+            f"{text!r} is outside the range of dates that can be expressed in UTC."
+        ) from exc
 
 
 def format_utc(moment: datetime) -> str:

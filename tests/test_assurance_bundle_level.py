@@ -19,6 +19,7 @@ from assurance.machine.bundle import check_bundle, verify_bundle
 from assurance.machine.cli import main
 from assurance.machine.envelope import SafetyEnvelope
 
+from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_bundle_check import (
     LIMITS,
     envelope,
@@ -91,7 +92,11 @@ class TestReplayComparesEverySealedFieldItCanDerive:
         assert not ok
         assert any(field in p for p in problems), problems
 
-    def test_a_resealed_confidence_the_result_does_not_earn_is_caught(self, tmp_path):
+    def test_a_resealed_confidence_the_result_does_not_earn_is_caught(
+            self, tmp_path, monkeypatch):
+        # HIGH confidence needs a physical tier, which a declared provenance no longer
+        # reaches; assume a verified recorder attestation to have one to tamper with.
+        simulate_verified_recorder_attestation(monkeypatch)
         _, raw, env, tr = make(tmp_path)
         assert raw["evidence"]["confidence"] == "high"
         raw["evidence"]["confidence"] = "medium"

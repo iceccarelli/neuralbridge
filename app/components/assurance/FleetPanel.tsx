@@ -27,6 +27,37 @@ function hours(h: number | null | undefined): string {
 
 // Where the record behind a machine's row comes from, how complete the look was and how far it can
 // be trusted. All of it is the customer's own report: no field here is independent telemetry.
+// How the last successful look became current. Labelled, never hidden: when the manifest first arrives
+// in the same report as the look, the service cannot tell an honest first push from a fabricated one,
+// so it says which basis it was.
+function relayBasisText(row: ObservationRow | undefined): string {
+  if (!row) return '';
+  const atReceipt = row.last_successful_manifest_age_at_receipt_hours;
+  const receiptAge =
+    row.last_successful_manifest_age_exceeds_window_at_receipt === true && typeof atReceipt === 'number'
+      ? ` The manifest was already ${Math.round(atReceipt)} h old when the server received it, past the freshness window.`
+      : '';
+  switch (row.last_successful_relay_basis) {
+    case 'planted_in_same_report':
+      return (
+        'Freshness basis: first received in this same report. The manifest this look relies on arrived in the same ' +
+        'report that relayed it. An honest first push looks exactly like this, and so does a fabricated one; read the ' +
+        'freshness as asserted by the reporter.' +
+        receiptAge
+      );
+    case 'held_from_earlier_report':
+      return `Freshness basis: relayed from a manifest this account already held from an earlier report (asserted by the reporter, not proof of a look).${receiptAge}`;
+    case 'same_configuration_held':
+      return `Freshness basis: relayed from a different manifest of the same configuration this account already holds (asserted by the reporter, not proof of a look).${receiptAge}`;
+    case 'relayed_basis_unrecorded':
+      return `Freshness basis: relayed; the record does not say on what basis.${receiptAge}`;
+    case 'unrelayed':
+      return `Freshness basis: the look rests on its own manifest; no relay.${receiptAge}`;
+    default:
+      return 'Freshness basis: not stated.';
+  }
+}
+
 function SourceCell({ row }: { row: ObservationRow | undefined }) {
   if (!row || !row.reported) {
     return (
@@ -50,7 +81,17 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
   return (
     <td data-testid="obs-source" data-source="client-reported-watch" data-completeness={status}>
       <strong>Source: client-reported Watch observation</strong> (<code>assurance watch push</code>), not independent
-      telemetry.
+      telemetry. Basis: <code data-testid="obs-basis">{row.basis ?? 'client_reported'}</code>.
+      <br />
+      <span className="aw-note" data-testid="obs-replay-limit">
+        Anyone holding your account key can fabricate a current-looking observation (an old manifest in one entry,
+        relayed as current in the next); this service cannot tell that from an honest look. It records when it received
+        each report and labels how a look became current.
+      </span>
+      <br />
+      <span className="aw-note" data-testid="obs-relay-basis" data-relay-basis={row.last_successful_relay_basis ?? ''}>
+        {relayBasisText(row)}
+      </span>
       <br />
       Completeness of the latest attempt: {completeness}.
       <br />
@@ -58,7 +99,11 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
         Manifest age at the last successful look: {hours(row.last_successful_manifest_age_hours)}
         {row.last_successful_manifest_relayed ? ' (a manifest sealed earlier and relayed; its age is shown, not judged)' : ''}
         . At the latest attempt: {hours(row.last_attempt_manifest_age_hours)}. Dates and cadence are declared by the
-        reporting client.
+        reporting client; the server&rsquo;s own receipt time is{' '}
+        {row.last_successful_received_at ?? 'not stated'}, and a look is never counted as later than it.
+        {row.last_successful_observed_at_skew
+          ? ' The reported look date differs from the server receipt by more than 24 h (observed_at_skew); read the date with care.'
+          : ''}
       </span>
       {row.last_attempt_detail && (
         <>

@@ -798,19 +798,207 @@ class TestTime:
         assert (m["outcome"], m["reason"]) == ("refused", "manifest_stale")
         assert len(ledger_of(acct)) == 0
 
-    def test_a_relayed_manifest_counts_but_its_age_is_recorded_and_shown(self, client, cell, tmp_path):
-        """`watch push` sends the manifest sealed when the configuration last changed."""
+    # -- manifest_relayed is a claim, honoured only for a manifest this account holds ----
+    #
+    # Before: `manifest_relayed: true` skipped the staleness check for ANY manifest, so
+    # a 60-day-old fabricated manifest with a current observed_at was recorded as an
+    # observation and the machine read fresh. That used to be pinned as intended
+    # (`test_a_relayed_manifest_counts_but_its_age_is_recorded_and_shown`). It is not:
+    # the server cannot tell a relayed manifest from one invented for the occasion, so it
+    # honours the mark only when its own ledger already holds that exact manifest.
+
+    def test_a_relayed_flag_on_a_manifest_the_account_never_held_does_not_count(
+            self, client, cell, tmp_path):
+        """The old test's input, with the corrected expectation."""
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        # a DIFFERENT configuration: the same one would be honoured (same_configuration_held)
+        manifest = make_manifest(tmp_path, fw=b"firmware 9.9.9", when=now() - timedelta(days=60))
+        entry = {**good(manifest, at=now() - timedelta(minutes=1), status="changed",
+                        keep_taken_at=True), "manifest_relayed": True}
+        before = len(manifests_from_ledger(ledger_of(acct), KEY_0412))
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert m["outcome"] == "recorded"
+        assert m["reason"] == "relayed_manifest_not_held"
+        assert m["recorded_status"] == "manifest_stale"
+        assert m["counts_as_observation"] is False
+        assert m["manifest_relayed_verified"] is False
+        assert "Remedy" in m["detail"] and "does not hold" in m["detail"]
+        assert 59 * 24 < m["manifest_age_hours"] < 61 * 24
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_observation_at"] is None
+        assert row["stale"] is True
+        assert row["last_attempt_status"] == "manifest_stale"
+        assert row["last_attempt_succeeded"] is False
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == before
+        assert case_entries(ledger_of(acct)) == []
+
+    def test_a_relayed_flag_on_an_unheld_manifest_does_not_enrol_a_machine(
+            self, client, cell, tmp_path):
         acct, h = cell
         manifest = make_manifest(tmp_path, when=now() - timedelta(days=60))
         entry = {**good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True),
                  "manifest_relayed": True}
         m = post(client, h, report(entry)).json()["machines"][0]
+        assert (m["outcome"], m["reason"]) == ("refused", "relayed_manifest_not_held")
+        assert "Remedy" in m["detail"]
+        assert len(ledger_of(acct)) == 0
+
+    def test_a_relayed_unheld_changed_manifest_opens_no_case_and_moves_no_baseline(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t0 = now() - timedelta(days=2)
+        post(client, h, report(good(make_manifest(tmp_path), at=t0), started=t0))
+        before = len(manifests_from_ledger(ledger_of(acct), KEY_0412))
+        forged = make_manifest(tmp_path, fw=b"firmware 9.9.9", when=now() - timedelta(days=60))
+        entry = {**good(forged, at=now() - timedelta(minutes=1), status="changed",
+                        keep_taken_at=True), "manifest_relayed": True}
+        m = post(client, h, report(entry, watch_id="W2")).json()["machines"][0]
+        assert m["reason"] == "relayed_manifest_not_held" and m["counts_as_observation"] is False
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == before
+        assert case_entries(ledger_of(acct)) == []
+        assert machine_row(client, h, KEY_0412)["last_successful_observation_at"] == iso(t0)
+
+    def test_a_genuine_unchanged_relayed_manifest_still_counts(self, client, cell, tmp_path):
+        """The `watch push` case: the manifest sealed 60 days ago, re-confirmed today."""
+        acct, h = cell
+        t0 = now() - timedelta(days=60)
+        manifest = make_manifest(tmp_path, when=t0)
+        first = post(client, h, report(good(manifest, at=t0), started=t0))
+        assert first.json()["machines"][0]["recorded_status"] == "first_seen"
+        again = {**good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(again, watch_id="W2")).json()["machines"][0]
         assert m["counts_as_observation"] is True and m["reason"] == ""
+        assert m["recorded_status"] == "observed"
+        assert m["manifest_relayed_verified"] is True
         assert 59 * 24 < m["manifest_age_hours"] < 61 * 24
         row = machine_row(client, h, KEY_0412)
         assert row["stale"] is False
         assert row["last_successful_manifest_relayed"] is True
         assert 59 * 24 < row["last_successful_manifest_age_hours"] < 61 * 24
+        assert case_entries(ledger_of(acct)) == []
+
+    def test_a_restamped_manifest_of_the_held_configuration_is_labelled_same_configuration(
+            self, client, cell, tmp_path):
+        """Restamping taken_at keeps the configuration hash. The relay is honoured on the
+        weaker basis (same configuration held, not the exact manifest) and says so; a
+        different configuration is never honoured (see TestRelayBasis)."""
+        acct, h = cell
+        t0 = now() - timedelta(days=60)
+        manifest = make_manifest(tmp_path, when=t0)
+        post(client, h, report(good(manifest, at=t0), started=t0))
+        restamped = {**manifest, "taken_at": iso(now() - timedelta(days=59))}
+        entry = {**good(restamped, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(entry, watch_id="W2")).json()["machines"][0]
+        assert m["counts_as_observation"] is True
+        assert m["relay_basis"] == "same_configuration_held"
+
+    def test_a_relayed_flag_changes_nothing_for_a_manifest_that_is_fresh_anyway(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        entry = {**good(make_manifest(tmp_path), at=t), "manifest_relayed": True}
+        m = post(client, h, report(entry, started=t)).json()["machines"][0]
+        assert m["counts_as_observation"] is True
+        assert m["manifest_relayed_verified"] is False      # nothing held it; nothing needed it
+
+    # -- the server's clock is the only one it trusts ---------------------------------
+
+    def test_a_restamped_observed_at_cannot_make_an_old_manifest_a_current_observation(
+            self, client, cell, tmp_path):
+        """observed_at set to just after taken_at hides the manifest's age from the reporter's
+        own arithmetic. The record keeps the server's receipt and flags the skew, and this
+        single entry leaves the machine stale. It does NOT show that a second, relayed entry
+        cannot then borrow the manifest this one planted: it can, and
+        ``TestRelayBasis.test_a_manifest_planted_in_the_same_report_is_labelled_not_hidden``
+        pins that the result is labelled ``planted_in_same_report``, not refused."""
+        acct, h = cell
+        taken = now() - timedelta(days=60)
+        manifest = make_manifest(tmp_path, when=taken)
+        entry = good(manifest, at=taken + timedelta(hours=1), keep_taken_at=True)
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert m["observed_at_skew"] is True
+        assert m["manifest_age_hours"] == 1.0                 # the reporter's own arithmetic
+        row = machine_row(client, h, KEY_0412)
+        assert row["stale"] is True and row["stale_reason"] == "older_than_cadence"
+        assert row["last_successful_observed_at_skew"] is True
+        assert row["age_hours"] > 59 * 24
+        body = [e.evidence().body for e in ledger_of(acct).entries(kind="watch.observation")][-1]
+        assert body["manifest_age_at_receipt_hours"] > 59 * 24   # what the server's clock says
+
+    def test_received_at_is_recorded_and_a_late_delivery_is_flagged_not_freshened(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        late = now() - timedelta(days=3)
+        entry = good(make_manifest(tmp_path), at=late)
+        m = post(client, h, report(entry, started=late)).json()["machines"][0]
+        assert m["outcome"] == "recorded" and m["counts_as_observation"] is True
+        assert m["observed_at_skew"] is True
+        assert m["basis"] == "client_reported"
+        received = datetime.fromisoformat(m["received_at"].replace("Z", "+00:00"))
+        assert abs((received - datetime.now(UTC)).total_seconds()) < 30
+        row = machine_row(client, h, KEY_0412)
+        # the look is still read at the time the reporter said, three days ago
+        assert row["last_successful_observation_at"] == iso(late)
+        assert row["last_successful_observed_at_declared"] == iso(late)
+        assert row["last_successful_received_at"] == m["received_at"]
+        assert row["last_successful_observed_at_skew"] is True
+        assert 71 < row["age_hours"] < 73
+
+    def test_a_prompt_report_is_not_flagged(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        m = post(client, h, report(good(make_manifest(tmp_path), at=t), started=t)
+                 ).json()["machines"][0]
+        assert m["observed_at_skew"] is False
+        assert machine_row(client, h, KEY_0412)["last_successful_observed_at_skew"] is False
+
+    def test_a_look_dated_ahead_of_receipt_is_read_as_received_for_staleness(self, tmp_path):
+        """observed_at may run up to 60 s ahead; staleness is judged from receipt, not from it."""
+        ledger = EvidenceLedger(tmp_path / "ahead.db")
+        received = now() - timedelta(days=9)
+        ahead = received + timedelta(seconds=50)
+        entry = good(make_manifest(tmp_path), at=ahead)
+        r = ingest_report(ledger, report(entry, started=received), actor=SCANNER, now=received)
+        assert r.results[0].counts_as_observation is True
+        # 168 h after receipt + 30 s: past the default cadence from receipt, but still inside it
+        # if the reporter's own (later) date were believed.
+        as_of = received + timedelta(hours=168, seconds=30)
+        row = fleet_observations(ledger, now=as_of)["machines"][0]
+        assert row["last_successful_observation_at"] == iso(received)
+        assert row["stale"] is True and row["stale_reason"] == "older_than_cadence"
+
+    def test_a_late_delivery_is_never_made_fresher_than_its_own_stated_time(self, tmp_path):
+        ledger = EvidenceLedger(tmp_path / "late.db")
+        received = now() - timedelta(days=9)
+        stated = received - timedelta(days=8)          # delivered 8 days after the look
+        entry = good(make_manifest(tmp_path), at=stated)
+        ingest_report(ledger, report(entry, started=received), actor=SCANNER, now=received)
+        row = fleet_observations(ledger, now=received)["machines"][0]
+        assert row["last_successful_observation_at"] == iso(stated)
+        assert row["last_successful_observed_at_skew"] is True
+        assert row["stale"] is True            # 8 days old at receipt, cadence 168 h
+
+    # -- every observation says whose word it is --------------------------------------
+
+    def test_every_surface_labels_observations_client_reported_and_names_the_replay(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        posted = post(client, h, report(good(make_manifest(tmp_path), at=t), started=t)).json()
+        assert posted["machines"][0]["basis"] == "client_reported"
+        assert any("fabricate a current-looking observation" in x for x in posted["limitations"])
+        data = observations(client, h)
+        assert data["basis"] == "client_reported"
+        assert all(m["basis"] == "client_reported" for m in data["machines"])
+        assert all(r["basis"] == "client_reported" for r in data["recent_reports"])
+        joined = " ".join(data["limitations"])
+        assert "fabricate a current-looking observation" in joined
+        assert "does not prevent it" in joined
+        body = [e.evidence().body for e in ledger_of(acct).entries(kind="watch.observation")][-1]
+        assert body["basis"] == "client_reported" and body["received_at"]
 
     def test_the_push_client_marks_an_older_manifest_as_relayed(self, tmp_path):
         from assurance.watch.push import _relayed
@@ -1147,9 +1335,9 @@ class TestWhenTheIngestLockIsHeld:
 
 class TestRunSummaryReachesTheHostedRecord:
     def test_supplier_findings_and_local_cases_are_stored_as_client_reported(
-            self, client, cell):
+            self, client, cell, tmp_path):
         acct, h = cell
-        enroll_manifest(acct, Path(__file__).parent)  # an enrolled machine to fail against
+        enroll_manifest(acct, tmp_path)  # an enrolled machine to fail against
         summary = {
             "stale_observations": ["Grimaldi/AR-7#0412 last seen long ago"],
             "advisory_findings": [{
@@ -1178,3 +1366,184 @@ class TestRunSummaryReachesTheHostedRecord:
                                    run_summary={"awareness_at": "2026-10-19T05:00:00Z"}))
         assert r.status_code == 422
         assert len(ledger_of(acct)) == 0
+
+
+# =====================================================================
+# how a look became current: relay_basis (F2 label, F3 same-configuration relay)
+# =====================================================================
+#
+# The server cannot prevent a reporter holding the account key from fabricating a
+# current-looking observation: one entry plants an old manifest (observed_at just
+# after taken_at, recorded and counted), a second relays it. That is also exactly what
+# the legitimate `watch push` anchor + relayed pair looks like. So these tests pin what
+# the server DOES provide: the observation is labelled with how its freshness was
+# obtained, so a person reading the row can see it.
+
+class TestRelayBasis:
+    @staticmethod
+    def _plant_and_relay(tmp_path, *, days=90):
+        taken = now() - timedelta(days=days)
+        manifest = make_manifest(tmp_path, when=taken)
+        plant = good(manifest, at=taken + timedelta(hours=1), keep_taken_at=True)
+        relay = {**good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        return plant, relay
+
+    def test_a_manifest_planted_in_the_same_report_is_labelled_not_hidden(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        plant, relay = self._plant_and_relay(tmp_path)
+        r = post(client, h, report(plant, relay)).json()
+        planted, relayed = r["machines"]
+        # not refused: the honest push depends on this exact shape ...
+        assert relayed["counts_as_observation"] is True
+        # ... so it is labelled instead
+        assert relayed["relay_basis"] == "planted_in_same_report"
+        assert relayed["manifest_first_received_in_this_report"] is True
+        assert relayed["manifest_age_at_receipt_hours"] > 89 * 24
+        assert planted["relay_basis"] == "unrelayed"
+        assert planted["manifest_first_received_in_this_report"] is False
+        row = machine_row(client, h, KEY_0412)
+        assert row["stale"] is False                      # the gate does not stop it
+        assert row["last_successful_relay_basis"] == "planted_in_same_report"
+        assert row["last_successful_manifest_first_received_in_this_report"] is True
+        assert row["last_successful_manifest_age_at_receipt_hours"] > 89 * 24
+        assert row["last_successful_manifest_age_exceeds_window_at_receipt"] is True
+        body = [e.evidence().body for e in ledger_of(acct).entries(kind="watch.observation")][-1]
+        assert body["relay_basis"] == "planted_in_same_report"
+        assert body["manifest_first_received_in_this_report"] is True
+
+    def test_a_manifest_held_from_an_earlier_report_is_labelled_as_such(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t0 = now() - timedelta(days=60)
+        manifest = make_manifest(tmp_path, when=t0)
+        post(client, h, report(good(manifest, at=t0), started=t0))
+        again = {**good(manifest, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(again, watch_id="W2")).json()["machines"][0]
+        assert m["relay_basis"] == "held_from_earlier_report"
+        assert m["manifest_first_received_in_this_report"] is False
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_relay_basis"] == "held_from_earlier_report"
+        assert row["last_successful_manifest_first_received_in_this_report"] is False
+        # an old manifest relayed as current is visible from the receipt-time age alone
+        assert row["last_successful_manifest_age_exceeds_window_at_receipt"] is True
+        assert row["last_successful_manifest_age_at_receipt_hours"] > 59 * 24
+
+    def test_a_fresh_unrelayed_look_is_labelled_unrelayed(self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        m = post(client, h, report(good(make_manifest(tmp_path), at=t), started=t)
+                 ).json()["machines"][0]
+        assert m["relay_basis"] == "unrelayed"
+        row = machine_row(client, h, KEY_0412)
+        assert row["last_successful_relay_basis"] == "unrelayed"
+        assert row["last_successful_manifest_age_exceeds_window_at_receipt"] is False
+
+    def test_a_non_observation_has_no_relay_basis_to_show(self, client, cell, tmp_path):
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        other = make_manifest(tmp_path, fw=b"firmware 9.9.9", when=now() - timedelta(days=60))
+        entry = {**good(other, at=now() - timedelta(minutes=1), status="changed",
+                        keep_taken_at=True), "manifest_relayed": True}
+        m = post(client, h, report(entry)).json()["machines"][0]
+        assert m["counts_as_observation"] is False
+        assert m["relay_basis"] == "unrelayed"
+
+    # -- F3: the same configuration, a different manifest ---------------------------
+
+    def test_an_honest_push_is_current_when_the_ledger_holds_the_same_configuration(
+            self, client, cell, tmp_path):
+        """Enrolled with M2 (taken now); Watch pushes anchor(M1, 30 d) + relayed(M1)."""
+        from assurance.machinery.manifest import SafetyManifest
+
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")                    # M2, taken now
+        m1 = make_manifest(tmp_path, when=now() - timedelta(days=30))
+        held = manifests_from_ledger(ledger_of(acct), KEY_0412)
+        assert SafetyManifest.from_dict(m1).configuration_hash() == held[-1].configuration_hash()
+        assert SafetyManifest.from_dict(m1).content_hash() != held[-1].content_hash()
+        anchor = {**good(m1, at=now() - timedelta(days=30), status="changed",
+                         keep_taken_at=True), "manifest_relayed": False}
+        relay = {**good(m1, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        r = post(client, h, report(anchor, relay)).json()["machines"]
+        assert r[1]["counts_as_observation"] is True, r[1]
+        assert r[1]["relay_basis"] == "same_configuration_held"
+        assert r[1]["manifest_relayed_verified"] is True
+        row = machine_row(client, h, KEY_0412)
+        assert row["stale"] is False
+        assert row["last_successful_relay_basis"] == "same_configuration_held"
+        assert case_entries(ledger_of(acct)) == []
+
+    def test_the_same_configuration_relay_alone_is_current_and_writes_no_manifest(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")
+        m1 = make_manifest(tmp_path, when=now() - timedelta(days=30))
+        before = len(manifests_from_ledger(ledger_of(acct), KEY_0412))
+        relay = {**good(m1, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(relay)).json()["machines"][0]
+        assert m["recorded_status"] == "observed" and m["counts_as_observation"] is True
+        assert m["relay_basis"] == "same_configuration_held"
+        assert len(manifests_from_ledger(ledger_of(acct), KEY_0412)) == before
+
+    def test_a_relay_of_a_different_configuration_is_not_made_current(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        enroll_manifest(acct, tmp_path, "0412")                    # firmware 3.8.2
+        other = make_manifest(tmp_path, fw=b"firmware 9.9.9", when=now() - timedelta(days=30))
+        relay = {**good(other, at=now() - timedelta(minutes=1), status="changed",
+                        keep_taken_at=True), "manifest_relayed": True}
+        m = post(client, h, report(relay)).json()["machines"][0]
+        assert m["reason"] == "relayed_manifest_not_held"
+        assert m["counts_as_observation"] is False and m["relay_basis"] == "unrelayed"
+        assert case_entries(ledger_of(acct)) == []
+        assert machine_row(client, h, KEY_0412)["last_successful_observation_at"] is None
+
+    def test_a_configuration_held_only_in_history_is_not_the_current_one(
+            self, client, cell, tmp_path):
+        """Held A, then B is the baseline: a relayed older-dated A is not 'the same as now'."""
+        acct, h = cell
+        t0 = now() - timedelta(days=3)
+        a = make_manifest(tmp_path, when=t0)
+        b = make_manifest(tmp_path, fw=b"firmware 4.0.0", when=t0 + timedelta(days=1))
+        post(client, h, report(good(a, at=t0), good(b, at=t0 + timedelta(days=1),
+                                                    status="changed"), started=t0))
+        a2 = make_manifest(tmp_path, when=now() - timedelta(days=30))
+        relay = {**good(a2, at=now() - timedelta(minutes=1), keep_taken_at=True),
+                 "manifest_relayed": True}
+        m = post(client, h, report(relay, watch_id="W2")).json()["machines"][0]
+        assert m["counts_as_observation"] is False
+        assert m["reason"] == "relayed_manifest_not_held"
+
+    # -- the words say what the server can and cannot do --------------------------------
+
+    def test_the_limitations_say_a_key_holder_can_fabricate_a_current_looking_observation(
+            self, client, cell, tmp_path):
+        acct, h = cell
+        t = now() - timedelta(minutes=5)
+        posted = post(client, h, report(good(make_manifest(tmp_path), at=t), started=t)).json()
+        for text in (" ".join(posted["limitations"]),
+                     " ".join(observations(client, h)["limitations"])):
+            assert "fabricate a current-looking observation" in text
+            assert "never held being presented as a relayed one" not in text
+            assert "whichever is later" not in text
+            assert "planted_in_same_report" in text
+        assert "recorded, not gating" in " ".join(observations(client, h)["limitations"])
+
+    def test_the_docs_do_not_claim_a_relay_cannot_be_planted(self):
+        from assurance.watch import ingest
+
+        root = Path(__file__).resolve().parents[1]
+        md = (root / "deploy" / "assurance" / "WATCH.md").read_text()
+        assert "cannot become current from an old manifest alone" not in md
+        assert "fabricate a current-looking observation" in md
+        assert "planted_in_same_report" in md and "same_configuration_held" in md
+        src = (root / "src" / "assurance" / "watch" / "ingest.py").read_text()
+        assert "cannot be put on a manifest the account has never been given" not in src
+        assert ingest.RELAY_BASES == (
+            "unrelayed", "held_from_earlier_report", "planted_in_same_report",
+            "same_configuration_held")
