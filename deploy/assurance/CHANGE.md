@@ -198,17 +198,24 @@ caller:
 - that bundle's tier is **at least `validated`** (`assurance.core.tiers`). Below
   it, the entry stays required, reads `below_validated:<tier>` in
   `evidence_current`, the case records why in `checks_skipped`, and only a person's
-  waiver closes it. **Today that is every verification this package produces from a
-  trace:** a trace's provenance is declared by whoever files it and nothing signs a
-  recording, so the engine caps it at `community` (`deploy/assurance/MACHINE.md`,
-  "Why a declared provenance does not count"). No verification this package can
-  produce reaches `validated` until a verifiable recorder attestation exists, so a
-  re-verification clears no entry by itself and a `decider` operator waives it. The
-  tier is read the way the public bundle checker reads it, not from the stored word:
-  `VerificationRecord.from_ledger` takes a sealed `validated` as `validated` only
-  when the body is engine 5 or later **and** its `provenance_basis` is in
-  `provenance_trust.LIFTING_BASES` (empty today); an engine-4 `validated` bundle
-  already in a ledger, or a resealed body, is read as `community`; and
+  waiver closes it. **That is every verification whose trace has no accepted
+  recorder attestation:** a trace's provenance is declared by whoever files it, so
+  the engine caps it at `community` (`deploy/assurance/MACHINE.md`, "Why a declared
+  provenance does not count"). **A `validated` verification requires a recorder
+  attestation accepted under the verifier's own recorder trust list**
+  ("Recorder attestation" there): a signed statement, by a key the verifier trusts,
+  over these exact trace bytes. It does not show the recording is physically true or
+  that the machine is safe. Without one a re-verification clears no entry by itself
+  and a `decider` operator waives it; **a waiver is still a waiver**, recorded as one
+  and never read as current. The tier is read the way the public bundle checker reads
+  it, not from the stored word: `VerificationRecord.from_ledger` takes a sealed
+  `validated` as `validated` only when the body is engine 6 or later, its
+  `provenance_basis` is `recorder_attested` **and** the accepted attestation is
+  recorded beside it; given the reader's own trust list
+  (`from_ledger(..., recorder_trust=)`) it also re-assesses that attestation, so a
+  revoked key stops supporting the tier. An engine-4 or engine-5 `validated` bundle
+  already in a ledger, or a resealed body that only says `recorder_attested`, is read
+  as `community`; and
 - `assess_coverage` reads the function `current`.
 
 An entry that fails stays required, with the reason (`stale`, `unknown`,

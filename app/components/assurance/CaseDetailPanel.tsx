@@ -9,6 +9,8 @@ import {
   type Attribution,
   type CaseDetail,
   type ExportBundle,
+  type ExportCompleteness,
+  exportCompleteness,
   type HistoryItem,
   type Replay,
 } from '../../lib/assuranceApi';
@@ -55,6 +57,32 @@ function blockedMessage(data: unknown): string {
   return typeof reason?.message === 'string' ? reason.message : '';
 }
 
+// Four things a hosted export can be, driven by the response. The wording never promises more
+// than the file carries: a ticked box is a request, and the server may have declined it
+// (`skeleton_truncated`), and a hosted export has no signed anchor until the operator has signed
+// the account's ledger.
+export function completenessNote(c: ExportCompleteness): string {
+  const a = c.anchor;
+  const anchorLine = !a
+    ? 'It carries no signed anchor: the operator has not signed this ledger, so no signature fixes how far it reached.'
+    : a.readFromLedger
+      ? `It carries a signed anchor (attestation ${a.sequence}, head seq ${a.headSeq}, read from your ledger); records after that head are covered by no signature.`
+      : `It carries an attestation (${a.sequence}) the signer did not read from your ledger, which is not a completeness check.`;
+  if (c.skeleton === 'carried') {
+    return a && a.readFromLedger
+      ? `This file carries the skeleton and a signed anchor (attestation ${a.sequence}, head seq ${a.headSeq}, read from your ledger), so with the signer’s public key the check can show that none of this case’s records was removed up to that head. Records after it are covered by no signature.`
+      : `This file carries the skeleton, but it does not by itself show that none of this case’s records was removed: ${anchorLine} Without a signed head the check reports completeness as not checked (a record cut from the end, or a rebuilt chain, would read the same). Download it again once the operator has signed your ledger.`;
+  }
+  if (c.skeleton === 'truncated') {
+    return `The server left the skeleton out because your ledger holds too many other entries to list (skeleton_truncated), so this file names no other case and cannot show that none of this case’s records was removed, with or without the signer’s key: completeness is reported as not established. ${anchorLine}`;
+  }
+  const why =
+    c.skeleton === 'absent'
+      ? 'You asked for the skeleton but the server did not return one, so this file names no other case'
+      : 'This file names no other case';
+  return `${why} and cannot show that none of this case’s records was removed: the check reports completeness as not checked, and with the signer’s public key it reports that completeness could not be established. ${anchorLine} Download it again with the skeleton to have that checked.`;
+}
+
 export default function CaseDetailPanel({
   apiKey,
   caseId,
@@ -79,7 +107,7 @@ export default function CaseDetailPanel({
   const [verifHash, setVerifHash] = useState('');
   const [result, setResult] = useState<ApiOutcome<unknown> | null>(null);
   const [notice, setNotice] = useState('');
-  const [exported, setExported] = useState<{ file: string; entries: number; skeleton: boolean } | null>(null);
+  const [exported, setExported] = useState<{ file: string; entries: number; completeness: ExportCompleteness } | null>(null);
   // Off by default: the skeleton names every OTHER entry's id, kind and time in this ledger.
   const [withSkeleton, setWithSkeleton] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -182,7 +210,8 @@ export default function CaseDetailPanel({
     a.download = file;
     a.click();
     URL.revokeObjectURL(url);
-    setExported({ file, entries: out.data.entries.length, skeleton });
+    // What the FILE carries comes from the response, not from the box that was ticked.
+    setExported({ file, entries: out.data.entries.length, completeness: exportCompleteness(out.data, skeleton) });
   };
 
   return (
@@ -249,10 +278,10 @@ export default function CaseDetailPanel({
                 </ul>
                 {belowFloor.length > 0 && (
                   <p className="aw-note" data-testid="reverify-blocked">
-                    Not cleared: {belowFloor.join(', ')} — the evidence is below the &lsquo;validated&rsquo; floor. No
-                    verification this package can produce reaches &lsquo;validated&rsquo; until a verifiable recorder
-                    attestation exists (declared provenance is capped at &lsquo;community&rsquo;), so a decider operator
-                    may waive the entry.
+                    Not cleared: {belowFloor.join(', ')} — the evidence is below the &lsquo;validated&rsquo; floor. A
+                    declared provenance is capped at &lsquo;community&rsquo;; &lsquo;validated&rsquo; needs a recorder
+                    attestation accepted under the verifier&apos;s own trust list. A decider operator may waive the
+                    entry; a waiver is recorded as a waiver and never reads as current.
                   </p>
                 )}
                 <p className="aw-note">
@@ -289,9 +318,10 @@ export default function CaseDetailPanel({
                   that manifest below with the <code>content_hash</code> that call returned as{' '}
                   <code>verification_content_hash</code>. The server checks the hash against the ledger. There is no way
                   to mark an entry verified from this page; closing one without evidence is the explicit waiver, which
-                  reads &ldquo;waived&rdquo;. Today no verification this package produces reaches &lsquo;validated&rsquo;
-                  (declared provenance is capped at &lsquo;community&rsquo;), so a submission is recorded but a required
-                  entry is closed only by a decider&apos;s waiver until a verifiable recorder attestation exists.
+                  reads &ldquo;waived&rdquo;. A verification reaches &lsquo;validated&rsquo; only if a recorder attestation
+                  of its trace is accepted under the verifier&apos;s own trust list (a declared provenance is capped at
+                  &lsquo;community&rsquo;); otherwise a submission is recorded but a required entry is closed only by
+                  a decider&apos;s waiver.
                 </div>
               </div>
               <div>
@@ -659,9 +689,9 @@ export default function CaseDetailPanel({
                   <code>python -m assurance evidence verify {exported.file}</code>. That shows the file is internally
                   consistent: every record still matches its hash. A rebuilt chain would read the same, and it does not
                   show that the file matches the ledger as held; for that, check a signed head attestation.{' '}
-                  {exported.skeleton
-                    ? 'This file carries the skeleton, so with the signer’s public key the check can show that none of this case’s records was removed up to the signed head (a head the signer read from your ledger).'
-                    : 'This file names no other case, so it cannot show that none of this case’s records was removed: the check reports completeness as not checked, and with the signer’s public key it reports that completeness could not be established. Download it again with the skeleton to have that checked.'}{' '}
+                  <span data-testid="export-completeness" data-skeleton={exported.completeness.skeleton} data-anchor={exported.completeness.anchor ? 'present' : 'absent'}>
+                    {completenessNote(exported.completeness)}
+                  </span>{' '}
                   If the server refuses the export as contradicting a signed head it read from your ledger, keep the
                   ledger and its attestation log as they are.
                 </p>

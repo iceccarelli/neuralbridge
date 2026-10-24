@@ -21,7 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
+from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Machine, get_register
+from assurance.api.recorder_trust import server_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
 from assurance.change.replay import reconstruct_case
@@ -83,6 +85,9 @@ def _actor(name: str, role: str, principal: Principal, *, human: bool = False,
     ``named`` demands a name from a caller that has no operator (the human-workflow
     steps); the ``assess/*`` routes leave it off and record automation.
     """
+    # Whatever role is handed in, the sealed text has the server's grammar (`;`, `=`, and
+    # so `operator=`/`key=`/`attribution=`) only where this function wrote it.
+    role = sanitise_declared_role(role)
     account = principal.account.id if principal.account else "open-mode"
     if principal.operator_id:
         if name and name.strip() != principal.operator_name:
@@ -276,7 +281,8 @@ async def assess_drift_route(
         raise _bad(exc, "comparison") from exc
 
 
-    verifications = VerificationRecord.from_ledger(register.ledger, subject=key)
+    verifications = VerificationRecord.from_ledger(
+        register.ledger, subject=key, recorder_trust=server_recorder_trust())
     interventions = interventions_from_ledger(register.ledger, key)
     store = CaseStore(register.ledger)
     try:
@@ -427,7 +433,8 @@ async def reverify_case_route(
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "manifest") from exc
     key = manifest.machine.key
-    verifications = VerificationRecord.from_ledger(register.ledger, subject=key)
+    verifications = VerificationRecord.from_ledger(
+        register.ledger, subject=key, recorder_trust=server_recorder_trust())
     interventions = interventions_from_ledger(register.ledger, key)
     try:
         case = reverify(CaseStore(register.ledger), case_id, manifest, verifications,

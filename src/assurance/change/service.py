@@ -976,11 +976,13 @@ def reverify(
       found cannot be evidence about it;
     * that bundle passed every check the function declares (a newer bundle for one
       check plus an older one for another is not enough);
-    * that bundle's tier is at least ``validated``. No verification this package
-      can produce reaches ``validated`` until a verifiable recorder attestation
-      exists (a trace's declared provenance is capped at ``community``), so today a
-      re-verification clears nothing by itself and only a person's waiver (a
-      ``decider`` operator) closes an entry; and
+    * that bundle's tier is at least ``validated``. A trace's declared provenance is
+      capped at ``community``; a ``validated`` verification needs a signed recorder
+      attestation accepted under the verifier's own recorder trust list (a trusted
+      key signed these exact trace bytes; not proof the recording is physically
+      true). Without one a re-verification clears nothing by itself and only a
+      person's waiver (a ``decider`` operator) closes an entry, and a waiver is
+      still a waiver; and
     * :func:`assess_coverage` reads the function ``current``.
 
     An entry that fails any of them stays required, with the reason in
@@ -1096,10 +1098,10 @@ def reverify(
         skipped = _union(skipped, [
             f"{', '.join(weak)}: the re-verification evidence "
             f"{record.content_hash[:12]} is at tier {record.tier or 'unknown'!r}, below "
-            "'validated', so it did not clear the entry. No verification this package "
-            "can produce reaches 'validated' until a verifiable recorder attestation "
-            "exists (declared provenance is capped at 'community'); a decider "
-            "operator may waive the entry."])
+            "'validated', so it did not clear the entry. A declared provenance is "
+            "capped at 'community'; a 'validated' verification needs a recorder "
+            "attestation accepted under the verifier's own recorder trust list. A "
+            "decider operator may waive the entry; a waiver is still a waiver."])
 
     if still_required:
         nxt = CaseStatus.AWAITING_REVERIFICATION
@@ -1139,8 +1141,8 @@ def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
     and the MCP tool give the same answer for the same case. ``reverify`` answers
     "ok" whenever the submission was *accepted*; this says whether it *cleared*
     anything. ``code`` is ``below_validated_tier`` when a required entry was read
-    current on evidence under the floor (today that is every verification this
-    package produces from a trace) and ``evidence_not_current`` when coverage did
+    current on evidence under the floor (every verification whose trace has no
+    accepted recorder attestation) and ``evidence_not_current`` when coverage did
     not read the entry current at all. ``entries`` maps each outstanding entry to
     the reason recorded for it.
     """
@@ -1161,10 +1163,12 @@ def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
             "message": (
                 f"Not cleared: the evidence is at tier {', '.join(repr(t) for t in tiers)}, "
                 f"below the {REVERIFICATION_TIER_FLOOR!r} floor a re-verification must "
-                "reach to clear an entry. No verification this package can produce "
-                "reaches 'validated' until a verifiable recorder attestation exists "
-                "(a trace's declared provenance is capped at 'community'), so a "
-                "recorder attestation is needed to clear it by evidence. " + waive),
+                "reach to clear an entry. A trace's declared provenance is capped at "
+                "'community'; a 'validated' verification requires a recorder "
+                "attestation accepted under the verifier's own recorder trust list "
+                "(a signed statement by a key the verifier trusts over these exact "
+                "trace bytes; not proof the recording is physically true), so one is "
+                "needed to clear this by evidence. " + waive),
         }
     return {
         "code": "evidence_not_current",
@@ -1176,7 +1180,8 @@ def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
             "after the change (see the reason per entry). Submit a verification, "
             "sealed after the case opened, that ran every check each function "
             f"declares; even then it must reach {REVERIFICATION_TIER_FLOOR!r}, which "
-            "needs a verifiable recorder attestation. " + waive),
+            "needs a recorder attestation accepted under the verifier's own recorder "
+            "trust list. " + waive),
     }
 
 

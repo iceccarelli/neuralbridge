@@ -6,11 +6,12 @@ caller files. Nothing signs a recording, so a Cell account could POST a trace fr
 tier with ``may_claim_physical_behaviour`` true; the anonymous bundle checker then
 said ``ok``. The fix caps a declared provenance at ``community`` and records
 ``provenance_basis: declared_by_filer`` (``machine/provenance_trust.py``); the one
-extension point for a future signed recorder attestation mirrors the limits review.
+route above that cap is a signed recorder attestation accepted under the verifier's own
+trust list (``machine/recorder_attestation.py``, pinned in
+``test_assurance_recorder_attestation.py``).
 
-This module deliberately does NOT assume a recorder attestation (the other machine
-test modules do, so that they can pin the other inputs of the tier floor), except in
-the tests that name it.
+This module pins the CAP: nothing here supplies an attestation except where a test
+names it, and nothing is patched.
 
 It also pins the second half of the same trust boundary: the sealed actor follows the
 authenticated credential (``POST /v1/machine/verify``), as on ``/v1/change``.
@@ -44,7 +45,7 @@ from assurance.machine.envelope import (
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machine.verify import ENGINE_VERSION, verify
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
+from .support_recorder import RECORDER, Recorder, build_attested_bundle
 from .test_assurance_machine import client as _client
 from .test_assurance_machine import keyed
 from .test_assurance_machine import store as _store
@@ -170,8 +171,8 @@ class TestTheReproducedDefect:
         assert "filer's own declaration" in text
 
     def test_the_engine_was_bumped_so_old_bundles_are_never_reinterpreted(self):
-        assert ENGINE_VERSION == "5"
-        assert verify(envelope(), laptop_trace()).engine_version == "5"
+        assert ENGINE_VERSION == "6"
+        assert verify(envelope(), laptop_trace()).engine_version == "6"
 
     def test_an_honest_declared_bundle_still_checks_and_replays(self):
         raw, env, tr = honest_raw()
@@ -219,7 +220,7 @@ class TestAResealedValidatedClaimIsRejected:
         assert any("engine 4 or earlier" in p for p in res.problems), res.problems
 
     def test_a_forged_attested_basis_is_not_believed(self):
-        """No attestation can be verified yet, so the word 'attested' lifts nothing."""
+        """The word 'attested' lifts nothing: no attestation is recorded behind it."""
         raw, _, _ = honest_raw()
         raw["evidence"]["body"]["provenance_basis"] = "recorder_attested"
         raw["result"]["provenance_basis"] = "recorder_attested"
@@ -227,14 +228,16 @@ class TestAResealedValidatedClaimIsRejected:
         assert not res.ok
         assert any("recorder_attested" in p for p in res.problems), res.problems
 
-    def test_a_bundle_sealed_under_an_assumed_attestation_is_rejected_by_a_real_checker(
-            self, monkeypatch):
-        with monkeypatch.context() as m:
-            simulate_verified_recorder_attestation(m)
-            raw, env, tr = honest_raw()
-            assert raw["evidence"]["body"]["tier"] == "validated"
-            assert check_bundle_data(raw, envelope=env, trace=tr).ok  # the double's world
-        res = check_bundle_data(raw, envelope=env, trace=tr)           # the real one
+    def test_a_bundle_sealed_by_a_recorder_the_checker_does_not_trust_is_rejected(self):
+        """Sealed under ITS OWN trust list it is validated; under the checker's, it is not."""
+        env, tr = envelope(), laptop_trace()
+        mine = Recorder("my recorder")
+        raw = json.loads(json.dumps(build_attested_bundle(
+            env, tr, actor=ACTOR, recorder=mine).to_dict()))
+        assert raw["evidence"]["body"]["tier"] == "validated"
+        assert check_bundle_data(raw, envelope=env, trace=tr,
+                                 recorder_trust=mine.trust()).ok
+        res = check_bundle_data(raw, envelope=env, trace=tr, recorder_trust=RECORDER.trust())
         assert not res.ok and res.level == LEVEL_REJECTED
 
     def test_a_simulation_is_still_capped_on_its_own_rule(self):
@@ -254,15 +257,15 @@ class TestAResealedValidatedClaimIsRejected:
 
 
 class TestTheExtensionPoint:
-    def test_a_verified_attestation_lifts_the_cap_through_one_function(
-            self, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
-        r = verify(envelope(), laptop_trace())
+    def test_a_verified_attestation_lifts_the_cap_through_one_function(self):
+        env, tr, rec = envelope(), laptop_trace(), Recorder()
+        r = verify(env, tr, recorder_attestations=[rec.attest_for(env, tr)],
+                   recorder_trust=rec.trust())
         assert r.tier is AssuranceTier.VALIDATED and r.may_claim_physical_behaviour
         assert r.provenance_basis == "recorder_attested"
 
-    def test_nothing_lifts_today(self):
-        assert provenance_trust.LIFTING_BASES == frozenset()
+    def test_a_declared_provenance_alone_lifts_nothing(self):
+        assert provenance_trust.LIFTING_BASES == frozenset({"recorder_attested"})
         assert provenance_trust.assess_provenance(laptop_trace()).lifts_tier is False
 
 

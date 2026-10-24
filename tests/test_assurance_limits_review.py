@@ -16,7 +16,7 @@ import pytest
 from assurance.attest.keys import SigningKey
 from assurance.core.evidence import Actor
 from assurance.core.tiers import AssuranceTier
-from assurance.machine.bundle import build_bundle, check_bundle, check_bundle_data
+from assurance.machine.bundle import check_bundle, check_bundle_data
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -35,18 +35,7 @@ from assurance.machine.limits_review import (
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
-
-
-@pytest.fixture(autouse=True)
-def _recorder_attestation_assumed(monkeypatch):
-    """This module pins how the LIMITS table reaches or misses validated. A trace's
-    declared provenance now caps every tier at community (``provenance_trust.py``),
-    which would make every "stays community" assertion below pass for the wrong
-    reason, so the trace is assumed attested here. The provenance cap itself is pinned
-    in ``test_assurance_machine_provenance.py``."""
-    simulate_verified_recorder_attestation(monkeypatch)
-
+from .support_recorder import RECORDER, build_attested_bundle, verify_attested
 
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
@@ -83,6 +72,7 @@ def tr() -> Trace:
                  sample_rate_hz=50.0, samples=tuple(samples))
 
 
+RT = RECORDER.trust()          # the verifier's own recorder trust list
 REVIEWER = SigningKey.generate()
 OTHER = SigningKey.generate()
 
@@ -102,12 +92,12 @@ def review(t: LimitsTable, key=REVIEWER, **over) -> LimitsReview:
 
 
 def run(t, reviews=(), tr_=None, trust_=None, **kw):
-    return verify(env(t), tr_ or tr(), limits=t, limits_reviews=reviews,
+    return verify_attested(env(t), tr_ or tr(), limits=t, limits_reviews=reviews,
                   review_trust=trust_, now=NOW, **kw)
 
 
 def test_the_engine_was_bumped_because_the_tier_semantics_changed():
-    assert run(table()).engine_version == "5"
+    assert run(table()).engine_version == "6"
 
 
 # -- the original defect --------------------------------------------------
@@ -254,8 +244,8 @@ def test_one_good_review_among_bad_ones_is_accepted_and_the_bad_are_reported():
 # -- bundles: library, CLI, API, replay agree ------------------------------
 
 def sealed(t, reviews=(), trust_=None):
-    return build_bundle(env(t), tr(), actor=ACTOR, limits=t, limits_reviews=reviews,
-                        review_trust=trust_)
+    return build_attested_bundle(env(t), tr(), actor=ACTOR, limits=t, limits_reviews=reviews,
+                                 review_trust=trust_)
 
 
 def test_bundle_records_the_review_and_replays_under_the_verifiers_own_trust():
@@ -264,11 +254,11 @@ def test_bundle_records_the_review_and_replays_under_the_verifiers_own_trust():
     assert b.tier is AssuranceTier.VALIDATED
     assert b.evidence.body["limits_review"]["status"] == "accepted"
     ok = check_bundle_data(b.to_dict(), envelope=env(t), trace=tr(), limits=t,
-                           review_trust=trust(REVIEWER))
+                           review_trust=trust(REVIEWER), recorder_trust=RT)
     assert ok.ok and ok.reproduced
     # A verifier who does not trust the key cannot reproduce the validated tier.
     no_trust = check_bundle_data(b.to_dict(), envelope=env(t), trace=tr(), limits=t,
-                                 review_trust=trust(OTHER))
+                                 review_trust=trust(OTHER), recorder_trust=RT)
     assert not no_trust.ok
     # With no trust list at all the replay is not performed and says so.
     none = check_bundle_data(b.to_dict(), envelope=env(t), trace=tr(), limits=t)
@@ -300,7 +290,7 @@ def test_a_tampered_review_in_a_bundle_is_not_reproduced():
     d = json.loads(json.dumps(b.to_dict()))
     d["evidence"]["body"]["limits_review"]["reviews"][0]["basis"] = "forged"
     assert not check_bundle_data(d, envelope=env(t), trace=tr(), limits=t,
-                                 review_trust=trust(REVIEWER)).ok
+                                 review_trust=trust(REVIEWER), recorder_trust=RT).ok
 
 
 def test_old_engine_bundle_with_validated_and_limits_gets_an_honest_limitation():
@@ -328,6 +318,9 @@ def test_cli_verify_and_check_use_the_same_contract(tmp_path: Path, capsys):
     (tmp_path / "trust.json").write_text(json.dumps({
         "format": "assurance.machine.limits-trust.v1",
         "reviewers": [{"label": "R", "public_key_pem": REVIEWER.verifying.pem()}]}))
+    RECORDER.write_trust(tmp_path / "rtrust.json")
+    RECORDER.write_attestation(tmp_path / "att.json", env(t),
+                               Trace.from_json(tmp_path / "trace.json"))
     base = ["machine", "verify", "--envelope", str(tmp_path / "env.json"),
             "--trace", str(tmp_path / "trace.json"), "--limits", str(tmp_path / "limits.json"),
             "--actor", "v.g", "--json"]
@@ -340,10 +333,16 @@ def test_cli_verify_and_check_use_the_same_contract(tmp_path: Path, capsys):
 
     assert tier([], "a.json") == "community"
     assert tier(["--limits-review", str(tmp_path / "review.json")], "b.json") == "community"
+    # a trusted limits review alone is not enough: the trace's provenance is only declared
     assert tier(["--limits-review", str(tmp_path / "review.json"),
-                 "--limits-trust", str(tmp_path / "trust.json")], "c.json") == "validated"
+                 "--limits-trust", str(tmp_path / "trust.json")], "c0.json") == "community"
+    assert tier(["--limits-review", str(tmp_path / "review.json"),
+                 "--limits-trust", str(tmp_path / "trust.json"),
+                 "--recorder-attestation", str(tmp_path / "att.json"),
+                 "--recorder-trust", str(tmp_path / "rtrust.json")], "c.json") == "validated"
     res = check_bundle(tmp_path / "c.json", envelope=env(t), trace=tr(), limits=t,
-                       review_trust=ReviewTrust.from_json(tmp_path / "trust.json"))
+                       review_trust=ReviewTrust.from_json(tmp_path / "trust.json"),
+                       recorder_trust=RT)
     assert res.ok and res.reproduced
 
 
@@ -355,6 +354,7 @@ def test_api_check_reports_the_review_and_seal_ignores_caller_trust(monkeypatch)
     b = sealed(t, [review(t)], trust(REVIEWER))
     c = TestClient(app)
     body = {"bundle": b.to_dict(), "envelope": env(t).to_dict(), "limits": t.to_dict(),
+            "recorder_trust": RT.to_dict(),
             "limits_trust": {"format": "assurance.machine.limits-trust.v1", "reviewers": [
                 {"label": "R", "public_key_pem": REVIEWER.verifying.pem()}]}}
     body["trace"] = {
@@ -386,17 +386,17 @@ def test_an_expired_review_cannot_be_replayed_as_valid_by_a_forged_assessed_on()
     t = table()
     rv = review(t, expires_on="2026-09-30")
     early = datetime(2026, 9, 15, tzinfo=UTC)
-    res = verify(env(t), tr(), limits=t, limits_reviews=[rv], review_trust=trust(REVIEWER),
-                 now=early)
+    res = verify_attested(env(t), tr(), limits=t, limits_reviews=[rv],
+                          review_trust=trust(REVIEWER), now=early)
     assert res.tier is AssuranceTier.VALIDATED          # valid on the day it was sealed
-    b = build_bundle(env(t), tr(), actor=ACTOR, limits=t, result=res)
+    b = build_attested_bundle(env(t), tr(), actor=ACTOR, limits=t, result=res)
     d = b.to_dict()
     # judged today (after expiry) by the verifier: not reproduced as validated
     today = check_bundle_data(d, envelope=env(t), trace=tr(), limits=t,
-                              review_trust=trust(REVIEWER),
+                              review_trust=trust(REVIEWER), recorder_trust=RT,
                               as_of=datetime(2026, 10, 22, tzinfo=UTC))
     assert not today.ok
     # judged as of the sealing day, by the verifier's own choice, it reproduces
     then = check_bundle_data(d, envelope=env(t), trace=tr(), limits=t,
-                             review_trust=trust(REVIEWER), as_of=early)
+                             review_trust=trust(REVIEWER), recorder_trust=RT, as_of=early)
     assert then.ok and then.reproduced

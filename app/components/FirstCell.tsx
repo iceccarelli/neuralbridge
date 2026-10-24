@@ -137,7 +137,7 @@ export default function FirstCell({ apiBase, apiKey }: { apiBase: string; apiKey
               ? 'this run may claim physical behaviour.'
               : 'this run may NOT claim physical behaviour — the verifier itself withheld that claim.'}{' '}
             {result.data.provenance_basis === 'declared_by_filer' &&
-              'The trace\u2019s provenance is declared by whoever files it, and nothing signs a recording, so it never lifts the tier above community.'}{' '}
+              'The trace\u2019s provenance is declared by whoever files it, and no recorder attestation was accepted under a trust list this service holds, so it does not lift the tier above community.'}{' '}
             {result.data.sealed
               ? 'Sealed to the hash-chained evidence ledger.'
               : 'Not sealed to the ledger (seal was not requested).'}

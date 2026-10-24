@@ -37,7 +37,6 @@ from assurance.change.store import CASE_KINDS
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
-from assurance.machine.bundle import build_bundle
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -58,16 +57,7 @@ from assurance.watch.config import WatchConfig
 from assurance.watch.runner import run_watch
 
 from .support import plan_dict, write_export
-from .support_recorder_attestation import simulate_verified_recorder_attestation
-
-
-@pytest.fixture(autouse=True)
-def _recorder_attestation_assumed(monkeypatch):
-    """These tests are about what happens to a validated verification afterwards,
-    not about how it is earned. The engine never lifts a declared provenance, so
-    stand in for a verified recorder attestation (see the helper's docstring)."""
-    simulate_verified_recorder_attestation(monkeypatch)
-
+from .support_recorder import build_attested_bundle
 
 T0 = datetime(2026, 9, 14, 6, tzinfo=UTC)
 WEEK = timedelta(days=7)
@@ -136,7 +126,7 @@ def verify_machine(ledger: EvidenceLedger, key: str, *, when: datetime):
                   samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                        tcp_speed=400.0, mode=OperatingMode.SSM,
                                        separation=2200.0) for i in range(10)))
-    return build_bundle(env, trace, actor=ENGINEER, ledger=ledger, subject=key)
+    return build_attested_bundle(env, trace, actor=ENGINEER, ledger=ledger, subject=key)
 
 
 def case_kind_entries(ledger: EvidenceLedger):

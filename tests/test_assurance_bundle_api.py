@@ -94,7 +94,7 @@ class TestFlagsReflectWhatRan:
             "seal": True, "internal_consistency": True,
             "against_original_envelope": False, "against_original_trace": False,
             "against_limits": False, "limits_review": False,
-            "reproduced": False}
+            "recorder_attestation": False, "reproduced": False}
 
     def test_a_reseal_that_is_incoherent_passes_the_seal_but_not_the_consistency(
             self, client, made):

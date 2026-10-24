@@ -193,6 +193,73 @@ test.describe('Assurance workspace — case lifecycle', () => {
     expect(missing.status()).toBe(404);
   });
 
+  test('the export notice follows what the server returned, not the box that was ticked', async ({ page }) => {
+    const detail = await openCase(page);
+    const note = detail.getByTestId('export-completeness');
+    const save = () =>
+      Promise.all([page.waitForEvent('download'), detail.getByRole('button', { name: /Download this case/ }).click()]);
+    // The promise a ticked box must NOT make on its own.
+    const removedClaim = /none of this case.s records was removed up to that head/;
+
+    // 1. Box off: nothing named, nothing signed (the hosted ledger has not been signed by the operator).
+    await save();
+    await expect(note).toHaveAttribute('data-skeleton', 'not_requested');
+    await expect(note).toHaveAttribute('data-anchor', 'absent');
+    await expect(note).toContainText('names no other case');
+    await expect(note).toContainText('no signed anchor');
+    await expect(note).not.toContainText(removedClaim);
+
+    // 2. Box on, real server: the skeleton arrives, but a hosted export has no anchor until the operator
+    //    has signed. Carrying the skeleton must not read as "nothing was removed".
+    await detail.getByTestId('export-skeleton').check();
+    await save();
+    await expect(note).toHaveAttribute('data-skeleton', 'carried');
+    await expect(note).toHaveAttribute('data-anchor', 'absent');
+    await expect(note).toContainText('no signed anchor');
+    await expect(note).toContainText('completeness as not checked');
+    await expect(note).not.toContainText(removedClaim);
+
+    // 3. Box on, but the server declines the skeleton (more other entries than it will list). The same
+    //    request, a different response: the notice must say the file names no other case.
+    const mutate = (change: (b: Record<string, unknown>) => void) => async (route: import('@playwright/test').Route) => {
+      const real = await route.fetch();
+      const body = await real.json();
+      change(body);
+      await route.fulfill({ response: real, json: body });
+    };
+    const url = /\/v1\/change\/cases\/[^/]+\/export\?skeleton=true/;
+    await page.route(url, mutate((b) => { b.skeleton = []; b.skeleton_truncated = true; }));
+    await save();
+    await expect(note).toHaveAttribute('data-skeleton', 'truncated');
+    await expect(note).toContainText('left the skeleton out');
+    await expect(note).toContainText('names no other case');
+    await expect(note).not.toContainText(removedClaim);
+    await page.unroute(url);
+
+    // 4. Skeleton carried and the operator has signed this ledger: only now may the notice say what a key can show.
+    await page.route(url, mutate((b) => {
+      b.anchor = { sequence: 3, head_seq: 7, basis: 'read_from_ledger', attested_at: '2026-10-01T00:00:00Z' };
+    }));
+    await save();
+    await expect(note).toHaveAttribute('data-skeleton', 'carried');
+    await expect(note).toHaveAttribute('data-anchor', 'present');
+    await expect(note).toContainText('attestation 3, head seq 7');
+    await expect(note).toContainText(removedClaim);
+    await expect(note).toContainText('covered by no signature');
+    await page.unroute(url);
+
+    // 5. Truncated even though an anchor is present: the anchor does not rescue a skeleton-less file.
+    await page.route(url, mutate((b) => {
+      b.skeleton = []; b.skeleton_truncated = true;
+      b.anchor = { sequence: 3, head_seq: 7, basis: 'read_from_ledger' };
+    }));
+    await save();
+    await expect(note).toHaveAttribute('data-skeleton', 'truncated');
+    await expect(note).toHaveAttribute('data-anchor', 'present');
+    await expect(note).not.toContainText(removedClaim);
+    await expect(note).toContainText('not established');
+  });
+
   test('an intervention is assessed only when it was sealed first; unknown ids are the server\'s 422', async ({ page, request }) => {
     await page.goto('/assurance');
     await page.getByLabel('API key').fill(seed.key_k);

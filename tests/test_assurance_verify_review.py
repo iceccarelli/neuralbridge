@@ -378,7 +378,7 @@ class TestNumbersTheSealCannotDistinguish:
         assert r.ok and r.unestablished == (), (body, r.unestablished)
 
     @pytest.mark.parametrize("body", [
-        {"serial": 2**53 + 1}, {"x": 4e-07}, {"x": 0.1 + 0.2}, {"x": [{"deep": 2**70}]},
+        {"serial": 2**53 + 1}, {"x": 4e-07}, {"x": [{"deep": 2**70}]},
         {"x": 0.1234567}, {"x": float("1e-7")}])
     def test_new_seals_of_such_numbers_are_refused(self, body):
         ev = Evidence(kind="t.record", body=body, actor=Actor("a.person", "engineer"),
@@ -500,3 +500,87 @@ class TestOverflowIsAReportNotACrash:
                      headers={"Content-Type": "application/json"})
         assert r.status_code == 200
         assert r.json()["outcome"] == "inconsistent", r.json()["summary"]
+
+
+from .test_assurance_machine import client, keyed, store  # noqa: E402,F401
+
+
+class TestFloatNoiseIsNotAFinding:
+    """Round 3 H1: ``400.0 - 342.9`` is 157.10000000000002. That is arithmetic noise 14
+    places below anything the seal could mis-hash, not a measurement finer than the hash
+    keeps. Refusing it made ordinary one-decimal speeds return HTTP 500."""
+
+    @pytest.mark.parametrize("v", [400.0 - 342.9, 0.1 + 0.2, 57.10000000000002,
+                                   1e10 + 0.1, 123456789.123456, 500.0 - 99.9])
+    def test_float_noise_is_not_reported(self, v):
+        from assurance.core.evidence import indistinguishable_numbers
+        assert indistinguishable_numbers({"worst_margin": v}) == []
+
+    def test_noise_around_zero_is_not_reported(self):
+        """0.1 + 0.2 - 0.3 is 5.5e-17: a margin that is zero, written by float arithmetic.
+        The ULP of a number this small is far below the tolerance, so only the absolute
+        tolerance keeps it from being flagged."""
+        from assurance.core.evidence import indistinguishable_numbers
+        assert indistinguishable_numbers({"worst_margin": 0.1 + 0.2 - 0.3}) == []
+        assert indistinguishable_numbers({"worst_margin": -5.7e-14}) == []
+
+    @pytest.mark.parametrize("v", [4e-07, 3e-07, 0.1234567, 1e-7, 0.0000049])
+    def test_a_real_sub_microunit_value_still_is(self, v):
+        from assurance.core.evidence import indistinguishable_numbers
+        assert indistinguishable_numbers({"m": v})
+
+    def test_a_body_with_float_noise_seals_and_verifies(self, tmp_path):
+        led = EvidenceLedger(tmp_path / "noise.db")
+        led.append(Evidence(kind="t.record", body={"worst_margin": 400.0 - 342.9},
+                            actor=Actor("a.person", "engineer"),
+                            origin=Origin("unit-test")).seal(), subject="S")
+        r = verify_export(led.export())
+        assert r.ok and r.unestablished == (), r.unestablished
+
+    def test_a_one_decimal_trace_seals_a_machine_verification(self):
+        """The reviewer's repro at library level: 342.9 mm/s against a 500 mm/s limit."""
+        from datetime import UTC, datetime
+
+        from assurance.machine.bundle import build_bundle
+        from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
+
+        from .test_assurance_machine_provenance import envelope
+        trace = Trace(
+            trace_id="RUN-1DP", provenance=Provenance.FIELD, source_system="ctrl",
+            started_at=datetime(2026, 9, 12, 4, 31, tzinfo=UTC), sample_rate_hz=50.0,
+            samples=tuple(Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=342.9,
+                                 mode=OperatingMode.SSM, separation=3000.0)
+                          for i in range(20)))
+        bundle = build_bundle(envelope(), trace, actor=Actor("v.g", "verification engineer"))
+        assert bundle.evidence.verify()
+
+    def test_the_route_answers_200_for_one_decimal_speeds_never_500(self, client, store):
+        from .test_assurance_machine import keyed
+        from .test_assurance_machine_provenance import envelope, laptop_trace
+        t = laptop_trace().hashable_payload()
+        for sample in t["samples"]:
+            sample["tcp_speed"] = 342.9
+        r = client.post("/v1/machine/verify", headers=keyed(store, "cell"),
+                        json={"envelope": envelope().to_dict(), "trace": t,
+                              "actor": "v.grimaldi"})
+        assert r.status_code == 200, r.text
+
+    def test_a_seal_refusal_is_a_422_naming_the_value_never_a_500(self, client, store, monkeypatch):
+        """If a caller-supplied number is one the seal cannot protect, the route says so."""
+        from assurance.api import machine_routes
+        from assurance.core.errors import EvidenceIncompleteError
+
+        from .test_assurance_machine import keyed
+        from .test_assurance_machine_provenance import envelope, laptop_trace
+
+        def refuse(*a, **k):
+            raise EvidenceIncompleteError("body.serial = 1 is an integer beyond 2^53")
+
+        monkeypatch.setattr(machine_routes, "build_bundle", refuse)
+        r = client.post("/v1/machine/verify", headers=keyed(store, "cell"),
+                        json={"envelope": envelope().to_dict(),
+                              "trace": laptop_trace().hashable_payload(),
+                              "actor": "v.grimaldi"})
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"]["error"] == "unsealable_number"
+        assert "2^53" in r.json()["detail"]["detail"]

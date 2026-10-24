@@ -25,7 +25,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
+from assurance.api.recorder_trust import server_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
@@ -93,6 +95,20 @@ class PassportCheckIn(BaseModel):
     passport: dict[str, Any]
 
 
+def _declared_actor(body: ManifestIn | InterventionIn) -> Actor | None:
+    """The person the caller names, with the role they declare, minus the server's grammar.
+
+    These routes add no attribution of their own, so the role is sealed as the caller's
+    words; ``;`` and ``=`` are removed (``declared_actor``) so it cannot imitate an
+    ``operator=``/``key=``/``attribution=`` token written by another route. An undeclared
+    role stays empty.
+    """
+    if not body.actor:
+        return None
+    return Actor(identifier=body.actor,
+                 role=sanitise_declared_role(body.role, default=""), kind="person")
+
+
 def _bad(exc: Exception, what: str) -> HTTPException:
     return HTTPException(
         # 422: unprocessable content.
@@ -151,8 +167,7 @@ async def post_manifest(
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     manifest = _manifest(body.manifest)
-    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
-             if body.actor else None)
+    actor = _declared_actor(body)
     evidence = record_manifest(register.ledger, manifest, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -184,8 +199,7 @@ async def post_intervention(
         intervention = Intervention.from_dict(body.intervention)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "intervention") from exc
-    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
-             if body.actor else None)
+    actor = _declared_actor(body)
     evidence = record_intervention(register.ledger, intervention, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -217,7 +231,8 @@ async def coverage(
     key = manifest.machine.key
     report = assess_coverage(
         manifest,
-        VerificationRecord.from_ledger(register.ledger, subject=key),
+        VerificationRecord.from_ledger(
+            register.ledger, subject=key, recorder_trust=server_recorder_trust()),
         interventions_from_ledger(register.ledger, key),
     )
     return report.to_dict()
@@ -232,7 +247,8 @@ async def passport(
     manifest = _manifest(body.manifest)
     built = build_passport(
         register.ledger, manifest,
-        actor=Actor(identifier=body.actor, role=body.role, kind="person"),
+        actor=Actor(identifier=body.actor,
+                    role=sanitise_declared_role(body.role), kind="person"),
         seal=body.seal,
     )
     payload = built.to_dict()

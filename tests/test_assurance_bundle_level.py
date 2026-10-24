@@ -19,8 +19,9 @@ from assurance.machine.bundle import check_bundle, verify_bundle
 from assurance.machine.cli import main
 from assurance.machine.envelope import SafetyEnvelope
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
+from .support_recorder import RECORDER, build_attested_bundle
 from .test_assurance_bundle_check import (
+    ACTOR,
     LIMITS,
     envelope,
     make,
@@ -92,16 +93,16 @@ class TestReplayComparesEverySealedFieldItCanDerive:
         assert not ok
         assert any(field in p for p in problems), problems
 
-    def test_a_resealed_confidence_the_result_does_not_earn_is_caught(
-            self, tmp_path, monkeypatch):
-        # HIGH confidence needs a physical tier, which a declared provenance no longer
-        # reaches; assume a verified recorder attestation to have one to tamper with.
-        simulate_verified_recorder_attestation(monkeypatch)
-        _, raw, env, tr = make(tmp_path)
+    def test_a_resealed_confidence_the_result_does_not_earn_is_caught(self, tmp_path):
+        # HIGH confidence needs a physical tier, which a declared provenance does not
+        # reach; seal a recording a trusted recorder really attested to have one to tamper.
+        env, tr = envelope(), trace()
+        raw = json.loads(json.dumps(build_attested_bundle(env, tr, actor=ACTOR).to_dict()))
         assert raw["evidence"]["confidence"] == "high"
         raw["evidence"]["confidence"] = "medium"
         del raw["result"]
-        ok, problems = verify_bundle(write(tmp_path, reseal(raw)), envelope=env, trace=tr)
+        ok, problems = verify_bundle(write(tmp_path, reseal(raw)), envelope=env, trace=tr,
+                                     recorder_trust=RECORDER.trust())
         assert not ok and any("confidence" in p for p in problems)
 
     def test_an_added_relation_is_caught(self, tmp_path):

@@ -7,8 +7,9 @@ waiver. ``reverify`` used to answer "ok" and leave the case where it was with
 ``below_validated:community`` buried in ``evidence_current``. Each class here is
 the regression for one place that has to say why.
 
-Deliberately does NOT apply the recorder-attestation test double, except where a
-test says so: these tests are about the cap itself.
+These tests are about the cap itself, so they seal DECLARED recordings; the tests that
+need a cleared case seal one a recorder the verifier trusts really attested
+(``tests/support_recorder.py``: a real signature, the real assessment).
 """
 
 from __future__ import annotations
@@ -33,15 +34,14 @@ from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
 from . import interfaces_fixtures as fx
-from .support_recorder_attestation import simulate_verified_recorder_attestation
 from .test_assurance_change import (
     LATER,
     MACHINE,
     REVIEWER,
     _inputs,
     drive,
-    seal_a_real_verification,
 )
+from .test_assurance_change import seal_a_real_verification as _seal
 
 live_api = fx.live_api
 
@@ -54,6 +54,11 @@ def ledger(tmp_path):
 @pytest.fixture
 def store(ledger):
     return CaseStore(ledger)
+
+
+def seal_a_real_verification(ledger, *, when, subject=None):
+    """A real verification of a field recording nobody attested: capped at community."""
+    return _seal(ledger, when=when, subject=subject, attested=False)
 
 
 def _reverify_with_a_real_bundle(ledger, store):
@@ -114,10 +119,9 @@ class TestBlockedReasonFromTheService:
         assert blocked_reason(done) is None
         assert advance(store, done.case_id, actor=REVIEWER).status is CaseStatus.READY_TO_CLOSE
 
-    def test_a_cleared_case_has_no_blocked_reason(self, ledger, store, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
+    def test_a_cleared_case_has_no_blocked_reason(self, ledger, store):
         case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
-        bundle = seal_a_real_verification(ledger, when=LATER)
+        bundle = _seal(ledger, when=LATER)         # a recorder the verifier trusts attested it
         done = reverify(store, case.case_id, observed,
                         VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
                         interventions_from_ledger(ledger, MACHINE.key),
@@ -183,12 +187,12 @@ class TestCliSaysWhy:
 # the HTTP API and the MCP tool
 # =====================================================================
 
-def _world(live_api, email):
+def _world(live_api, email, *, attested=False):
     account_id, headers = live_api.account(email)
     led = live_api.tenant_ledger(account_id)
     store = CaseStore(led)
     case, observed = drive(led, store, CaseStatus.AWAITING_REVERIFICATION)
-    bundle = seal_a_real_verification(led, when=LATER)
+    bundle = _seal(led, when=LATER, attested=attested)
     return headers, case, observed, bundle
 
 
@@ -223,9 +227,9 @@ class TestApiAndMcpSayWhy:
         assert result["body"]["blocked_reason"]["code"] == "below_validated_tier"
         assert "blocked_reason" in (server.change_reverify.__doc__ or "")
 
-    def test_a_cleared_case_carries_no_blocked_reason(self, live_api, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
-        headers, case, observed, bundle = _world(live_api, "cleared-api@example.de")
+    def test_a_cleared_case_carries_no_blocked_reason(self, live_api):
+        headers, case, observed, bundle = _world(live_api, "cleared-api@example.de",
+                                                 attested=True)
         with live_api.client() as http:
             r = http.post(f"/v1/change/cases/{case.case_id}/reverification", headers=headers,
                           json={"manifest": observed.to_dict(), "actor": "v.grimaldi",
@@ -233,6 +237,24 @@ class TestApiAndMcpSayWhy:
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "ready_to_close"
         assert "blocked_reason" not in r.json()
+
+
+class TestARevokedRecorderKeyStopsSupportingValidated:
+    def test_the_route_reads_the_servers_trust_list_not_just_the_seal(
+            self, live_api, monkeypatch, tmp_path):
+        from .support_recorder import RECORDER
+
+        headers, case, observed, bundle = _world(live_api, "revoked-api@example.de",
+                                                 attested=True)   # sealed while trusted
+        monkeypatch.setenv("ASSURANCE_RECORDER_TRUST", str(
+            RECORDER.write_trust(tmp_path / "revoked-trust.json", revoked=True)))
+        with live_api.client() as http:
+            r = http.post(f"/v1/change/cases/{case.case_id}/reverification", headers=headers,
+                          json={"manifest": observed.to_dict(), "actor": "v.grimaldi",
+                                "verification_content_hash": bundle.content_hash})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "awaiting_reverification"
+        assert r.json()["blocked_reason"]["code"] == "below_validated_tier"
 
 
 # =====================================================================
@@ -284,30 +306,27 @@ class TestALegacyValidatedBundleIsReadAtItsRealTier:
         assert any("'community'" in c for c in report.checks_skipped)
 
     @pytest.mark.parametrize("engine", ["4", "3", "", "garbage", None])
-    def test_a_recorder_attested_basis_does_not_rescue_an_old_engine(
-            self, ledger, monkeypatch, engine):
-        simulate_verified_recorder_attestation(monkeypatch)
+    def test_a_recorder_attested_basis_does_not_rescue_an_old_engine(self, ledger, engine):
         _legacy_validated(ledger, when=LATER, engine=engine, drop_basis=False,
                           basis="recorder_attested")
         (rec,) = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
         assert rec.tier == "community"
 
-    def test_a_declared_basis_does_not_rescue_a_current_engine(self, ledger, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
-        _legacy_validated(ledger, when=LATER, engine="5", drop_basis=False,
+    def test_a_declared_basis_does_not_rescue_a_current_engine(self, ledger):
+        _legacy_validated(ledger, when=LATER, engine="6", drop_basis=False,
                           basis="declared_by_filer")
         (rec,) = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
         assert rec.tier == "community"
 
-    def test_engine_5_with_a_lifting_basis_keeps_validated(self, ledger, monkeypatch):
-        simulate_verified_recorder_attestation(monkeypatch)
-        seal_a_real_verification(ledger, when=LATER)     # a real engine-5 attested bundle
+    def test_a_current_engine_attested_bundle_keeps_validated(self, ledger):
+        _seal(ledger, when=LATER)          # a real engine-6 bundle, really attested
         (rec,) = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
         assert rec.tier == "validated"
 
-    def test_without_a_lifting_basis_even_a_current_validated_body_is_capped(self, ledger):
-        _legacy_validated(ledger, when=LATER, engine="5", drop_basis=False,
-                          basis="recorder_attested")     # basis not in LIFTING_BASES now
+    def test_a_body_that_only_says_recorder_attested_is_capped(self, ledger):
+        """The word alone lifts nothing: no attestation is recorded beside it."""
+        _legacy_validated(ledger, when=LATER, engine="6", drop_basis=False,
+                          basis="recorder_attested")
         (rec,) = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
         assert rec.tier == "community"
 
