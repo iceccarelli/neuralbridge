@@ -27,8 +27,9 @@ function hours(h: number | null | undefined): string {
 
 // Where the record behind a machine's row comes from, how complete the look was and how far it can
 // be trusted. All of it is the customer's own report: no field here is independent telemetry.
-// How the last successful look became current. Labelled, never hidden: the service cannot tell a
-// manifest planted in the same report from the honest first push, so it says which it was.
+// How the last successful look became current. Labelled, never hidden: when the manifest first arrives
+// in the same report as the look, the service cannot tell an honest first push from a fabricated one,
+// so it says which basis it was.
 function relayBasisText(row: ObservationRow | undefined): string {
   if (!row) return '';
   const atReceipt = row.last_successful_manifest_age_at_receipt_hours;
@@ -39,7 +40,7 @@ function relayBasisText(row: ObservationRow | undefined): string {
   switch (row.last_successful_relay_basis) {
     case 'planted_in_same_report':
       return (
-        'Freshness basis: PLANTED IN THE SAME REPORT. The manifest this look relies on was first received in the same ' +
+        'Freshness basis: first received in this same report. The manifest this look relies on arrived in the same ' +
         'report that relayed it. An honest first push looks exactly like this, and so does a fabricated one; read the ' +
         'freshness as asserted by the reporter.' +
         receiptAge

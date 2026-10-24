@@ -55,9 +55,16 @@ export default function VerifyPage() {
                   for it) chains to it with nothing missing. <strong>Not shown unless you paste the signer&apos;s
                   public key:</strong> that nothing was cut from the end or removed &mdash; a bundle can be rebuilt
                   consistently, so without a signed head the result says <em>completeness not checked</em>. With the
-                  key, an export that is shorter than, or disagrees with, its signed head is rejected; a head that
-                  signs an empty ledger anchors nothing; and records after the head are counted as covered by no
-                  signature, never as complete. Never shown:
+                  key, an export that is shorter than, or disagrees with, its signed head is rejected, as is a record
+                  dated after that head was signed; a head that signs an empty ledger anchors nothing; and records
+                  after the head are counted as covered by no signature, never as complete. Only a head the signer{' '}
+                  <em>read from the ledger</em> (basis <code>read_from_ledger</code>) can anchor a file: a head the
+                  signer was merely <em>told</em> (<code>declared_by_holder</code>, which any paid account can have
+                  signed for numbers it invented) is reported as <em>declared</em> and is never &ldquo;anchored&rdquo;.
+                  A one-case export can be shown complete only if it was exported with its skeleton (
+                  <code>?skeleton=true</code>, which lists the id, kind and time of every other entry in that ledger);
+                  without it, a key gets <em>&ldquo;completeness could not be established&rdquo;</em> &mdash; amber, and
+                  not a finding of tampering. Never shown:
                   records after that head, that the signer did not also control the ledger (a hosted ledger&apos;s
                   operator holds both, so keep your own copy of a signed attestation), or who the named people are.
                 </p>
@@ -104,17 +111,19 @@ export default function VerifyPage() {
           <pre className="code-panel">{`git clone ${REPO}.git && cd neuralbridge
 pip install -e '.[assurance-attest]'
 python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
-python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head
+python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head (exit 0 only if anchored)
 python -m assurance machine check bundle.json                   # machine bundle
 python -m assurance attest verify --log attestations.jsonl --public-key issuer.pub`}</pre>
           <p className="hero-panel-note" style={{ maxWidth: '72ch' }}>
             Where the file comes from: a Register or Cell account downloads a case export from the{' '}
             <a href="/assurance">workspace</a> (<code>GET /v1/cases/&#123;id&#125;/export</code>). The same free check
             is <code>POST /v1/evidence/verify</code>, listed on <a href="/developers">/developers</a>: send the file
-            as the body with <code>Content-Type: application/json</code>. In the answer, <code>ok</code> is true only
-            when every check that kind of file needs was run and none found a problem &mdash; an attestation log
-            checked without the issuer&apos;s public key is never <code>ok</code>. If this site has no API
-            configured, the button above says so rather than faking a result.
+            as the body with <code>Content-Type: application/json</code>. In the answer, <code>ok</code> means only
+            that no inconsistency was found in the checks that ran &mdash; read <code>completeness</code> (ledger
+            exports: <code>anchored</code> is the only complete answer) and <code>level</code> (machine bundles:{' '}
+            <code>integrity_only</code> is never a reproduction) beside it. An attestation log checked without the
+            issuer&apos;s public key is never <code>ok</code>. If this site has no API configured, the button above
+            says so rather than faking a result.
           </p>
         </div>
       </section>
