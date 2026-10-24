@@ -12,9 +12,11 @@ a model. :class:`Provenance` carries the distinction into the type system, and
 :attr:`Provenance.tier_ceiling` names the most an *independently attested*
 provenance could support.
 
-The provenance is, however, a field the filer writes: nothing in this package signs
-a recording. A declared provenance is therefore recorded but does not lift the tier
-by itself (:mod:`assurance.machine.provenance_trust`).
+The provenance is, however, a field the filer writes. A declared provenance is
+therefore recorded but does not lift the tier by itself; only a signed recorder
+attestation accepted under the verifier's own trust list does
+(:mod:`assurance.machine.provenance_trust`,
+:mod:`assurance.machine.recorder_attestation`).
 """
 
 from __future__ import annotations

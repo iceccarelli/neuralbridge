@@ -48,6 +48,14 @@ from assurance.machine.envelope import (
 )
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import ReviewTrust
+from assurance.machine.recorder_attestation import (
+    MachineRef,
+    RecorderAttestation,
+    RecorderAttestationError,
+    RecorderTrust,
+    RecordingFacts,
+    assess_recorder_attestation,
+)
 from assurance.machine.trace import (
     MAX_FILE_BYTES,
     OperatingMode,
@@ -136,11 +144,18 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         # staleness is computed against this, never against the filing time.
         "trace_started_at": format_utc(trace.started_at),
         "provenance": result.provenance,
-        # Why that provenance is believed: today always "declared_by_filer", which
-        # caps the tier at community. Sealed so a replay and the public checker can
-        # see that a validated tier did not rest on a declared word.
+        # Why that provenance is believed: "declared_by_filer" caps the tier at
+        # community; "recorder_attested" means a signed recorder attestation was
+        # accepted under the SEALING verifier's trust list. A checker never believes
+        # the word: it re-assesses the attestations recorded below under its own list.
         "provenance_basis": result.provenance_basis,
         "provenance_assessment": result.provenance_assessment,
+        # How the supplied recorder attestations were assessed, and the attestations as
+        # supplied. Never a trust list: that is the verifier's own input.
+        "recorder_attestation": result.recorder_attestation,
+        # The unit the verification is about (empty: the product line); the
+        # attestation's machine reference is matched against it.
+        "machine_serial": result.machine_serial,
         "engine_version": result.engine_version,
         "limits_hash": limits.content_hash() if limits else "",
         # How the table's review evidence was assessed, with the reviews themselves,
@@ -167,6 +182,8 @@ def _judgement(res: VerificationResult) -> tuple[ValidationState, Confidence]:
 
 def _refuse_foreign_result(
     result: VerificationResult, envelope: SafetyEnvelope, trace: Trace,
+    attestations: Sequence[Any] = (), recorder_trust: RecorderTrust | None = None,
+    machine_serial: str = "",
 ) -> None:
     mismatches = []
     if result.envelope_hash != envelope.content_hash():
@@ -179,7 +196,13 @@ def _refuse_foreign_result(
     if (result.product, result.product_version) != (envelope.product,
                                                     envelope.product_version):
         mismatches.append("it names a different product or version")
-    ceiling = min(provenance_trust.assess_provenance(trace).ceiling, envelope.tier_ceiling)
+    assessed = provenance_trust.assess_provenance(
+        trace, attestations, recorder_trust,
+        machine_ref=MachineRef(envelope.product, envelope.product_version, machine_serial))
+    ceiling = min(assessed.ceiling, envelope.tier_ceiling)
+    if result.provenance_basis != assessed.basis.value:
+        mismatches.append(f"it names provenance basis {result.provenance_basis!r}, these "
+                          f"inputs give {assessed.basis.value!r}")
     if result.tier > ceiling:
         mismatches.append(f"it claims tier {result.tier.value!r}, above the "
                           f"{ceiling.value!r} these inputs can support")
@@ -187,6 +210,11 @@ def _refuse_foreign_result(
         raise BundleError(
             "the supplied result does not belong to this envelope and trace: "
             + "; ".join(mismatches) + ".")
+
+
+def _serial_of(subject: str) -> str:
+    """The unit serial in a machine key (``maker/model#serial``), or ``""``."""
+    return subject.rpartition("#")[2].strip() if "#" in subject else ""
 
 
 def build_bundle(
@@ -197,6 +225,9 @@ def build_bundle(
     limits: LimitsTable | None = None,
     limits_reviews: Sequence[Any] = (),
     review_trust: ReviewTrust | None = None,
+    recorder_attestations: Sequence[Any] = (),
+    recorder_trust: RecorderTrust | None = None,
+    machine_serial: str = "",
     ledger: EvidenceLedger | None = None,
     result: VerificationResult | None = None,
     subject: str = "",
@@ -213,16 +244,26 @@ def build_bundle(
     unit, so that :mod:`assurance.machinery.staleness` can find it alongside
     that unit's intervention records.
 
+    ``recorder_attestations`` are signed attestations of the trace; ``recorder_trust`` is
+    the sealing verifier's own list of recorder keys. Without a trust list nothing can be
+    accepted and the provenance stays declared by the filer. ``machine_serial`` names the
+    unit; when omitted it is taken from a ``subject`` of the form ``maker/model#serial``
+    (a machine key), so the evidence filed under a unit cannot rest on a recorder
+    attached to another.
+
     ``result`` lets a caller seal a verification it already ran. It must be the
     verification of *these* inputs: a result for another trace or envelope, or one
     claiming a tier its inputs cannot support, is refused rather than sealed under
     a trace it says nothing about.
     """
+    serial = machine_serial or _serial_of(subject)
     res = result if result is not None else verify(
         envelope, trace, limits=limits, limits_reviews=limits_reviews,
-        review_trust=review_trust)
+        review_trust=review_trust, recorder_attestations=recorder_attestations,
+        recorder_trust=recorder_trust, machine_serial=serial)
     if result is not None:
-        _refuse_foreign_result(result, envelope, trace)
+        _refuse_foreign_result(result, envelope, trace, recorder_attestations,
+                               recorder_trust, serial)
 
     state, confidence = _judgement(res)
 
@@ -457,18 +498,19 @@ def _coherence_problems(
             "simulation can never exceed 'community': it says nothing about how the "
             "hardware behaves."
         )
-    if tier is AssuranceTier.VALIDATED and not _provenance_lifts_tier(body):
+    if tier is AssuranceTier.VALIDATED and not provenance_lifts_tier(body):
         basis = body.get("provenance_basis")
         problems.append(
             f"the bundle records tier 'validated' on a trace whose provenance "
             f"{provenance!r} is "
             + (f"only {basis!r}" if isinstance(basis, str)
                else "recorded with no provenance_basis (an engine 4 or earlier bundle)")
-            + ". A provenance the filer declared cannot lift the tier: nothing signs a "
-            "recording, so a trace is no evidence about the machine that made it, and "
-            "no verified recorder attestation backs this one. (Bundles from engine 4 "
-            "or earlier, which let a declared 'bench' or 'field' reach 'validated', "
-            "are rejected here for the same reason.)")
+            + ". A provenance the filer declared cannot lift the tier, and the bundle "
+            "records no recorder attestation that a checker could re-assess. (Bundles "
+            "from engine 4 or earlier, which let a declared 'bench' or 'field' reach "
+            "'validated', are rejected here for the same reason.)")
+    if body.get("provenance_basis") == _ATTESTED:
+        problems.extend(_attested_claim_problems(body))
     if len(problems) == tier_problems:
         verified.append(
             f"the recorded tier {tier_name!r} is one the engine can produce from the "
@@ -615,6 +657,18 @@ class BundleCheck:
     internally_consistent: bool = False
     #: The engine was re-run on the supplied inputs (whether or not it matched).
     replayed: bool = False
+    #: The provenance basis the bundle RECORDS (``declared_by_filer`` or
+    #: ``recorder_attested``). A claim, never evidence of itself.
+    provenance_basis: str = ""
+    #: What THIS check made of that claim: ``not_applicable`` (declared by the filer),
+    #: ``reproduced`` (the recorded attestation is accepted under the trust list the
+    #: checker supplied), ``unverifiable`` (the bundle claims an attestation and no
+    #: trust list was supplied, so it is NOT believed) or ``not_reproduced`` (rejected).
+    provenance_reassessed: str = "not_applicable"
+    #: The tier this check believes: the recorded tier, capped at ``community`` unless
+    #: the recorder attestation was reproduced under the checker's own trust list.
+    #: (The limits review is reported separately.)
+    believed_tier: str = ""
 
     @property
     def reproduced(self) -> bool:
@@ -637,13 +691,17 @@ def check_bundle(
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
     review_trust: ReviewTrust | None = None,
+    recorder_trust: RecorderTrust | None = None,
+    machine_serial: str | None = None,
     as_of: datetime | None = None,
 ) -> BundleCheck:
     """:func:`verify_bundle` with the full answer: ``level`` and what ran.
 
-    ``as_of`` is the moment the *verifier* judges a limits review's expiry against
-    (default: now). The date a bundle records for itself is never used: a sealed
-    claim about when it was assessed could be set to a day the review was still valid.
+    ``as_of`` is the moment the *verifier* judges a limits review's or a recorder
+    attestation's expiry against (default: now). The date a bundle records for itself is
+    never used: a sealed claim about when it was assessed could be set to a day the
+    evidence was still valid. ``recorder_trust`` is the checker's OWN list of recorder
+    keys; a list found inside a bundle is ignored.
     """
     path = Path(bundle_path)
     if path.stat().st_size > MAX_FILE_BYTES:
@@ -654,7 +712,8 @@ def check_bundle(
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         return _rejected(f"the file is not readable JSON: {exc}")
     return check_bundle_data(raw, envelope=envelope, trace=trace, limits=limits,
-                             review_trust=review_trust)
+                             review_trust=review_trust, recorder_trust=recorder_trust,
+                             machine_serial=machine_serial, as_of=as_of)
 
 
 def verify_bundle(
@@ -664,6 +723,7 @@ def verify_bundle(
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
     review_trust: ReviewTrust | None = None,
+    recorder_trust: RecorderTrust | None = None,
 ) -> tuple[bool, list[str]]:
     """Check a bundle without trusting whoever produced it.
 
@@ -696,7 +756,7 @@ def verify_bundle(
     that cannot be read is reported as a problem; this never raises on content.
     """
     result = check_bundle(bundle_path, envelope=envelope, trace=trace, limits=limits,
-                          review_trust=review_trust)
+                          review_trust=review_trust, recorder_trust=recorder_trust)
     return result.ok, result.notes
 
 
@@ -706,9 +766,11 @@ def verify_bundle_data(
     envelope: SafetyEnvelope | None = None,
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
+    recorder_trust: RecorderTrust | None = None,
 ) -> tuple[bool, list[str]]:
     """:func:`verify_bundle` for a bundle already parsed, so nothing is written to disk."""
-    result = check_bundle_data(raw, envelope=envelope, trace=trace, limits=limits)
+    result = check_bundle_data(raw, envelope=envelope, trace=trace, limits=limits,
+                               recorder_trust=recorder_trust)
     return result.ok, result.notes
 
 
@@ -719,9 +781,19 @@ def check_bundle_data(
     trace: Trace | None = None,
     limits: LimitsTable | None = None,
     review_trust: ReviewTrust | None = None,
+    recorder_trust: RecorderTrust | None = None,
+    machine_serial: str | None = None,
     as_of: datetime | None = None,
 ) -> BundleCheck:
-    """The one implementation: library, CLI and HTTP routes all end up here."""
+    """The one implementation: library, CLI and HTTP routes all end up here.
+
+    ``recorder_trust`` is the CHECKER's own recorder trust list. A bundle that records
+    ``provenance_basis: recorder_attested`` is believed only if the attestations it
+    carries are accepted under that list (``BundleCheck.provenance_reassessed``); with
+    none supplied the claim is reported as unverifiable and the tier believed is capped
+    at ``community``. ``machine_serial`` is the unit the checker says the bundle is
+    about; default: the one the bundle records.
+    """
     if not isinstance(raw, dict):
         return _rejected(f"the file holds a JSON {type(raw).__name__}, not a bundle object.")
 
@@ -783,6 +855,15 @@ def check_bundle_data(
 
     replayed = False
     replay_problems: list[str] = []
+    claims_attested = body.get("provenance_basis") == _ATTESTED
+    attested_coherent = claims_attested and not _attested_claim_problems(body)
+    assessment_rec = body.get("provenance_assessment")
+    recorded_attestation_hash = (
+        str(assessment_rec.get("attestation_hash", ""))
+        if isinstance(assessment_rec, dict) else "")
+    recorder_state = "not_applicable"
+    if claims_attested:
+        recorder_state = "unverifiable" if recorder_trust is None else "not_reproduced"
     if envelope is None or trace is None:
         limitations.insert(0, (
             "NOT CHECKED: the original envelope and trace were not supplied, so only "
@@ -803,6 +884,8 @@ def check_bundle_data(
                 "re-run was not performed and the review was not assessed. Supply "
                 "--limits-trust with keys you obtained independently of this bundle."
             ))
+        elif claims_attested and recorder_trust is None:
+            pass        # the recorder limitation below says why nothing was re-run
         elif recorded_limits and limits is None:
             limitations.insert(0, (
                 "NOT CHECKED: the bundle was produced against a body-region limits "
@@ -810,11 +893,14 @@ def check_bundle_data(
                 "re-run was not performed. Supply it with --limits."
             ))
         else:
+            serial = machine_serial if machine_serial is not None else str(
+                body.get("machine_serial") or "")
             try:
                 replay = verify(
                     envelope, trace, limits=limits,
                     limits_reviews=_recorded_reviews(body), review_trust=review_trust,
-                    now=as_of)
+                    recorder_attestations=_recorded_attestations(body),
+                    recorder_trust=recorder_trust, machine_serial=serial, now=as_of)
             except AssuranceError as exc:
                 problems.append(f"re-running the engine on the supplied inputs failed: "
                                 f"{exc}")
@@ -823,6 +909,49 @@ def check_bundle_data(
                 replay_problems = _replay_differences(
                     replay, evidence, envelope, trace, limits)
                 problems.extend(replay_problems)
+                replay_assessment = replay.provenance_assessment or {}
+                if (claims_attested and replay.provenance_basis == _ATTESTED
+                        and replay_assessment.get("attestation_hash")
+                        == recorded_attestation_hash):
+                    recorder_state = "reproduced"
+
+    if (claims_attested and recorder_trust is not None and not replayed
+            and attested_coherent and not problems):
+        # No original trace to re-run, but the attestation can still be re-assessed from
+        # the bundle's own description of the trace, under the CHECKER's trust list.
+        reassessed = reassess_recorded_attestations(body, recorder_trust, now=as_of,
+                                        machine_serial=machine_serial)
+        if (reassessed is not None and reassessed.attested
+                and reassessed.attestation_hash == recorded_attestation_hash):
+            recorder_state = "reproduced"
+            verified.append(
+                "the recorded recorder attestation is accepted under the recorder trust "
+                f"list you supplied (key {reassessed.key_fingerprint}); the recording "
+                "window was not compared because the original trace was not supplied "
+                "(the trace hash it signs was)")
+        else:
+            problems.append(
+                "the bundle records provenance_basis 'recorder_attested', but the "
+                "attestation it carries is not accepted under the recorder trust list "
+                "you supplied ("
+                + (reassessed.status.value if reassessed is not None else "unreadable")
+                + "): its provenance is only declared by the filer, and the tier it "
+                "records above 'community' is not believed.")
+    if recorder_state == "unverifiable":
+        limitations.append(
+            "NOT CHECKED: the bundle records provenance_basis 'recorder_attested' (a "
+            "signed recorder attestation) and no recorder trust list was supplied, so "
+            "the attestation was not assessed and the re-run was not performed. It is "
+            "NOT believed: for this check the trace's provenance is treated as declared "
+            "by the filer and the tier as capped at community. Supply --recorder-trust "
+            "with keys you obtained independently of this bundle.")
+    if claims_attested and not attested_coherent:
+        recorder_state = "not_reproduced"
+    elif (claims_attested and recorder_state == "not_reproduced"
+          and recorder_trust is not None and not problems):
+        problems.append(
+            "re-running with the recorder trust list you supplied does not reproduce "
+            "provenance_basis 'recorder_attested' for the attestation the bundle records.")
 
     ok = not problems
     reproduced = ok and replayed
@@ -834,12 +963,21 @@ def check_bundle_data(
             "identity and start time, the stated limitations and the confidence")
     level = (LEVEL_REJECTED if not ok
              else LEVEL_REPRODUCED if reproduced else LEVEL_INTEGRITY_ONLY)
+    tier_name = str(body.get("tier"))
+    recorded_tier = _TIERS.get(tier_name)
+    believed = tier_name
+    if (recorded_tier is not None and recorded_tier > AssuranceTier.COMMUNITY
+            and recorder_state != "reproduced"):
+        believed = AssuranceTier.COMMUNITY.value
     return BundleCheck(
         ok=ok, level=level, problems=tuple(problems), limitations=tuple(limitations),
         verified=tuple(verified) if ok else (),
         seal_intact=seal_intact,
         internally_consistent=not coherence,
-        replayed=replayed)
+        replayed=replayed,
+        provenance_basis=str(body.get("provenance_basis") or ""),
+        provenance_reassessed=recorder_state,
+        believed_tier=believed)
 
 
 def _recorded_reviews(body: dict[str, Any]) -> list[Any]:
@@ -853,24 +991,136 @@ def _review_accepted(body: dict[str, Any]) -> bool:
     return isinstance(rec, dict) and rec.get("status") == "accepted"
 
 
-def _provenance_lifts_tier(body: dict[str, Any]) -> bool:
-    """Does the sealed provenance basis let the trace reach ``validated``?
+_ATTESTED = "recorder_attested"
+#: The first engine whose sealed body can carry a recorder attestation. Earlier engines
+#: could not have verified one, so a body that claims it is lying about its engine.
+_FIRST_ENGINE_WITH_ATTESTATION = 6
 
-    The counterpart of :func:`_review_accepted` for the trace. Only a basis in
-    ``provenance_trust.LIFTING_BASES`` does, and that set is empty until a recorder
-    attestation can be verified, so a bundle cannot carry ``validated`` from a
-    declared provenance, whatever it claims to have been sealed with.
+
+def _engine_number(body: dict[str, Any]) -> int:
+    try:
+        return int(str(body.get("engine_version", "")).strip())
+    except ValueError:
+        return 0
+
+
+def _recorded_attestations(body: dict[str, Any]) -> list[Any]:
+    rec = body.get("recorder_attestation")
+    items = rec.get("attestations") if isinstance(rec, dict) else None
+    return list(items) if isinstance(items, list) else []
+
+
+def _attested_claim_problems(body: dict[str, Any]) -> list[str]:
+    """Does a sealed ``recorder_attested`` claim hang together? No trust is involved.
+
+    This cannot show the claim is *true* (that needs the verifier's trust list); it
+    shows the bundle contains what a true claim would: an accepted attestation that is
+    among the recorded ones, names this bundle's trace, product and version, and is the
+    one the sealed provenance assessment cites.
+    """
+    out: list[str] = []
+    if _engine_number(body) < _FIRST_ENGINE_WITH_ATTESTATION:
+        return [f"the bundle records provenance_basis {_ATTESTED!r} but names engine "
+                f"{body.get('engine_version')!r}; engines before "
+                f"{_FIRST_ENGINE_WITH_ATTESTATION} could not verify a recorder "
+                "attestation, so this basis cannot be genuine."]
+    if body.get("provenance") not in ("bench", "field"):
+        out.append(f"the bundle records {_ATTESTED!r} for provenance "
+                   f"{body.get('provenance')!r}; only bench and field recordings can be "
+                   "attested.")
+    rec = body.get("recorder_attestation")
+    if not isinstance(rec, dict) or rec.get("status") != "accepted":
+        return [*out, f"the bundle records provenance_basis {_ATTESTED!r} with no accepted "
+                "recorder attestation assessment behind it."]
+    try:
+        accepted = RecorderAttestation.from_dict(rec.get("accepted_attestation"))
+    except RecorderAttestationError as exc:
+        return [*out, f"the accepted recorder attestation in the bundle cannot be read: {exc}"]
+    if accepted.to_dict() not in _recorded_attestations(body):
+        out.append("the accepted recorder attestation is not among the attestations the "
+                   "bundle records.")
+    pa = body.get("provenance_assessment")
+    ahash = accepted.content_hash()
+    if not (isinstance(pa, dict) and pa.get("basis") == _ATTESTED
+            and pa.get("attestation_hash") == ahash
+            and pa.get("key_fingerprint") == accepted.key_fingerprint):
+        out.append("the sealed provenance assessment does not cite the accepted "
+                   "attestation (hash and key fingerprint).")
+    if rec.get("attestation_hash") != ahash or rec.get("key_fingerprint") != \
+            accepted.key_fingerprint:
+        out.append("the recorder attestation assessment does not agree with the "
+                   "attestation it accepted.")
+    for label, signed, recorded in (
+            ("trace hash", accepted.trace_hash, body.get("trace_hash")),
+            ("trace id", accepted.trace_id, body.get("trace_id")),
+            ("provenance", accepted.provenance, body.get("provenance")),
+            ("trace start", accepted.started_at, body.get("trace_started_at")),
+            ("product", accepted.product, body.get("product")),
+            ("product version", accepted.product_version, body.get("product_version"))):
+        if signed != recorded:
+            out.append(f"the accepted recorder attestation names {label} {signed!r}; the "
+                       f"bundle records {recorded!r}.")
+    if rec.get("trace_hash") != body.get("trace_hash"):
+        out.append("the recorder attestation assessment is about a different trace than "
+                   "the bundle records.")
+    return out
+
+
+def provenance_lifts_tier(body: dict[str, Any]) -> bool:
+    """May a sealed ``validated`` tier rest on this body's provenance? (Coherence only.)
+
+    Only a ``recorder_attested`` basis can, and only if the body also contains a
+    coherent accepted attestation (:func:`_attested_claim_problems`). This is *not*
+    belief: whether the attestation is genuine is decided by the checker re-assessing it
+    under its own trust list (:func:`_recorder_state`). A body that merely says
+    ``recorder_attested`` lifts nothing.
     """
     basis = body.get("provenance_basis")
-    return isinstance(basis, str) and basis in provenance_trust.LIFTING_BASES
+    return (isinstance(basis, str) and basis in provenance_trust.LIFTING_BASES
+            and not _attested_claim_problems(body))
+
+
+def reassess_recorded_attestations(
+    body: dict[str, Any], trust: RecorderTrust | None, *, now: datetime | None,
+    machine_serial: str | None,
+) -> Any:
+    """Re-assess the attestations a bundle records, from the bundle alone (no trace bytes).
+
+    The recording window cannot be compared without the trace, but the trace hash the
+    attestation signs is compared with the bundle's, and that hash covers the window.
+    """
+    facts = RecordingFacts.from_bundle_body(body)
+    if facts is None:
+        return None
+    serial = machine_serial if machine_serial is not None else str(
+        body.get("machine_serial") or "")
+    ref = MachineRef(str(body.get("product")), str(body.get("product_version")), serial)
+    return assess_recorder_attestation(
+        facts, _recorded_attestations(body), trust, machine_ref=ref, now=now)
 
 
 def _without_assessed_on(body: dict[str, Any]) -> dict[str, Any]:
-    """The body minus the day a review was assessed: shown, never compared or trusted."""
+    """The body minus what is shown but never compared or trusted on replay.
+
+    The day an assessment was made (a sealed claim about it could name a day the
+    evidence was still valid), whether a trust list was present, and the per-finding
+    prose, none of which is a fact about the evidence.
+    """
+    out = body
     rec = body.get("limits_review")
-    if not isinstance(rec, dict):
-        return body
-    return {**body, "limits_review": {k: v for k, v in rec.items() if k != "assessed_on"}}
+    if isinstance(rec, dict):
+        out = {**out, "limits_review": {k: v for k, v in rec.items() if k != "assessed_on"}}
+    att = body.get("recorder_attestation")
+    if isinstance(att, dict):
+        trimmed = {k: v for k, v in att.items()
+                   if k not in ("assessed_on", "trust_configured")}
+        findings = trimmed.get("findings")
+        if isinstance(findings, list):
+            trimmed["findings"] = [
+                {k: v for k, v in f.items() if k != "detail"} if isinstance(f, dict) else f
+                for f in findings]
+        out = {**out, "recorder_attestation": trimmed}
+    return out
 
 
 def _replay_differences(
