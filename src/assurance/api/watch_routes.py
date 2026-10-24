@@ -46,7 +46,7 @@ MAX_MACHINES_PER_REPORT = 200
 def _timestamp(value: str) -> str:
     try:
         parse_utc(value)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, OverflowError) as exc:
         raise ValueError(f"{value!r} is not an ISO-8601 timestamp with a timezone: {exc}") from exc
     return value
 
