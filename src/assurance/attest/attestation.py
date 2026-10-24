@@ -36,7 +36,8 @@ import base64
 import json
 import os
 import threading
-from collections.abc import Iterable, Iterator
+import time
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -51,14 +52,19 @@ from .keys import SigningKey, VerifyingKey
 
 __all__ = [
     "ATTESTATION_FORMAT",
+    "LOCK_TIMEOUT_SECONDS",
     "AttestationBasis",
+    "AttestationBusyError",
     "AttestationError",
     "AttestationLog",
+    "AttestationLogDamagedError",
     "HeadAttestation",
     "LedgerHead",
     "LogVerdict",
     "attest",
+    "describe_anchor",
     "head_of",
+    "select_anchor",
     "verify_log",
 ]
 
@@ -68,8 +74,36 @@ __all__ = [
 ATTESTATION_FORMAT = "assurance.head-attestation.v1"
 
 
+#: How long a writer waits for the log's lock before giving up. Signing one head is
+#: milliseconds of work, so ten seconds is "something is wrong or very busy", not
+#: "queue politely": past it the caller gets a typed busy error (HTTP 503 with
+#: ``Retry-After``) instead of a request that holds a worker thread indefinitely.
+LOCK_TIMEOUT_SECONDS = 10.0
+_LOCK_POLL_SECONDS = 0.02
+
+
 class AttestationError(AssuranceError):
     """An attestation cannot be made, or a log does not hold up."""
+
+
+class AttestationLogDamagedError(AttestationError):
+    """The log file itself cannot be read as a log: a fault to repair, not a finding.
+
+    Distinct from a refusal (a rewind, a fork), which is the *answer* this system
+    exists to give. A damaged file says nothing about the ledger; it says the
+    file needs a person.
+    """
+
+
+class AttestationBusyError(AssuranceError):
+    """The log's lock was not free within the deadline. Retry; nothing was written.
+
+    Deliberately not an :class:`AttestationError`: it is not a finding about any
+    ledger, and a caller that treats every ``AttestationError`` as "refused" must
+    not mislabel contention as one.
+    """
+
+    retry_after_seconds = 2
 
 
 class AttestationBasis(StrEnum):
@@ -247,9 +281,75 @@ class HeadAttestation:
             return False
         return key.verify(self.signed_payload(), self.signature_bytes())
 
+    @property
+    def note_is_tenant_supplied(self) -> bool:
+        """True when ``note`` is text the *requester* typed, not the key holder.
+
+        A ``declared_by_holder`` attestation is made for somebody who handed the
+        signer three numbers and a note; the signature covers the note because it
+        covers everything, which does not make it the key holder's statement. The
+        basis is inside the signed bytes, so this cannot be lifted off one record
+        and put on another. Derived rather than stored: the signed format is
+        unchanged, so every existing attestation and every verifier still works.
+        """
+        return bool(self.note) and self.basis is AttestationBasis.DECLARED_BY_HOLDER
+
+
+def select_anchor(
+    records: Sequence[HeadAttestation], *, accept_declared: bool = False,
+) -> HeadAttestation | None:
+    """The one rule for which attestation an export embeds as its ``anchor``.
+
+    Used by the API (and so the MCP tool that calls it) and by every CLI export,
+    so the same log can never anchor one export to a different record depending on
+    which door it came through.
+
+    The newest ``read_from_ledger`` record wins: the signer read the chain and saw
+    it verify. A ``declared_by_holder`` record is three numbers somebody typed
+    about a ledger the signer never saw; it describes the *holder's* ledger, not
+    necessarily the one being exported, so it is never chosen unless
+    ``accept_declared`` says a person pointed at this log on purpose (the offline
+    CLI's ``--attestations``). Even then a declared head over zero records anchors
+    nothing and is refused rather than embedded as if it did.
+    """
+    for record in reversed(records):
+        if record.basis is AttestationBasis.READ_FROM_LEDGER:
+            return record
+    if not accept_declared:
+        return None
+    for record in reversed(records):
+        if record.head_seq == 0:
+            raise AttestationError(
+                f"attestation {record.sequence} was declared by the holder over zero "
+                "records. It anchors nothing: an export cannot show that no record "
+                "was removed up to a head that covers none."
+            )
+        return record
+    return None
+
+
+def describe_anchor(anchor: dict[str, Any] | HeadAttestation) -> str:
+    """One line for the CLI to say what an embedded anchor is, and is not."""
+    data = anchor.to_dict() if isinstance(anchor, HeadAttestation) else anchor
+    where = f"attestation {data['sequence']} (seq {data['head_seq']})"
+    if data.get("basis") == AttestationBasis.DECLARED_BY_HOLDER.value:
+        return (
+            f"anchor is {where}, declared by the holder: the signer was told this head "
+            "and it was not read from the ledger, so it is not a check that the chain "
+            "verified. Records after it are covered by no signature"
+        )
+    return f"anchored to {where}; records after it are covered by no signature"
+
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+
+
+def _thread_lock_for(log: AttestationLog) -> threading.Lock:
+    """One in-process lock per *real* file, however its path was spelled."""
+    key = os.path.realpath(log.path)
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.Lock())
 
 
 class AttestationLog:
@@ -258,52 +358,144 @@ class AttestationLog:
     Deliberately not a database. It must be copyable by somebody who does not
     have this software installed, readable by somebody who does not trust it,
     and small enough to paste into an email to an auditor.
+
+    ``label`` is how this log is named in error text. It defaults to the path,
+    which is right for a CLI that was handed the path; a server passes a label so
+    that no message it sends to a client contains a filesystem path.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, label: str | None = None) -> None:
         self.path = Path(path)
+        self.label = label or str(path)
 
+    # -- reading -----------------------------------------------------------
     def read(self) -> list[HeadAttestation]:
-        if not self.path.exists():
-            return []
+        """Every record. Takes no lock, so it never waits and never blocks a writer.
+
+        A writer appends one line at a time, so a reader that races it can see the
+        file end part-way through a line. That last, unterminated, unparseable line
+        is ignored here (see :meth:`has_torn_tail`): it is either an append still in
+        flight or the debris of a crash, and in neither case was a signed record
+        ever handed to anybody. A damaged line *anywhere else* is an error.
+        """
+        return self.scan()[0]
+
+    def has_torn_tail(self) -> bool:
+        """True when the file ends in an unterminated line that is not a record."""
+        return self.scan()[1]
+
+    def scan(self) -> tuple[list[HeadAttestation], bool]:
+        """``(records, torn_tail)``: every readable record, and whether the file ends
+        in an unterminated line that is not one."""
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return [], False
+        *lines, tail = raw.split(b"\n")      # tail is b"" when the file ends in a newline
         out: list[HeadAttestation] = []
-        for number, line in enumerate(self.path.read_text("utf-8").splitlines(), start=1):
-            text = line.strip()
-            if not text:
-                continue
+        for number, line in enumerate(lines, start=1):
+            if line.strip():
+                out.append(self._parse(line, number))
+        torn = False
+        if tail.strip():
             try:
-                data = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise AttestationError(
-                    f"{self.path} line {number} is not JSON ({exc}). A damaged "
-                    "attestation log is a finding: it is the one file a rewind "
-                    "cannot reach, so damage to it is worth explaining."
-                ) from exc
-            out.append(HeadAttestation.from_dict(data))
-        return out
+                out.append(self._parse(tail, len(lines) + 1))
+            except AttestationLogDamagedError:
+                torn = True
+        return out, torn
+
+    def _parse(self, line: bytes, number: int) -> HeadAttestation:
+        try:
+            data = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AttestationLogDamagedError(
+                f"{self.label} line {number} is not JSON ({exc}). A damaged "
+                "attestation log is a finding: it is the one file a rewind "
+                "cannot reach, so damage to it is worth explaining."
+            ) from exc
+        if not isinstance(data, dict):
+            raise AttestationLogDamagedError(
+                f"{self.label} line {number} is not an attestation record.")
+        try:
+            return HeadAttestation.from_dict(data)
+        except (AttestationError, ValueError, TypeError) as exc:
+            raise AttestationLogDamagedError(
+                f"{self.label} line {number} is not a readable attestation: {exc}"
+            ) from exc
+
+    def _read_for_append(self) -> list[HeadAttestation]:
+        """The records, for a caller about to append: a torn tail is refused.
+
+        Appending after an unterminated line would glue the new record onto the
+        debris and turn a recoverable tail into a damaged middle. The file is
+        evidence; it is left exactly as found for a person to repair.
+        """
+        records, torn = self.scan()
+        if torn:
+            raise AttestationLogDamagedError(
+                f"{self.label} ends in an unterminated line (a write that did not "
+                "finish). Nothing was appended: doing so would merge the new record "
+                "into the damaged one. Preserve the file as it is and have the "
+                "operator repair it."
+            )
+        return records
 
     def last(self) -> HeadAttestation | None:
         records = self.read()
         return records[-1] if records else None
 
     def require_last(self) -> HeadAttestation:
-        """The newest record, for a caller that *asked* for one.
+        """The newest record of *any* basis, for a caller that *asked* for one.
 
-        A missing or empty log is an error here, not "no anchor": an export or a
-        verification that was told to use an attestation log must not quietly
-        carry on without one.
+        A missing or empty log is an error here, not "no anchor". This is **not** the
+        rule for which record anchors an export: that is :meth:`require_anchor`,
+        which every export path shares.
         """
         if not self.path.exists():
             raise AttestationError(
-                f"{self.path} does not exist. Nothing was read, and no attestation "
+                f"{self.label} does not exist. Nothing was read, and no attestation "
                 "was invented.")
         latest = self.last()
         if latest is None:
-            raise AttestationError(f"{self.path} holds no attestations.")
+            raise AttestationError(f"{self.label} holds no attestations.")
         return latest
 
+    def anchor(self, *, accept_declared: bool = False) -> HeadAttestation | None:
+        """The record an export would embed (:func:`select_anchor`), or ``None``."""
+        return select_anchor(self.read(), accept_declared=accept_declared)
+
+    def require_anchor(self) -> HeadAttestation:
+        """The record an offline export embeds because a person named this log.
+
+        The operator's explicit ``--attestations`` choice allows a record the holder
+        declared when the log holds nothing the signer read itself; the embedded
+        anchor carries its ``basis`` and the CLI says so. A missing or empty log is
+        an error: an export told to use a log must not quietly carry on without one.
+        """
+        if not self.path.exists():
+            raise AttestationError(
+                f"{self.label} does not exist. Nothing was read, and no attestation "
+                "was invented.")
+        records = self.read()
+        if not records:
+            raise AttestationError(f"{self.label} holds no attestations.")
+        chosen = select_anchor(records, accept_declared=True)
+        if chosen is None:  # pragma: no cover - records is non-empty, so one basis matched
+            raise AttestationError(f"{self.label} holds no usable attestation.")
+        return chosen
+
+    # -- writing -----------------------------------------------------------
+    def lock_path(self) -> Path:
+        """The sidecar file ``flock`` is taken on: beside the *real* file.
+
+        Keyed by the resolved path, like the in-process lock, so a symlinked
+        directory or a symlinked file cannot give two processes two locks over one
+        log.
+        """
+        return Path(os.path.realpath(self.path) + ".lock")
+
     @contextmanager
-    def locked(self) -> Iterator[None]:
+    def locked(self, timeout: float | None = None) -> Iterator[None]:
         """Serialise read-decide-append across threads and processes.
 
         ``attest`` derives the next sequence and ``previous`` hash from the last
@@ -311,23 +503,45 @@ class AttestationLog:
         with the same sequence: a forked log that ``verify_log`` rightly refuses
         but that has already handed a signed record to somebody. One in-process
         lock per real path plus ``flock`` on a sidecar file covers both.
+
+        Waiting is bounded: ``LOCK_NB`` polling against a deadline
+        (:data:`LOCK_TIMEOUT_SECONDS` unless *timeout* is given), then
+        :class:`AttestationBusyError`. A process that holds the sidecar lock and
+        never lets go must cost a request ten seconds, not a worker for ever.
         """
-        key = os.path.realpath(self.path)
-        with _LOCKS_GUARD:
-            thread_lock = _LOCKS.setdefault(key, threading.Lock())
-        with thread_lock:
+        budget = max(LOCK_TIMEOUT_SECONDS if timeout is None else timeout, 0.0)
+        deadline = time.monotonic() + budget
+        thread_lock = _thread_lock_for(self)
+        if not thread_lock.acquire(timeout=budget):
+            raise self._busy(budget)
+        try:
             try:
                 import fcntl
             except ImportError:  # pragma: no cover - not POSIX: one process only
                 yield
                 return
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(str(self.path) + ".lock", "a+") as handle:
-                fcntl.flock(handle, fcntl.LOCK_EX)
+            sidecar = self.lock_path()
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            with open(sidecar, "a+") as handle:
+                while True:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise self._busy(budget) from None
+                        time.sleep(_LOCK_POLL_SECONDS)
                 try:
                     yield
                 finally:
                     fcntl.flock(handle, fcntl.LOCK_UN)
+        finally:
+            thread_lock.release()
+
+    def _busy(self, waited: float) -> AttestationBusyError:
+        return AttestationBusyError(
+            f"{self.label} is being written by another request (waited {waited:g}s). "
+            "Nothing was signed or appended; retry shortly.")
 
     def append(self, attestation: HeadAttestation) -> HeadAttestation:
         """Append one record. Call inside :meth:`locked` when the record's
@@ -364,6 +578,27 @@ def attest(
     the chain does not verify, when the ledger is shorter than it was at the
     last attestation, when an already-attested link has changed, or when a
     different key is being used without ``rotating=True``.
+
+    The length, head and fork comparisons are made **only against earlier records
+    of the same basis**. A ``read_from_ledger`` record describes the ledger this
+    process read; a ``declared_by_holder`` record describes whatever ledger the
+    caller said they held. One log may hold both (a hosted account's log does), and
+    comparing a head with a record about a different ledger is not a rewind
+    detector: it tells a customer their records were removed because the service's
+    own ledger was longer, and lets one inflated number stop the other kind of
+    signing for good. The key check and the ``previous`` hash chain still span the
+    whole file.
+
+    The ledger is read inside the lock, deliberately: a snapshot taken before it
+    could be older than a head appended meanwhile and be refused as a "rewind", and
+    the head would be older than the ``attested_at`` that is signed beside it. The
+    API path declares a head and reads no ledger, so it holds the lock only for the
+    small log.
+
+    Raises :class:`AttestationLogDamagedError` (an :class:`AttestationError` that is
+    a fault, not a finding) when the log cannot be read, and
+    :class:`AttestationBusyError` when its lock is not free within
+    :data:`LOCK_TIMEOUT_SECONDS`.
     """
     with log.locked():
         head: LedgerHead
@@ -375,25 +610,27 @@ def attest(
             head = source
             by_seq = None
 
-        history = log.read()
+        history = log._read_for_append()
         previous = history[-1] if history else None
+        same_basis = [r for r in history if r.basis is head.basis]
+        prior = same_basis[-1] if same_basis else None
 
-        if previous is not None:
-            if head.length < previous.ledger_length:
+        if prior is not None:
+            if head.length < prior.ledger_length:
                 raise AttestationError(
                     f"refusing to attest: the ledger holds {head.length} record(s), but "
-                    f"attestation {previous.sequence} signed for {previous.ledger_length} "
-                    f"at {previous.attested_at}. An append-only ledger does not get "
+                    f"attestation {prior.sequence} signed for {prior.ledger_length} "
+                    f"at {prior.attested_at}. An append-only ledger does not get "
                     "shorter. Records were removed after they were attested — this is "
                     "the event this whole mechanism exists to catch. Preserve the "
                     "database and the attestation log as they are."
                 )
-            if head.head_seq < previous.head_seq:
+            if head.head_seq < prior.head_seq:
                 raise AttestationError(
                     f"refusing to attest: head seq {head.head_seq} is behind the "
-                    f"{previous.head_seq} signed at {previous.attested_at}."
+                    f"{prior.head_seq} signed at {prior.attested_at}."
                 )
-            for earlier in history:
+            for earlier in same_basis:
                 if earlier.head_seq == 0:
                     continue
                 if by_seq is not None:
@@ -415,6 +652,7 @@ def attest(
                         "chain was rebuilt — same position, different history. This is "
                         "a fork, not a gap, and it will not show up in verify_chain."
                     )
+        if previous is not None:
             if previous.key_fingerprint != key.fingerprint and not rotating:
                 raise AttestationError(
                     f"refusing to attest: this log was signed by key "
@@ -454,6 +692,10 @@ class LogVerdict:
     checks_skipped: list[str] = field(default_factory=list)
     key_fingerprint: str = ""
     latest: HeadAttestation | None = None
+    #: Every non-empty note, with whose words it is. A note on a counter-signature is
+    #: the requester's free text (``note_is_tenant_supplied``), signed along with the
+    #: head; it is not a statement by the key holder about the ledger.
+    notes: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> str:
         if self.checked == 0:
@@ -471,6 +713,7 @@ def verify_log(
     key: VerifyingKey,
     *,
     ledger: EvidenceLedger | None = None,
+    basis: AttestationBasis | None = None,
 ) -> LogVerdict:
     """Check an attestation log, and optionally check a ledger against it.
 
@@ -482,7 +725,15 @@ def verify_log(
     to infer.
 
     With a ledger, the question that matters gets asked: does the ledger in
-    front of us still contain every head that was signed for?
+    front of us still contain every head that was signed for? Only the records
+    that describe *that* ledger are joined to it: those whose basis is *basis*, or,
+    when none is given, the log's only basis, or ``read_from_ledger`` when the log
+    mixes both (a hosted account's does). A ``declared_by_holder`` record describes
+    the holder's own ledger; against the hosted one it would read as thousands of
+    removed records. The ones left out are named in ``checks_skipped``.
+
+    Length and head are compared only between records of the same basis, for the
+    same reason.
     """
     records = list(attestations)
     problems: list[str] = []
@@ -491,6 +742,7 @@ def verify_log(
     expected_sequence = 1
     previous: HeadAttestation | None = None
     fingerprints: set[str] = set()
+    last_of_basis: dict[AttestationBasis, HeadAttestation] = {}
 
     for record in records:
         where = f"attestation {record.sequence}"
@@ -512,12 +764,14 @@ def verify_log(
                 f"{where}: names predecessor {record.previous[:12] or '(none)'} but "
                 f"follows {expected_previous[:12] or '(none)'} — the log was spliced"
             )
-        if previous is not None and record.ledger_length < previous.ledger_length:
+        earlier_same_basis = last_of_basis.get(record.basis)
+        if earlier_same_basis is not None and (
+                record.ledger_length < earlier_same_basis.ledger_length):
             problems.append(
                 f"{where}: signs for {record.ledger_length} records where "
-                f"attestation {previous.sequence} signed for "
-                f"{previous.ledger_length}. The ledger was shortened between the "
-                "two, and both statements are signed."
+                f"attestation {earlier_same_basis.sequence} signed for "
+                f"{earlier_same_basis.ledger_length}. The ledger was shortened between "
+                "the two, and both statements are signed."
             )
         if not record.verified_by(key):
             problems.append(
@@ -527,7 +781,22 @@ def verify_log(
             )
         fingerprints.add(record.key_fingerprint)
         previous = record
+        last_of_basis[record.basis] = record
         expected_sequence += 1
+
+    notes = [
+        {"sequence": r.sequence, "note": r.note,
+         "note_is_tenant_supplied": r.note_is_tenant_supplied}
+        for r in records if r.note
+    ]
+    requester_notes = [n["sequence"] for n in notes if n["note_is_tenant_supplied"]]
+    if requester_notes:
+        skipped.append(
+            "Attestation(s) " + ", ".join(str(n) for n in requester_notes)
+            + " carry a note. On a counter-signature the note is the requester's free "
+            "text: the signature covers it because it covers every field, but it is "
+            "not a statement by the key holder about the ledger."
+        )
 
     declared = [r.sequence for r in records
                 if r.basis is AttestationBasis.DECLARED_BY_HOLDER]
@@ -562,7 +831,19 @@ def verify_log(
         entries = ledger.entries()
         by_seq = {e.seq: e.link_hash for e in entries}
         length = len(entries)
-        for record in records:
+        bases = {r.basis for r in records}
+        target = basis if basis is not None else (
+            next(iter(bases)) if len(bases) == 1 else AttestationBasis.READ_FROM_LEDGER)
+        joined = [r for r in records if r.basis is target]
+        left_out = [r.sequence for r in records if r.basis is not target]
+        if left_out:
+            skipped.append(
+                "Attestation(s) " + ", ".join(str(n) for n in left_out)
+                + f" were not checked against this ledger: their basis is not "
+                f"{target.value}, so they describe a different ledger (the one the "
+                "holder declared). Pass the other basis to check those instead."
+            )
+        for record in joined:
             where = f"attestation {record.sequence}"
             if length < record.ledger_length:
                 problems.append(
@@ -588,7 +869,7 @@ def verify_log(
         skipped.append(
             "Records appended after the latest attestation are covered by no "
             "signature. Everything from seq "
-            f"{(records[-1].head_seq + 1) if records else 1} onward rests on the "
+            f"{(joined[-1].head_seq + 1) if joined else 1} onward rests on the "
             "chain alone."
         )
 
@@ -606,4 +887,5 @@ def verify_log(
         checks_skipped=skipped,
         key_fingerprint=key.fingerprint,
         latest=records[-1] if records else None,
+        notes=notes,
     )

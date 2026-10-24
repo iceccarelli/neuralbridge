@@ -31,7 +31,7 @@ from ..security.art14.model import (
 )
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
-from .attest_routes import anchor_contradiction, latest_anchor
+from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from .deps import (
     Metered,
     MeterTicket,
@@ -341,6 +341,7 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     "/cases/{case_id}/export",
     response_model=dict,
     summary="A verifiable evidence bundle for one case",
+    responses=EXPORT_RESPONSES,
 )
 def get_case_export(
     case_id: str,
@@ -377,6 +378,23 @@ def get_case_export(
     ``GET /v1/plans`` is a statement about code that runs. A customer whose
     subscription has ended still gets it (``require_evidence_readout``): their
     evidence is not held hostage to a payment.
+
+    **Completeness.** Without ``skeleton`` a bundle is internally consistent but a
+    removed entry of the case cannot be seen, and a verifier reports completeness as
+    *not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the
+    signer's public key can show nothing was removed up to the anchor; records after
+    it are covered by no signature.
+
+    **Anchor.** ``anchor`` is the newest attestation the service *read from this
+    account's own ledger* (``read_from_ledger``). No customer route creates one: the
+    operator runs ``assurance attest sign`` against the hosted ledger
+    (``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and
+    its completeness is not checked. Counter-signed heads you declared about your own
+    ledger (``POST /v1/ledger/attest``) are never embedded. If the embedded
+    attestation does not match this ledger the answer is 409
+    ``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged
+    attestation log is 500 ``attestation_log_damaged``, never a silently unanchored
+    export; ``?anchor=false`` is the explicit way to export without one.
     """
     if principal.plan.register and not principal.plan.export:
         raise HTTPException(
