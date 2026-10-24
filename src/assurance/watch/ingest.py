@@ -137,7 +137,7 @@ def _thread_lock(ledger: EvidenceLedger) -> threading.Lock:
 
 def lock_path(ledger: EvidenceLedger) -> str:
     """The file whose advisory lock serialises ingest into this ledger."""
-    return str(ledger.path) + ".ingest.lock"
+    return os.path.realpath(ledger.path) + ".ingest.lock"
 
 
 @contextmanager
