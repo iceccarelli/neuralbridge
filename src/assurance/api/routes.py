@@ -32,6 +32,7 @@ from ..security.art14.model import (
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
 from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
+from .declared_actor import sanitise_declared_role
 from .deps import (
     Metered,
     MeterTicket,
@@ -80,7 +81,15 @@ public_router = APIRouter(tags=["service"])
 
 
 def _actor(payload: ActorIn) -> Actor:
-    return Actor(identifier=payload.identifier, role=payload.role, kind=payload.kind)
+    """The recorded actor, exactly as the caller declared it, minus the server's grammar.
+
+    This register builds no attribution of its own, so the declared role is sealed as the
+    caller's own words: ``;`` and ``=`` are removed (``declared_actor``) so it cannot
+    imitate the ``operator=``/``key=``/``attribution=`` tokens other routes write.
+    An undeclared role stays empty.
+    """
+    return Actor(identifier=payload.identifier,
+                 role=sanitise_declared_role(payload.role, default=""), kind=payload.kind)
 
 
 def _recorded(register: Art14Register, case_id: str, evidence) -> RecordedOut:
