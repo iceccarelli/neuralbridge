@@ -79,7 +79,9 @@ export default function CaseDetailPanel({
   const [verifHash, setVerifHash] = useState('');
   const [result, setResult] = useState<ApiOutcome<unknown> | null>(null);
   const [notice, setNotice] = useState('');
-  const [exported, setExported] = useState<{ file: string; entries: number } | null>(null);
+  const [exported, setExported] = useState<{ file: string; entries: number; skeleton: boolean } | null>(null);
+  // Off by default: the skeleton names every OTHER entry's id, kind and time in this ledger.
+  const [withSkeleton, setWithSkeleton] = useState(false);
   const [busy, setBusy] = useState(false);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
@@ -151,7 +153,12 @@ export default function CaseDetailPanel({
     setNotice('');
     setResult(null);
     setResultAt('export');
-    const out = await call<ExportBundle>(API_BASE, apiKey, `/v1/change/cases/${enc}/export`);
+    const skeleton = withSkeleton;
+    const out = await call<ExportBundle>(
+      API_BASE,
+      apiKey,
+      `/v1/change/cases/${enc}/export${skeleton ? '?skeleton=true' : ''}`,
+    );
     if (out.kind !== 'ok') {
       setResult(out);
       return;
@@ -171,10 +178,11 @@ export default function CaseDetailPanel({
     const url = URL.createObjectURL(new Blob([JSON.stringify(out.data, null, 2)], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `case-${caseId}.json`;
+    const file = skeleton ? `case-${caseId}-with-skeleton.json` : `case-${caseId}.json`;
+    a.download = file;
     a.click();
     URL.revokeObjectURL(url);
-    setExported({ file: `case-${caseId}.json`, entries: out.data.entries.length });
+    setExported({ file, entries: out.data.entries.length, skeleton });
   };
 
   return (
@@ -462,7 +470,7 @@ export default function CaseDetailPanel({
                   </button>
                   {refusal('reverification')}
                   {result?.kind === 'ok' && resultAt === 'reverification' && blockedMessage(result.data) && (
-                    <p className="aw-note" data-testid="reverify-blocked-reason">
+                    <p className="aw-note" role="status" data-testid="reverify-blocked-reason">
                       Recorded, but the case is still waiting: {blockedMessage(result.data)}
                     </p>
                   )}
@@ -626,8 +634,22 @@ export default function CaseDetailPanel({
 
             <div className="aw-export">
               <h4>Evidence export</h4>
+              <label className="aw-note" style={{ display: 'block', marginBottom: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  data-testid="export-skeleton"
+                  checked={withSkeleton}
+                  onChange={(e) => setWithSkeleton(e.target.checked)}
+                />{' '}
+                Include the ledger skeleton, so the file&apos;s completeness can be checked
+              </label>
+              <p className="aw-note" data-testid="export-skeleton-note">
+                The skeleton lists the <strong>id, kind and time of every other entry in your ledger</strong> &mdash; your
+                other cases and incidents &mdash; with no evidence in them. It is what lets a verifier see that a record of
+                this case was removed. Leave it off unless the person who receives the file may see those ids.
+              </p>
               <button className="btn btn-secondary" onClick={() => void download()}>
-                Download this case&apos;s evidence
+                Download this case&apos;s evidence{withSkeleton ? ' (with skeleton)' : ''}
               </button>{' '}
               <a href="/verify">Verify this export</a>
               {exported && (
@@ -635,19 +657,21 @@ export default function CaseDetailPanel({
                   Saved <code>{exported.file}</code> ({exported.entries} ledger entries; the server reported the chain as
                   verified when it built the file). Anyone can check it offline, without an account:{' '}
                   <code>python -m assurance evidence verify {exported.file}</code>. That shows the file is internally
-                  consistent and untampered; it does not show that it matches the ledger as held. For that, check a signed
-                  head attestation. This file names no other case, so it cannot show that none of this case&apos;s
-                  records was removed: the check reports completeness as not checked. An export that can show it (
-                  <code>?skeleton=true</code>) lists the id, kind and time of every other entry in your ledger, so
-                  ask for it only for someone who may see those. If the server refuses the export as contradicting a
-                  signed head it read from your ledger, keep the ledger and its attestation log as they are.
+                  consistent: every record still matches its hash. A rebuilt chain would read the same, and it does not
+                  show that the file matches the ledger as held; for that, check a signed head attestation.{' '}
+                  {exported.skeleton
+                    ? 'This file carries the skeleton, so with the signer’s public key the check can show that none of this case’s records was removed up to the signed head (a head the signer read from your ledger).'
+                    : 'This file names no other case, so it cannot show that none of this case’s records was removed: the check reports completeness as not checked, and with the signer’s public key it reports that completeness could not be established. Download it again with the skeleton to have that checked.'}{' '}
+                  If the server refuses the export as contradicting a signed head it read from your ledger, keep the
+                  ledger and its attestation log as they are.
                 </p>
               )}
               {!exported && (
                 <p className="aw-note">
-                  The offline check shows an export is internally consistent and untampered. It does not show that the
-                  export matches the ledger as held; that needs a signed head attestation. This download names no
-                  other case, so completeness is reported as not checked.
+                  The offline check shows an export is internally consistent: every record still matches its hash. It does
+                  not show that the export matches the ledger as held; that needs a signed head attestation. Without the
+                  skeleton this download names no other case, so completeness is reported as not checked, and as not
+                  established when you check it against a signed head.
                 </p>
               )}
             </div>

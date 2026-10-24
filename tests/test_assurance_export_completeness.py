@@ -191,7 +191,9 @@ class TestCompletenessNeedsASignedAnchor:
         bundle = led.export()  # nothing signed in it
         assert verify_export(bundle).completeness == NOT_CHECKED
         r = verify_export(bundle, trusted_key=key.verifying)
-        assert not r.ok and any("no signed anchor" in p for p in r.problems)
+        # asked for, and not establishable: not "tampered", and never a pass
+        assert not r.ok and r.problems == ()
+        assert any("no signed anchor" in u for u in r.unestablished)
         assert r.completeness != ANCHORED
 
     def test_stripping_the_anchor_does_not_buy_a_pass_when_a_key_is_supplied(self, signed):
@@ -283,7 +285,7 @@ class TestCompletenessNeedsASignedAnchor:
         led.append(_ev(1), subject="X")
         r = verify_export(led.export(anchor=_anchor(log)), trusted_key=key.verifying)
         assert not r.ok and r.completeness == NOT_CHECKED and r.anchor is None
-        assert any("covers no record" in p for p in r.problems), r.problems
+        assert any("covers no record" in u for u in r.unestablished), r.unestablished
         assert r.checks_skipped[0].startswith("COMPLETENESS NOT CHECKED")
         assert "empty ledger" in r.checks_skipped[0]
         assert not r.text().startswith("VERIFIED — anchored")
@@ -334,7 +336,7 @@ class TestAnAnchorMustCoverARecord:
         for supplied in ({}, {"anchors": [log.require_last()]}):
             r = verify_export(bundle, trusted_key=key.verifying, **supplied)
             assert r.completeness == NOT_CHECKED and not r.ok
-            assert any("covers no record" in p for p in r.problems)
+            assert any("covers no record" in u for u in r.unestablished)
             assert "VERIFIED — anchored" not in r.text()
             assert r.anchor is None
 
@@ -448,7 +450,8 @@ class TestTheSkeleton:
         assert plain.ok and plain.completeness == NOT_CHECKED
         assert "no skeleton" in " ".join(plain.checks_skipped)
         keyed = verify_export(bundle, trusted_key=key.verifying)
-        assert not keyed.ok and any("could not be established" in p for p in keyed.problems)
+        assert not keyed.ok and keyed.problems == ()
+        assert any("could not be established" in u for u in keyed.unestablished)
 
     def test_an_anchor_on_one_of_the_subjects_own_entries_does_not_make_a_skeleton_less_bundle_complete(
             self, tmp_path):
@@ -459,8 +462,10 @@ class TestTheSkeleton:
             led.append(_ev(i), subject="CASE-A" if i % 2 == 0 else "CASE-B")
         key, log = SigningKey.generate(), AttestationLog(tmp_path / "five.jsonl")
         from assurance.attest import LedgerHead
+        from assurance.attest.attestation import AttestationBasis
         five = led.entries()[4]
-        attest(LedgerHead(length=5, head_seq=5, head_link_hash=five.link_hash), key, log)
+        attest(LedgerHead(length=5, head_seq=5, head_link_hash=five.link_hash,
+                          basis=AttestationBasis.READ_FROM_LEDGER), key, log)
         bundle = led.export(subject="CASE-A", anchor=_anchor(log), skeleton=True)
         assert verify_export(bundle, trusted_key=key.verifying).completeness == ANCHORED_PARTIAL
         del bundle["skeleton"], bundle["skeleton_truncated"]
@@ -508,9 +513,11 @@ class TestTheSkeletonIsOptIn:
         led, _, _ = signed
         r = verify_export(led.export(subject="CASE-A"))
         assert r.ok and r.completeness == NOT_CHECKED
-        first = r.checks_skipped[0]
-        assert first.startswith("COMPLETENESS NOT CHECKED")
-        assert "skeleton" in first and "other subjects" in first
+        assert r.checks_skipped[0].startswith("COMPLETENESS NOT CHECKED")
+        # the reason is its own line, so no line is long enough to be clipped
+        why = " ".join(r.checks_skipped[:2])
+        assert "skeleton" in why and "other subjects" in why
+        assert all(len(c) < 600 for c in r.checks_skipped)
 
     def test_the_whole_ledger_export_never_has_one(self, signed):
         led, _, _ = signed
@@ -591,10 +598,11 @@ class TestTheCliAsAUser:
                          "-o", str(out), "--attestations", str(log.path),
                          "--skeleton"]) == 0
         assert "anchored to attestation 1" in capsys.readouterr().out
-        assert cli_main(["evidence", "verify", str(out), "--public-key", str(pub)]) == 0
+        # 6 of 8 records are signed: a key asks for completeness, so this is not a pass.
+        assert cli_main(["evidence", "verify", str(out), "--public-key", str(pub)]) == 3
         said = capsys.readouterr().out
-        # 6 of 8 records are signed: never the full-anchor headline.
-        assert "VERIFIED — anchored to a signed head" not in said
+        # never the full-anchor headline (nor a bare VERIFIED)
+        assert "VERIFIED" not in said.splitlines()[0]
         assert "2 record(s)" in said.splitlines()[0] and "no signature" in said.splitlines()[0]
         # The same file without the key: a pass that says what it did not check.
         assert cli_main(["evidence", "verify", str(out)]) == 0
@@ -621,7 +629,8 @@ class TestTheCliAsAUser:
                          "-o", str(out), "--attestations", str(log.path)]) == 0
         said = capsys.readouterr().out
         assert "--skeleton" in said and "skeleton" not in json.loads(out.read_text())
-        assert cli_main(["evidence", "verify", str(out), "--public-key", str(pub)]) == 1
+        # nothing is wrong with the file; completeness cannot be shown without the skeleton
+        assert cli_main(["evidence", "verify", str(out), "--public-key", str(pub)]) == 3
         assert "skeleton" in capsys.readouterr().out
 
     def test_art14_export_without_attestations_says_it_is_not_anchored(
