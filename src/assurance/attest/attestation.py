@@ -58,6 +58,7 @@ __all__ = [
     "AttestationError",
     "AttestationLog",
     "AttestationLogDamagedError",
+    "AttestationTornTailError",
     "HeadAttestation",
     "LedgerHead",
     "LogVerdict",
@@ -92,6 +93,18 @@ class AttestationLogDamagedError(AttestationError):
     Distinct from a refusal (a rewind, a fork), which is the *answer* this system
     exists to give. A damaged file says nothing about the ledger; it says the
     file needs a person.
+    """
+
+
+class AttestationTornTailError(AttestationLogDamagedError):
+    """The log ends in an unterminated line that is not a record.
+
+    Either a write is in flight or a crash cut one off, and a reader cannot tell
+    which. For *listing* the log that is a warning; for *choosing the anchor of an
+    export* it is damage, because the missing line may have been the newest signed
+    record, and the record before it would then be a stale anchor with no sign of
+    the gap. Subclassing the damaged-log error keeps every caller that already treats
+    that as a fault correct.
     """
 
 
@@ -253,19 +266,27 @@ class HeadAttestation:
                 "attestation record is missing " + ", ".join(missing)
                 + " — it was not written by this system, or it was edited."
             )
-        return cls(
-            format=str(data["format"]),
-            sequence=int(data["sequence"]),
-            ledger_length=int(data["ledger_length"]),
-            head_seq=int(data["head_seq"]),
-            head_link_hash=str(data["head_link_hash"]),
-            basis=AttestationBasis(str(data["basis"])),
-            attested_at=str(data["attested_at"]),
-            key_fingerprint=str(data["key_fingerprint"]),
-            previous=str(data["previous"]),
-            note=str(data.get("note", "")),
-            signature=str(data.get("signature", "")),
-        )
+        try:
+            return cls(
+                format=str(data["format"]),
+                sequence=int(data["sequence"]),
+                ledger_length=int(data["ledger_length"]),
+                head_seq=int(data["head_seq"]),
+                head_link_hash=str(data["head_link_hash"]),
+                basis=AttestationBasis(str(data["basis"])),
+                attested_at=str(data["attested_at"]),
+                key_fingerprint=str(data["key_fingerprint"]),
+                previous=str(data["previous"]),
+                note=str(data.get("note", "")),
+                signature=str(data.get("signature", "")),
+            )
+        except OverflowError as exc:
+            # ``int(1e999)``: JSON accepts a number no integer can hold. The file chose
+            # it, so it is a record that is not one of ours, not a crash.
+            raise AttestationError(
+                "attestation record holds a number that is not a whole number "
+                f"({exc}) — it was not written by this system, or it was edited."
+            ) from exc
 
     def signature_bytes(self) -> bytes:
         try:
@@ -407,7 +428,7 @@ class AttestationLog:
     def _parse(self, line: bytes, number: int) -> HeadAttestation:
         try:
             data = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise AttestationLogDamagedError(
                 f"{self.label} line {number} is not JSON ({exc}). A damaged "
                 "attestation log is a finding: it is the one file a rewind "
@@ -432,11 +453,34 @@ class AttestationLog:
         """
         records, torn = self.scan()
         if torn:
-            raise AttestationLogDamagedError(
+            raise AttestationTornTailError(
                 f"{self.label} ends in an unterminated line (a write that did not "
                 "finish). Nothing was appended: doing so would merge the new record "
                 "into the damaged one. Preserve the file as it is and have the "
                 "operator repair it."
+            )
+        return records
+
+    def _read_for_anchor(self) -> list[HeadAttestation]:
+        """The records, for a caller choosing the anchor of an export: a torn tail
+        is damage, not something to read around.
+
+        :meth:`read` drops an unterminated unparseable last line because, for listing
+        the log, that is the honest thing (and :meth:`scan` says it happened). An export
+        is different: the dropped line may be the newest signed attestation, and the
+        record before it would then be embedded as the anchor with no sign of the gap,
+        which is exactly the silently-unanchored export the registry says never
+        happens. A ledger rewound after the lost record was signed would then export
+        cleanly. The file is left as found.
+        """
+        records, torn = self.scan()
+        if torn:
+            raise AttestationTornTailError(
+                f"{self.label} ends in an unterminated line (a write that did not "
+                "finish, or one still in flight). The newest attestation may be the "
+                "one that was cut off, so no earlier record is chosen as the anchor "
+                "in its place. Preserve the file as it is and have the operator "
+                "repair it."
             )
         return records
 
@@ -461,8 +505,12 @@ class AttestationLog:
         return latest
 
     def anchor(self, *, accept_declared: bool = False) -> HeadAttestation | None:
-        """The record an export would embed (:func:`select_anchor`), or ``None``."""
-        return select_anchor(self.read(), accept_declared=accept_declared)
+        """The record an export would embed (:func:`select_anchor`), or ``None``.
+
+        Raises :class:`AttestationTornTailError` when the log ends in an unterminated
+        line: see :meth:`_read_for_anchor`.
+        """
+        return select_anchor(self._read_for_anchor(), accept_declared=accept_declared)
 
     def require_anchor(self) -> HeadAttestation:
         """The record an offline export embeds because a person named this log.
@@ -476,7 +524,7 @@ class AttestationLog:
             raise AttestationError(
                 f"{self.label} does not exist. Nothing was read, and no attestation "
                 "was invented.")
-        records = self.read()
+        records = self._read_for_anchor()
         if not records:
             raise AttestationError(f"{self.label} holds no attestations.")
         chosen = select_anchor(records, accept_declared=True)
@@ -545,11 +593,37 @@ class AttestationLog:
 
     def append(self, attestation: HeadAttestation) -> HeadAttestation:
         """Append one record. Call inside :meth:`locked` when the record's
-        sequence was derived from a prior :meth:`read`."""
+        sequence was derived from a prior :meth:`read`.
+
+        The file must end in a newline or the new record would be glued onto the last
+        line and turn it into an unreadable middle. If the last line is a complete,
+        parseable record that merely lost its newline, the newline is written first (a
+        repair that changes no signed byte). If it is not a record (a torn write) the
+        append is refused with :class:`AttestationTornTailError` and the file is left
+        exactly as found.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(attestation.to_dict(), sort_keys=True, separators=(",", ":"))
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+        with self.path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            lead = b""
+            if size:
+                handle.seek(size - 1)
+                if handle.read(1) != b"\n":
+                    handle.seek(0)
+                    *lines, tail = handle.read().split(b"\n")
+                    try:
+                        self._parse(tail, len(lines) + 1)
+                    except AttestationLogDamagedError as exc:
+                        raise AttestationTornTailError(
+                            f"{self.label} ends in an unterminated line that is not a "
+                            "record. Nothing was appended: doing so would merge the new "
+                            "record into the damaged one. Preserve the file as it is "
+                            "and have the operator repair it."
+                        ) from exc
+                    lead = b"\n"
+            handle.write(lead + line.encode("utf-8") + b"\n")
             handle.flush()
             os.fsync(handle.fileno())
         return attestation

@@ -164,7 +164,37 @@ export type ExportBundle = {
   subject: string;
   chain_verified: boolean;
   entries: ExportEntry[];
+  // Only with ?skeleton=true: every OTHER entry of the account's ledger (no evidence). Past the
+  // server's limit it is left out: `skeleton` is then empty and `skeleton_truncated` is true.
+  skeleton?: unknown[];
+  skeleton_truncated?: boolean;
+  // The newest attestation the service READ from this account's ledger. A hosted export has none
+  // until the operator has signed the ledger.
+  anchor?: { sequence?: number; head_seq?: number; basis?: string; attested_at?: string } | null;
 };
+
+// What an export actually carries, read from the RESPONSE (never from the request checkbox):
+// a file that was asked to carry the skeleton may not, and a hosted export has no anchor unless
+// the operator signed the ledger.
+export type ExportCompleteness = {
+  skeleton: 'carried' | 'truncated' | 'absent' | 'not_requested';
+  anchor: { sequence: number; headSeq: number; readFromLedger: boolean } | null;
+};
+
+export function exportCompleteness(bundle: ExportBundle, requestedSkeleton: boolean): ExportCompleteness {
+  let skeleton: ExportCompleteness['skeleton'] = 'not_requested';
+  if (requestedSkeleton) {
+    if (bundle.skeleton_truncated === true) skeleton = 'truncated';
+    else if (Array.isArray(bundle.skeleton)) skeleton = 'carried';
+    else skeleton = 'absent';
+  }
+  const a = bundle.anchor;
+  const anchor =
+    a && typeof a === 'object' && typeof a.sequence === 'number' && typeof a.head_seq === 'number'
+      ? { sequence: a.sequence, headSeq: a.head_seq, readFromLedger: a.basis === 'read_from_ledger' }
+      : null;
+  return { skeleton, anchor };
+}
 
 // GET /v1/me
 export type Me = {
