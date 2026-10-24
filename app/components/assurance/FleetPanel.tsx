@@ -84,8 +84,8 @@ function SourceCell({ row }: { row: ObservationRow | undefined }) {
       <br />
       <span className="aw-note" data-testid="obs-replay-limit">
         Anyone holding your account key can fabricate a current-looking observation (an old manifest in one entry,
-        relayed as current in the next); this service cannot tell that from an honest look at an unchanged machine. It
-        records when it received each report and labels how a look became current.
+        relayed as current in the next); this service cannot tell that from an honest look. It records when it received
+        each report and labels how a look became current.
       </span>
       <br />
       <span className="aw-note" data-testid="obs-relay-basis" data-relay-basis={row.last_successful_relay_basis ?? ''}>
