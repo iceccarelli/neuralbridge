@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 
 // Every internal link on the site resolves. Crawls the running Next server from the home page
 // and the sitemap, over HTTP, and checks: no dead anchors (href="#" or empty), no javascript:
@@ -6,6 +8,30 @@ import { test, expect } from '@playwright/test';
 // page it points to. External links are not fetched (no network is assumed).
 
 const MAX_PAGES = 400;
+
+// Every route whose page.tsx declares `robots: { index: false }`, derived from the source rather than
+// listed by hand, so a page that is made noindex later cannot stay in the sitemap unnoticed.
+function noindexRoutes(): string[] {
+  const root = join(process.cwd(), 'app');
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name === 'page.tsx' && /index:\s*false/.test(readFileSync(full, 'utf8'))) {
+        const route = '/' + relative(root, dir).split(sep).filter((seg) => !/^\(.*\)$/.test(seg)).join('/');
+        out.push(route === '/' ? '/' : route.replace(/\/$/, ''));
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+test('the noindex set is derived from the pages, and covers the three known ones', () => {
+  const found = noindexRoutes();
+  for (const r of ['/assurance', '/checkout/success', '/status']) expect(found, `${r} declares index: false`).toContain(r);
+});
 
 function hrefs(html: string): string[] {
   const out: string[] = [];
@@ -37,10 +63,15 @@ test('every internal link, anchor and sitemap entry on the site resolves', async
   const queue: string[] = ['/'];
   const sitemap = await request.get(`${origin}/sitemap.xml`);
   expect(sitemap.status()).toBe(200);
+  const noindex = noindexRoutes();
+  const listed: string[] = [];
   for (const m of (await sitemap.text()).matchAll(/<loc>([^<]+)<\/loc>/g)) {
     const u = new URL(m[1], origin);
     // noindex pages must not be advertised to crawlers
-    expect(u.pathname, 'noindex page listed in sitemap').not.toMatch(/^\/(checkout|assurance)(\/|$)/);
+    for (const r of noindex) {
+      expect(u.pathname === r || u.pathname.startsWith(`${r}/`), `noindex page ${r} listed in sitemap`).toBe(false);
+    }
+    listed.push(u.pathname);
     queue.push(u.pathname + u.search);
   }
 
@@ -93,6 +124,15 @@ test('every internal link, anchor and sitemap entry on the site resolves', async
     const page = await fetchPage(f.path);
     if (page.status >= 400 || !page.html) continue; // already reported
     if (!ids(page.html).has(f.frag)) problems.push(`${f.from}: #${f.frag} is not an id on ${f.path}`);
+  }
+
+  // And what the page itself says wins over what the source says: a sitemap entry whose rendered page
+  // carries a noindex robots tag is a contradiction, however the tag got there.
+  for (const path of listed) {
+    const page = await fetchPage(path);
+    if (/<meta[^>]+name=["']robots["'][^>]*content=["'][^"']*noindex/i.test(page.html)) {
+      problems.push(`${path}: listed in the sitemap but renders <meta name="robots" content="...noindex...">`);
+    }
   }
 
   console.log(`crawled ${seen.size} page(s), ${fragments.length} fragment link(s)`);
