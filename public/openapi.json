@@ -151,7 +151,7 @@
       },
       "AttestIn": {
         "additionalProperties": false,
-        "description": "Three numbers the customer reads out of their own ledger.\n\nNothing else is accepted, and nothing else is wanted. The point of this\nendpoint is that the records stay where they are.",
+        "description": "Three numbers the customer reads out of their own ledger.\n\nNothing else is accepted, and nothing else is wanted. The point of this\nendpoint is that the records stay where they are. In particular there is no\n``rotating`` flag: acknowledging that the signing key changed is the operator's\nact (``assurance attest sign --rotating``), and a tenant who could set it would\nswitch off the key-change guard on the log it shares with the operator.",
         "properties": {
           "head_link_hash": {
             "description": "link hash of the last record, hex SHA-256",
@@ -180,12 +180,6 @@
             "maxLength": 500,
             "title": "Note",
             "type": "string"
-          },
-          "rotating": {
-            "default": false,
-            "description": "acknowledge that this service is signing with a different key than it did last time. Only set this if you were told to.",
-            "title": "Rotating",
-            "type": "boolean"
           }
         },
         "required": [
@@ -387,6 +381,32 @@
             ],
             "description": "YOUR reviewer trust list (format assurance.machine.limits-trust.v1), obtained independently of the bundle, to re-assess the limits review sealed in it. Without it a validated limits tier is not reproduced",
             "title": "Limits Trust"
+          },
+          "machine_serial": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the unit you say the bundle is about; default: the one it records",
+            "title": "Machine Serial"
+          },
+          "recorder_trust": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "YOUR recorder trust list (format assurance.machine.recorder-trust.v1), obtained independently of the bundle, to re-assess the recorder attestation sealed in it (\"check as me\"). It affects only this answer, never what the server seals. Without it a bundle that claims `recorder_attested` is not believed: its tier is capped at community and reported as unverifiable",
+            "title": "Recorder Trust"
           },
           "trace": {
             "anyOf": [
@@ -2174,6 +2194,23 @@
             "title": "Limits Reviews",
             "type": "array"
           },
+          "machine_serial": {
+            "default": "",
+            "description": "the unit this verification is about; an attestation that names a different serial is refused. Defaults to the serial in a machine-key `subject` (maker/model#serial)",
+            "maxLength": 200,
+            "title": "Machine Serial",
+            "type": "string"
+          },
+          "recorder_attestations": {
+            "description": "signed recorder attestations of the trace (format assurance.machine.recorder-attestation.v1, signed offline by the recorder operator with `assurance machine recorder-sign`). They are assessed against the recorder trust list the SERVER is configured with (ASSURANCE_RECORDER_TRUST); a caller cannot supply its own trust or a provenance basis, which would let a trace's filer vouch for the trace. With no server trust nothing is accepted and the trace's provenance stays declared by the filer (tier capped at community). An accepted attestation proves a trusted key signed these exact trace bytes; not that the recording is physically true",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 8,
+            "title": "Recorder Attestations",
+            "type": "array"
+          },
           "role": {
             "default": "verification engineer",
             "maxLength": 200,
@@ -2781,7 +2818,10 @@
             "description": "Validation Error"
           },
           "500": {
-            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, so the anchor cannot be chosen; never a silently unanchored export)."
+            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, or ends in an unterminated line that may be the newest record, so the anchor cannot be chosen; never a silently unanchored export)."
+          },
+          "503": {
+            "description": "`attestation_busy`: the attestation log ends in an unfinished line and a signer holds its lock right now. Retry after `Retry-After`; nothing was decided or exported."
           }
         },
         "summary": "A verifiable evidence bundle for one case",
@@ -3965,7 +4005,10 @@
             "description": "Validation Error"
           },
           "500": {
-            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, so the anchor cannot be chosen; never a silently unanchored export)."
+            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, or ends in an unterminated line that may be the newest record, so the anchor cannot be chosen; never a silently unanchored export)."
+          },
+          "503": {
+            "description": "`attestation_busy`: the attestation log ends in an unfinished line and a signer holds its lock right now. Retry after `Retry-After`; nothing was decided or exported."
           }
         },
         "summary": "A verifiable evidence bundle for one case",
@@ -4693,6 +4736,24 @@
               ],
               "description": "the issuer's Ed25519 PUBLIC key (PEM, line breaks as spaces), to check attestation signatures, or a ledger export's signed anchor (which is what shows nothing was removed). Never a private key: those are refused unread.",
               "title": "X-Issuer-Public-Key"
+            }
+          },
+          {
+            "description": "YOUR recorder trust list (JSON, format assurance.machine.recorder-trust.v1, on one line), to re-assess the recorder attestation in a machine bundle. Without it a bundle that claims `recorder_attested` is reported as unverifiable and its tier is not believed. Public keys only: a private key is refused unread.",
+            "in": "header",
+            "name": "x-recorder-trust",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "YOUR recorder trust list (JSON, format assurance.machine.recorder-trust.v1, on one line), to re-assess the recorder attestation in a machine bundle. Without it a bundle that claims `recorder_attested` is reported as unverifiable and its tier is not believed. Public keys only: a private key is refused unread.",
+              "title": "X-Recorder-Trust"
             }
           },
           {
@@ -5688,10 +5749,10 @@
             "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
           },
           "409": {
-            "description": "`attestation_refused`: a finding, not a malformed request. The head is shorter than, behind, or a different history from one already signed *for the same kind of head* (your own declared heads), or a different key is signing without `rotating`. The `finding` is the sentence to show whoever runs the database."
+            "description": "`attestation_refused`: a finding, not a malformed request. The head is shorter than, behind, or a different history from one already signed *for the same kind of head* (your own declared heads), or the service key is not the one that signed this log (only the operator can acknowledge a rotation, with the CLI). The `finding` is the sentence to show whoever runs the database."
           },
           "422": {
-            "description": "Not a ledger head (`not_a_ledger_head`), or a length or sequence beyond the declared-head bound."
+            "description": "Not a ledger head (`not_a_ledger_head`), a length or sequence beyond the declared-head bound, or a field this request does not take (`rotating` is not one it does)."
           },
           "500": {
             "description": "`attestation_log_damaged`: this account's attestation log cannot be read or ends in an unfinished write. A fault to repair, not a finding about your ledger; nothing was signed."

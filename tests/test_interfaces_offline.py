@@ -152,6 +152,40 @@ class TestRunningTheOfflinePathOpensNoSocket:
         assert (plant.root / "report.html").is_file()
 
 
+class TestRecorderAttestationNeedsNoNetwork:
+    """Signing a recording and verifying under a trust list are offline operations."""
+
+    def test_sign_trust_verify_and_check_in_a_fresh_interpreter_open_no_socket(
+            self, plant, tmp_path):
+        env = json.loads((plant.root / "envelope.json").read_text(encoding="utf-8"))
+        commands = [
+            ["attest", "keygen", "--out", "rec.pem"],
+            ["machine", "recorder-sign", "--key", "rec.pem", "--trace", "trace.json",
+             "--product", env["product"], "--product-version", env["product_version"],
+             "--recorder-id", "REC-OFFLINE", "--out", "att.json"],
+            ["machine", "recorder-trust", "--trust", "rtrust.json",
+             "--public-key", "rec.pem.pub", "--label", "offline recorder",
+             "--provenance", "field"],
+            ["machine", "verify", "--envelope", "envelope.json", "--trace", "trace.json",
+             "--actor", "v.grimaldi", "--recorder-attestation", "att.json",
+             "--recorder-trust", "rtrust.json", "--out", "signed-bundle.json"],
+            ["machine", "check", "signed-bundle.json", "--envelope", "envelope.json",
+             "--trace", "trace.json", "--recorder-trust", "rtrust.json"],
+            ["machine", "check", "signed-bundle.json", "--envelope", "envelope.json",
+             "--trace", "trace.json"],
+        ]
+        out = run_child(tmp_path, plant.root, commands, PLANT_API_KEY="unused")
+
+        assert out["events"] == [], out["events"]
+        assert out["loaded"] == [], out["loaded"]
+        assert [rc for _, rc in out["results"]] == [0] * len(commands), out["results"]
+        bundle = json.loads((plant.root / "signed-bundle.json").read_text(encoding="utf-8"))
+        assert bundle["evidence"]["body"]["provenance_basis"] == "recorder_attested"
+        assert bundle["evidence"]["body"]["tier"] == "validated"
+        assert "PRIVATE" not in json.dumps(bundle).upper()
+        assert "PRIVATE" not in (plant.root / "att.json").read_text(encoding="utf-8").upper()
+
+
 class TestWatchPushIsTheOnlyNetworkedPath:
     def test_dry_run_opens_no_socket_and_loads_no_client(self, plant, tmp_path):
         plant.kit_run("cli")

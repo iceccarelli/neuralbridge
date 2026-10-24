@@ -874,8 +874,27 @@ def verify_export_file(
 ) -> ExportVerification:
     try:
         bundle = json.loads(Path(path).read_text(encoding="utf-8"))
+    except RecursionError:
+        return _too_deep()
     except (OSError, ValueError) as exc:
         return ExportVerification(False, 0, "unknown",
                                   (f"cannot read the bundle: {type(exc).__name__}",),
                                   ())
-    return verify_export(bundle, trusted_key=trusted_key, anchors=anchors)
+    try:
+        return verify_export(bundle, trusted_key=trusted_key, anchors=anchors)
+    except RecursionError:
+        # Parsed, but the analysis walks the structure too and the file chose its depth.
+        return _too_deep()
+
+
+def _too_deep() -> ExportVerification:
+    """A file nested past the interpreter's stack is unreadable, not 'does not verify'.
+
+    A ``RecursionError`` is not a ``ValueError``, so it used to escape as a traceback and
+    exit 1, the code for 'the evidence is wrong'. Nobody could read this file; that says
+    nothing about the evidence either way, so it takes the 'unreadable' path (exit 2).
+    """
+    return ExportVerification(
+        False, 0, "unknown",
+        ("cannot read the bundle: file too deeply nested (far deeper than any evidence "
+         "export)",), ())

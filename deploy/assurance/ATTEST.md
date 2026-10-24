@@ -72,10 +72,17 @@ Then, on a timer:
 | 0 | signed |
 | 1 | a **finding** — a rewind, a fork, an unexpected key |
 | 2 | the command could not run (missing file, bad passphrase) |
+| 3 | the attestation log ends in an unterminated line (a write that did not finish): `verify` reports `ok: false` / `torn_tail: true` because the newest attestation may be missing; `sign` appended nothing |
 
 A finding must not share an exit code with a missing file. If `sign` ever exits
 1, do not investigate by re-running it: preserve the database and the
-attestation log as they are, and read the message.
+attestation log as they are, and read the message. Exit 3 is the log needing a
+person, not a verdict on the ledger: copy the log aside, look at its last line
+(`tail -c 400 attest.jsonl`), and only then repair it. A last line that is a complete
+record merely missing its newline is repaired by the next `sign`; one that is cut
+off mid-record has to be truncated back to the previous newline by hand, which gives
+up the attestation that was being written. A real finding (exit 1) is reported as
+exit 1 even when the tail is also torn.
 
 Checking, by anybody who has the public key:
 
@@ -161,6 +168,16 @@ assurance; the signed values are the three numbers.
   finding about your ledger, and it is not a 409. Nothing is appended onto a damaged
   tail: the file is evidence and is left as found. `GET /v1/ledger/attest/log` still
   answers, lists the readable records and puts the unfinished line in `warnings`.
+  **A hosted export does not read around it:** the unfinished line may be the newest
+  attestation, so choosing the record before it could anchor the export to a stale
+  head after a rewind. `GET /v1/cases/{id}/export` and `GET /v1/change/cases/{id}/export`
+  look again briefly (a writer may be mid-append), then answer **503 `attestation_busy`**
+  (a signer holds the log's lock: retry) or **500 `attestation_log_damaged`** (nobody is
+  writing: repair the file, see exit 3 above). `?anchor=false` exports without an anchor
+  and says nothing about the log.
+* The tenant API has no `rotating` flag: changing the signing key is acknowledged only
+  by the operator (`assurance attest sign --rotating`). A request that sends `rotating`
+  is refused with 422.
 * Error text never names a server path.
 
 ### Verification is free and always will be

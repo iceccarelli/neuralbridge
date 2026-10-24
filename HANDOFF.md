@@ -50,16 +50,95 @@ and it caught a regression the unit suite did not). Fixed in that round: a *decl
 (the signer was told the head, never read the chain; any Cell tenant can obtain one) no longer reads
 `anchored` — it is `declared_head`, entries dated after the signature are refused, and only
 `read_from_ledger` heads anchor; the honest default hosted export checked with the right key is
-`not_established`, not "inconsistent"; the append-only attestation log no longer mixes declared and
-server-read bases (a tenant could brick its own hosted signing, and a customer was told "records were
-removed" falsely); attest runs off the event loop with a bounded lock and 503; a torn log tail no
-longer wedges exports or leaks a server path; the last enabled decider cannot be disabled and the
+`not_established`, not "inconsistent"; the append-only attestation log's *length, head and fork checks*
+no longer compare a declared head with a server-read one (a tenant could brick its own hosted signing,
+and a customer was told "records were removed" falsely). **The file still holds both kinds of record
+side by side**; only the checks are scoped by basis (the hash chain and the key check span the whole
+file, and `verify_log` against a ledger joins one basis and names the rest in `checks_skipped`);
+attest runs off the event loop with a bounded lock and 503; a torn log tail no
+longer wedges signing or leaks a server path (round 3 changed what it does to exports, below); the last enabled decider cannot be disabled and the
 operator bootstrap is one-shot (an agent could mint itself a decider after offboarding); operator keys
 cannot mint or revoke account keys; caller text cannot forge `attribution=` inside a sealed actor role;
 an overflowing date is a refused entry, not a 500 and a partial write; seals now refuse integers beyond
 2^53 and sub-microunit floats that the content hash cannot distinguish.
 
+Third review round (proved by reproduction, fixed test-first with a mutation check per guard; the
+fixes themselves have had no independent review yet):
+- **A torn attestation-log tail no longer lets a hosted export fail open (M1).** The unterminated last
+  line may be the newest signed attestation; reading around it anchored the export to the record
+  before it, so a ledger rewound after that record was signed exported 200 with a stale anchor and no
+  warning (with the log intact it is 409). `AttestationLog.anchor()` / `require_anchor()` now raise
+  `AttestationTornTailError`. Hosted exports (`attest_routes.latest_anchor`, used by
+  `GET /v1/cases/{id}/export` and `GET /v1/change/cases/{id}/export`) look again three times over
+  ~0.12 s, then try the log's lock without waiting: lock held (a signer is writing) is **503
+  `attestation_busy` + `Retry-After`**; lock free (nobody is writing, so it is debris) is **500
+  `attestation_log_damaged`**, decided after one more look under the lock. `?anchor=false` is the explicit
+  unanchored export. Only `GET /v1/ledger/attest/log` still lists what it can and warns. The offline
+  CLI exports (`evidence verify --attestations`, `change export`, `art14 export`) refuse the same way
+  (their existing error exit). **Not changed:** `assurance report build --attestations` still reads
+  around a torn tail (`report/cli.py`, outside this slice).
+- **`assurance attest verify` no longer passes a cut-off log (M2).** A torn tail is `ok: false`,
+  `torn_tail: true`, with the message among `problems`, and **exit 3** (`TORN_TAIL_EXIT`); `sign` onto a
+  torn log is exit 3 as well. A real finding still exits 1 even if the tail is also torn; 2 is still
+  "could not run".
+- **Append cannot glue a record onto an unterminated line (L2).** `AttestationLog.append` checks the final
+  byte under the caller's lock: a last line that is a complete record merely missing its newline is
+  repaired by writing the newline first (no signed byte changes); a last line that is not a record is
+  refused with `AttestationTornTailError` and the file is left as found.
+- **An overflowing or absurdly nested record is a damaged log, not a crash (L3, L4).** `int(1e999)` and a
+  `RecursionError` in the log reader become `AttestationLogDamagedError`: 500 `attestation_log_damaged` on
+  every API caller, `finding:` exit 1 in the CLI. `assurance evidence verify` on a file nested past the
+  stack is "cannot read the bundle: file too deeply nested", exit **2** (it was a traceback and exit 1,
+  the code for "does not verify").
+- **`rotating` is no longer an API field (L1).** A tenant could set it and switch off the key-change guard
+  on the log it shares with the operator. `POST /v1/ledger/attest` refuses it (422, `extra=forbid`);
+  `assurance attest sign --rotating` is the only way to acknowledge a rotation.
+- **Caller text cannot forge `operator=`/`key=`/`attribution=` on any API route that seals a role (M3).**
+  The sanitiser moved to `api/declared_actor.py` (`machine_routes.sanitise_declared_role` is still
+  importable). It is applied at: `POST /v1/machine/verify`; every `/v1/change/*` route via
+  `change_routes._actor` (its role parameter, a server constant today); `POST
+  /v1/machinery/{manifest,intervention,passport}`; and the Article 14 register's `_actor` (`routes.py`:
+  signal, awareness, triage, availability, measure, filings, user-notification). Where the route adds no
+  attribution of its own (machinery, register) the sealed role is the caller's words with `;` and `=`
+  removed and carries **no server attribution at all**; `identifier` is still whatever the caller typed
+  there. `tests/test_assurance_declared_actor.py` drives each route with a forged role and also fails if
+  an `Actor(role=<caller text>)` is added anywhere in `api/*.py`. Not an `Actor`, so not covered: the
+  supplier/fleet/value/check/billing routes take a plain actor string. MCP tools call the HTTP API.
+- **The workspace export notice follows the response, not the checkbox (M5).** `CaseDetailPanel` says what
+  the file carries from `skeleton`, `skeleton_truncated` and `anchor`: skeleton + signed anchor (what a
+  key can then show, and that later records are unsigned); skeleton, no anchor (completeness not
+  checked); skeleton left out by the server (nothing named, not established, with or without a key);
+  skeleton not requested. Browser spec: `tests-e2e/assurance-lifecycle.spec.ts` ("the export notice
+  follows what the server returned"). The truncated and anchored states are produced by rewriting the
+  real response in the browser (`route.fetch` + `fulfill`), not by a ledger with >5,000 other entries or
+  a signed account, so the server side of those two states is covered by the Python tests only.
+
 **Known and not fixed** (do not claim otherwise):
+- **M4: a lost or leaked sole decider key has no API recovery.** Observed with an account-level key
+  against an account whose only decider is "lost": creating a decider is 403, `POST
+  /v1/operators/{id}/disable` is 403 (and a decider may not disable the last decider either:
+  `last_decider`), `POST /v1/keys/revoke` of the operator's key is 409, and the bootstrap is one-shot
+  ("has ever had an operator"). An account whose only decider key is lost cannot create another
+  decider through the API. A leaked decider key can create further deciders by
+  design (a decider manages operators). There is **no out-of-band recovery procedure and none has been
+  rehearsed.** What an operator would have to do is edit the account store directly (`accounts.db`:
+  the `operators` and `api_keys` tables; set `api_keys.revoked_at` for the key hashes bound to the
+  lost operator, set `operators.disabled_at`, and either insert a new decider with a key whose SHA-256
+  is stored in `api_keys.key_hash` bound by `operator_id`, or delete the account's `operators` rows to
+  re-arm the bootstrap). That bypasses the guard, leaves no trace in the ledger, and was not tried.
+  Building a recovery route is a founder decision (it is also the thing an attacker would ask for).
+- **L5: an integer swapped for the equal float is not detected by the content hash** (`5` -> `5.0`,
+  `0` -> `-0.0`): canonical JSON hashes them identically. The seal refuses floats the hash cannot keep
+  apart, but a bundle edited after export this way still verifies.
+- **L6: declared attestations are unmetered and each call costs O(log size)** (the log is re-read and
+  re-parsed under the lock; the reviewer measured 3,000 heads = 41 s cumulative). `POST
+  /v1/ledger/attest/verify` caps at 5,000 records, so a log flooded past that cannot be verified
+  through the API (it can locally). No per-account cap on declared attestations exists.
+- **L7: `declared_head` and `anchored_partial` are `ok: true` in the API and Python but exit 3 in
+  `assurance evidence verify` when a key is supplied.** Documented in the CLI; the two surfaces answer
+  the same question with different words.
+- `change` routes run blocking work on the event loop; the torn-tail look-again in `latest_anchor`
+  sleeps up to ~0.12 s there, only when a torn tail is present.
 - No recorder-attestation signer or trust format exists, so `validated` is unreachable and change cases
   needing a re-verification close only by a decider's waiver.
 - Hosted exports carry no anchor until an operator runs `assurance attest sign` against the tenant
@@ -72,8 +151,6 @@ an overflowing date is a refused entry, not a 500 and a partial write; seals now
   10.5 s for another tenant's read). No per-account concurrency cap exists.
 - The `/v1/cases/{id}/export` route returns 503, not 401, with no key in an unconfigured deployment.
 - `change` routes (e.g. `export_case`) run blocking SQLite work on the event loop.
-- The skeleton opt-in checkbox in the workspace has no browser test of its own; the sitemap, verifier
-  and lifecycle specs pass.
 - No monotonic-timestamp check in the ledger (a clock rollback gives out-of-order `at`).
 - A `READ_FROM_MACHINE` manifest hash source maps to `validated` on a caller-supplied label
   (`machinery/manifest.py`); it is the same declared-word shape as trace provenance but is not a

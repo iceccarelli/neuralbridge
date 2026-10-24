@@ -40,18 +40,7 @@ from assurance.machine.ssm import separation_required
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machine.verify import CheckOutcome, Verdict, verify
 
-from .support_recorder_attestation import simulate_verified_recorder_attestation
-
-
-@pytest.fixture(autouse=True)
-def _recorder_attestation_assumed(monkeypatch):
-    """This module pins the OTHER inputs of the tier floor (figure bases, limits review,
-    dates, coverage). The trace's declared provenance now caps every tier at community
-    (``provenance_trust.py``), which would hide every one of them, so these tests assume
-    a verified recorder attestation, as a future signer would provide. The cap itself is
-    pinned in ``test_assurance_machine_provenance.py``, which does not assume it."""
-    simulate_verified_recorder_attestation(monkeypatch)
-
+from .support_recorder import verify_attested
 
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 DATASHEET = FigureBasis(kind="datasheet", reference="scanner rev D")
@@ -347,14 +336,14 @@ class TestWeakestInputDecidesTheTier:
         run = Trace(trace_id="R", provenance=prov, source_system="s",
                     started_at=run.started_at, sample_rate_hz=50.0, samples=run.samples)
         want = weakest(CEILING[stop_kind], CEILING[unc_kind], PROV_CEILING[prov])
-        assert verify(e, run).tier is want
+        assert verify_attested(e, run).tier is want
 
     @pytest.mark.parametrize("stop_kind", sorted(CEILING))
     @pytest.mark.parametrize("unc_kind", sorted(CEILING))
     def test_only_measured_inputs_on_a_physical_trace_reach_validated(
             self, stop_kind, unc_kind):
         e = env(stop_basis=BASIS[stop_kind], unc_basis=BASIS[unc_kind])
-        r = verify(e, one_sample_run(e, 1.0e5))
+        r = verify_attested(e, one_sample_run(e, 1.0e5))
         reaches = r.tier is AssuranceTier.VALIDATED
         assert reaches == (stop_kind == "measured" and unc_kind == "measured")
         assert r.may_claim_physical_behaviour == reaches
@@ -366,7 +355,7 @@ class TestWeakestInputDecidesTheTier:
             run = Trace(trace_id="R", provenance=prov, source_system="s",
                         started_at=run.started_at, sample_rate_hz=50.0,
                         samples=run.samples)
-            assert verify(e, run).tier is not AssuranceTier.CERTIFIED
+            assert verify_attested(e, run).tier is not AssuranceTier.CERTIFIED
 
     def test_nothing_in_the_trace_can_raise_the_tier(self):
         """A simulated trace whose free-form fields claim to be a certified field
@@ -380,7 +369,7 @@ class TestWeakestInputDecidesTheTier:
             conditions={"tier": "certified", "provenance": "field",
                         "may_claim_physical_behaviour": True, "validated": True},
         )
-        r = verify(e, liar)
+        r = verify_attested(e, liar)    # even a recorder's signature cannot lift a simulation
         assert r.tier is AssuranceTier.COMMUNITY
         assert not r.may_claim_physical_behaviour
 

@@ -49,6 +49,21 @@ SEAL_EXACT_INT = 2**53
 _MAX_NUMBER_FINDINGS = 1000
 
 
+#: Arithmetic noise is not a finding. ``400.0 - 342.9`` is 157.10000000000002: it differs
+#: from its 6-decimal rounding by 3e-14, far below anything a person could mean, and every
+#: derived margin in a verification looks like this. A number is "finer than the hash
+#: keeps" only when rounding moves it by more than this tolerance (or by a few ULPs for
+#: large magnitudes, where the float cannot hold 6 decimals anyway). 4e-07 (rounds to 0.0)
+#: and 0.1234567 are still findings. Differences below the tolerance are NOT distinguished.
+FLOAT_NOISE_TOLERANCE = 1e-9
+
+
+def _hash_keeps(value: float) -> bool:
+    """True when rounding to the hash precision moves *value* by no more than noise."""
+    return abs(value - round(value, HASH_PRECISION)) <= max(FLOAT_NOISE_TOLERANCE,
+                                                            4 * math.ulp(value))
+
+
 def indistinguishable_numbers(value: Any) -> list[str]:
     """Numbers in *value* the seal cannot tell from a different number.
 
@@ -71,7 +86,7 @@ def indistinguishable_numbers(value: Any) -> list[str]:
                 shown = str(node) if node.bit_length() < 200 else "a very large integer"
                 found.append(f"{where} = {shown} is an integer beyond 2^53")
         elif isinstance(node, float):
-            if not math.isfinite(node) or round(node, HASH_PRECISION) != node:
+            if not math.isfinite(node) or not _hash_keeps(node):
                 found.append(f"{where} = {node!r} is a number finer than "
                              f"{HASH_PRECISION} decimal places")
         elif isinstance(node, dict):

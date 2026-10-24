@@ -21,7 +21,6 @@ is what makes the sealed bundle worth buying.
 from __future__ import annotations
 
 import os
-import unicodedata
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -29,6 +28,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from assurance.api.change_routes import _actor as bound_actor
+
+# `sanitise_declared_role` moved to assurance.api.declared_actor so every route that seals a
+# caller-declared role shares one definition. Re-exported: other code imports it from here.
+from assurance.api.declared_actor import (  # noqa: F401
+    DEFAULT_ROLE,
+    MAX_DECLARED_ROLE,
+    sanitise_declared_role,
+)
 from assurance.api.deps import (
     Anyone,
     Machine,
@@ -37,12 +44,19 @@ from assurance.api.deps import (
     get_accounts,
     get_register,
 )
+from assurance.api.recorder_trust import server_recorder_trust
 from assurance.billing.accounts import AccountStore, Principal
-from assurance.core.errors import AssuranceError
+from assurance.core.errors import AssuranceError, EvidenceIncompleteError
 from assurance.machine.bundle import BundleCheck, build_bundle, check_bundle_data
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import ReviewTrust
+from assurance.machine.recorder_attestation import (
+    MAX_ATTESTATIONS,
+    RecorderAttestationError,
+    RecorderTrust,
+    refuse_private_key,
+)
 from assurance.machine.ssm import separation_required
 from assurance.machine.trace import Trace
 
@@ -53,29 +67,6 @@ machine_router = APIRouter(prefix="/v1/machine", tags=["machine safety"])
 #: A trace bigger than this is a file upload problem, not an API problem, and
 #: the CLI handles it without a round trip. Refusing early beats timing out.
 MAX_SAMPLES = 200_000
-
-
-DEFAULT_ROLE = "verification engineer"
-MAX_DECLARED_ROLE = 80
-
-
-def sanitise_declared_role(role: str) -> str:
-    """The caller-declared role, reduced to text that cannot imitate a server token.
-
-    The sealed ``Actor.role`` reads ``"<declared> via account A; key=K; attribution=B"``
-    where everything after the declared part is built by the server. ``;`` and ``=``
-    are that grammar's separators, so they (and their full-width look-alikes, via
-    NFKC) are removed from the declared part along with control and line-separator
-    characters; whitespace is collapsed and the length capped. An empty result falls
-    back to the default role. Applied before the role reaches ``bound_actor`` so the
-    server-built ``attribution=`` is the only such token in the sealed record.
-    """
-    text = unicodedata.normalize("NFKC", role or "")
-    text = "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn")
-                   else c for c in text)
-    text = text.replace(";", " ").replace("=", " ")
-    text = " ".join(text.split())[:MAX_DECLARED_ROLE].strip()
-    return text or DEFAULT_ROLE
 
 
 class SeparationIn(BaseModel):
@@ -111,6 +102,23 @@ class VerifyIn(BaseModel):
                     "the reviewer trust list the SERVER is configured with "
                     "(ASSURANCE_LIMITS_REVIEW_TRUST); a caller cannot supply its own "
                     "trust, which would let a table's author vouch for the table")
+    recorder_attestations: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=MAX_ATTESTATIONS,
+        description="signed recorder attestations of the trace "
+                    "(format assurance.machine.recorder-attestation.v1, signed offline by "
+                    "the recorder operator with `assurance machine recorder-sign`). They "
+                    "are assessed against the recorder trust list the SERVER is "
+                    "configured with (ASSURANCE_RECORDER_TRUST); a caller cannot supply "
+                    "its own trust or a provenance basis, which would let a trace's filer "
+                    "vouch for the trace. With no server trust nothing is accepted and "
+                    "the trace's provenance stays declared by the filer (tier capped at "
+                    "community). An accepted attestation proves a trusted key signed "
+                    "these exact trace bytes; not that the recording is physically true")
+    machine_serial: str = Field(
+        default="", max_length=200,
+        description="the unit this verification is about; an attestation that names a "
+                    "different serial is refused. Defaults to the serial in a machine-key "
+                    "`subject` (maker/model#serial)")
     actor: str = Field(min_length=1, max_length=200,
                        description="who is signing this verification")
     role: str = Field(default="verification engineer", max_length=200)
@@ -137,6 +145,17 @@ class BundleCheckIn(BaseModel):
                     "obtained independently of the bundle, to re-assess the limits "
                     "review sealed in it. Without it a validated limits tier is not "
                     "reproduced")
+    recorder_trust: dict[str, Any] | None = Field(
+        default=None,
+        description="YOUR recorder trust list (format assurance.machine.recorder-trust.v1), "
+                    "obtained independently of the bundle, to re-assess the recorder "
+                    "attestation sealed in it (\"check as me\"). It affects only this "
+                    "answer, never what the server seals. Without it a bundle that "
+                    "claims `recorder_attested` is not believed: its tier is capped at "
+                    "community and reported as unverifiable")
+    machine_serial: str | None = Field(
+        default=None, max_length=200,
+        description="the unit you say the bundle is about; default: the one it records")
     limits: dict[str, Any] | None = Field(
         default=None,
         description="the body-region limits table the bundle was verified against, "
@@ -157,6 +176,15 @@ def _server_review_trust() -> ReviewTrust | None:
         return ReviewTrust.from_json(path)
     except AssuranceError:
         return None  # fail closed: a broken trust file trusts nobody
+
+
+def _attestation_summary(rec: Any) -> dict[str, Any] | None:
+    """The recorder-attestation assessment without the attestations themselves."""
+    if not isinstance(rec, dict):
+        return None
+    return {k: rec.get(k) for k in (
+        "status", "attested", "key_fingerprint", "attestation_hash", "trust_configured",
+        "window_checked", "findings", "explanation", "assessed_on")}
 
 
 def _review_summary(rec: Any) -> dict[str, Any] | None:
@@ -306,15 +334,33 @@ async def verify_run(
         except (AssuranceError, KeyError, ValueError, TypeError) as exc:
             raise _bad(exc, "limits") from exc
 
-    bundle = build_bundle(
-        envelope, trace,
-        actor=actor,
-        limits=limits,
-        limits_reviews=body.limits_reviews,
-        review_trust=_server_review_trust(),
-        ledger=register.ledger if (body.seal and register is not None) else None,
-        subject=body.subject,
-    )
+    try:
+        refuse_private_key(body.recorder_attestations)
+    except RecorderAttestationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "private_key_refused", "detail": str(exc)}) from exc
+
+    try:
+        bundle = build_bundle(
+            envelope, trace,
+            actor=actor,
+            limits=limits,
+            limits_reviews=body.limits_reviews,
+            review_trust=_server_review_trust(),
+            recorder_attestations=body.recorder_attestations,
+            recorder_trust=server_recorder_trust(),
+            machine_serial=body.machine_serial,
+            ledger=register.ledger if (body.seal and register is not None) else None,
+            subject=body.subject,
+        )
+    except EvidenceIncompleteError as exc:
+        # The seal refused a number its hash cannot protect (an integer beyond 2^53 or a
+        # value finer than 6 decimals in a caller-supplied field). That is the caller's
+        # input, not a server fault: say which value, never a 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
     # The hash a re-verification cites (``verification_content_hash`` on
@@ -328,6 +374,11 @@ async def verify_run(
     payload["provenance_basis"] = bundle.result.provenance_basis
     payload["provenance_note"] = (bundle.result.provenance_assessment or {}).get(
         "explanation", "")
+    # How the recorder attestations were assessed (statuses, findings, key fingerprint),
+    # under the SERVER's trust list. `accepted` proves a trusted key signed these trace
+    # bytes; it does not prove the recording is physically true.
+    payload["recorder_attestation"] = _attestation_summary(
+        bundle.result.recorder_attestation)
     return payload
 
 
@@ -366,8 +417,20 @@ def _check_bundle_sync(body: BundleCheckIn) -> BundleCheck:
             trust = ReviewTrust.from_dict(body.limits_trust)
         except AssuranceError as exc:
             raise _bad(exc, "limits_trust") from exc
+    recorder_trust = None
+    if body.recorder_trust is not None:
+        try:
+            refuse_private_key(body.recorder_trust)
+            recorder_trust = RecorderTrust.from_dict(body.recorder_trust)
+        except RecorderAttestationError as exc:
+            if "private key" in str(exc).lower():
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"error": "private_key_refused", "detail": str(exc)}) from exc
+            raise _bad(exc, "recorder_trust") from exc
     return check_bundle_data(body.bundle, envelope=envelope, trace=trace, limits=limits,
-                             review_trust=trust)
+                             review_trust=trust, recorder_trust=recorder_trust,
+                             machine_serial=body.machine_serial)
 
 
 @machine_router.post(
@@ -421,11 +484,23 @@ async def check_bundle(
             "limits_review": result.reproduced and isinstance(
                 recorded.get("limits_review"), dict) and bool(
                 recorded["limits_review"].get("validated")),
+            # True only if THIS check accepted the recorded attestation under the trust
+            # list the caller supplied. A trusted key signed these trace bytes; that is
+            # not physical authenticity of the recording, nor safety.
+            "recorder_attestation": result.provenance_reassessed == "reproduced",
             "reproduced": result.reproduced,
         },
         "recorded_verdict": recorded.get("verdict"),
         "recorded_tier": recorded.get("tier"),
         "recorded_provenance_basis": recorded.get("provenance_basis"),
+        "provenance_basis_recorded": result.provenance_basis,
+        # not_applicable | reproduced | unverifiable (no trust supplied: NOT believed) |
+        # not_reproduced (rejected)
+        "provenance_reassessed": result.provenance_reassessed,
+        # The recorded tier, capped at community unless the recorder attestation was
+        # reproduced under YOUR trust list. The limits review is reported separately.
+        "believed_tier": result.believed_tier,
+        "recorder_attestation": _attestation_summary(recorded.get("recorder_attestation")),
         # What the sealed bundle says about the review of its limits table (status
         # and explanation); whether THIS check accepted it is `checked.limits_review`.
         "recorded_limits_review": _review_summary(recorded.get("limits_review")),
