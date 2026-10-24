@@ -330,6 +330,35 @@ class TestEveryApiReaderIsHandedTheTrust:
         assert r.status_code == 200, r.text
         _all_trust_lists(spy)
 
+    def _enrol(self, client, store):
+        from .test_assurance_fleet import manifest as fleet_manifest
+
+        h = keyed(store, "cell")
+        man = fleet_manifest()
+        assert client.post("/v1/machinery/manifest", json={"manifest": man.to_dict()},
+                           headers=h).status_code == 200
+        return h, man
+
+    def test_the_value_route(self, client, store, spy):
+        h, _ = self._enrol(client, store)
+        spy.clear()
+        assert client.get("/v1/value", headers=h).status_code == 200
+        _all_trust_lists(spy)
+
+    def test_the_enrolled_check_route(self, client, store, spy):
+        h, man = self._enrol(client, store)
+        spy.clear()
+        r = client.post("/v1/check/fleet-machine", json={"machine_key": man.machine.key},
+                        headers=h)
+        assert r.status_code == 200, r.text
+        _all_trust_lists(spy)
+
+    def test_the_fleet_report_route(self, client, store, spy):
+        h, _ = self._enrol(client, store)
+        spy.clear()
+        assert client.get("/v1/fleet/report", headers=h).status_code == 200
+        _all_trust_lists(spy)
+
     def test_the_watch_route_hands_ingest_the_trust(self, client, store, monkeypatch):
         from assurance.api import watch_routes
 
