@@ -54,8 +54,9 @@ from assurance.core.evidence import (
     ValidationState,
 )
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machinery.divergence import compare
+from assurance.machinery.divergence import Divergence, compare
 from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
@@ -449,16 +450,24 @@ def _seal_observation(
     return evidence
 
 
-def _held_observations(ledger: EvidenceLedger, key: str) -> list[tuple[datetime, str]]:
-    """``(observed_at, report_digest)`` for every verifying observation of the machine."""
-    out: list[tuple[datetime, str]] = []
+def _held_observations(
+    ledger: EvidenceLedger, key: str,
+) -> list[tuple[datetime, str, bool]]:
+    """``(observed_at, report_digest, counts)`` for every verifying observation.
+
+    ``counts`` is whether the held record is an observation at all (not a failed look,
+    a stale-manifest attempt or a not-a-look attempt), so a retry can say what the
+    ledger really holds rather than what the retried entry claimed.
+    """
+    out: list[tuple[datetime, str, bool]] = []
     for entry in ledger.entries(subject=key, kind=OBSERVATION_KIND):
         evidence = entry.evidence()
         if not evidence.verify():
             continue
         at = observed_at_of(evidence.body, entry.at)
         if at is not None:
-            out.append((at, str(evidence.body.get("report_digest", ""))))
+            out.append((at, str(evidence.body.get("report_digest", "")),
+                        str(evidence.body.get("status", "")) not in NOT_A_LOOK_STATUSES))
     return out
 
 
@@ -597,14 +606,15 @@ def _ingest_entry(
 
     digest = entry_digest(watch_id, entry, observed_at)
     held = _held_observations(ledger, key)
-    if any(d == digest for _, d in held):
+    same = [counts for _, d, counts in held if d == digest]
+    if same:
         return MachineResult(
             serial=serial, machine_key=key, reported_status=status,
             recorded_status="", outcome="already_recorded", observed_at=stamp,
             detail="this exact observation is already in the ledger; nothing was written.",
-            counts_as_observation=positive)
+            counts_as_observation=same[0])
     if held:
-        newest = max(at for at, _ in held)
+        newest = max(at for at, _, _ in held)
         if observed_at < newest:
             return _refuse(entry, key, "superseded_by_newer_observation",
                            f"the ledger already holds an observation of {key} from "
@@ -752,6 +762,7 @@ def _ingest_entry(
         # The case before the manifest, the order run_watch keeps: if this
         # dies in between, the baseline here is still the old one, a retry sees
         # the same drift and assess_drift lands on the same case.
+        divergence = _as_client_reported(divergence)
         trigger_case = case_id_for(TriggerType.MACHINE_DRIFT, observed_hash)
         existed = store.get(trigger_case) is not None
         case = assess_drift(
@@ -822,6 +833,30 @@ def _relay_basis(
     if baseline is not None and baseline.configuration_hash() == manifest.configuration_hash():
         return "same_configuration_held"
     return "unrelayed"
+
+
+#: Said in every case and divergence the hosted ingest seals, because both rest on
+#: manifests the reporter sent. ``basis: client_reported`` is already on the
+#: observation records; this puts it where a case reader looks.
+CLIENT_REPORTED_CAVEAT = (
+    "both manifests behind this finding were client-reported through hosted ingest "
+    "(POST /v1/watch/report): the hosted service did not observe the machine and "
+    "cannot show the reporter read the real unit. Confidence is capped at medium."
+)
+
+
+def _as_client_reported(divergence: Divergence) -> Divergence:
+    """The same divergence, with its tier capped below ``validated`` and the caveat added.
+
+    ``compare()`` derives the tier from the manifests' hash sources, which a hosted
+    reporter declares. A claim about how the real hardware behaves needs more than a
+    declaration, so the confidence ``assess_drift`` and ``record_divergence`` derive
+    from the tier drops to medium. Only the confidence and the caveat change: the
+    verdict, the changed items and the case id are exactly what ``compare()`` found.
+    """
+    return replace(
+        divergence, tier=min(divergence.tier, AssuranceTier.COMMUNITY),
+        checks_skipped=(*divergence.checks_skipped, CLIENT_REPORTED_CAVEAT))
 
 
 def _not_a_look(manifest: SafetyManifest) -> str:
@@ -927,9 +962,21 @@ def ingest_report(
                            max_age_hours=float(max_age) if max_age else None)
         results: dict[int, MachineResult] = {}
         for i in order:
-            results[i] = _ingest_entry(
-                ledger, store, entries[i], watch_id=watch_id,
-                run_started_at=run_started_at, actor=actor, now=clock, account=account)
+            try:
+                results[i] = _ingest_entry(
+                    ledger, store, entries[i], watch_id=watch_id,
+                    run_started_at=run_started_at, actor=actor, now=clock,
+                    account=account)
+            except OverflowError as exc:
+                # Date arithmetic on an extreme reporter-supplied timestamp. One
+                # entry's arithmetic failing refuses that entry; it must not abort the
+                # report after earlier entries were written (a partial write with no
+                # watch.report record, and an HTTP 500).
+                results[i] = _refuse(
+                    entries[i], str(entries[i].get("machine_key", ""))
+                    or str(entries[i].get("serial", "")),
+                    "timestamp_out_of_range",
+                    f"a date in this entry is outside the range that can be handled: {exc}")
 
         recorded = [i for i in order if results[i].outcome == "recorded"]
         report_recorded = False

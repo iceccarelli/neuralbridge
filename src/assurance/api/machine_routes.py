@@ -21,6 +21,7 @@ is what makes the sealed bundle worth buying.
 from __future__ import annotations
 
 import os
+import unicodedata
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -52,6 +53,29 @@ machine_router = APIRouter(prefix="/v1/machine", tags=["machine safety"])
 #: A trace bigger than this is a file upload problem, not an API problem, and
 #: the CLI handles it without a round trip. Refusing early beats timing out.
 MAX_SAMPLES = 200_000
+
+
+DEFAULT_ROLE = "verification engineer"
+MAX_DECLARED_ROLE = 80
+
+
+def sanitise_declared_role(role: str) -> str:
+    """The caller-declared role, reduced to text that cannot imitate a server token.
+
+    The sealed ``Actor.role`` reads ``"<declared> via account A; key=K; attribution=B"``
+    where everything after the declared part is built by the server. ``;`` and ``=``
+    are that grammar's separators, so they (and their full-width look-alikes, via
+    NFKC) are removed from the declared part along with control and line-separator
+    characters; whitespace is collapsed and the length capped. An empty result falls
+    back to the default role. Applied before the role reaches ``bound_actor`` so the
+    server-built ``attribution=`` is the only such token in the sealed record.
+    """
+    text = unicodedata.normalize("NFKC", role or "")
+    text = "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn")
+                   else c for c in text)
+    text = text.replace(";", " ").replace("=", " ")
+    text = " ".join(text.split())[:MAX_DECLARED_ROLE].strip()
+    return text or DEFAULT_ROLE
 
 
 class SeparationIn(BaseModel):
@@ -250,7 +274,7 @@ async def verify_run(
     # The sealed actor follows the credential, as on /v1/change: an operator key
     # attributes to that operator and a different `actor` is refused; an account key
     # is recorded as declared; open mode keeps the declared label.
-    actor = bound_actor(body.actor, body.role, principal, named=True)
+    actor = bound_actor(body.actor, sanitise_declared_role(body.role), principal, named=True)
 
     try:
         envelope = SafetyEnvelope.from_dict(body.envelope)

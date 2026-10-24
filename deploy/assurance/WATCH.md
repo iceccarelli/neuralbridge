@@ -617,6 +617,30 @@ look for `stale_observations`. It never was an observation of the whole machine.
   of that configuration holding it. A manifest freshly fabricated, or a held one
   re-presented, defeats all of it. It is a stated limit of an opt-in reporting
   channel, not a proof of observation.
+* **Cases and divergences opened from a hosted report are capped at medium
+  confidence** and carry a `checks_skipped` line saying both manifests were
+  client-reported through hosted ingest and the service did not observe the
+  machine. The hash sources the reporter declares would otherwise let a
+  reporter-built manifest read as `validated` and the case as `high`. The verdict,
+  changed items and case id are unchanged. A retry of a `manifest_stale` or failed
+  attempt answers `already_recorded` with `counts_as_observation` taken from the
+  held record, not from the retried entry.
+* A timestamp that cannot be expressed in UTC (for example
+  `0001-01-01T00:00:00+01:00`) is `422` in a report's own `observed_at` /
+  `run_started_at`, and `refused` (`invalid_manifest`) for one entry's manifest
+  date: the rest of the report is recorded. It is never a `500` or a partial write.
+* **Remaining limits, not fixed here.**
+  (1) *Threadpool.* The wait for the per-ledger ingest lock (up to 30 s) holds a
+  request thread, so one tenant sending many concurrent reports can occupy the
+  worker's threadpool and delay other tenants until they answer `503 ingest_busy`.
+  There is no per-account concurrency cap yet.
+  (2) *Cadence window.* The freshness window uses the `max_age_hours` the report
+  declares (1 to 720 h, the only ceiling in the code; there is no per-account
+  configured ceiling to cap it by), so a reporter can widen what counts as a fresh
+  manifest up to 30 days. `stale` does not look at `relay_basis`: a look that was
+  honoured on a relay is as current as any other until the cadence passes. Both
+  are visible on the record (`relay_basis`, `manifest_age_*`,
+  `cadence_hours`) but not refused.
 * It is as good as the export and the plan, exactly as the local watch is.
 * A machine omitted from a report is not reported as anything; its silence shows
   as staleness once the cadence has passed.
