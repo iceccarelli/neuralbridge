@@ -11,6 +11,9 @@ const MAX_BYTES = 4 * 1024 * 1024;
 export type Outcome =
   | 'no_inconsistency_found'
   | 'signatures_not_checked'
+  // Nothing was found wrong, but something asked for (completeness against a signed head,
+  // typically) could not be established. NOT a finding that the file was changed.
+  | 'not_established'
   | 'inconsistent'
   | 'unreadable'
   | 'unsupported'
@@ -19,16 +22,25 @@ export type Outcome =
 export type VerifyResult = {
   kind: 'ledger_export' | 'machine_bundle' | 'attestation_log' | 'unknown';
   outcome: Outcome;
-  // True only when every check this kind of file needs was run and none found a problem.
+  // True means only: no inconsistency was found in the checks that ran. It is not "complete"
+  // and not "reproduced": read `completeness` (ledger exports) and `level` (machine bundles).
   ok: boolean;
   // Attestation logs only (null otherwise): whether any signature was actually checked.
   signatures_verified: boolean | null;
   // Ledger exports only (null otherwise): did a signed anchor, under the key supplied,
-  // show nothing was removed? 'anchored' = the signed head covers the last record;
-  // 'anchored_partial' = records follow the signed head and no signature covers them;
-  // 'not_checked' is the default and is never a pass.
-  completeness?: 'anchored' | 'anchored_partial' | 'not_checked' | 'failed' | null;
-  anchor?: { head_seq: number; records_after_anchor: number } | null;
+  // show nothing was removed? 'anchored' = a head the signer READ from the ledger covers the
+  // last record; 'anchored_partial' = records follow that head and no signature covers them;
+  // 'declared_head' = the signer was only TOLD the head and never read the chain (not an
+  // anchor); 'not_checked' is the default and is never a pass.
+  completeness?: 'anchored' | 'anchored_partial' | 'declared_head' | 'not_checked' | 'failed' | null;
+  anchor?: {
+    head_seq: number;
+    records_after_anchor: number;
+    // read_from_ledger: the signer read the chain. declared_by_holder: it was handed three numbers.
+    basis?: 'read_from_ledger' | 'declared_by_holder' | string;
+  } | null;
+  // Ledger exports only: what was asked for and could not be established (not tampering).
+  unestablished?: string[];
   scope: string;
   entries: number;
   verified: string[];
@@ -43,6 +55,8 @@ export type VerifyResult = {
     product?: string | null;
     product_version?: string | null;
     provenance?: string | null;
+    // Who vouches for `provenance`: 'declared_by_filer' = the filer said so, nothing signed it.
+    provenance_basis?: string | null;
     trace_started_at?: string | null;
   } | null;
   head: { seq: number; link_hash: string; length: number } | null;
@@ -57,11 +71,32 @@ const KIND_LABEL: Record<VerifyResult['kind'], string> = {
   unknown: 'Not recognised',
 };
 
+// The colour says how much to rely on the answer: green only for a ledger export whose signed
+// head the signer READ from the ledger and that covers its last record. Everything else that is
+// not a finding of tampering is amber, because "no inconsistency found" is not "complete".
+export function headlineText(r: VerifyResult): string {
+  if (r.outcome === 'no_inconsistency_found' && r.completeness === 'declared_head') {
+    return 'No inconsistency found — but the signed head was only declared to the signer, so completeness is not shown';
+  }
+  return HEADLINE[r.outcome];
+}
+
+export function headlineTone(r: VerifyResult): 'success' | 'caution' | 'danger' {
+  if (r.outcome === 'inconsistent' || r.outcome === 'check_failed') return 'danger';
+  if (r.outcome === 'no_inconsistency_found' && r.completeness === 'anchored') return 'success';
+  return 'caution';
+}
+
+const PROVENANCE_BASIS: Record<string, string> = {
+  declared_by_filer: 'declared by the filer — nothing signed the recording',
+};
+
 // Deliberately no "valid", "passed" or tick: the strongest thing any outcome says
 // is that the checks that ran found nothing wrong.
 const HEADLINE: Record<Outcome, string> = {
   no_inconsistency_found: 'No inconsistency found in the checks that ran',
   signatures_not_checked: 'Structure only — no signature was checked',
+  not_established: 'Could not be established — nothing wrong was found, but a check you asked for could not be completed',
   inconsistent: 'Problems found',
   unreadable: 'Could not read this file — nothing was checked',
   unsupported: 'Not a file this page can check',
@@ -78,12 +113,13 @@ const css = `
   border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; background: var(--surface); color: var(--ink); resize: vertical; }
 .ev-panel { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; background: var(--surface); display: flex; flex-direction: column; gap: 0.9rem; min-width: 0; }
 .ev-headline { font-weight: 700; font-size: 1.05rem; margin: 0; }
-.ev-headline[data-outcome='no_inconsistency_found'] { color: var(--success); }
-.ev-headline[data-outcome='inconsistent'], .ev-headline[data-outcome='check_failed'] { color: var(--danger); }
-.ev-headline[data-outcome='unreadable'], .ev-headline[data-outcome='unsupported'], .ev-headline[data-outcome='signatures_not_checked'] { color: var(--orange-dark); }
+.ev-headline[data-tone='success'] { color: var(--success); }
+.ev-headline[data-tone='danger'] { color: var(--danger); }
+.ev-headline[data-tone='caution'] { color: var(--orange-dark); }
 .ev-sec h3 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.35rem; color: var(--ink-soft); }
 .ev-sec ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.86rem; line-height: 1.5; }
 .ev-sec[data-kind='problems'] { border-left: 3px solid var(--danger); padding-left: 0.75rem; }
+.ev-sec[data-kind='unestablished'] { border-left: 3px solid var(--orange); padding-left: 0.75rem; }
 .ev-sec[data-kind='verified'] { border-left: 3px solid var(--success); padding-left: 0.75rem; }
 .ev-sec[data-kind='assumed'] { border-left: 3px solid var(--orange); padding-left: 0.75rem; }
 .ev-sec[data-kind='notchecked'] { border-left: 3px solid var(--ink-soft); padding-left: 0.75rem; }
@@ -263,7 +299,11 @@ export default function EvidenceVerifier() {
               checked, its signatures are reported as <strong>not verified</strong>, and the result is{' '}
               <strong>never shown as a pass</strong>. A ledger export is the same: without the key of the signed head
               it carries, <strong>completeness is reported as not checked</strong> (entries cut from the end, or a
-              rebuilt chain, would look identical). Paste a public key only: a private key is refused and never sent.
+              rebuilt chain, would look identical). With the key, a <em>one-case</em> export can only be shown complete
+              if the exporter included the ledger skeleton (<code>?skeleton=true</code>); without it the answer is
+              &ldquo;could not be established&rdquo;, which is not a finding of tampering. A head the signer was only
+              told (<code>declared_by_holder</code>) is never an anchor. Paste a public key only: a private key is
+              refused and never sent.
             </p>
             <textarea
               className="ev-text"
@@ -289,9 +329,9 @@ export default function EvidenceVerifier() {
           </div>
           <p className="ev-note" data-testid="ev-stateless">
             Nothing is stored. The file is sent to the Assurance API, checked in memory and dropped; the only
-            record is the ordinary access-log line (time, path, status — never the file; a public key you paste for an
-            attestation check travels in a request header, which the access log does not record). It counts as one of your free
-            daily checks from this address.
+            record is the ordinary access-log line (time, path, status — never the file; a public key you paste, for an
+            attestation check or to check a ledger export against its signed head, travels in a request header, which the
+            access log does not record). It counts as one of your free daily checks from this address.
           </p>
           {error && (
             <p className="ev-err" role="alert" data-testid="ev-error">
@@ -310,24 +350,41 @@ export default function EvidenceVerifier() {
           )}
           {result && (
             <>
-              <h2 className="ev-headline" data-outcome={result.outcome} data-testid="ev-headline">
-                {HEADLINE[result.outcome]}
+              <h2
+                className="ev-headline"
+                data-outcome={result.outcome}
+                data-tone={headlineTone(result)}
+                data-testid="ev-headline"
+              >
+                {headlineText(result)}
               </h2>
               <p className="ev-meta" data-testid="ev-kind">
                 Detected: <strong>{KIND_LABEL[result.kind]}</strong>
                 {result.scope ? ` · ${result.scope}` : ''}
                 {result.signatures_verified === false ? ' · signatures NOT verified' : ''}
                 {result.signatures_verified === true ? ' · signatures verified against the key you supplied' : ''}
-                {result.completeness === 'anchored' ? ' · matches a signed head that covers its last record (key you supplied)' : ''}
+                {result.completeness === 'anchored'
+                  ? ' · matches a signed head that the signer read from the ledger (basis read_from_ledger) and that covers its last record (key you supplied)'
+                  : ''}
                 {result.completeness === 'anchored_partial'
-                  ? ` · matches a signed head only up to seq ${result.anchor?.head_seq ?? '?'}; ${result.anchor?.records_after_anchor ?? 'some'} later record(s) are covered by no signature`
+                  ? ` · matches a signed head the signer read from the ledger, but only up to seq ${result.anchor?.head_seq ?? '?'}; ${result.anchor?.records_after_anchor ?? 'some'} later record(s) are covered by no signature`
+                  : ''}
+                {result.completeness === 'declared_head'
+                  ? ` · matches a head that was only DECLARED to the signer (basis ${result.anchor?.basis ?? 'declared_by_holder'}): the signer never read the chain, so this is not an anchor`
                   : ''}
                 {result.completeness === 'not_checked' ? ' · completeness NOT checked' : ''}
                 {result.completeness === 'failed' ? ' · does not match its signed head' : ''}
                 {result.kind !== 'unknown' && result.entries > 0 ? ` · ${result.entries} record(s)` : ''}
               </p>
-              <p className="ev-note">{result.summary}</p>
+              <p className="ev-note" data-testid="ev-summary">
+                {result.summary}
+              </p>
               <List kind="problems" title="Problems found" items={result.problems} />
+              <List
+                kind="unestablished"
+                title="Could not be established (not a finding that the file was changed)"
+                items={result.unestablished ?? []}
+              />
               <List kind="verified" title="Facts a check established" items={result.verified} />
               {result.tier && (
                 <section className="ev-sec" data-testid="ev-tier">
@@ -336,7 +393,13 @@ export default function EvidenceVerifier() {
                     <li>
                       Verdict: <strong>{result.tier.recorded_verdict ?? 'unknown'}</strong> · assurance tier:{' '}
                       <strong>{result.tier.recorded_tier ?? 'unknown'}</strong>
-                      {result.tier.provenance ? ` · run provenance: ${result.tier.provenance}` : ''}
+                      {result.tier.provenance
+                        ? ` · run provenance: ${result.tier.provenance}${
+                            result.tier.provenance_basis
+                              ? ` (${PROVENANCE_BASIS[result.tier.provenance_basis] ?? result.tier.provenance_basis})`
+                              : ''
+                          }`
+                        : ''}
                     </li>
                     {result.tier.as_recorded_may_claim_physical_behaviour !== null && (
                       <li>

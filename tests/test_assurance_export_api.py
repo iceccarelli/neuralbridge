@@ -147,10 +147,12 @@ class TestTheSkeletonIsOptInAndStaysInsideTheAccount:
         api, (_, ha), _, _ = tenants
         got = _check(api, api.get("/v1/cases/C1/export", headers=ha).json())
         assert got["ok"] and got["completeness"] == "not_checked"
-        assert "skeleton" in got["not_checked"][0]
+        assert "skeleton" in " ".join(got["not_checked"][:2])
         keyed = _check(api, api.get("/v1/cases/C1/export", headers=ha).json(),
                        _service_key_header(api))
-        assert not keyed["ok"] and any("skeleton" in p for p in keyed["problems"])
+        # a genuine export is not "tampered": it is "not established", with the remedy
+        assert not keyed["ok"] and keyed["outcome"] == "not_established"
+        assert keyed["problems"] == [] and any("skeleton" in u for u in keyed["unestablished"])
 
 
 class TestTheAnchorEndToEnd:
@@ -206,7 +208,8 @@ class TestTheAnchorEndToEnd:
         bundle = api.get("/v1/cases/C1/export?anchor=false&skeleton=true", headers=ha).json()
         assert "anchor" not in bundle
         got = _check(api, bundle, _service_key_header(api))
-        assert not got["ok"] and any("no signed anchor" in p for p in got["problems"])
+        assert not got["ok"] and got["outcome"] == "not_established"
+        assert any("no signed anchor" in u for u in got["unestablished"])
 
     def test_a_rewound_ledger_refuses_to_export_under_its_own_attestation(self, tenants):
         api, (account, ha), _, _ = tenants
@@ -320,7 +323,8 @@ class TestAZeroLengthAttestationAnchorsNothing:
         got = _check(api, bundle, _service_key_header(api))
         assert not got["ok"] and got["completeness"] == "not_checked"
         assert got["anchor"] is None
-        assert any("covers no record" in p for p in got["problems"])
+        assert got["outcome"] == "not_established"
+        assert any("covers no record" in u for u in got["unestablished"])
         assert "agrees with a signed head" not in got["summary"]
 
 

@@ -457,6 +457,9 @@ class TestMachineBundle:
         assert isinstance(tier["as_recorded_may_claim_physical_behaviour"], bool)
         assert "may_claim_physical_behaviour" not in tier
         assert tier["evidence_required"]
+        # who vouches for the run's provenance is shown beside it (declared by the filer)
+        assert tier["provenance_basis"] == machine_bundle["evidence"]["body"]["provenance_basis"]
+        assert tier["provenance_basis"] == "declared_by_filer"
         assert any("hashes to the hash it carries" in f for f in result["verified"])
         assert any("envelope copy" in f for f in result["verified"])
         assert any("nothing here shows the machine behaved" in n

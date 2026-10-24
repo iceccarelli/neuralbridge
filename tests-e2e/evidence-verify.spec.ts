@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { classify, describeOutcome } from '../app/lib/assuranceApi';
 
 // /verify against the REAL local Assurance API (nothing mocked). Run via
 // scripts/e2e-assurance.sh, which starts the API and a Next server built with
@@ -23,6 +24,7 @@ import json, sys, tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from assurance.attest import AttestationLog, SigningKey, attest
+from assurance.attest.attestation import AttestationBasis, LedgerHead
 from assurance.evidence.ledger import EvidenceLedger
 from tests.test_assurance_evidence_api import build_real_ledger
 from tests.test_assurance_change import seal_a_real_verification
@@ -34,8 +36,22 @@ log = AttestationLog(work / "attest.jsonl")
 attest(ledger, key, log, note="e2e")
 machine = seal_a_real_verification(
     EvidenceLedger(work / "machine.db"), when=datetime(2026, 2, 9, tzinfo=UTC))
+anchor = log.require_last().to_dict()
+# A head the signer was only TOLD (what POST /v1/ledger/attest signs), under its own key.
+declared_key = SigningKey.generate()
+head = ledger.entries()[-1]
+declared = attest(
+    LedgerHead(len(ledger.entries()), head.seq, head.link_hash, AttestationBasis.DECLARED_BY_HOLDER),
+    declared_key, AttestationLog(work / "declared.jsonl"))
+declared_whole = ledger.export()
+declared_whole["anchor"] = declared.to_dict()
 out = {
     "whole": json.dumps(ledger.export()),
+    "whole_anchored": json.dumps(ledger.export(anchor=anchor)),
+    "case_anchored": json.dumps(ledger.export(subject=case_id, anchor=anchor)),
+    "case_skeleton_anchored": json.dumps(ledger.export(subject=case_id, anchor=anchor, skeleton=True)),
+    "declared_whole": json.dumps(declared_whole),
+    "declared_public_key": declared_key.verifying.pem(),
     "case": json.dumps(ledger.export(subject=case_id)),
     "machine": json.dumps(machine.to_dict()),
     "attestations": (work / "attest.jsonl").read_text(),
@@ -44,7 +60,18 @@ out = {
 (work / "fixtures.json").write_text(json.dumps(out))
 `;
 
-type Fixtures = { whole: string; case: string; machine: string; attestations: string; public_key: string };
+type Fixtures = {
+  whole: string;
+  whole_anchored: string;
+  case_anchored: string;
+  case_skeleton_anchored: string;
+  declared_whole: string;
+  declared_public_key: string;
+  case: string;
+  machine: string;
+  attestations: string;
+  public_key: string;
+};
 
 function build(): Fixtures {
   const work = mkdtempSync(join(tmpdir(), 'evidence-verify-'));
@@ -81,6 +108,8 @@ test.describe('Evidence verify page', () => {
     await upload(page, 'export.json', fx.whole);
     const headline = page.getByTestId('ev-headline');
     await expect(headline).toHaveText('No inconsistency found in the checks that ran');
+    // not green: nothing shows the export is complete, and the colour must not say it is
+    await expect(headline).toHaveAttribute('data-tone', 'caution');
     await expect(page.getByTestId('ev-kind')).toContainText('Ledger export');
     await expect(page.getByTestId('ev-kind')).toContainText('whole ledger');
 
@@ -108,6 +137,58 @@ test.describe('Evidence verify page', () => {
     await expect(page.getByTestId('ev-kind')).toContainText('subject');
     await expect(page.getByTestId('ev-notchecked')).toContainText("holds one subject's entries only");
     await expect(page.getByTestId('ev-head')).toHaveCount(0);
+  });
+
+  test('an untouched default one-case export with the right key is "could not be established", not "problems found"', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('ev-text').fill(fx.case_anchored);
+    await page.getByTestId('ev-key').fill(fx.public_key);
+    await page.getByTestId('ev-run').click();
+    const headline = page.getByTestId('ev-headline');
+    await expect(headline).toContainText('Could not be established');
+    await expect(headline).toHaveAttribute('data-outcome', 'not_established');
+    await expect(headline).toHaveAttribute('data-tone', 'caution'); // amber, not the danger colour
+    await expect(page.getByTestId('ev-summary')).toContainText('Completeness could not be established');
+    await expect(page.getByTestId('ev-summary')).toContainText('skeleton=true');
+    await expect(page.getByTestId('ev-unestablished')).toContainText('skeleton');
+    await expect(page.getByTestId('ev-problems')).toHaveCount(0);
+    await expect(page.getByTestId('ev-result')).not.toContainText('Problems found');
+    await expect(page.getByTestId('ev-result')).not.toContainText('not what the exporter wrote');
+  });
+
+  test('the same case with its skeleton, checked with the key, is anchored and green', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('ev-text').fill(fx.case_skeleton_anchored);
+    await page.getByTestId('ev-key').fill(fx.public_key);
+    await page.getByTestId('ev-run').click();
+    const headline = page.getByTestId('ev-headline');
+    await expect(headline).toHaveText('No inconsistency found in the checks that ran');
+    await expect(headline).toHaveAttribute('data-tone', 'success');
+    await expect(page.getByTestId('ev-kind')).toContainText('read_from_ledger');
+    await expect(page.getByTestId('ev-unestablished')).toHaveCount(0);
+  });
+
+  test('a head the signer was only told is "declared", amber, and never anchored', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('ev-text').fill(fx.declared_whole);
+    await page.getByTestId('ev-key').fill(fx.declared_public_key);
+    await page.getByTestId('ev-run').click();
+    const headline = page.getByTestId('ev-headline');
+    await expect(headline).toContainText('only declared');
+    await expect(headline).toHaveAttribute('data-tone', 'caution');
+    await expect(page.getByTestId('ev-kind')).toContainText('DECLARED');
+    await expect(page.getByTestId('ev-kind')).toContainText('declared_by_holder');
+    await expect(page.getByTestId('ev-kind')).not.toContainText('read from the ledger');
+    await expect(page.getByTestId('ev-summary')).toContainText('never read the chain');
+    await expect(page.getByTestId('ev-notchecked').first()).toContainText('COMPLETENESS NOT CHECKED');
+  });
+
+  test('the key box says a one-case export needs the skeleton, and the page says the key is also for ledger exports', async ({ page }) => {
+    await open(page);
+    await page.getByTestId('ev-text').fill(fx.case_anchored);
+    await expect(page.getByTestId('ev-key')).toBeVisible(); // opened by the signed anchor in the file
+    await expect(page.getByText('?skeleton=true').first()).toBeVisible();
+    await expect(page.getByTestId('ev-stateless')).toContainText('to check a ledger export against its signed head');
   });
 
   test('changing one character of a hash is reported as a problem, with no whole-file facts', async ({ page }) => {
@@ -161,6 +242,7 @@ test.describe('Evidence verify page', () => {
     await expect(tier).toContainText('assurance tier');
     await expect(tier).toContainText('physical machine');
     await expect(tier).toContainText('as recorded in the file');
+    await expect(tier).toContainText('declared by the filer');
     await expect(page.getByTestId('ev-notchecked')).toContainText('a seal is not a signature');
     await expect(page.getByTestId('ev-notchecked')).toContainText('nothing here shows the machine behaved');
 
@@ -235,5 +317,41 @@ test.describe('Evidence verify page, no API configured', () => {
     await page.getByTestId('ev-run').click();
     await expect(page.getByTestId('ev-error')).toContainText('cannot check anything and will not pretend to');
     await expect(page.getByTestId('ev-headline')).toHaveCount(0);
+  });
+});
+
+// Pure functions of the API client: no server needed.
+test.describe('A 409 that is a finding keeps its words and its advice', () => {
+  test('anchor_contradicts_ledger has its own heading and shows the keep-the-evidence advice with the refusal', () => {
+    const body = {
+      detail: {
+        error: 'anchor_contradicts_ledger',
+        finding: 'refusing to export: the ledger holds 2 record(s), but attestation 1 signed for 3.',
+        remedy: 'Preserve the ledger and the attestation log as they are.',
+      },
+    };
+    const o = classify(409, body);
+    expect(o.kind).toBe('conflict');
+    if (o.kind !== 'conflict') return;
+    const d = describeOutcome(o);
+    expect(d.heading).toContain('The export contradicts a signed ledger head');
+    expect(d.heading).not.toContain('Not allowed in the current state');
+    expect(d.text).toContain('the ledger holds 2 record(s)');
+    expect(d.remedy).toContain('Preserve the ledger and the attestation log');
+  });
+
+  test('a plain 409 keeps the generic heading and the server\'s own words', () => {
+    const o = classify(409, { detail: 'the case is already closed' });
+    expect(o.kind).toBe('conflict');
+    if (o.kind !== 'conflict') return;
+    const d = describeOutcome(o);
+    expect(d.heading).toContain('Not allowed in the current state');
+    expect(d.text).toContain('already closed');
+  });
+
+  test('a finding with no remedy still tells the person to keep the ledger', () => {
+    const o = classify(409, { detail: { error: 'anchor_contradicts_ledger', finding: 'x differs' } });
+    if (o.kind !== 'conflict') throw new Error('expected a conflict');
+    expect(describeOutcome(o).remedy).toMatch(/Keep the ledger and its attestation log/);
   });
 });
