@@ -55,8 +55,16 @@ export type VerifyResult = {
     product?: string | null;
     product_version?: string | null;
     provenance?: string | null;
-    // Who vouches for `provenance`: 'declared_by_filer' = the filer said so, nothing signed it.
+    // Who vouches for `provenance`: 'declared_by_filer' = the filer said so, nothing signed it;
+    // 'recorder_attested' = the file RECORDS a signed recorder attestation (a claim until
+    // re-assessed under a recorder trust list you hold).
     provenance_basis?: string | null;
+    // What THIS check made of that claim: not_applicable | reproduced (accepted under the
+    // recorder trust list you supplied) | unverifiable (none supplied: not believed) |
+    // not_reproduced (rejected).
+    provenance_reassessed?: 'not_applicable' | 'reproduced' | 'unverifiable' | 'not_reproduced' | null;
+    // The recorded tier, read as community unless the attestation was reproduced under your list.
+    believed_tier?: string | null;
     trace_started_at?: string | null;
   } | null;
   head: { seq: number; link_hash: string; length: number } | null;
@@ -88,8 +96,23 @@ export function headlineTone(r: VerifyResult): 'success' | 'caution' | 'danger' 
 }
 
 const PROVENANCE_BASIS: Record<string, string> = {
-  declared_by_filer: 'declared by the filer — nothing signed the recording',
+  declared_by_filer: 'declared by the filer — no recorder attestation was accepted',
+  recorder_attested: 'a signed recorder attestation is recorded — a claim until re-assessed under your own trust list',
 };
+
+// What this check made of a recorded recorder attestation. Deliberately never "authentic" or
+// "safe": the strongest result is that a key YOU trust signed these trace bytes.
+export const REASSESSED: Record<string, string> = {
+  reproduced:
+    'Accepted under the recorder trust list you supplied: a key you trust signed these exact trace bytes.',
+  unverifiable:
+    'NOT checked — no recorder trust list was supplied, so the attestation is not believed and the tier is read as community.',
+  not_reproduced:
+    'NOT accepted under the recorder trust list you supplied — the tier above community is not believed.',
+};
+
+export const RECORDER_CAVEAT =
+  'Integrity \u2260 recorder authenticity \u2260 physical safety: even an accepted attestation shows only that the holder of a key you trust signed these trace bytes. It does not show the samples are true measurements, that the recorder was calibrated or uncompromised, who holds the key, or that the machine is safe.';
 
 // Deliberately no "valid", "passed" or tick: the strongest thing any outcome says
 // is that the checks that ran found nothing wrong.
@@ -148,6 +171,7 @@ export default function EvidenceVerifier() {
   const [text, setText] = useState('');
   const [fileName, setFileName] = useState('');
   const [keyPem, setKeyPem] = useState('');
+  const [recorderTrust, setRecorderTrust] = useState('');
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,7 +217,7 @@ export default function EvidenceVerifier() {
       return;
     }
     // A private key never needs to leave this browser, and nothing here wants one.
-    if (/PRIVATE/i.test(keyPem) || /BEGIN [A-Z ]*PRIVATE KEY/i.test(text)) {
+    if (/PRIVATE/i.test(keyPem) || /PRIVATE/i.test(recorderTrust) || /BEGIN [A-Z ]*PRIVATE KEY/i.test(text)) {
       setError(
         'That looks like a private key. It was not sent. Only a PUBLIC key is ever needed here — and if this was a real private key, treat it as exposed and replace it.',
       );
@@ -209,6 +233,17 @@ export default function EvidenceVerifier() {
       // hold line breaks, so the PEM travels on one line and the server re-wraps it.
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (keyPem.trim()) headers['X-Issuer-Public-Key'] = keyPem.trim().split(/\s+/).join(' ');
+      // YOUR recorder trust list (public keys only), on one line, to re-assess a recorder
+      // attestation recorded in a machine bundle. Never a list the bundle carries.
+      if (recorderTrust.trim()) {
+        try {
+          headers['X-Recorder-Trust'] = JSON.stringify(JSON.parse(recorderTrust));
+        } catch {
+          setError('The recorder trust list is not valid JSON. Nothing was sent.');
+          setBusy(false);
+          return;
+        }
+      }
       const res = await fetch(`${API_BASE}/v1/evidence/verify`, { method: 'POST', headers, body: text });
       const body = await res.json().catch(() => null);
       if (res.status === 429) {
@@ -218,6 +253,8 @@ export default function EvidenceVerifier() {
         );
       } else if (res.status === 422 && body?.detail?.error === 'private_key_refused') {
         setError(body.detail.detail);
+      } else if (res.status === 422 && body?.detail?.error === 'invalid_recorder_trust') {
+        setError(`The recorder trust list was not accepted: ${body.detail.detail}`);
       } else if (res.status === 503 && body?.detail?.error === 'verifier_busy') {
         setError('The checker is busy with other files. Nothing was counted against your allowance — try again in a few seconds.');
       } else if (res.status === 413) {
@@ -317,6 +354,31 @@ export default function EvidenceVerifier() {
             />
           </details>
 
+          <details>
+            <summary className="ev-meta" style={{ cursor: 'pointer' }}>
+              Machine bundles: your recorder trust list (to re-assess a recorder attestation)
+            </summary>
+            <p className="ev-note" style={{ margin: '0.5rem 0' }}>
+              A bundle that records <code>recorder_attested</code> is a claim. Without a recorder trust list of your
+              own, obtained <em>somewhere other than the bundle</em>, it is reported as <strong>not checked</strong> and
+              its tier is read as community. With one, the attestation it carries is re-assessed under{' '}
+              <em>your</em> list. Even then the strongest result is that a key you trust signed those trace bytes:{' '}
+              <strong>integrity &ne; recorder authenticity &ne; physical safety</strong>. Paste{' '}
+              <code>assurance.machine.recorder-trust.v1</code> JSON with public keys only: a private key is refused
+              and never sent.
+            </p>
+            <textarea
+              className="ev-text"
+              style={{ minHeight: '90px' }}
+              aria-label="Recorder trust list (JSON)"
+              data-testid="ev-recorder-trust"
+              spellCheck={false}
+              value={recorderTrust}
+              onChange={(e) => setRecorderTrust(e.target.value)}
+              placeholder={'{"format": "assurance.machine.recorder-trust.v1", "recorders": [ … ]}'}
+            />
+          </details>
+
           <div className="ev-row">
             <button className="btn btn-primary" onClick={() => void run()} disabled={busy} data-testid="ev-run">
               {busy ? 'Checking…' : 'Check this file'}
@@ -401,6 +463,16 @@ export default function EvidenceVerifier() {
                           }`
                         : ''}
                     </li>
+                    {result.tier.provenance_reassessed && result.tier.provenance_reassessed !== 'not_applicable' && (
+                      <li data-testid="ev-recorder-reassessed" data-state={result.tier.provenance_reassessed}>
+                        Recorder attestation, as this check read it:{' '}
+                        <strong>{REASSESSED[result.tier.provenance_reassessed] ?? result.tier.provenance_reassessed}</strong>{' '}
+                        Tier this check believes: <strong>{result.tier.believed_tier ?? 'unknown'}</strong>.
+                      </li>
+                    )}
+                    {result.tier.provenance_basis === 'recorder_attested' && (
+                      <li data-testid="ev-recorder-caveat">{RECORDER_CAVEAT}</li>
+                    )}
                     {result.tier.as_recorded_may_claim_physical_behaviour !== null && (
                       <li>
                         The file says this tier would allow a claim about the physical machine:{' '}
