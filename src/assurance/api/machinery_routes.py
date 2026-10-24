@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
-from assurance.api.recorder_trust import server_recorder_trust
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
@@ -232,7 +232,7 @@ async def coverage(
     report = assess_coverage(
         manifest,
         VerificationRecord.from_ledger(
-            register.ledger, subject=key, recorder_trust=server_recorder_trust()),
+            register.ledger, subject=key, recorder_trust=reader_recorder_trust()),
         interventions_from_ledger(register.ledger, key),
     )
     return report.to_dict()
@@ -250,6 +250,7 @@ async def passport(
         actor=Actor(identifier=body.actor,
                     role=sanitise_declared_role(body.role), kind="person"),
         seal=body.seal,
+        recorder_trust=reader_recorder_trust(),
     )
     payload = built.to_dict()
     payload["sealed"] = bool(body.seal)

@@ -22,6 +22,7 @@ attestation accepted under the verifier's own trust list does
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 import statistics
@@ -100,6 +101,42 @@ def _refuse_unit_variants(keys: Iterable[str]) -> None:
                 "mm/s, seconds, newtons and cm²). Convert it and name it as the field, "
                 "or remove it: a column that is silently ignored reads as 'not recorded'."
             )
+
+
+_EXACT_PREFIX = b"assurance.machine.trace-exact.v1\n"
+
+
+def _opt_hex(value: float | None) -> str | None:
+    return None if value is None else float(value).hex()
+
+
+def _exact_sample(s: Sample) -> list[Any]:
+    """One sample, every numeric field as its exact binary value, in a fixed order."""
+    return [float(s.t).hex(), [float(c).hex() for c in s.tcp], float(s.tcp_speed).hex(),
+            s.mode.value, _opt_hex(s.separation), _opt_hex(s.human_speed),
+            _opt_hex(s.contact_force), _opt_hex(s.contact_area), s.body_region]
+
+
+def _exact_value(value: Any) -> Any:
+    """A type-tagged, order-independent form of a free-form value (the conditions)."""
+    if value is None:
+        return ["n"]
+    if isinstance(value, bool):
+        return ["b", value]
+    if isinstance(value, str):
+        return ["s", value]
+    if isinstance(value, int):
+        # An integer is the float it is equal to, so 99 and 99.0 (the same condition
+        # through a JSON round trip) agree; one beyond float precision keeps its digits.
+        return ["f", float(value).hex()] if abs(value) <= 2 ** 53 else ["i", str(value)]
+    if isinstance(value, float):
+        return ["f", value.hex()]
+    if isinstance(value, (list, tuple)):
+        return ["l", [_exact_value(v) for v in value]]
+    if isinstance(value, dict):
+        pairs = [[str(k), _exact_value(v)] for k, v in value.items()]
+        return ["d", sorted(pairs, key=lambda kv: (kv[0], json.dumps(kv[1])))]
+    return ["r", type(value).__name__, repr(value)]
 
 
 class Provenance(StrEnum):
@@ -404,8 +441,43 @@ class Trace:
         }
 
     def content_hash(self) -> str:
-        """Identity of the run. Two traces with the same hash are the same run."""
+        """Identity of the run. Two traces with the same hash are the same run.
+
+        "The same run" at the precision of :func:`content_hash_of`: every number is
+        rounded to six decimals before hashing, so two traces that differ by less than
+        that share a hash (and can differ in a verdict). Anything that must bind the
+        *exact* bytes, as a recorder attestation does, uses :meth:`exact_digest` too.
+        """
         return content_hash_of(self.hashable_payload())
+
+    def exact_digest(self) -> str:
+        """SHA-256 over every value of this trace at full precision.
+
+        Each float is written as ``float.hex()``, which is its exact binary value (so a
+        difference of one unit in the last place is a different digest and ``-0.0`` is
+        not ``0.0``), and every other field that can affect a verdict is included: the
+        trace id, provenance, source system, the start time (to the second, as
+        everywhere else: the content hash, the attestation window and staleness read
+        no finer, and a trace file re-serialised through :meth:`hashable_payload` must
+        keep its digest), the sample rate, the conditions (type-tagged, so ``1`` / ``"1"`` / ``[1]`` cannot
+        collide) and each sample field in a fixed order. It is deliberately *not*
+        :meth:`content_hash`, whose six-decimal rounding is a property other records
+        rely on and is left as it is.
+        """
+        head = json.dumps({
+            "trace_id": self.trace_id,
+            "provenance": self.provenance.value,
+            "source_system": self.source_system,
+            "started_at": format_utc(self.started_at),
+            "sample_rate_hz": float(self.sample_rate_hz).hex(),
+            "conditions": _exact_value(self.conditions),
+            "sample_count": len(self.samples),
+        }, sort_keys=True, separators=(",", ":"))
+        h = hashlib.sha256(_EXACT_PREFIX)
+        h.update(head.encode("utf-8") + b"\n")
+        for s in self.samples:
+            h.update(json.dumps(_exact_sample(s), separators=(",", ":")).encode("utf-8") + b"\n")
+        return h.hexdigest()
 
     def __len__(self) -> int:
         return len(self.samples)

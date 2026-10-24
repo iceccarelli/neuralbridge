@@ -270,6 +270,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
                           "provenance_basis_recorded": result.provenance_basis,
                           "provenance_reassessed": result.provenance_reassessed,
                           "believed_tier": result.believed_tier,
+                          "reassessment_note": result.reassessment_note,
                           "problems": result.notes,
                           "limitations": list(result.limitations)}, indent=2))
     else:
@@ -284,8 +285,12 @@ def _cmd_check(args: argparse.Namespace) -> int:
         for p in result.notes:
             print(f"  - {p}")
         if result.provenance_basis == "recorder_attested":
-            print(f"  recorder attestation: {result.provenance_reassessed}; tier believed "
-                  f"by this check: {result.believed_tier}")
+            if result.reassessment_note:
+                print(f"  recorder attestation: {result.provenance_reassessed} "
+                      f"({result.reassessment_note}); no tier above community is believed")
+            else:
+                print(f"  recorder attestation: {result.provenance_reassessed}; tier "
+                      f"believed by this check: {result.believed_tier}")
         if result.ok and not result.reproduced:
             print("  A seal is not a signature. Supply --envelope and --trace (and "
                   "--limits if the bundle used a table) to check the claim, not just "

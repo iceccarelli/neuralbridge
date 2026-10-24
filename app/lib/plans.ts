@@ -128,7 +128,7 @@ export const FALLBACK_PLANS: Plan[] = [
       'Fleet: every enrolled machine ranked worst-first, and a supplier advisory fanned out to serial numbers and the safety functions it puts in question',
       'Declarations of Conformity bound to a configuration hash, so a declaration can be shown to have stopped describing the machine',
       CASES_NOT_METERED,
-      "Change-assurance cases over /v1/change/*: open, claim, advance and submit re-verification evidence. Closure is a named human decision. No verification this package produces reaches the validated tier yet (declared trace provenance is capped at community), so a required re-verification is closed only by a named person's waiver",
+      "Change-assurance cases over /v1/change/*: open, claim, advance and submit re-verification evidence. Closure is a named human decision. A validated verification needs a recorder attestation accepted under a trust list the operator configures; no such list is configured in a default deployment, so a required re-verification is closed in practice by a named person's waiver",
       'Counter-signed head attestation: POST /v1/ledger/attest signs the head of your ledger with a key you do not hold, so a rewind contradicts a signed statement. Your ledger is never uploaded — we sign three numbers and never see a record',
     ],
     limits: {

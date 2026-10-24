@@ -42,6 +42,7 @@ from assurance.fleet.declaration import (
 )
 from assurance.fleet.impact import ImpactReport, assess_impact
 from assurance.fleet.registry import Fleet
+from assurance.machine.recorder_attestation import RecorderTrust
 
 __all__ = ["ReportInput", "render_report"]
 
@@ -70,6 +71,10 @@ class ReportInput:
     #: cannot. They join the numbered list verbatim, like every other limit.
     extra_limits: tuple[str, ...] = ()
     generated_at: datetime | None = None
+    #: The reader's own recorder trust list, applied to the verifications the report
+    #: counts. The hosted route always sets one; without it the sealing verifier's own
+    #: tier is believed (right for a report on one's own ledger, offline).
+    recorder_trust: RecorderTrust | None = None
     #: The signed head attestations made for this ledger (``assurance attest``),
     #: and the public key to check them against. The key must have reached the
     #: reader by a route other than the attestation log; without it signatures are
@@ -382,7 +387,7 @@ def _attestation_block(data: ReportInput, chain_ok: bool) -> str:
 
 def render_report(data: ReportInput) -> str:
     """Produce one self-contained HTML page. No network, no scripts."""
-    fleet = Fleet.from_ledger(data.ledger)
+    fleet = Fleet.from_ledger(data.ledger, recorder_trust=data.recorder_trust)
     generated = data.generated_at or utc_now()
     declarations = {d.machine_key: d for d in data.declarations}
 

@@ -55,6 +55,7 @@ from assurance.machine.recorder_attestation import (
     RecorderTrust,
     RecordingFacts,
     assess_recorder_attestation,
+    is_placeholder,
 )
 from assurance.machine.trace import (
     MAX_FILE_BYTES,
@@ -63,19 +64,29 @@ from assurance.machine.trace import (
     Sample,
     Trace,
 )
-from assurance.machine.verify import ENGINE_VERSION, Verdict, VerificationResult, verify
+from assurance.machine.verify import (
+    ENGINE_VERSION,
+    Verdict,
+    VerificationResult,
+    is_known_engine,
+    parse_engine_version,
+    verify,
+)
 
 __all__ = [
     "BUNDLE_KIND",
     "LEVEL_INTEGRITY_ONLY",
     "LEVEL_REJECTED",
     "LEVEL_REPRODUCED",
+    "REASSESSED_ONLY",
     "BundleCheck",
     "BundleError",
     "EvidenceBundle",
+    "MachineSubjectError",
     "build_bundle",
     "check_bundle",
     "check_bundle_data",
+    "resolve_machine_serial",
     "verify_bundle",
     "verify_bundle_data",
 ]
@@ -213,17 +224,52 @@ def _refuse_foreign_result(
 
 
 class MachineSubjectError(BundleError):
-    """TEMP red stub."""
+    """A ledger subject or serial that cannot name exactly one unit."""
 
 
 def resolve_machine_serial(subject: str, machine_serial: str = "") -> str:
-    """TEMP red stub: the old, permissive rule."""
-    return machine_serial or _serial_of(subject)
+    """The one serial a verification is about, from its ledger subject and the caller's.
 
+    There is a single grammar for a unit's key, ``maker/model#serial``, and it is read
+    one way everywhere (library, CLI, API, MCP):
 
-def _serial_of(subject: str) -> str:
-    """The unit serial in a machine key (``maker/model#serial``), or ``""``."""
-    return subject.rpartition("#")[2].strip() if "#" in subject else ""
+    * the serial is everything after the **first** ``#``; it must be present, must not
+      itself contain ``#``, and must not start or end with a space or hold a control
+      character. ``Mk/Md#``, ``Mk/Md#B#`` and ``Mk/Md#X#A`` are refused, not read as a
+      verification of no unit or of unit ``A``;
+    * a subject with no ``#`` (``product@version``, or none) names a product line, not a
+      unit. It requires no serial of the attestation, and an explicit ``machine_serial``
+      is then the unit the caller says it is about (the recorder is matched against it);
+    * an explicit ``machine_serial`` that differs from the serial in a unit key is
+      refused. Otherwise an attestation made on unit A would be sealed as evidence filed
+      under unit B's key, where every ledger reader (coverage, passport, re-verification)
+      would take it as B's.
+    """
+    in_subject: str | None = None
+    if "#" in subject:
+        head, _, tail = subject.partition("#")
+        why = ""
+        if not head.strip():
+            why = "it names no maker/model before the '#'"
+        elif not tail:
+            why = "it has no serial after the '#'"
+        elif "#" in tail:
+            why = "its serial contains another '#'"
+        elif tail != tail.strip() or not tail.isprintable():
+            why = "its serial starts or ends with a space or holds a control character"
+        if why:
+            raise MachineSubjectError(
+                f"the subject {subject!r} is not a unit key (maker/model#serial): {why}. "
+                "Give the unit's key exactly as the machine register shows it, or a "
+                "product-line subject with no '#' (product@version).")
+        in_subject = tail
+    if machine_serial and in_subject is not None and machine_serial != in_subject:
+        raise MachineSubjectError(
+            f"machine_serial {machine_serial!r} is not the serial in the subject "
+            f"{subject!r} ({in_subject!r}). A verification is filed under one unit's key "
+            "and must rest on that unit's recorder: omit machine_serial (it is taken from "
+            "the subject), or give the key of the unit the recorder was attached to.")
+    return machine_serial or in_subject or ""
 
 
 def build_bundle(
@@ -258,14 +304,16 @@ def build_bundle(
     accepted and the provenance stays declared by the filer. ``machine_serial`` names the
     unit; when omitted it is taken from a ``subject`` of the form ``maker/model#serial``
     (a machine key), so the evidence filed under a unit cannot rest on a recorder
-    attached to another.
+    attached to another. The subject grammar is :func:`resolve_machine_serial`'s: a
+    malformed unit key, or a ``machine_serial`` that contradicts the key's, raises
+    :class:`MachineSubjectError` before anything is verified or sealed.
 
     ``result`` lets a caller seal a verification it already ran. It must be the
     verification of *these* inputs: a result for another trace or envelope, or one
     claiming a tier its inputs cannot support, is refused rather than sealed under
     a trace it says nothing about.
     """
-    serial = machine_serial or _serial_of(subject)
+    serial = resolve_machine_serial(subject, machine_serial)
     res = result if result is not None else verify(
         envelope, trace, limits=limits, limits_reviews=limits_reviews,
         review_trust=review_trust, recorder_attestations=recorder_attestations,
@@ -366,6 +414,13 @@ def _check_set_problems(
     always produces its whole set, so the sealed names must be exactly that set.
     """
     engine = body.get("engine_version")
+    if not is_known_engine(engine):
+        return [
+            f"the bundle names an unknown engine version {engine!r}: this verifier knows "
+            f"engines 1 to {ENGINE_VERSION}, written as plain ASCII numerals. A version it "
+            "cannot place is not a reason to skip the test that the recorded checks are "
+            "the complete set, so the bundle is rejected rather than passed unchecked."
+        ], [], []
     if engine != ENGINE_VERSION:
         return [], [
             f"NOT CHECKED: the bundle was produced by engine {engine!r}, whose set of "
@@ -633,6 +688,9 @@ def _coherence_problems(
     return problems, limits, verified
 
 
+#: What an interface says when the attestation was re-assessed and nothing more.
+REASSESSED_ONLY = "attestation re-assessed; checks not re-run"
+
 LEVEL_REJECTED = "rejected"
 LEVEL_INTEGRITY_ONLY = "integrity_only"
 LEVEL_REPRODUCED = "reproduced"
@@ -675,9 +733,16 @@ class BundleCheck:
     #: trust list was supplied, so it is NOT believed) or ``not_reproduced`` (rejected).
     provenance_reassessed: str = "not_applicable"
     #: The tier this check believes: the recorded tier, capped at ``community`` unless
-    #: the recorder attestation was reproduced under the checker's own trust list.
-    #: (The limits review is reported separately.)
+    #: this check is ``ok``, re-ran the engine on the supplied envelope and trace and
+    #: reproduced the whole result, AND the recorder attestation was reproduced under the
+    #: checker's own trust list. Anything less (the attestation alone re-assessed, the
+    #: seal and coherence alone) is not a belief about what the machine did, because the
+    #: checks themselves were not re-run. (The limits review is reported separately.)
     believed_tier: str = ""
+    #: Set when the recorder attestation was re-assessed under the checker's list but the
+    #: checks were not re-run (``REASSESSED_ONLY``): the answer an interface shows beside
+    #: ``provenance_reassessed`` instead of a tier.
+    reassessment_note: str = ""
 
     @property
     def reproduced(self) -> bool:
@@ -974,10 +1039,18 @@ def check_bundle_data(
              else LEVEL_REPRODUCED if reproduced else LEVEL_INTEGRITY_ONLY)
     tier_name = str(body.get("tier"))
     recorded_tier = _TIERS.get(tier_name)
+    # A tier above community is believed only when nothing was found wrong, the engine was
+    # re-run on the original envelope and trace and reproduced the whole result, and the
+    # attestation holds under THIS checker's list. A re-assessed attestation over checks
+    # nobody re-ran (a bundle whose verdict was edited and resealed looks the same from
+    # the outside), or any rejected bundle, is community. A lower recorded tier stays.
+    fully_reproduced = reproduced and recorder_state == "reproduced"
     believed = tier_name
-    if (recorded_tier is not None and recorded_tier > AssuranceTier.COMMUNITY
-            and recorder_state != "reproduced"):
+    if recorded_tier is None:
         believed = AssuranceTier.COMMUNITY.value
+    elif recorded_tier > AssuranceTier.COMMUNITY and not fully_reproduced:
+        believed = AssuranceTier.COMMUNITY.value
+    note = REASSESSED_ONLY if (ok and not replayed and recorder_state == "reproduced") else ""
     return BundleCheck(
         ok=ok, level=level, problems=tuple(problems), limitations=tuple(limitations),
         verified=tuple(verified) if ok else (),
@@ -986,7 +1059,8 @@ def check_bundle_data(
         replayed=replayed,
         provenance_basis=str(body.get("provenance_basis") or ""),
         provenance_reassessed=recorder_state,
-        believed_tier=believed)
+        believed_tier=believed,
+        reassessment_note=note)
 
 
 def _recorded_reviews(body: dict[str, Any]) -> list[Any]:
@@ -1006,17 +1080,16 @@ _ATTESTED = "recorder_attested"
 _FIRST_ENGINE_WITH_ATTESTATION = 6
 
 
-def _engine_number(body: dict[str, Any]) -> int:
-    try:
-        return int(str(body.get("engine_version", "")).strip())
-    except ValueError:
-        return 0
-
-
 def _recorded_attestations(body: dict[str, Any]) -> list[Any]:
+    """The attestations the bundle records, for re-assessment.
+
+    A placeholder (the digest sealed where something unreadable was supplied) is a note
+    that something unreadable was submitted, not an attestation: it is dropped, so a
+    replay assesses what could be read and nothing it would have to re-describe.
+    """
     rec = body.get("recorder_attestation")
     items = rec.get("attestations") if isinstance(rec, dict) else None
-    return list(items) if isinstance(items, list) else []
+    return [i for i in items if not is_placeholder(i)] if isinstance(items, list) else []
 
 
 def _attested_claim_problems(body: dict[str, Any]) -> list[str]:
@@ -1028,7 +1101,8 @@ def _attested_claim_problems(body: dict[str, Any]) -> list[str]:
     one the sealed provenance assessment cites.
     """
     out: list[str] = []
-    if _engine_number(body) < _FIRST_ENGINE_WITH_ATTESTATION:
+    engine_number = parse_engine_version(body.get("engine_version"))
+    if engine_number is None or engine_number < _FIRST_ENGINE_WITH_ATTESTATION:
         return [f"the bundle records provenance_basis {_ATTESTED!r} but names engine "
                 f"{body.get('engine_version')!r}; engines before "
                 f"{_FIRST_ENGINE_WITH_ATTESTATION} could not verify a recorder "
@@ -1114,6 +1188,14 @@ def _without_assessed_on(body: dict[str, Any]) -> dict[str, Any]:
     The day an assessment was made (a sealed claim about it could name a day the
     evidence was still valid), whether a trust list was present, and the per-finding
     prose, none of which is a fact about the evidence.
+
+    The recorder attestation block is compared on what can be reproduced: the readable
+    attestations and what became of each (status and hash), the accepted attestation and
+    key, the trace and window facts. The raw submitted list and the findings and headline
+    that describe *unreadable* entries are not compared: those were sealed as digest
+    placeholders (:func:`~assurance.machine.recorder_attestation.is_placeholder`) that a
+    replay does not re-feed, and nothing unreadable can lift a tier. Whether the
+    attestation was accepted is compared, so a forged tier still differs.
     """
     out = body
     rec = body.get("limits_review")
@@ -1122,12 +1204,13 @@ def _without_assessed_on(body: dict[str, Any]) -> dict[str, Any]:
     att = body.get("recorder_attestation")
     if isinstance(att, dict):
         trimmed = {k: v for k, v in att.items()
-                   if k not in ("assessed_on", "trust_configured")}
-        findings = trimmed.get("findings")
+                   if k not in ("assessed_on", "trust_configured", "attestations", "status")}
+        findings = att.get("findings")
         if isinstance(findings, list):
             trimmed["findings"] = [
-                {k: v for k, v in f.items() if k != "detail"} if isinstance(f, dict) else f
-                for f in findings]
+                {k: v for k, v in f.items() if k != "detail"}
+                for f in findings if isinstance(f, dict) and f.get("attestation_hash")]
+        trimmed["accepted"] = att.get("status") == "accepted"
         out = {**out, "recorder_attestation": trimmed}
     return out
 

@@ -2196,7 +2196,7 @@
           },
           "machine_serial": {
             "default": "",
-            "description": "the unit this verification is about; an attestation that names a different serial is refused. Defaults to the serial in a machine-key `subject` (maker/model#serial)",
+            "description": "the unit this verification is about; a recorder attestation that names a different serial is not accepted. Defaults to the serial in a machine-key `subject` (maker/model#serial); if both are given they must be the same (422 `invalid_subject` otherwise)",
             "maxLength": 200,
             "title": "Machine Serial",
             "type": "string"
@@ -2225,7 +2225,7 @@
           },
           "subject": {
             "default": "",
-            "description": "file the sealed bundle under this ledger subject. Give the machine's key (manufacturer/model#serial) for the verification to count as evidence for that unit in coverage, re-verification and the passport; omitted, it is filed under product@version, a product line",
+            "description": "file the sealed bundle under this ledger subject. Give the machine's key (manufacturer/model#serial) for the verification to count as evidence for that unit in coverage, re-verification and the passport; omitted, it is filed under product@version, a product line. A key is read one way: the serial is everything after the first '#', it must be present and must not contain another '#'",
             "maxLength": 400,
             "title": "Subject",
             "type": "string"

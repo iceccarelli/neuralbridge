@@ -32,6 +32,7 @@ from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import Divergence, Severity
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest, not_a_look
@@ -839,12 +840,15 @@ def assess_intervention(
 
 def assess_recorded_intervention(
     store: CaseStore, manifest: SafetyManifest, intervention_id: str, *, actor: Actor,
+    recorder_trust: RecorderTrust | None = None,
 ) -> tuple[Intervention, ChangeAssuranceCase | None]:
     """:func:`assess_intervention` for an intervention already sealed in the ledger.
 
     The one place that looks the intervention up, so the command line and the
     HTTP route cannot disagree about which record they assessed. The
     verifications and interventions come from the ledger, never the caller.
+    ``recorder_trust`` is the reader's own recorder trust list, applied to those
+    verifications (a hosted reader always passes one).
     """
     key = manifest.machine.key
     interventions = interventions_from_ledger(store.ledger, key)
@@ -853,7 +857,8 @@ def assess_recorded_intervention(
         raise UnknownInterventionError(
             f"no intervention {intervention_id!r} is sealed for {key}. "
             "Record it first with `assurance machinery record-change`.")
-    verifications = VerificationRecord.from_ledger(store.ledger, subject=key)
+    verifications = VerificationRecord.from_ledger(
+        store.ledger, subject=key, recorder_trust=recorder_trust)
     return chosen, assess_intervention(
         store, chosen, manifest, verifications, interventions, actor=actor)
 

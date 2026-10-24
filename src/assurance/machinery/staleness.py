@@ -41,6 +41,7 @@ from assurance.machine.bundle import (
     reassess_recorded_attestations,
 )
 from assurance.machine.recorder_attestation import RecorderTrust
+from assurance.machine.verify import parse_engine_version
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 
@@ -89,16 +90,21 @@ def _believed_tier(body: dict[str, Any], recorder_trust: RecorderTrust | None = 
 
     With ``recorder_trust`` (the reader's own list) the recorded attestations are also
     re-assessed under it, so a key the reader has since revoked or removed stops
-    supporting a ``validated`` tier. Without it the sealing verifier's own assessment,
-    which a coherent record shows was made, is believed: the ledger is the reader's own.
+    supporting a ``validated`` tier. An EMPTY list trusts nobody, so nothing re-assessed
+    is ``validated``.
+
+    ``recorder_trust=None`` means the reader has no list: the sealing verifier's own
+    assessment, which a coherent record shows was made, is believed. That is only right
+    where the ledger is the reader's own and nobody has revoked anything an offline
+    command reading it could not know. **Every hosted (API) reader passes a list** --
+    the server's, or an empty one when none is configured or the file is unusable
+    (``api/recorder_trust.py:reader_recorder_trust``) -- so a missing or broken trust
+    file can never make a reader more generous than a valid one.
     """
     stored = str(body.get("tier", ""))
     if not tier_reaches_validated(stored):
         return stored
-    try:
-        engine = int(str(body.get("engine_version", "")).strip())
-    except ValueError:
-        engine = 0
+    engine = parse_engine_version(body.get("engine_version")) or 0
     if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
             and provenance_lifts_tier(body)
             and (recorder_trust is None or _reproduces(body, recorder_trust))):

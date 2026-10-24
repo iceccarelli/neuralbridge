@@ -26,6 +26,7 @@ from typing import Any
 from assurance.change.store import CaseStore
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.manifest import HashSource
 from assurance.machinery.record import (
     MANIFEST_KIND,
@@ -67,7 +68,8 @@ _NOT_ASSESSED = [
 ]
 
 
-def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None) -> dict[str, Any]:
+def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
+                    recorder_trust: RecorderTrust | None = None) -> dict[str, Any]:
     as_of = now or utc_now()
     problems, head_seq, head_link = ledger.verify_full()
     out: dict[str, Any] = {
@@ -157,8 +159,10 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None) -> d
                  work_kind="inventory_not_read",
                  action=f"Read the {len(vendor) + len(declared)} unverified item(s) off {key}.")
 
-        cov = assess_coverage(m, VerificationRecord.from_ledger(ledger, subject=key),
-                              interventions_from_ledger(ledger, key))
+        cov = assess_coverage(
+            m, VerificationRecord.from_ledger(ledger, subject=key,
+                                              recorder_trust=recorder_trust),
+            interventions_from_ledger(ledger, key))
         counts: dict[str, int] = {c.value: 0 for c in Coverage}
         for f in cov.functions:
             counts[f.coverage.value] += 1

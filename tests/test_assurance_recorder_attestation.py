@@ -171,9 +171,9 @@ class TestTheSignedPayload:
     def test_every_field_is_inside_the_signed_body(self):
         att = Recorder().attest(make_trace(), machine_serial="SN-1", expires_on="2027-01-01")
         d = att.to_dict()
-        assert set(d) == {"format", "attestation_id", "trace_hash", "trace_id", "provenance",
-                          "window", "recorder_id", "machine_ref", "attested_on", "expires_on",
-                          "key_fingerprint", "signature"}
+        assert set(d) == {"format", "attestation_id", "trace_hash", "exact_samples_digest",
+                          "trace_id", "provenance", "window", "recorder_id", "machine_ref",
+                          "attested_on", "expires_on", "key_fingerprint", "signature"}
         assert d["format"] == ATTESTATION_FORMAT == "assurance.machine.recorder-attestation.v1"
         assert set(d["window"]) == {"started_at", "sample_count", "sample_rate_hz", "duration_s"}
         assert set(d["machine_ref"]) == {"product", "product_version", "machine_serial"}
@@ -743,7 +743,10 @@ class TestSealedAndReassessed:
         raw, _, _ = sealed()
         res = check_bundle_data(raw, recorder_trust=RECORDER.trust())
         assert res.ok and res.level == LEVEL_INTEGRITY_ONLY
-        assert res.provenance_reassessed == "reproduced" and res.believed_tier == "validated"
+        # The attestation holds under the checker's list, but nothing re-ran the checks, so
+        # no tier is believed (see test_assurance_recorder_review_fixes.TestTheBelievedTier).
+        assert res.provenance_reassessed == "reproduced" and res.believed_tier == "community"
+        assert res.reassessment_note == "attestation re-assessed; checks not re-run"
         assert any("recording window was not compared" in v for v in res.verified)
 
     def test_a_checker_with_no_trust_does_not_believe_it_and_says_so(self):
@@ -1176,7 +1179,14 @@ class TestApi:
         assert none["checked"]["recorder_attestation"] is False
         mine = client.post(CHECK_URL, json={**base, "recorder_trust": RECORDER.trust_dict()}).json()
         assert mine["ok"] is True and mine["provenance_reassessed"] == "reproduced"
-        assert mine["believed_tier"] == "validated" and mine["checked"]["recorder_attestation"]
+        assert mine["believed_tier"] == "community"      # attestation only: checks not re-run
+        assert mine["reassessment_note"] == "attestation re-assessed; checks not re-run"
+        assert mine["checked"]["recorder_attestation"]
+        full = client.post(CHECK_URL, json={**base, "recorder_trust": RECORDER.trust_dict(),
+                                            "envelope": envelope().to_dict(),
+                                            "trace": make_trace().hashable_payload()}).json()
+        assert full["ok"] is True and full["level"] == "reproduced"
+        assert full["believed_tier"] == "validated" and full["reassessment_note"] == ""
         wrong = client.post(CHECK_URL, json={**base, "recorder_trust": Recorder().trust_dict()}
                             ).json()
         assert wrong["ok"] is False and wrong["believed_tier"] == "community"
@@ -1203,7 +1213,7 @@ class TestApi:
              "X-Recorder-Trust": json.dumps(RECORDER.trust_dict())}
         r2 = client.post("/v1/evidence/verify", content=json.dumps(raw), headers=h).json()
         assert r2["tier"]["provenance_reassessed"] == "reproduced"
-        assert r2["tier"]["believed_tier"] == "validated"
+        assert r2["tier"]["believed_tier"] == "community"      # the trace is never supplied here
         h["X-Recorder-Trust"] = json.dumps(Recorder().trust_dict())
         r3 = client.post("/v1/evidence/verify", content=json.dumps(raw), headers=h).json()
         assert r3["ok"] is False and r3["tier"]["believed_tier"] == "community"
