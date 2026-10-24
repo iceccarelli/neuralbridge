@@ -422,12 +422,18 @@ class TestATornTail:
         assert any("unterminated" in w for w in body["warnings"])
         assert str(attest_env) not in r.text
 
-    def test_a_default_export_survives_a_torn_tail(self, tenants):  # noqa: F811
+    def test_a_default_export_does_not_survive_a_torn_tail(self, tenants):  # noqa: F811
+        # Round 3 (M1) reverses the earlier rule that an export reads around a torn
+        # tail: the dropped line may be the newest signed attestation, and the record
+        # before it would then be a stale anchor with no sign of the gap. The explicit
+        # `?anchor=false` is the way to export without one.
         web, (a, ha), _, anchor = tenants
         _tear(_acct_log(a).path)
         r = web.get("/v1/cases/C1/export", headers=ha)
-        assert r.status_code == 200, r.text
-        assert r.json()["anchor"]["sequence"] == anchor["sequence"]
+        assert r.status_code == 500, r.text
+        assert r.json()["detail"]["error"] == "attestation_log_damaged"
+        r = web.get("/v1/cases/C1/export?anchor=false", headers=ha)
+        assert r.status_code == 200 and r.json().get("anchor") is None
 
     def test_a_middle_line_damage_does_not_leak_the_server_path(self, client, attest_env):  # noqa: F811
         acct, headers = _mk_account(attest_env)
