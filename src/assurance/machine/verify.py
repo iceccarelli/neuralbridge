@@ -13,7 +13,8 @@ it could not perform is worse than no tool, because it produces a clean report.
 
 **The verdict inherits the weakest input.** The tier a result may claim is the
 minimum of the trace's provenance ceiling (which a *declared* provenance cannot lift
-above community: nothing signs a recording), the envelope's figure bases, and the
+above community; only a recorder attestation accepted under the verifier's own trust
+list does), the envelope's figure bases, and the
 limits table's verification state. A perfect run against a datasheet stopping
 distance is not validated evidence, and the result says so without being asked.
 
@@ -37,6 +38,7 @@ from assurance.machine import provenance_trust
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import LimitsReviewAssessment, ReviewTrust, assess_reviews
+from assurance.machine.recorder_attestation import MachineRef, RecorderTrust
 from assurance.machine.ssm import separation_required
 from assurance.machine.trace import OperatingMode, Trace
 
@@ -77,7 +79,14 @@ __all__ = [
 #:    reported) until a recorder attestation can be verified
 #:    (``machine/provenance_trust.py``). Earlier engines let ``field`` reach
 #:    ``validated``; a bundle that carries that is rejected by the checker.
-ENGINE_VERSION = "5"
+#: 6: a declared provenance can be lifted by a signed recorder attestation accepted
+#:    under the verifier's own recorder trust list
+#:    (``machine/recorder_attestation.py``, ``provenance_basis: recorder_attested``).
+#:    The sealed body gains ``recorder_attestation`` (the assessment and the
+#:    attestations as supplied) and ``machine_serial``. A bundle is believed to carry
+#:    ``recorder_attested`` only if the checker's own re-assessment reproduces it;
+#:    engine 5 and earlier bundles can never be read as recorder-attested.
+ENGINE_VERSION = "6"
 
 #: A sanity floor on how much trace is worth calling a verification, NOT a standard
 #: and not taken from one. A single sample, or a handful spanning a few
@@ -217,10 +226,17 @@ class VerificationResult:
     verified_at: str
     #: How the limits table's review evidence was assessed; None when no table.
     limits_review: dict[str, Any] | None = None
-    #: Why the trace's provenance is believed as far as it is. Today always
-    #: ``declared_by_filer``, which never lifts the tier (see provenance_trust.py).
+    #: Why the trace's provenance is believed as far as it is: ``declared_by_filer``
+    #: (never lifts the tier) or ``recorder_attested`` (a signed recorder attestation
+    #: was accepted under the verifier's own trust list; see provenance_trust.py).
     provenance_basis: str = "declared_by_filer"
     provenance_assessment: dict[str, Any] | None = None
+    #: How the supplied recorder attestations were assessed, with the attestations
+    #: themselves, so a later verifier can re-assess them under its own trust list.
+    recorder_attestation: dict[str, Any] | None = None
+    #: The machine unit the verification is about, if known (checked against the
+    #: attestation's machine reference). Empty: the product line.
+    machine_serial: str = ""
 
     @property
     def violations(self) -> list[Violation]:
@@ -256,6 +272,8 @@ class VerificationResult:
             "provenance": self.provenance,
             "provenance_basis": self.provenance_basis,
             "provenance_assessment": self.provenance_assessment,
+            "recorder_attestation": self.recorder_attestation,
+            "machine_serial": self.machine_serial,
             "verdict": self.verdict.value,
             "tier": self.tier.value,
             "may_claim_physical_behaviour": self.may_claim_physical_behaviour,
@@ -303,8 +321,15 @@ class VerificationResult:
         if self.provenance_basis == "declared_by_filer" and self.provenance != "simulation":
             lines.append(
                 f"  The trace's provenance ({self.provenance!r}) is the filer's own "
-                "declaration; nothing signs a recording, so it does not lift the tier "
-                "above community."
+                "declaration; no recorder attestation was accepted under a trust list "
+                "this verifier holds, so it does not lift the tier above community."
+            )
+        elif self.provenance_basis == "recorder_attested":
+            lines.append(
+                "  A recorder attestation was accepted under this verifier's own trust "
+                "list: a trusted key signed these exact trace bytes. That is not proof "
+                "the recording is physically true, that the recorder was calibrated or "
+                "uncompromised, or that the machine is safe."
             )
         return "\n".join(lines)
 
@@ -892,6 +917,9 @@ def verify(
     limits: LimitsTable | None = None,
     limits_reviews: Sequence[Any] = (),
     review_trust: ReviewTrust | None = None,
+    recorder_attestations: Sequence[Any] = (),
+    recorder_trust: RecorderTrust | None = None,
+    machine_serial: str = "",
     now: datetime | None = None,
 ) -> VerificationResult:
     """Check one run against one envelope.
@@ -899,6 +927,11 @@ def verify(
     ``limits_reviews`` are signed reviews of the limits table and ``review_trust``
     the verifier's own list of reviewer keys. Only an accepted review can lift the
     limits tier to validated; the table's own verified_by text never does.
+
+    ``recorder_attestations`` are signed attestations of the trace and ``recorder_trust``
+    the verifier's own list of recorder keys. Only an accepted attestation lets the
+    trace's declared provenance reach its own ceiling; with no trust list nothing can
+    be accepted. ``machine_serial`` names the unit this verification is about, if known.
 
     ``now`` is the moment of verification, used only to judge whether an input is
     dated in the future; it defaults to the clock.
@@ -930,7 +963,10 @@ def verify(
     checks.append(dates)
 
     # The tier is the floor of every input the verdict depends on.
-    prov = provenance_trust.assess_provenance(trace)
+    prov = provenance_trust.assess_provenance(
+        trace, recorder_attestations, recorder_trust,
+        machine_ref=MachineRef(envelope.product, envelope.product_version, machine_serial),
+        now=now)
     tier = min(prov.ceiling, envelope.tier_ceiling)
     caveats.append(f"provenance_basis {prov.basis.value}: {prov.explanation}")
     if limits is not None and pfl.outcome is CheckOutcome.VERIFIED:
@@ -1011,5 +1047,7 @@ def verify(
         limits_review=review.to_dict() if review is not None else None,
         provenance_basis=prov.basis.value,
         provenance_assessment=prov.to_dict(),
+        recorder_attestation=prov.attestation.to_dict() if prov.attestation else None,
+        machine_serial=machine_serial,
     )
 

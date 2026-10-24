@@ -35,8 +35,12 @@ from typing import Any
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine import provenance_trust
-from assurance.machine.bundle import BUNDLE_KIND
+from assurance.machine.bundle import (
+    BUNDLE_KIND,
+    provenance_lifts_tier,
+    reassess_recorded_attestations,
+)
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 
@@ -62,9 +66,10 @@ _FUTURE_TOLERANCE = timedelta(days=1)
 
 _TIER_RANK = {"profile": 0, "community": 1, "validated": 2, "certified": 3}
 
-#: The first engine whose sealed ``provenance_basis`` means anything. Engines 4 and
-#: earlier let a trace's declared provenance reach ``validated`` on the filer's word.
-_FIRST_ENGINE_WITH_A_PROVENANCE_BASIS = 5
+#: The first engine whose sealed ``provenance_basis`` can mean a lifted tier. Engines 4
+#: and earlier let a trace's declared provenance reach ``validated`` on the filer's
+#: word; engine 5 capped it; engine 6 added the signed recorder attestation.
+_FIRST_ENGINE_WITH_A_PROVENANCE_BASIS = 6
 
 
 def tier_reaches_validated(tier: str) -> bool:
@@ -72,16 +77,20 @@ def tier_reaches_validated(tier: str) -> bool:
     return _TIER_RANK.get(tier, -1) >= _TIER_RANK["validated"]
 
 
-def _believed_tier(body: dict[str, Any]) -> str:
+def _believed_tier(body: dict[str, Any], recorder_trust: RecorderTrust | None = None) -> str:
     """The tier a sealed verification body is worth *today*, whatever it says.
 
     The stored ``tier`` is a string the sealing engine wrote. A body sealed by an
-    engine that let a declared provenance reach ``validated`` (engine 4 and earlier,
-    which also carries no ``provenance_basis``), or whose basis is not one that may
-    lift the tier, is read at ``community`` at most; the public bundle checker
-    refuses the same bodies. Only an engine >= 5 body whose sealed basis is in
-    ``provenance_trust.LIFTING_BASES`` (empty until a recorder attestation can be
-    verified) keeps a tier above ``community``. A lower stored tier is never raised.
+    engine that let a declared provenance reach ``validated`` (engine 4 and earlier) or
+    one that could not yet verify a recorder attestation (engine 5), or whose basis is
+    not ``recorder_attested`` with a coherent accepted attestation recorded beside it,
+    is read at ``community`` at most; the public bundle checker refuses the same bodies.
+    A lower stored tier is never raised.
+
+    With ``recorder_trust`` (the reader's own list) the recorded attestations are also
+    re-assessed under it, so a key the reader has since revoked or removed stops
+    supporting a ``validated`` tier. Without it the sealing verifier's own assessment,
+    which a coherent record shows was made, is believed: the ledger is the reader's own.
     """
     stored = str(body.get("tier", ""))
     if not tier_reaches_validated(stored):
@@ -90,11 +99,18 @@ def _believed_tier(body: dict[str, Any]) -> str:
         engine = int(str(body.get("engine_version", "")).strip())
     except ValueError:
         engine = 0
-    basis = body.get("provenance_basis")
-    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS and isinstance(basis, str)
-            and basis in provenance_trust.LIFTING_BASES):
+    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
+            and provenance_lifts_tier(body)
+            and (recorder_trust is None or _reproduces(body, recorder_trust))):
         return stored
     return "community"
+
+
+def _reproduces(body: dict[str, Any], recorder_trust: RecorderTrust) -> bool:
+    assessed = reassess_recorded_attestations(body, recorder_trust, now=None, machine_serial=None)
+    pa = body.get("provenance_assessment")
+    return bool(assessed is not None and assessed.attested and isinstance(pa, dict)
+                and assessed.attestation_hash == pa.get("attestation_hash"))
 
 
 class VerificationRecordError(AssuranceError, ValueError):
@@ -187,8 +203,13 @@ class VerificationRecord:
     @classmethod
     def from_ledger(
         cls, ledger: EvidenceLedger, *, subject: str | None = None,
+        recorder_trust: RecorderTrust | None = None,
     ) -> list[VerificationRecord]:
         """Read every sealed machine verification out of a ledger.
+
+        ``recorder_trust`` is the reader's own recorder trust list; when given, a
+        ``validated`` tier is kept only if the recorded attestation still re-assesses
+        under it (revocation takes effect). See :func:`_believed_tier`.
 
         A bundle whose evidence no longer matches its own hash is skipped rather
         than trusted: a tampered record must not be able to make a stale
@@ -224,7 +245,7 @@ class VerificationRecord:
                 product=str(body.get("product", "")),
                 product_version=str(body.get("product_version", "")),
                 verdict=str(body.get("verdict", "")),
-                tier=_believed_tier(body),
+                tier=_believed_tier(body, recorder_trust),
                 checks_verified=verified,
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
@@ -495,9 +516,9 @@ def assess_coverage(
     for tier_name, fids in sorted(weak_tiers.items()):
         caveats.append(
             f"{', '.join(sorted(fids))} show as current on verification at tier "
-            f"{tier_name!r}, below 'validated'. No verification this package can "
-            "produce reaches 'validated' until a verifiable recorder attestation "
-            "exists (a trace's declared provenance is capped at 'community'), so "
+            f"{tier_name!r}, below 'validated'. A trace's declared provenance is "
+            "capped at 'community'; 'validated' needs a recorder attestation accepted "
+            "under a recorder trust list the verifier holds, so "
             "current here means the recorded evidence still stands, not that the "
             "behaviour was demonstrated on the machine."
         )
