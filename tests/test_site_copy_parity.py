@@ -24,7 +24,6 @@ PUBLIC_COPY = [
     "docs/pricing.md",
     "docs/index.md",
     "public/llms.txt",
-    "public/llm.txt",
     "public/openapi.json",
     "public/.well-known/agent.json",
     "app/page.tsx",
@@ -71,7 +70,7 @@ class TestEvidenceAllowanceIsStatedAsEnforced:
         assert PLANS["cell"].validations_per_day is None
 
     @pytest.mark.parametrize("relative", [
-        "README.md", "docs/pricing.md", "docs/index.md", "public/llms.txt", "public/llm.txt",
+        "README.md", "docs/pricing.md", "docs/index.md", "public/llms.txt",
         "app/page.tsx", "app/layout.tsx", "app/solutions/[slug]/page.tsx",
     ])
     def test_the_copy_states_the_number_the_code_enforces(self, relative):
@@ -87,20 +86,41 @@ def _digits(price_label: str) -> str:
 
 
 class TestPricesInStructuredDataMatchPlans:
-    def test_layout_offers_use_the_list_prices(self):
-        layout = _text("app/layout.tsx")
-        for name in ("Register", "Cell"):
-            expected = _digits(PLANS[name.lower()].price_label)
-            assert expected
-            assert re.search(rf"name: '{name}', price: '{expected}'", layout), name
-            assert re.search(rf"name: '{name}',\s*brand[\s\S]*?price: '{expected}'", layout), name
-        assert "name: 'Validator', price: '0'" in layout
+    """schema.org Offers live in ``app/lib/structured-offers.json`` and are emitted by the home page only.
 
-    def test_layout_prices_are_labelled_unvalidated(self):
-        layout = _text("app/layout.tsx")
-        note = re.search(r"const LIST_PRICE_NOTE =\s*'([^']+)'", layout)
-        assert note and "unvalidated" in note.group(1).lower()
-        assert layout.count("description: LIST_PRICE_NOTE") >= 4  # 2 offers + 2 products
+    The pin is deliberately as strict as the old layout regex was: the number, the currency
+    AND (new) the billing period, taken from ``billing/plans.py``. A bare ``price`` with no
+    period read as a one-off charge for a subscription.
+    """
+
+    OFFERS = "app/lib/structured-offers.json"
+
+    @pytest.mark.parametrize("name", ["Register", "Cell"])
+    def test_offers_pin_the_list_price_the_currency_and_the_period(self, name):
+        data = json.loads(_text(self.OFFERS))
+        label = PLANS[name.lower()].price_label  # e.g. "\u20ac1,290 / month"
+        expected = _digits(label)
+        period = label.split("/")[1].strip()
+        assert expected and period == "month" and label.startswith("\u20ac")
+        offers = [o for o in data["softwareApplication"]["offers"] if o["name"] == name]
+        products = [p["offers"] for p in data["products"] if p["name"] == name]
+        assert len(offers) == 1 and len(products) == 1, name
+        for offer in (offers[0], products[0]):
+            spec = offer["priceSpecification"]
+            assert (spec["price"], spec["priceCurrency"], spec["unitText"]) == (expected, "EUR", period)
+
+    def test_the_validator_offer_is_zero(self):
+        data = json.loads(_text(self.OFFERS))
+        (free,) = [o for o in data["softwareApplication"]["offers"] if o["name"] == "Validator"]
+        assert free["priceSpecification"]["price"] == "0"
+
+    def test_prices_are_labelled_unvalidated_on_every_offer_and_product(self):
+        data = json.loads(_text(self.OFFERS))
+        note = data["listPriceNote"]
+        assert "unvalidated" in note.lower()
+        paid = [o for o in data["softwareApplication"]["offers"] if o["name"] != "Validator"]
+        paid += [p["offers"] for p in data["products"]]
+        assert len(paid) == 4 and all(o["description"] == note for o in paid)
 
     def test_agent_json_prices_match_and_are_labelled(self):
         data = json.loads(_text("public/.well-known/agent.json"))
