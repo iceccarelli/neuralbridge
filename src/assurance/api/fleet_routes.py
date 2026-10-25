@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
-from assurance.api.recorder_trust import server_recorder_trust
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.fleet.advisory import ComponentAdvisory, match_item
@@ -186,7 +186,7 @@ async def machines(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
-    return Fleet.from_ledger(register.ledger).to_dict()
+    return Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust()).to_dict()
 
 
 @fleet_router.get(
@@ -227,7 +227,7 @@ async def advisory_impact(
     hides the machines that were fine until this morning.
     """
     advisory = _advisory(body.advisory)
-    fleet = Fleet.from_ledger(register.ledger)
+    fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
     return assess_impact(advisory, fleet, provenance=_BARE_ADVISORY).to_dict()
 
 
@@ -284,7 +284,7 @@ async def advisory_impact_signed(
     trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
                           candidate_key=_candidate(body.candidate_public_key_pem))
     first = {r.advisory_id: r for r in records if not r.is_withdrawal}
-    fleet = Fleet.from_ledger(register.ledger)
+    fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
     out: list[dict[str, Any]] = []
     for row in trust.advisories:
         aid = row["advisory_id"]
@@ -326,6 +326,7 @@ async def report(
         ledger=register.ledger,
         organisation=organisation[:200],
         prepared_by=prepared_by[:200],
+        recorder_trust=reader_recorder_trust(),
     )))
 
 
@@ -382,7 +383,7 @@ async def declaration_check(
         coverage = assess_coverage(
             manifest,
             VerificationRecord.from_ledger(
-                register.ledger, subject=key, recorder_trust=server_recorder_trust()),
+                register.ledger, subject=key, recorder_trust=reader_recorder_trust()),
             interventions_from_ledger(register.ledger, key),
         )
 

@@ -15,7 +15,7 @@ instance returns this same table, generated from the entitlements
 | Machine safety verification | — | — | ✓ |
 | Annex III manifests & passports | — | — | ✓ |
 | Fleet advisory fan-out | — | — | ✓ |
-| Change-assurance cases (`/v1/change/*`; closure is a named human decision; a required re-verification is closed only by a person's waiver until a recorder attestation can be verified) | — | — | ✓ |
+| Change-assurance cases (`/v1/change/*`; closure is a named human decision; a validated verification needs a recorder attestation accepted under a trust list the operator configures, none is configured in a default deployment, so a required re-verification is closed in practice by a named person's waiver) | — | — | ✓ |
 | Counter-signed head attestation | — | — | ✓ |
 
 | | Price |

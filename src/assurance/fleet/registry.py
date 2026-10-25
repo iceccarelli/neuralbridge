@@ -23,6 +23,7 @@ from typing import Any
 
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import MANIFEST_KIND
@@ -108,8 +109,13 @@ class Fleet:
     chain_problems: tuple[str, ...] = ()
 
     @classmethod
-    def from_ledger(cls, ledger: EvidenceLedger) -> Fleet:
+    def from_ledger(cls, ledger: EvidenceLedger, *,
+                    recorder_trust: RecorderTrust | None = None) -> Fleet:
         """Build the fleet from whatever has been sealed.
+
+        ``recorder_trust`` is the reader's own recorder trust list, applied to every
+        verification read (see :meth:`VerificationRecord.from_ledger`). A hosted reader
+        always passes one; an offline command reading its owner's ledger may not.
 
         A machine appears once its latest manifest is sealed. Manifests with a
         broken seal are skipped rather than trusted — a tampered manifest must
@@ -151,7 +157,8 @@ class Fleet:
             from assurance.machinery.record import interventions_from_ledger
 
             ivs = interventions_from_ledger(ledger, key)
-            vfs = VerificationRecord.from_ledger(ledger, subject=key)
+            vfs = VerificationRecord.from_ledger(
+                ledger, subject=key, recorder_trust=recorder_trust)
             records.append(MachineRecord(
                 machine_key=key, manifest=manifest,
                 coverage=assess_coverage(manifest, vfs, ivs),

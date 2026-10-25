@@ -38,6 +38,7 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory, match_item
 from assurance.fleet.impact import ImpactReport, assess_impact
 from assurance.fleet.registry import Fleet
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.staleness import Coverage, CoverageReport
@@ -283,6 +284,7 @@ def run_ad_hoc_check(
 def run_enrolled_check(
     ledger: EvidenceLedger, machine_key: str,
     advisory: ComponentAdvisory | None = None,
+    *, recorder_trust: RecorderTrust | None = None,
 ) -> MachineAssuranceCheck:
     """The paid path: a machine already enrolled in the ledger.
 
@@ -290,7 +292,7 @@ def run_enrolled_check(
     coverage, interventions and verifications per machine — this composes
     those, it does not recompute them.
     """
-    fleet = Fleet.from_ledger(ledger)
+    fleet = Fleet.from_ledger(ledger, recorder_trust=recorder_trust)
     record = fleet.record(machine_key)
     if record is None:
         raise CheckError(

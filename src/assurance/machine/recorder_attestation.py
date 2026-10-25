@@ -11,7 +11,11 @@ What an accepted attestation PROVES
     covers the trace id, the declared provenance, the source system, the start time,
     the sample rate, the conditions and every sample) to a recorder key and to a
     machine reference (product, version, optionally a serial) the recorder says it
-    was attached to.
+    was attached to. "Exact" is meant literally: the content hash rounds every number
+    to six decimals, so the body also carries ``exact_samples_digest``
+    (:meth:`~assurance.machine.trace.Trace.exact_digest`, every value at full binary
+    precision) and a trace that differs from the attested one by less than that
+    rounding is ``trace_mismatch``.
 
 What it does NOT prove
     * that the sample values are true physical measurements;
@@ -24,6 +28,13 @@ What it does NOT prove
 
     Cryptographic integrity is not recorder authenticity, and recorder authenticity is
     not physical safety. Every report that quotes an accepted attestation says so.
+
+Expiry
+    An attestation with no ``expires_on`` never expires: the bound on it is revocation or
+    removal of its key in the verifier's trust list (and ``MAX_LAG_DAYS``, which bounds
+    only how long after the recording it may be dated). Set ``expires_on`` when signing
+    if an attestation should lapse; the accepted-attestation sentence says when none is
+    set.
 
 Trust is a verifier input
     A recorder trust list (:class:`RecorderTrust`) is pinned public keys, each with the
@@ -94,6 +105,7 @@ __all__ = [
     "TrustedRecorder",
     "UnsupportedAttestationVersionError",
     "assess_recorder_attestation",
+    "is_placeholder",
     "load_attestation_file",
     "loads_strict",
     "refuse_private_key",
@@ -285,6 +297,25 @@ def _exact_keys(d: dict[str, Any], expected: tuple[str, ...], where: str) -> Non
             f"{where or 'attestation '}is missing {', '.join(map(repr, missing))}.")
 
 
+def _decode_signature(signature: str) -> bytes:
+    """The signature's bytes, from the one canonical base64 spelling of them.
+
+    ``b64decode`` ignores the unused low bits of the last character, so several strings
+    decode to the same 64 bytes. Re-encoding must give back exactly the input: a
+    signature has one spelling, so one attestation cannot be passed off as several
+    different documents (or carry a distinguishing mark past a hash of the text).
+    """
+    try:
+        raw = base64.b64decode(signature.encode("ascii"), validate=True)
+    except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
+        raise RecorderAttestationError(f"attestation signature is not base64: {exc}") from exc
+    if base64.b64encode(raw).decode("ascii") != signature:
+        raise RecorderAttestationError(
+            "attestation signature is not canonical base64: the same bytes can be spelled "
+            "more than one way and only the standard spelling is accepted.")
+    return raw
+
+
 def decimal_text(value: float) -> str:
     """The fixed rendering of a float carried in a signed body (six decimals)."""
     return f"{float(value):.6f}"
@@ -321,6 +352,10 @@ class RecordingFacts:
     sample_count: int | None = None
     sample_rate_hz: float | None = None
     duration_s: float | None = None
+    #: ``Trace.exact_digest()`` when the trace bytes are available, else ``None`` (a
+    #: sealed bundle records only the rounded hash, so the exact digest is then not
+    #: compared and ``window_checked`` says the trace itself was not).
+    exact_digest: str | None = None
 
     @classmethod
     def from_trace(cls, trace: Trace) -> RecordingFacts:
@@ -328,7 +363,7 @@ class RecordingFacts:
             trace_hash=trace.content_hash(), trace_id=trace.trace_id,
             provenance=trace.provenance.value, started_at=trace.started_at,
             sample_count=len(trace.samples), sample_rate_hz=trace.sample_rate_hz,
-            duration_s=trace.duration_s)
+            duration_s=trace.duration_s, exact_digest=trace.exact_digest())
 
     @classmethod
     def from_bundle_body(cls, body: dict[str, Any]) -> RecordingFacts | None:
@@ -352,9 +387,9 @@ class RecordingFacts:
 # ---------------------------------------------------------------------------
 # the attestation
 # ---------------------------------------------------------------------------
-_TOP = ("format", "attestation_id", "trace_hash", "trace_id", "provenance", "window",
-        "recorder_id", "machine_ref", "attested_on", "expires_on", "key_fingerprint",
-        "signature")
+_TOP = ("format", "attestation_id", "trace_hash", "exact_samples_digest", "trace_id",
+        "provenance", "window", "recorder_id", "machine_ref", "attested_on", "expires_on",
+        "key_fingerprint", "signature")
 _WINDOW = ("started_at", "sample_count", "sample_rate_hz", "duration_s")
 _MREF = ("product", "product_version", "machine_serial")
 
@@ -370,6 +405,7 @@ class RecorderAttestation:
     format: str
     attestation_id: str
     trace_hash: str
+    exact_samples_digest: str
     trace_id: str
     provenance: str
     started_at: str
@@ -390,6 +426,7 @@ class RecorderAttestation:
             "format": self.format,
             "attestation_id": self.attestation_id,
             "trace_hash": self.trace_hash,
+            "exact_samples_digest": self.exact_samples_digest,
             "trace_id": self.trace_id,
             "provenance": self.provenance,
             "window": {
@@ -440,7 +477,9 @@ class RecorderAttestation:
         unsigned = cls(
             format=ATTESTATION_FORMAT,
             attestation_id=attestation_id or secrets.token_hex(16),
-            trace_hash=facts.trace_hash, trace_id=facts.trace_id,
+            trace_hash=facts.trace_hash,
+            exact_samples_digest=facts.exact_digest or "",
+            trace_id=facts.trace_id,
             provenance=facts.provenance, started_at=format_utc(facts.started_at),
             sample_count=str(facts.sample_count),
             sample_rate_hz=decimal_text(facts.sample_rate_hz or 0.0),
@@ -498,11 +537,7 @@ class RecorderAttestation:
             _iso_date(expires_on, "expires_on")
         signature = _text(data, "signature", "")
         if not _form_only:
-            try:
-                raw = base64.b64decode(signature.encode("ascii"), validate=True)
-            except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
-                raise RecorderAttestationError(
-                    f"attestation signature is not base64: {exc}") from exc
+            raw = _decode_signature(signature)
             if len(raw) != 64:
                 raise RecorderAttestationError(
                     "attestation signature is not an Ed25519 signature (64 bytes).")
@@ -514,6 +549,7 @@ class RecorderAttestation:
             format=fmt,
             attestation_id=_text(data, "attestation_id", "", pattern=_ID),
             trace_hash=_text(data, "trace_hash", "", pattern=_HASH),
+            exact_samples_digest=_text(data, "exact_samples_digest", "", pattern=_HASH),
             trace_id=_text(data, "trace_id", ""),
             provenance=provenance,
             started_at=started,
@@ -529,10 +565,7 @@ class RecorderAttestation:
             signature=signature)
 
     def signature_bytes(self) -> bytes:
-        try:
-            return base64.b64decode(self.signature.encode("ascii"), validate=True)
-        except (binascii.Error, ValueError, UnicodeEncodeError) as exc:
-            raise RecorderAttestationError(f"attestation signature is not base64: {exc}") from exc
+        return _decode_signature(self.signature)
 
 
 # ---------------------------------------------------------------------------
@@ -738,14 +771,19 @@ class RecorderAttestationAssessment:
                 f"duration {a.duration_s} s) to a recorder that calls itself "
                 f"{a.recorder_id!r} (the recorder's own text, not verified) and to the "
                 f"machine reference {where!r}, dated {a.attested_on}"
-                + (f", valid until {a.expires_on}" if a.expires_on else "")
+                + (f", valid until {a.expires_on}" if a.expires_on else
+                   ", with no expiry date (it stays valid until its key is revoked or "
+                   "removed from this verifier's trust list)")
                 + ". " + NOT_PROVED)
-        if self.status is AttestationStatus.NONE:
-            return ("no recorder attestation was supplied, so the trace's provenance is "
-                    "only declared by whoever filed it and the tier is capped at "
-                    "community.")
-        kinds = ", ".join(dict.fromkeys(f.status.value for f in self.findings)) or \
-            self.status.value
+        # Only attestations that could be READ shape this sentence. An unreadable one is
+        # listed in ``findings`` but cannot be re-fed on replay (it is sealed as a
+        # placeholder), so the sentence must come out the same without it.
+        readable = [f for f in self.findings if f.attestation_hash]
+        if not readable:
+            return ("no readable recorder attestation was supplied (anything unreadable is "
+                    "listed in the findings), so the trace's provenance is only declared by "
+                    "whoever filed it and the tier is capped at community.")
+        kinds = ", ".join(dict.fromkeys(f.status.value for f in readable))
         return (
             "recorder attestation evidence was supplied but not accepted "
             f"({kinds}), so the trace's provenance is only declared by whoever filed it "
@@ -766,6 +804,17 @@ class RecorderAttestationAssessment:
             "attestations": list(self.submitted),
             "explanation": self.explanation,
         }
+
+
+def is_placeholder(item: Any) -> bool:
+    """Is ``item`` what :func:`_placeholder` seals in place of an unreadable attestation?
+
+    A placeholder is a record that something unreadable was supplied. It is not an
+    attestation and is never fed back to the assessor: re-assessing it would only
+    describe the placeholder.
+    """
+    return (isinstance(item, dict) and set(item) == {"unreadable", "content_hash"}
+            and item.get("unreadable") in ("malformed", "unsupported_version", "refused"))
 
 
 def _placeholder(item: Any, why: str) -> dict[str, Any]:
@@ -904,8 +953,13 @@ def assess_recorder_attestation(
         return RecorderAttestationAssessment(
             facts.trace_hash, AttestationStatus.ACCEPTED, accepted, tuple(findings),
             tuple(raw), on, trusted, window_checked)
+    # The headline of a refusal is about the evidence that could be read, so that a
+    # junk entry listed first does not change what a re-assessment of the readable ones
+    # concludes (a replay never re-feeds what could not be read).
+    headline = next((f.status for f in findings if f.attestation_hash),
+                    findings[0].status if findings else AttestationStatus.MALFORMED)
     return RecorderAttestationAssessment(
-        facts.trace_hash, findings[0].status if findings else AttestationStatus.MALFORMED,
+        facts.trace_hash, headline,
         None, tuple(findings), tuple(raw), on, trusted, window_checked)
 
 
@@ -914,6 +968,10 @@ def _trace_mismatch(att: RecorderAttestation, facts: RecordingFacts) -> str:
         return (f"the attestation covers trace {att.trace_hash[:12]}, not "
                 f"{facts.trace_hash[:12]}: the trace was changed after it was attested, or "
                 "this is another trace")
+    if facts.exact_digest is not None and att.exact_samples_digest != facts.exact_digest:
+        return ("the attestation's exact sample digest differs from this trace's: the trace "
+                "carries the same content hash but at least one value differs from the one "
+                "that was attested by less than the hash's six-decimal rounding")
     if att.trace_id != facts.trace_id:
         return f"the attestation names trace id {att.trace_id!r}, the trace is {facts.trace_id!r}"
     if att.provenance != facts.provenance:

@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Anyone, Machine, get_register
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.check import CheckError, run_ad_hoc_check, run_enrolled_check
 from assurance.core.errors import AssuranceError
@@ -108,7 +109,8 @@ async def check_fleet_machine(
     del principal
     advisory = _advisory(body.advisory) if body.advisory is not None else None
     try:
-        result = run_enrolled_check(register.ledger, body.machine_key, advisory)
+        result = run_enrolled_check(register.ledger, body.machine_key, advisory,
+                                    recorder_trust=reader_recorder_trust())
     except CheckError as exc:
         raise HTTPException(
             status_code=404,
