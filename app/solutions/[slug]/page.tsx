@@ -8,8 +8,12 @@ export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
 }
 
-export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
-  const solution = getSolution(params.slug);
+// Next 15+ passes route params as a Promise (Next 16 removed synchronous access): await them.
+type SolutionParams = Promise<{ slug: string }>;
+
+export async function generateMetadata({ params }: { params: SolutionParams }): Promise<Metadata> {
+  const { slug } = await params;
+  const solution = getSolution(slug);
   if (!solution) return {};
   const title = `${solution.role} | Industrial Autonomous Assurance`;
   const url = `/solutions/${solution.slug}`;
@@ -31,8 +35,9 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   };
 }
 
-export default function SolutionPage({ params }: { params: { slug: string } }) {
-  const solution = getSolution(params.slug);
+export default async function SolutionPage({ params }: { params: SolutionParams }) {
+  const { slug } = await params;
+  const solution = getSolution(slug);
   if (!solution) notFound();
 
   return (
