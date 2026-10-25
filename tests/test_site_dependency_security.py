@@ -33,9 +33,9 @@ def _evaluated_next_config() -> dict:
     """``next.config.js`` as Next sees it, not as text: a substring check cannot tell
     ``unoptimized: true`` from ``"unoptimized": true`` or a comment that mentions a flag."""
     node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not installed; the next.config.js checks need it")
-    out = subprocess.run(
+    # A skip would be a gate that did not run; the site cannot be built without Node either.
+    assert node, "node is not installed; the next.config.js checks need it"
+    out = subprocess.run(  # noqa: S603 - fixed argv: node, a constant script, and a repo path
         [node, "-e", "process.stdout.write(JSON.stringify(require(process.argv[1])))",
          str(ROOT / "next.config.js")],
         capture_output=True, text=True, check=True, timeout=60)
@@ -175,7 +175,7 @@ def test_there_is_no_dead_lint_script():
     assert PACKAGE["scripts"].get("lint") != "next lint"
     assert PACKAGE["scripts"].get("typecheck") == "tsc --noEmit"
     if "lint" in PACKAGE["scripts"]:
-        configs = [p for p in ROOT.glob("eslint.config.*")] + [p for p in ROOT.glob(".eslintrc*")]
+        configs = [*ROOT.glob("eslint.config.*"), *ROOT.glob(".eslintrc*")]
         assert configs, "a lint script needs a lint config, or it only looks like something is checked"
 
 
