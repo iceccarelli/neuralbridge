@@ -36,6 +36,9 @@ log = AttestationLog(work / "attest.jsonl")
 attest(ledger, key, log, note="e2e")
 machine = seal_a_real_verification(
     EvidenceLedger(work / "machine.db"), when=datetime(2026, 2, 9, tzinfo=UTC))
+# The same recording sealed with only its DECLARED provenance: the engine caps it at community.
+machine_declared = seal_a_real_verification(
+    EvidenceLedger(work / "machine_declared.db"), when=datetime(2026, 2, 9, tzinfo=UTC), attested=False)
 anchor = log.require_last().to_dict()
 # A head the signer was only TOLD (what POST /v1/ledger/attest signs), under its own key.
 declared_key = SigningKey.generate()
@@ -54,6 +57,7 @@ out = {
     "declared_public_key": declared_key.verifying.pem(),
     "case": json.dumps(ledger.export(subject=case_id)),
     "machine": json.dumps(machine.to_dict()),
+    "machine_declared": json.dumps(machine_declared.to_dict()),
     "attestations": (work / "attest.jsonl").read_text(),
     "public_key": key.verifying.pem(),
 }
@@ -234,8 +238,24 @@ test.describe('Evidence verify page', () => {
     await expect(page.getByTestId('ev-problems')).toContainText('appears twice');
   });
 
+  test('a machine bundle sealed with a recorder attestation is a recorded claim, not a believed tier', async ({ page }) => {
+    await upload(page, 'attested.json', fx.machine);
+    await expect(page.getByTestId('ev-kind')).toContainText('Machine verification bundle');
+    const tier = page.getByTestId('ev-tier');
+    // What the file records is shown, and labelled as what the file says.
+    await expect(tier).toContainText('as recorded in the file');
+    await expect(tier).toContainText('a signed recorder attestation is recorded');
+    // ... and the page says it is a claim until the reader re-assesses it under THEIR trust list,
+    // and that this public check does not hold the trace bytes.
+    await expect(tier).toContainText('a claim until re-assessed under your own trust list');
+    await expect(tier).toContainText('physical machine');
+    await expect(page.getByTestId('ev-notchecked')).toContainText('a seal is not a signature');
+    // A recorded attestation must never read as an established fact here.
+    await expect(page.getByTestId('ev-result')).not.toContainText('recorder authenticity is established');
+  });
+
   test('a machine bundle shows the recorded tier and what it cannot show', async ({ page }) => {
-    await upload(page, 'bundle.json', fx.machine);
+    await upload(page, 'bundle.json', fx.machine_declared);
     await expect(page.getByTestId('ev-headline')).toHaveText('No inconsistency found in the checks that ran');
     await expect(page.getByTestId('ev-kind')).toContainText('Machine verification bundle');
     const tier = page.getByTestId('ev-tier');
@@ -246,7 +266,7 @@ test.describe('Evidence verify page', () => {
     await expect(page.getByTestId('ev-notchecked')).toContainText('a seal is not a signature');
     await expect(page.getByTestId('ev-notchecked')).toContainText('nothing here shows the machine behaved');
 
-    const bundle = JSON.parse(fx.machine);
+    const bundle = JSON.parse(fx.machine_declared);
     bundle.result.tier = 'certified';
     await page.getByTestId('ev-text').fill(JSON.stringify(bundle));
     await page.getByTestId('ev-run').click();
