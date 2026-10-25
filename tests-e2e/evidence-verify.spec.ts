@@ -73,6 +73,7 @@ type Fixtures = {
   declared_public_key: string;
   case: string;
   machine: string;
+  machine_declared: string;
   attestations: string;
   public_key: string;
 };
