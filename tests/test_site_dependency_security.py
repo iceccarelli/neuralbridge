@@ -108,3 +108,45 @@ def test_there_is_no_dead_lint_script():
     """``next lint`` was removed in Next 16; a script that cannot run hides that nothing lints."""
     assert PACKAGE["scripts"].get("lint") != "next lint"
     assert PACKAGE["scripts"].get("typecheck") == "tsc --noEmit"
+
+
+# ---------------------------------------------------------------------------
+# Next 15+ route params are a Promise; Next 16 removed synchronous access.
+# ---------------------------------------------------------------------------
+
+APP = ROOT / "app"
+_DYNAMIC_SEGMENT = re.compile(r"\[[^/\]]+\]")
+
+
+def _code(text: str) -> str:
+    """Source without ``//`` comment lines, so an explanation may quote the old form."""
+    return "\n".join(line for line in text.splitlines() if not line.strip().startswith("//"))
+
+
+def _dynamic_route_files() -> list[Path]:
+    out = []
+    for path in sorted(APP.rglob("*.ts*")):
+        rel = path.relative_to(APP).as_posix()
+        if path.name in {"page.tsx", "layout.tsx", "route.ts", "route.tsx"} and _DYNAMIC_SEGMENT.search(rel):
+            out.append(path)
+    return out
+
+
+def test_there_are_dynamic_routes_to_guard():
+    names = {p.relative_to(APP).as_posix() for p in _dynamic_route_files()}
+    assert any(n.startswith("solutions/[slug]") for n in names), names
+    assert any(n.startswith("docs/[[...slug]]") for n in names), names
+
+
+@pytest.mark.parametrize("path", _dynamic_route_files(), ids=lambda p: p.relative_to(APP).as_posix())
+def test_dynamic_route_params_are_awaited(path):
+    """``params.slug`` read directly is ``undefined`` on Next 16: /solutions/* became a 404 and
+    every /docs/* page silently rendered the docs index with a canonical of /docs/. The build and
+    ``tsc`` both passed, so only the code itself can guard this."""
+    code = _code(path.read_text(encoding="utf-8"))
+    if "params" not in code:
+        return
+    assert "Promise<" in code, f"{path.name}: params must be typed as a Promise"
+    assert "await params" in code, f"{path.name}: params must be awaited"
+    assert not re.search(r"\bparams\.[A-Za-z_]", code), f"{path.name}: params is read synchronously"
+    assert not re.search(r"\bparams\?\.[A-Za-z_]", code), f"{path.name}: params is read synchronously"
