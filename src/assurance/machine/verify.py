@@ -26,6 +26,7 @@ shipping.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -51,6 +52,8 @@ __all__ = [
     "Verdict",
     "VerificationResult",
     "Violation",
+    "is_known_engine",
+    "parse_engine_version",
     "verify",
 ]
 
@@ -87,6 +90,28 @@ __all__ = [
 #:    ``recorder_attested`` only if the checker's own re-assessment reproduces it;
 #:    engine 5 and earlier bundles can never be read as recorder-attested.
 ENGINE_VERSION = "6"
+
+_ENGINE_SPELLING = re.compile(r"[1-9][0-9]{0,3}", re.ASCII)
+
+
+def parse_engine_version(value: object) -> int | None:
+    """The engine number a sealed body names, or ``None`` if it is not a real one.
+
+    Only the canonical spelling counts: ASCII digits, no sign, no leading zero, no
+    surrounding space, at most four digits. ``int()`` alone accepts ``"٦"`` (an Arabic-
+    Indic six), ``" 6"`` and ``"+6"``, so a body could name an engine that this checker
+    reads as 6 while every string comparison against ``ENGINE_VERSION`` says it is
+    another one.
+    """
+    if type(value) is not str or not _ENGINE_SPELLING.fullmatch(value):
+        return None
+    return int(value)
+
+
+def is_known_engine(value: object) -> bool:
+    """Is ``value`` the spelling of an engine that exists (1 up to :data:`ENGINE_VERSION`)?"""
+    n = parse_engine_version(value)
+    return n is not None and n <= int(ENGINE_VERSION)
 
 #: A sanity floor on how much trace is worth calling a verification, NOT a standard
 #: and not taken from one. A single sample, or a handful spanning a few

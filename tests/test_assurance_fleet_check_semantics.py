@@ -177,7 +177,7 @@ class TestCustomerVerdictsAreNotFlattering:
         key = self.enrol_verified(ledger)
         real = Fleet.from_ledger
         monkeypatch.setattr(Fleet, "from_ledger", classmethod(
-            lambda cls, led: broken(real(led))))
+            lambda cls, led, **kw: broken(real(led, **kw))))
         c = run_enrolled_check(ledger, key)
         assert c.verdict is AssuranceVerdict.CANNOT_DETERMINE
         assert any("DOES NOT VERIFY" in s for s in c.checks_skipped)
@@ -188,7 +188,7 @@ class TestCustomerVerdictsAreNotFlattering:
             "ControlCo", "Safety firmware", ("1.0",)),))
         real = Fleet.from_ledger
         monkeypatch.setattr(Fleet, "from_ledger", classmethod(
-            lambda cls, led: broken(real(led))))
+            lambda cls, led, **kw: broken(real(led, **kw))))
         c = run_enrolled_check(ledger, key, clear)
         assert c.verdict is AssuranceVerdict.CANNOT_DETERMINE
 
@@ -197,7 +197,7 @@ class TestCustomerVerdictsAreNotFlattering:
         key = self.enrol_verified(ledger)
         real = Fleet.from_ledger
         monkeypatch.setattr(Fleet, "from_ledger", classmethod(
-            lambda cls, led: broken(real(led))))
+            lambda cls, led, **kw: broken(real(led, **kw))))
         c = run_enrolled_check(ledger, key, advisory())
         assert c.verdict in (AssuranceVerdict.REQUIRES_REVERIFICATION,
                              AssuranceVerdict.REQUIRES_HUMAN_REVIEW,

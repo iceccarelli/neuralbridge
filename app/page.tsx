@@ -484,7 +484,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>Change-assurance cases (<code>/v1/change/*</code>; closure is a named human decision; a required re-verification is closed only by a person&apos;s waiver until a recorder attestation can be verified)</td>
+                  <td>Change-assurance cases (<code>/v1/change/*</code>; closure is a named human decision; a validated verification needs a recorder attestation accepted under a trust list the operator configures, none is configured in a default deployment, so a required re-verification is closed in practice by a named person&apos;s waiver)</td>
                   <td>—</td>
                   <td>—</td>
                   <td className="check">✓</td>

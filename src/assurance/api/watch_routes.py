@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from assurance.api.deps import Machine, get_register
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.store import CaseStore
 from assurance.core.errors import LedgerIntegrityError
@@ -195,7 +196,7 @@ def post_report(
         CaseStore(register.ledger).require_intact()
         result = ingest_report(
             register.ledger, body.model_dump(mode="json"),
-            actor=_actor(principal), now=now)
+            actor=_actor(principal), now=now, recorder_trust=reader_recorder_trust())
     except LedgerIntegrityError as exc:
         raise HTTPException(status_code=500, detail={
             "error": "ledger_integrity", "detail": str(exc)}) from exc

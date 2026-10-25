@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
 from assurance.api.deps import Machine, get_register
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.value.position import assess_position
 
@@ -26,4 +27,5 @@ async def position(
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     del principal
-    return await run_in_threadpool(assess_position, register.ledger)
+    return await run_in_threadpool(assess_position, register.ledger,
+                                   recorder_trust=reader_recorder_trust())

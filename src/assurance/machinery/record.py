@@ -29,6 +29,7 @@ from assurance.core.evidence import (
 )
 from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machine.trace import MAX_FILE_BYTES
 from assurance.machinery.divergence import Divergence
 from assurance.machinery.intervention import Intervention
@@ -270,18 +271,25 @@ def build_passport(
     interventions: list[Intervention] | None = None,
     verifications: list[VerificationRecord] | None = None,
     seal: bool = True,
+    recorder_trust: RecorderTrust | None = None,
 ) -> MachinePassport:
     """Assemble and seal the machine's current evidence position.
 
     Interventions and verifications are read out of the ledger when not supplied,
     which is the normal path: the passport is a view over what has been recorded,
     not a document somebody assembles by hand.
+
+    ``recorder_trust`` is the reader's own recorder trust list, applied to the
+    verifications read from the ledger: a ``validated`` tier whose recorder key the
+    reader has revoked or removed is read as ``community``, and the passport's state and
+    confidence follow that tier floor. A hosted reader always passes one.
     """
     key = manifest.machine.key
     ivs = (interventions if interventions is not None
            else interventions_from_ledger(ledger, key))
     vfs = (verifications if verifications is not None
-           else VerificationRecord.from_ledger(ledger, subject=key))
+           else VerificationRecord.from_ledger(ledger, subject=key,
+                                               recorder_trust=recorder_trust))
 
     coverage = assess_coverage(manifest, vfs, ivs)
     chain_ok, chain_problems = ledger.verify_chain()

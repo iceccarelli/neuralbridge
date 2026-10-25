@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Machine, get_register
-from assurance.api.recorder_trust import server_recorder_trust
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
 from assurance.change.replay import reconstruct_case
@@ -282,7 +282,7 @@ async def assess_drift_route(
 
 
     verifications = VerificationRecord.from_ledger(
-        register.ledger, subject=key, recorder_trust=server_recorder_trust())
+        register.ledger, subject=key, recorder_trust=reader_recorder_trust())
     interventions = interventions_from_ledger(register.ledger, key)
     store = CaseStore(register.ledger)
     try:
@@ -322,7 +322,7 @@ async def assess_advisory_route(
         advisory = ComponentAdvisory.from_dict(body.advisory)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "advisory") from exc
-    fleet = Fleet.from_ledger(register.ledger)
+    fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
     report = assess_impact(advisory, fleet)
     store = CaseStore(register.ledger)
     try:
@@ -350,7 +350,8 @@ async def assess_intervention_route(
     try:
         chosen, case = assess_recorded_intervention(
             CaseStore(register.ledger), manifest, body.intervention_id,
-            actor=_actor(body.actor, "watch", principal))
+            actor=_actor(body.actor, "watch", principal),
+            recorder_trust=reader_recorder_trust())
     except UnknownInterventionError as exc:
         raise HTTPException(status_code=422, detail={
             "error": "unknown_intervention", "detail": str(exc)}) from exc
@@ -434,7 +435,7 @@ async def reverify_case_route(
         raise _bad(exc, "manifest") from exc
     key = manifest.machine.key
     verifications = VerificationRecord.from_ledger(
-        register.ledger, subject=key, recorder_trust=server_recorder_trust())
+        register.ledger, subject=key, recorder_trust=reader_recorder_trust())
     interventions = interventions_from_ledger(register.ledger, key)
     try:
         case = reverify(CaseStore(register.ledger), case_id, manifest, verifications,
