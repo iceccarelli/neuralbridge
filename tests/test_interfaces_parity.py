@@ -4,7 +4,7 @@ evidence that verifies offline.
 
 Everything is real: the exports are synthetic vendor files, enrolment is the
 offline kit, detection is ``watch run``, the CLI is a ``python -m assurance``
-subprocess, the API is a uvicorn server on a real socket (ports 18400-18499)
+subprocess, the API is a uvicorn server on a real socket (a kernel-chosen loopback port)
 with real accounts and per-account ledgers, and the hosted ledger is fed by the
 real ``watch push``. The only thing not run is Stripe.
 
