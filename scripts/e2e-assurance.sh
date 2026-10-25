@@ -21,7 +21,15 @@ done
 
 PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work"
 PYTHONPATH=src setsid python -m uvicorn assurance.api.service:app --port "$API_PORT" >"$WORK/api.log" 2>&1 & API=$!
-setsid npx next dev -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
+# WEB_MODE=dev (default) serves with `next dev`; WEB_MODE=start builds for production and serves
+# with `next start`, which is what ships (no dev-only origin checks, no HMR, minified client code).
+# NEXT_PUBLIC_ASSURANCE_API_URL is read at build time, so it is exported above, before the build.
+if [ "${WEB_MODE:-dev}" = "start" ]; then
+  npx next build >"$WORK/build.log" 2>&1 || { echo "next build failed; see $WORK/build.log" >&2; tail -30 "$WORK/build.log" >&2; exit 3; }
+  setsid npx next start -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
+else
+  setsid npx next dev -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
+fi
 # Each server runs in its own process group so the whole tree (npx -> next-server)
 # is stopped, not just the wrapper.
 trap 'kill -- -$API -$WEB 2>/dev/null || true' EXIT
