@@ -1,8 +1,10 @@
 """A real assurance API on a real socket, for the cross-interface tests.
 
-Servers here use ports 18400-18499 only. Accounts, keys and per-account ledgers
-are the real ones (``assurance.api.deps``), in a temp directory; nothing about
-the domain or the HTTP layer is mocked.
+Each server listens on a socket this module binds itself, to a port the kernel chooses
+(loopback only), and hands that socket to uvicorn: there is no probe-then-bind gap, so
+two runs on one machine cannot end up talking to each other's server. Accounts, keys and
+per-account ledgers are the real ones (``assurance.api.deps``), in a temp directory;
+nothing about the domain or the HTTP layer is mocked.
 """
 
 from __future__ import annotations
@@ -21,18 +23,17 @@ import uvicorn
 
 from .support_recorder import server_trust
 
-PORT_RANGE = range(18400, 18500)
 
-
-def free_port() -> int:
-    for port in PORT_RANGE:
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-            return port
-    raise RuntimeError("no free port in 18400-18499")
+def listening_socket() -> socket.socket:
+    """A loopback socket, bound and listening on a port the kernel picked, owned by the caller."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(128)
+    except OSError:
+        sock.close()
+        raise
+    return sock
 
 
 @dataclass
@@ -76,10 +77,11 @@ def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveAp
     deps._accounts_for.cache_clear()
     deps._tenant_register_for.cache_clear()
 
-    port = free_port()
+    sock = listening_socket()
+    port = sock.getsockname()[1]
     server = uvicorn.Server(uvicorn.Config(
         create_app(), host="127.0.0.1", port=port, log_level="error"))
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{port}"
     for _ in range(100):
@@ -89,12 +91,15 @@ def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveAp
         except httpx.TransportError:
             time.sleep(0.1)
     else:
+        server.should_exit = True
+        sock.close()
         raise RuntimeError("assurance API did not come up")
     try:
         yield LiveApi(url=url, accounts=deps.get_accounts(), root=tmp_path)
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        sock.close()
         deps._register_for.cache_clear()
         deps._accounts_for.cache_clear()
         deps._tenant_register_for.cache_clear()
