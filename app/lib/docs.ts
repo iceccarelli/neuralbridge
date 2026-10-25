@@ -112,7 +112,7 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
   const resolved = resolveDocSource(slug);
   if (!resolved) return null;
 
-  const abs = path.join(REPO_ROOT, resolved.file);
+  const abs = path.join(/*turbopackIgnore: true*/ REPO_ROOT, resolved.file);
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
@@ -127,7 +127,7 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
 // drift. These aren't part of the /docs tree (no sidebar), just rendered
 // standalone with the same markdown pipeline.
 export function loadRootDoc(file: string, title: string): { title: string; html: string; editPath: string } | null {
-  const abs = path.join(REPO_ROOT, file);
+  const abs = path.join(/*turbopackIgnore: true*/ REPO_ROOT, file);
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
