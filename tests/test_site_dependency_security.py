@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,12 +27,26 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 LOCK = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
-NEXT_CONFIG = (ROOT / "next.config.js").read_text(encoding="utf-8")
+
+
+def _evaluated_next_config() -> dict:
+    """``next.config.js`` as Next sees it, not as text: a substring check cannot tell
+    ``unoptimized: true`` from ``"unoptimized": true`` or a comment that mentions a flag."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the next.config.js checks need it")
+    out = subprocess.run(
+        [node, "-e", "process.stdout.write(JSON.stringify(require(process.argv[1])))",
+         str(ROOT / "next.config.js")],
+        capture_output=True, text=True, check=True, timeout=60)
+    return json.loads(out.stdout)
 
 #: The lowest release on each supported line that contains the 14 October 2026 fixes
 #: (registry: 15.5.28 is the last 15.x, 16.4.1 the first 16.x with them).
 MIN_NEXT = {15: (15, 5, 28), 16: (16, 4, 1)}
 MIN_SHARP = (0, 35, 5)
+#: @img/sharp-libvips-*: 1.3.4 bundles librsvg 2.63.2 (1.3.3 bundled 2.62.91).
+MIN_LIBVIPS = (1, 3, 4)
 
 
 def _version(text: str) -> tuple[int, int, int]:
@@ -81,6 +97,25 @@ def test_no_nested_sharp_below_the_fix():
             assert _version(entry["version"]) >= MIN_SHARP, f"{path}: {entry['version']}"
 
 
+def test_the_libvips_that_carries_librsvg_is_patched():
+    """The SVG fix lives in the prebuilt libvips (it bundles librsvg), not in sharp's JS."""
+    found = 0
+    for path, entry in LOCK["packages"].items():
+        if "/@img/sharp-libvips-" in f"/{path}" and entry.get("version"):
+            found += 1
+            assert _version(entry["version"]) >= MIN_LIBVIPS, f"{path}: {entry['version']}"
+    assert found, "no @img/sharp-libvips-* in the lockfile; sharp would build libvips itself"
+
+
+def test_next_native_binaries_match_next():
+    """``@next/swc-*`` ships with the same version as ``next``; a stale one means a hand-edited lock."""
+    version = _locked("next")["version"]
+    swc = {p: e for p, e in LOCK["packages"].items() if p.startswith("node_modules/@next/swc-")}
+    assert swc, "no @next/swc-* packages locked"
+    for path, entry in swc.items():
+        assert entry["version"] == version, f"{path}: {entry['version']} != next {version}"
+
+
 def test_next_never_resolves_a_bundled_postcss_with_known_source_map_reads():
     """Next bundles its own postcss; 8.5.23+ carries the sourceMappingURL fixes."""
     nested = LOCK["packages"].get("node_modules/next/node_modules/postcss")
@@ -88,26 +123,60 @@ def test_next_never_resolves_a_bundled_postcss_with_known_source_map_reads():
         assert _version(nested["version"]) >= (8, 5, 23), nested["version"]
 
 
+def test_every_locked_package_comes_from_the_npm_registry_with_an_integrity_hash():
+    """A hand-edited ``resolved`` URL (or a dropped hash) is how a lockfile is turned into a
+    supply-chain vector; ``npm ci`` would install whatever it points at."""
+    for path, entry in LOCK["packages"].items():
+        if not path or entry.get("link"):
+            continue
+        resolved = entry.get("resolved")
+        assert resolved and resolved.startswith("https://registry.npmjs.org/"), f"{path}: {resolved}"
+        assert str(entry.get("integrity", "")).startswith("sha512-"), f"{path}: integrity"
+
+
 def test_the_declared_node_floor_matches_what_next_requires():
     engines = LOCK["packages"]["node_modules/next"].get("engines", {}).get("node", "")
     floor = re.search(r">=\s*(\d+)\.(\d+)", engines)
-    if floor:
-        needed = (int(floor.group(1)), int(floor.group(2)))
-        declared = re.search(r">=\s*(\d+)\.(\d+)", PACKAGE.get("engines", {}).get("node", ""))
-        assert declared, "package.json must declare the Node floor Next requires"
-        assert (int(declared.group(1)), int(declared.group(2))) >= needed
+    assert floor, f"next declares no Node floor ({engines!r}); this guard needs updating"
+    needed = (int(floor.group(1)), int(floor.group(2)))
+    declared_text = PACKAGE.get("engines", {}).get("node", "")
+    declared = re.fullmatch(r">=\s*(\d+)\.(\d+)(?:\.\d+)?", declared_text.strip())
+    # A range such as "^18.18.0 || >=20.9.0" would admit a Node that cannot build the site.
+    assert declared, f"package.json engines.node must be a single '>=x.y.z' floor, not {declared_text!r}"
+    assert (int(declared.group(1)), int(declared.group(2))) >= needed
+    lock_root = LOCK["packages"][""].get("engines", {}).get("node")
+    assert lock_root == declared_text, "package-lock.json root is out of step with package.json engines"
 
 
-@pytest.mark.parametrize("flag", ["dangerouslyAllowSVG", "unoptimized: true"])
-def test_image_optimization_is_not_widened(flag):
-    """SVG through the optimizer was the route to the critical RCE; do not opt back in."""
-    assert flag not in NEXT_CONFIG
+def test_image_optimization_is_not_widened():
+    """SVG through the optimizer was the route to the critical RCE; do not opt back in. Evaluated,
+    not grepped, so formatting and comments cannot hide or fake a setting."""
+    cfg = _evaluated_next_config()
+    images = cfg.get("images", {}) or {}
+    assert not images.get("dangerouslyAllowSVG"), "SVG must not go through the image optimizer"
+    assert not images.get("unoptimized"), "images.unoptimized hides the optimizer instead of patching it"
+    assert not images.get("remotePatterns"), "no remote image sources: nothing outside /public may be fetched"
+    assert not images.get("domains"), "no remote image sources: nothing outside /public may be fetched"
+    assert not images.get("localPatterns"), "do not widen the local paths the optimizer will read"
+
+
+def test_image_cache_ttl_keeps_the_pre_16_behaviour():
+    """Next 16 defaults ``minimumCacheTTL`` to 4 h; a hero replaced at the same URL would be stale."""
+    assert _evaluated_next_config().get("images", {}).get("minimumCacheTTL") == 60
+
+
+def test_the_dev_origin_allowlist_is_loopback_only():
+    origins = _evaluated_next_config().get("allowedDevOrigins", [])
+    assert set(origins) <= {"127.0.0.1", "localhost"}, origins
 
 
 def test_there_is_no_dead_lint_script():
     """``next lint`` was removed in Next 16; a script that cannot run hides that nothing lints."""
     assert PACKAGE["scripts"].get("lint") != "next lint"
     assert PACKAGE["scripts"].get("typecheck") == "tsc --noEmit"
+    if "lint" in PACKAGE["scripts"]:
+        configs = [p for p in ROOT.glob("eslint.config.*")] + [p for p in ROOT.glob(".eslintrc*")]
+        assert configs, "a lint script needs a lint config, or it only looks like something is checked"
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +207,38 @@ def test_there_are_dynamic_routes_to_guard():
     assert any(n.startswith("docs/[[...slug]]") for n in names), names
 
 
+_ALLOWED_PARAMS_USES = (
+    (re.compile(r"\bawait\s+params\b"), "await params"),
+    (re.compile(r"\{\s*params\s*\}"), "{ params }"),
+    (re.compile(r"\bparams\s*:\s*[A-Z]\w*"), "params: <TypeAlias>"),
+)
+
+
 @pytest.mark.parametrize("path", _dynamic_route_files(), ids=lambda p: p.relative_to(APP).as_posix())
 def test_dynamic_route_params_are_awaited(path):
     """``params.slug`` read directly is ``undefined`` on Next 16: /solutions/* became a 404 and
     every /docs/* page silently rendered the docs index with a canonical of /docs/. The build and
-    ``tsc`` both passed, so only the code itself can guard this."""
+    ``tsc`` both passed, so only the code itself can guard this.
+
+    The only accepted uses of ``params`` are: taking it in a signature as ``{ params }`` typed by a
+    ``type X = Promise<...>`` alias, and ``await params``. Anything else (``(params as any).slug``,
+    ``{ params: { slug } }``, ``params[...]``, passing it on) is refused, and every function that
+    takes ``params`` must await it."""
     code = _code(path.read_text(encoding="utf-8"))
-    if "params" not in code:
+    if not re.search(r"\bparams\b", code):
         return
-    assert "Promise<" in code, f"{path.name}: params must be typed as a Promise"
-    assert "await params" in code, f"{path.name}: params must be awaited"
-    assert not re.search(r"\bparams\.[A-Za-z_]", code), f"{path.name}: params is read synchronously"
-    assert not re.search(r"\bparams\?\.[A-Za-z_]", code), f"{path.name}: params is read synchronously"
+    aliases = re.findall(r"\btype\s+(\w+)\s*=\s*Promise<", code)
+    assert aliases, f"{path.name}: params must be typed by a `type X = Promise<...>` alias"
+    for name in re.findall(r"\bparams\s*:\s*([A-Za-z_]\w*)", code):
+        assert name in aliases, f"{path.name}: params is typed {name!r}, which is not a Promise alias"
+
+    rest = code
+    for pattern, _ in _ALLOWED_PARAMS_USES:
+        rest = pattern.sub(" ", rest)
+    leftover = re.search(r".{0,30}\bparams\b.{0,30}", rest)
+    assert not leftover, f"{path.name}: params is used other than as `await params`: {leftover.group(0)!r}"
+
+    taken = len(re.findall(r"\{\s*params\s*\}", code))
+    awaited = len(re.findall(r"\bawait\s+params\b", code))
+    assert taken and awaited >= taken, (
+        f"{path.name}: {taken} function(s) take params but only {awaited} await it")

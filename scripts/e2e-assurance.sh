@@ -20,6 +20,11 @@ for port in "$API_PORT" "$WEB_PORT"; do
 done
 
 PYTHONPATH=src python scripts/e2e_seed_assurance.py "$ASSURANCE_E2E_SEED" "$WORK/work"
+# Each server runs in its own process group so the whole tree (npx -> next-server) is stopped, not
+# just the wrapper. The trap is set before the first server starts: a failing `next build` below
+# must not leave the API running on its port.
+API='' WEB=''
+trap 'kill -- ${API:+-$API} ${WEB:+-$WEB} 2>/dev/null || true' EXIT
 PYTHONPATH=src setsid python -m uvicorn assurance.api.service:app --port "$API_PORT" >"$WORK/api.log" 2>&1 & API=$!
 # WEB_MODE=dev (default) serves with `next dev`; WEB_MODE=start builds for production and serves
 # with `next start`, which is what ships (no dev-only origin checks, no HMR, minified client code).
@@ -30,9 +35,6 @@ if [ "${WEB_MODE:-dev}" = "start" ]; then
 else
   setsid npx next dev -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
 fi
-# Each server runs in its own process group so the whole tree (npx -> next-server)
-# is stopped, not just the wrapper.
-trap 'kill -- -$API -$WEB 2>/dev/null || true' EXIT
 for i in $(seq 1 60); do
   curl -fs "http://127.0.0.1:$API_PORT/v1/plans" >/dev/null && curl -fs "http://127.0.0.1:$WEB_PORT/assurance" >/dev/null && break
   sleep 2

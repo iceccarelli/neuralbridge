@@ -29,6 +29,23 @@ jobs:
       - name: Run mypy type checker
         run: mypy src/neuralbridge/ --ignore-missing-imports
 
+  # ── Marketing / workspace site (Next.js, repo root) ────────
+  # Until this job existed nothing in CI installed, type-checked or built the root Next.js site
+  # (the `dashboard` job below builds src/dashboard only), so a framework upgrade could break every
+  # route and still merge green. Route-level behaviour is covered by tests-e2e/ (scripts/e2e-assurance.sh).
+  site:
+    name: Site (typecheck + production build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
   # ── Unit Tests ─────────────────────────────────────────────
   test:
     name: Tests (Python ${{ matrix.python-version }})
