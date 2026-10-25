@@ -60,7 +60,7 @@ export default function RotatingImage({
   if (!hasB) {
     return (
       <div className={`media-band ${className}`} style={{ aspectRatio: aspect }}>
-        <Image src={slot.a.src} alt={slot.a.alt} fill sizes={sizes} priority={priority} style={{ objectFit: 'cover' }} />
+        <Image src={slot.a.src} alt={slot.a.alt} fill sizes={sizes} priority={priority} fetchPriority={priority ? 'high' : undefined} style={{ objectFit: 'cover' }} />
       </div>
     );
   }
@@ -74,6 +74,7 @@ export default function RotatingImage({
         fill
         sizes={sizes}
         priority={priority}
+        fetchPriority={priority ? 'high' : undefined}
         style={{ objectFit: 'cover', opacity: showB ? 0 : 1, transition: 'opacity var(--duration-panel) var(--ease)' }}
       />
       <Image

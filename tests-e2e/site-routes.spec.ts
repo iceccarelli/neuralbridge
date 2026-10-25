@@ -9,6 +9,8 @@ import { test, expect } from '@playwright/test';
 // so this spec reads what each page actually says about itself.
 
 const pathOf = (url: string) => new URL(url, 'http://x').pathname.replace(/\/+$/, '') || '/';
+// The path exactly as written: /docs/ and /docs are different URLs (the first redirects to the second).
+const exactPathOf = (url: string) => new URL(url, 'http://x').pathname;
 
 const text = (html: string, re: RegExp) =>
   (re.exec(html)?.[1] ?? '')
@@ -50,27 +52,41 @@ test.describe('dynamic routes render their own page', () => {
     expect(paths.length).toBeGreaterThanOrEqual(10);
 
     const titles = new Map<string, string>();
-    const h1s = new Set<string>();
+    const h1s = new Map<string, string>();
     for (const p of paths) {
       const res = await request.get(p);
       expect(res.status(), `${p} status`).toBe(200);
       const html = await res.text();
       const canonical = /<link[^>]+rel="canonical"[^>]+href="([^"]+)"/i.exec(html)?.[1] ?? '';
-      expect(pathOf(canonical), `${p} canonical must be its own path`).toBe(p);
+      expect(exactPathOf(canonical), `${p} canonical must be exactly its own path (no trailing slash)`).toBe(p);
       titles.set(p, text(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
-      h1s.add(text(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i));
-      // The sidebar marks the page it is on.
-      expect(html, `${p} marks itself active in the docs nav`).toContain(`href="${p}"`);
+      h1s.set(p, text(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i));
+      // The sidebar marks the page it is on, and only that one (the footer also links to some docs
+      // pages, and every page renders the whole sidebar, so a plain href match proves nothing).
+      const active = [...html.matchAll(/<a\b[^>]*>/g)]
+        .map((m) => m[0])
+        .filter((tag) => /class="[^"]*\bdocs-nav-link\b[^"]*\bactive\b/.test(tag))
+        .map((tag) => /href="([^"]+)"/.exec(tag)?.[1]);
+      expect(active, `${p} marks exactly itself active in the docs nav`).toEqual([p]);
     }
-    // If every URL served the index, there would be a single title and a single heading.
-    expect(new Set(titles.values()).size, 'distinct <title> across docs pages').toBeGreaterThanOrEqual(
-      Math.ceil(paths.length * 0.8),
-    );
-    expect(h1s.size, 'distinct <h1> across docs pages').toBeGreaterThanOrEqual(Math.ceil(paths.length * 0.8));
+    // Every page is its own document. If any URL served another page's body (the docs index, say),
+    // two would share a title or heading; a tolerance would let exactly that through.
+    const dup = (m: Map<string, string>) =>
+      [...m.entries()].filter(([, v], i, a) => a.findIndex(([, w]) => w === v) !== i).map(([k]) => k);
+    expect(dup(titles), 'docs pages sharing a <title> with an earlier page').toEqual([]);
+    expect(dup(h1s), 'docs pages sharing an <h1> with an earlier page').toEqual([]);
   });
 
   test('an unknown docs path is a real 404, not the index', async ({ request }) => {
     const res = await request.get('/docs/this-page-does-not-exist-9f3a');
     expect(res.status()).toBe(404);
+  });
+
+  test('the hero image keeps its high fetch priority (Next 16 stopped adding it for `priority`)', async ({ request }) => {
+    for (const p of ['/', '/solutions/manufacturer']) {
+      const html = await (await request.get(p)).text();
+      expect(html, `${p} preloads its hero with fetchPriority=high`).toMatch(/<link[^>]+rel="preload"[^>]+as="image"[^>]+fetchPriority="high"|<link[^>]+fetchPriority="high"[^>]+rel="preload"/i);
+      expect(html, `${p} hero <img>`).toMatch(/<img[^>]+fetchPriority="high"/i);
+    }
   });
 });
