@@ -8,20 +8,27 @@ export function generateStaticParams() {
   return listDocSlugs();
 }
 
-export function generateMetadata({ params }: { params: { slug?: string[] } }): Metadata {
-  const doc = loadDoc(params.slug);
+// Next 15+ hands route params over as a Promise, and Next 16 removed the synchronous access that
+// 14 allowed: reading the slug straight off `params` yields undefined, which for this catch-all
+// quietly renders the docs index for every URL (a 200 with a canonical of /docs/). Always await.
+type DocParams = Promise<{ slug?: string[] }>;
+
+export async function generateMetadata({ params }: { params: DocParams }): Promise<Metadata> {
+  const { slug } = await params;
+  const doc = loadDoc(slug);
   if (!doc) return { title: 'Documentation' };
   return {
     title: `${doc.title} | Docs | Industrial Autonomous Assurance`,
-    alternates: { canonical: `/docs/${(params.slug ?? []).join('/')}` },
+    alternates: { canonical: `/docs/${(slug ?? []).join('/')}` },
   };
 }
 
-export default function DocPage({ params }: { params: { slug?: string[] } }) {
-  const doc = loadDoc(params.slug);
+export default async function DocPage({ params }: { params: DocParams }) {
+  const { slug } = await params;
+  const doc = loadDoc(slug);
   if (!doc) notFound();
 
-  const activeHref = `/docs/${(params.slug ?? []).join('/')}`.replace(/\/$/, '') || '/docs';
+  const activeHref = `/docs/${(slug ?? []).join('/')}`.replace(/\/$/, '') || '/docs';
 
   return (
     <main id="top">
