@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -999,7 +1000,21 @@ class TestSmallerItems:
 # ---------------------------------------------------------------------------
 # docs descriptions are built by the real function, on the real documents
 # ---------------------------------------------------------------------------
-def _node(script: str) -> object:
+# docs.ts imports `marked`, which exists only after `npm ci`; CI's Python test job has no node_modules.
+# Only descriptions are under test here, so `marked` is resolved to a stub (rendering is not exercised) and
+# the extensionless './docDescription' import (valid for tsc/Next) gets its .ts extension (Node needs it);
+# firstParagraph itself lives in docDescription.ts, which imports nothing.
+_STUB_MARKED = (
+    "import { register } from 'node:module';"
+    "register('data:text/javascript,' + encodeURIComponent("
+    "\"export async function resolve(s, c, n) { if (s === 'marked') return "
+    "{ url: 'data:text/javascript,export const marked = { parse: () => \\\"\\\" };', shortCircuit: true };"
+    " if (s === './docDescription') return n('./docDescription.ts', c);"
+    " return n(s, c); }\"));"
+)
+
+
+def _node(script: str, *, stub_marked: bool = False) -> object:
     import shutil
 
     node = shutil.which("node")
@@ -1007,7 +1022,8 @@ def _node(script: str) -> object:
     version = subprocess.run([node, "--version"], capture_output=True, text=True, check=True).stdout  # noqa: S603
     assert int(version.strip().lstrip("v").split(".")[0]) >= 22, "node >= 22 runs docs.ts directly"
     done = subprocess.run(  # noqa: S603 - fixed argv; the script is a constant in this file
-        [node, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script],
+        [node, "--experimental-strip-types", "--no-warnings", "--input-type=module",
+         *(["--import", "data:text/javascript," + quote(_STUB_MARKED)] if stub_marked else []), "-e", script],
         capture_output=True, text=True, check=False, cwd=ROOT, timeout=120,
     )
     assert done.returncode == 0, done.stderr
@@ -1018,14 +1034,14 @@ class TestDocsDescriptions:
     def test_first_paragraph_keeps_identifiers_and_drops_markup(self):
         sample = ("# Title\n\n<!-- note -->\n\nCall `verify_chain` on [the ledger](ledger.md) with **care**, "
                   "_not_ haste; snake_case_word and 2*3 stay. More words follow so that the paragraph is long enough.\n")
-        out = _node("const m = await import('./app/lib/docs.ts');"
+        out = _node("const m = await import('./app/lib/docDescription.ts');"
                     f"process.stdout.write(JSON.stringify(m.firstParagraph({json.dumps(sample)})));")
         assert out.startswith("Call verify_chain on the ledger with care, not haste; snake_case_word and 2*3 stay.")
         assert "](" not in out and "`" not in out and "**" not in out
 
     def test_a_long_paragraph_is_cut_at_a_word_boundary_within_200_characters(self):
         sample = "word " * 80
-        out = _node("const m = await import('./app/lib/docs.ts');"
+        out = _node("const m = await import('./app/lib/docDescription.ts');"
                     f"process.stdout.write(JSON.stringify(m.firstParagraph({json.dumps(sample)})));")
         assert len(out) <= 201 and out.endswith("\u2026") and "wor\u2026" not in out
 
@@ -1038,7 +1054,7 @@ class TestDocsDescriptions:
             out.push({ slug: slug.join('/'), description: d.description, file: d.editPath });
           }
           process.stdout.write(JSON.stringify(out));
-        """)
+        """, stub_marked=True)
         assert len(docs) >= 14
         for doc in docs:
             source = read(doc["file"])
