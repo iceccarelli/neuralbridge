@@ -99,20 +99,21 @@ def run_cli(*argv: Any, cwd: Path | None = None, **env: str) -> subprocess.Compl
 # ---------------------------------------------------------------------------
 
 class Plant:
-    """Two machines' vendor exports, a kit and a watch over them, in one folder."""
+    """Machines' vendor exports (two by default), a kit and a watch over them, in one folder."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, serials: tuple[str, ...] = ("0412", "0501")) -> None:
         self.root = root
+        self.serials = serials
         root.mkdir(parents=True, exist_ok=True)
         plan = plan_dict()
         plan["manufacturer"], plan["model"] = "Grimaldi", "AR-7"
         (root / "plans").mkdir(exist_ok=True)
         (root / "plans" / "cell.json").write_text(json.dumps(plan), encoding="utf-8")
-        for serial in ("0412", "0501"):
+        for serial in serials:
             write_export(root / "exports" / serial, stamp="2026-09-14T06:00:00Z",
                          operator="m.tech", seq="4181")
         machines = [{"serial": s, "plan": "plans/cell.json", "exports": f"exports/{s}"}
-                    for s in ("0412", "0501")]
+                    for s in serials]
         (root / "kit.json").write_text(json.dumps({
             "kit_id": "plant-2", "organisation": "Grimaldi Robotics",
             "prepared_by": "m.keller", "site": "Plant 2", "country": "DE",
@@ -120,7 +121,7 @@ class Plant:
         (root / "watch.json").write_text(json.dumps({
             "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
             "targets": [{"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
-                         "site": "Plant 2", "country": "DE"} for s in ("0412", "0501")]}),
+                         "site": "Plant 2", "country": "DE"} for s in serials]}),
             encoding="utf-8")
 
     @property
@@ -184,11 +185,11 @@ class Plant:
         self.watch_run("cli", expect=1)
         self.push(api_url, key)
 
-    def manifest_dict(self) -> dict[str, Any]:
-        return manifests_from_ledger(self.ledger, KEY)[-1].to_dict()
+    def manifest_dict(self, key: str = KEY) -> dict[str, Any]:
+        return manifests_from_ledger(self.ledger, key)[-1].to_dict()
 
-    def expected_drift_case_id(self) -> str:
-        observed = manifests_from_ledger(self.ledger, KEY)[-1]
+    def expected_drift_case_id(self, key: str = KEY) -> str:
+        observed = manifests_from_ledger(self.ledger, key)[-1]
         return case_id_for(TriggerType.MACHINE_DRIFT, observed.configuration_hash())
 
 
