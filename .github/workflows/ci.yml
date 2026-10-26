@@ -24,8 +24,9 @@ jobs:
         run: |
           pip install -r requirements/dev.txt
           pip install -e .
+      # Same scope as CLAUDE.md's definition of done: src/ AND tests/.
       - name: Run ruff linter
-        run: ruff check src/
+        run: ruff check src/ tests/
       - name: Run mypy type checker
         run: mypy src/neuralbridge/ --ignore-missing-imports
 
@@ -77,6 +78,9 @@ jobs:
       NEURALBRIDGE_AI_PG_USER: neuralbridge
       NEURALBRIDGE_AI_PG_PASSWORD: neuralbridge_dev
       NEURALBRIDGE_AI_PG_TEST_DATABASE: neuralbridge_ai_test
+      # tests/test_golden_path_postgres.py: with the service above, an unreachable
+      # Postgres is a failure there, never a silent skip.
+      NEURALBRIDGE_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
