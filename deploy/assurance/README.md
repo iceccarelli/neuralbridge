@@ -5,24 +5,51 @@ deliberate limit, not an oversight: the evidence ledger is a hash chain, and a
 second writer on a second machine forks it. Scale vertically until the stores
 move to Postgres.
 
+> **Status: nothing here has been deployed.** The service has only run on a
+> laptop and in CI; no image has been built from this Dockerfile and run on Fly,
+> and no step below has been performed against a hosted host. `DEPLOY_NOW.md` is the
+> ordered, Stripe-**test-mode** rehearsal, with one command per phase
+> (`python scripts/staging_rehearsal.py config-check | smoke | webhook-test |
+> restore-drill | report`); this page is the reference behind it. Prices are
+> unvalidated assertions, and nothing on this page tells you to set a live key.
+
 ## fly.io
 
 ```bash
 fly launch --no-deploy --copy-config --config deploy/assurance/fly.toml
 fly volumes create assurance_data --size 1 --region fra
 
-fly secrets set \
-  ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \
-  STRIPE_SECRET_KEY=sk_test_... \
-  STRIPE_WEBHOOK_SECRET=whsec_... \
-  ASSURANCE_PRICE_REGISTER=price_... \
-  ASSURANCE_PRICE_CELL=price_...
+# Secrets: never on a command line (visible in `ps` and shell history) and never in a heredoc
+# (bash may stage one in a temporary file). Export them in your shell with `read -rs`, check them
+# with `python scripts/staging_rehearsal.py config-check --checkout-expected`, then pipe them in
+# (grep's arguments are names only; `fly secrets import` reads NAME=value lines on stdin, not
+# verified here):
+env | grep -E '^(ASSURANCE_API_KEYS|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|ASSURANCE_PRICE_REGISTER|ASSURANCE_PRICE_CELL)=' \
+  | fly secrets import
+# ASSURANCE_API_KEYS is the operator key: `export ASSURANCE_API_KEYS="$(openssl rand -hex 24)"`
+# STRIPE_SECRET_KEY=sk_test_...  STRIPE_WEBHOOK_SECRET=whsec_...  ASSURANCE_PRICE_*=price_...
 
-fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile
+fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile --ha=false
 ```
 
-Set `ASSURANCE_PUBLIC_URL` to the deployed hostname — checkout redirects are
-built from it, and a wrong value sends paying customers to a dead page.
+For a rehearsal use a **staging** copy of `fly.toml` with its own app name (the
+committed file names `assurance-register`, the name a production service would get);
+`DEPLOY_NOW.md` §1 has the one-line `sed`. Keep the keys above `sk_test_`: a
+`sk_live_` key belongs to a later, separate decision. `--ha=false` and a check that
+`fly status` shows one machine are there because a second machine is a second
+writer (Fly CLI behaviour is not verifiable from this repository).
+
+`ASSURANCE_PUBLIC_URL` is set in `fly.toml`'s `[env]` to the deployed hostname —
+checkout redirects are built from it, and a wrong value sends paying customers to
+a dead page. Edit it there (it is not a secret) rather than setting a second
+value as a secret.
+
+The image installs its own short dependency list (`fastapi`, `uvicorn`, `pydantic`,
+`httpx`, `cryptography`). `cryptography` is imported by `assurance.attest.keys`,
+which `assurance.api.service` loads at start-up: an earlier Dockerfile left it out,
+so an image built from it could not start. `tests/test_assurance_dockerfile_deps.py`
+now fails if a module the service loads imports a package that line does not install.
+It does not build the image.
 
 `ASSURANCE_ALLOWED_ORIGINS` defaults to `https://neuralbridge.io`,
 `https://www.neuralbridge.io` and `http://localhost:3000` — the marketing
@@ -35,6 +62,12 @@ site is served from a different origin (a Vercel preview URL, a staging
 domain).
 
 ## Stripe
+
+Test mode first: create the endpoint, the products and the prices in the Stripe
+dashboard's **test** mode, with `sk_test_…` keys. A webhook signing secret is
+`whsec_…` in both modes, so its mode cannot be read from the string; take it from
+the test-mode endpoint. `python scripts/staging_rehearsal.py config-check` refuses
+any `sk_live_`/`rk_live_`/`pk_live_`/`whsec_live` value in the environment.
 
 Create the webhook endpoint at `https://<app>.fly.dev/v1/billing/webhook`,
 subscribed to:
@@ -317,6 +350,11 @@ above.
 
 ## What to check after deploying
 
+`python scripts/staging_rehearsal.py smoke --expect-purchasable register,cell` does
+the read-only part of this list in one command (health, plan catalogue, 401 and 402,
+CORS preflight, TLS expiry, no secret in a response) with `PASS` / `FAIL` /
+`UNCHECKED` per step. The same checks by hand:
+
 ```bash
 curl https://<app>.fly.dev/                       # what the service is
 curl https://<app>.fly.dev/healthz                # auth_mode must not be "open"
@@ -399,6 +437,25 @@ belongs to a known account. **Rehearse a restore before relying on it**: restore
 the files to a scratch volume, point a throwaway service at them, and call
 `GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
 done against a deployed service — there is none.
+
+`python scripts/staging_rehearsal.py restore-drill --data-dir DIR` does the local half
+of that rehearsal in one command, on a data directory you give it **while the service is
+stopped**: it copies the directory to scratch (SQLite never opens the source: a
+write-ahead-log database that is merely read leaves `-wal`/`-shm` files beside it), takes the
+snapshot from the copy, wipes a scratch volume that really held the data, restores into it,
+checks the restored files equal the backup byte for byte, runs the `verify` above, compares
+restored row counts with the copy, tampers with another copy to show the verifier notices, and
+finally proves the source's listing and every file hash are unchanged. It refuses symlinks and
+a directory with `-wal`/`-shm`/`-journal` files (a service may be writing) unless you pass
+`--i-know-the-service-is-stopped`. `--backup-dir DIR` restores a backup you fetched from the volume
+instead (the counts against the hosted volume are then `UNCHECKED`: compare them with
+`python -m assurance.evidence.restore_check verify /data` run on the machine). It has
+been proven on real SQLite fixtures only, never on a hosted volume. A caveat on the
+commands above: `$(date +%F)` is expanded by your local shell (use the exact remote path
+the backup command printed if the machine's date may differ), the local directory you fetch
+into must exist (`mkdir -p`), and `fly ssh console` may run as root while the service runs as
+`assurance` (uid 10001) — check the ownership of what you write on the volume. None of that
+is verified here.
 
 That check answers "was anything **edited**?" and not "was anything
 **removed**?" — a chain rebuilt without the inconvenient records verifies
