@@ -737,7 +737,7 @@ class TestSmallerItems:
         for top in ("app", "public", "docs", "tests", "tests-e2e", "scripts", "deploy", ".github"):
             for path in (ROOT / top).rglob("*") if (ROOT / top).exists() else []:
                 if path.is_file() and path.suffix in {".ts", ".tsx", ".py", ".md", ".txt", ".json", ".yml", ".sh", ".toml"}:
-                    if path.name == "test_site_honesty.py":
+                    if path.name in ("test_site_honesty.py", "site-honesty.spec.ts"):
                         continue
                     if re.search(r"(?<!\w)llm\.txt", path.read_text(encoding="utf-8", errors="ignore")):
                         offenders.append(str(path.relative_to(ROOT)))
@@ -774,6 +774,12 @@ class TestSmallerItems:
         assert re.search(r"description:\s*\w+", page)
         docs = read("app/lib/docs.ts")
         assert "export function firstParagraph" in docs or "description" in docs
+
+    def test_a_docs_page_renders_one_h1_even_when_the_source_has_several(self):
+        docs = read("app/lib/docs.ts")
+        assert "export function singleH1" in docs
+        assert docs.count("singleH1(marked.parse(") == 2  # loadDoc and loadRootDoc
+        assert read("deploy/assurance/WATCH.md").count("\n# ") >= 2  # the case that needs it
 
     def test_the_search_input_keeps_a_visible_focus_style(self):
         css = read("app/globals.css")
