@@ -15,7 +15,13 @@ hash-chained ledger for audit trails. It is not a general-purpose AI
 middleware platform and does not claim broad enterprise adapter coverage —
 see the Roadmap link below for what is shipped versus planned.
 
-## Pricing (three tiers; re-checking someone else's evidence needs no account: 20 a day per address)
+## Pricing (three tiers)
+
+Re-checking someone else's evidence needs no account. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (POST /v1/evidence/verify, and /verify on this site) allows 20 a day per
+address; manifest diff allows 10 a day. Register and Cell have no daily cap on
+either.
 
 - **Validator** — Free, no card, no account required. Declaration/manifest/
   attestation verification, Article 14 draft validation and calculators,
@@ -63,9 +69,11 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/connectors/mcp
 - Browser REST console (paste an API key, call real /v1 routes):
   https://neuralbridge.io/console
-- AI control plane (discover a real connection, read it, plan a write,
-  approve, get a receipt — READ is free/rate-limited, WRITE requires a
-  Register or Cell key): https://neuralbridge.io/ai
+- AI control plane (discover a connection, read it, plan a write, approve,
+  get a receipt — READ is free/rate-limited and, on the Validator tier,
+  runs against the shared demo connection, which is read-only; WRITE and
+  binding your own connection require a Register or Cell key):
+  https://neuralbridge.io/ai
 - Contact / sales: https://neuralbridge.io/contact
 - OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
   https://neuralbridge.io/openapi.json
@@ -74,8 +82,9 @@ have independently confirmed the live API responds.
 - Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
 - Security policy (how to report a vulnerability): https://neuralbridge.io/security
-- Deploy status (founder checklist, what's left before this takes real
-  money): https://neuralbridge.io/status
+- Deploy checklist (a static founder checklist of what is left before this
+  takes real money; it does not probe a live service):
+  https://neuralbridge.io/status
 - Privacy: https://neuralbridge.io/privacy
 
 ## For AI agents evaluating or integrating with this product

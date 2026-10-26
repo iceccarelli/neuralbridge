@@ -140,7 +140,7 @@ export default function PricingPlans() {
           <Price price={validator.price} />
           <p className="price-tagline">{validator.blurb}</p>
           <ul className="price-list">
-            {validator.includes.slice(0, 8).map((item) => (
+            {validator.includes.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ul>
@@ -171,7 +171,7 @@ export default function PricingPlans() {
           <Price price={cell.price} />
           <p className="price-tagline">{cell.blurb}</p>
           <ul className="price-list">
-            {cell.includes.slice(0, 6).map((item) => (
+            {cell.includes.map((item) => (
               <li key={item}>{item}</li>
             ))}
           </ul>

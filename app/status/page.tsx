@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import { REPO } from '../lib/links';
 
 export const metadata: Metadata = {
-  title: 'Status | Industrial Autonomous Assurance',
-  description: 'The founder checklist between this build and a live, sellable deployment — checked at build time, not asserted.',
+  title: 'Deploy checklist | Industrial Autonomous Assurance',
+  description: 'A static founder checklist of the deploy steps between this build and a sellable deployment. It does not probe any live service; only the first item reflects the configuration of this build.',
   alternates: { canonical: '/status' },
   robots: { index: false, follow: true },
 };

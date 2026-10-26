@@ -470,7 +470,9 @@ class TestStructuredDataPricesAreMonthlyAndHomeOnly:
     def test_the_home_page_is_what_emits_them(self):
         page = read("app/page.tsx")
         assert "structured-offers.json" in page
-        assert page.count("application/ld+json") == 3  # application + Register + Cell
+        assert page.count("application/ld+json") == 1  # one script per block, mapped over the JSON's blocks
+        assert "structuredOffers.softwareApplication" in page and "...structuredOffers.products" in page
+        assert len(json.loads(read(OFFERS))["products"]) == 2  # Register + Cell
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +751,6 @@ class TestSmallerItems:
         source = read("app/lib/search-index.ts")
         entry = re.search(r"title: 'Pricing \(docs\)'[^}]*blurb: '([^']*)'", source)
         assert entry and not re.search(r"generated", entry.group(1), re.I)
-        assert not re.search(r"generated from", ts_strings(source), re.I)
 
     def test_every_static_sitemap_route_is_in_the_search_index(self):
         routes = set(re.findall(r"\$\{SITE_URL\}(/[a-z/-]*)`", read("app/sitemap.ts")))

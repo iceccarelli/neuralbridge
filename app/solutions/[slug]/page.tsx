@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { SOLUTIONS, getSolution } from '../../lib/solutions';
 import { IMAGES } from '../../lib/images';
 import RotatingImage from '../../components/RotatingImage';
+import ImageryNote from '../../components/ImageryNote';
 
 export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
@@ -146,7 +147,7 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
         <div className="shell final-cta-inner">
           <div>
             <h2>{solution.headline}</h2>
-            <p>Re-checking evidence needs no account: 20 a day per address, with no daily cap on Register and Cell. Start there.</p>
+            <p>Re-checking someone else&apos;s evidence needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered. The file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site) allows 20 a day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either.</p>
           </div>
           <div className="hero-actions">
             <a
@@ -168,6 +169,7 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

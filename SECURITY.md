@@ -20,6 +20,6 @@ Please include the following information in your report:
 - Steps to reproduce the vulnerability.
 - Any proof-of-concept code.
 
-We will respond to your report within 48 hours and will keep you informed of the progress of our investigation.
+No response-time commitment (SLA) is promised, and no acknowledgement or fix date is guaranteed. We will try to keep you informed of progress.
 
 **Please do not report security vulnerabilities through public GitHub issues.**

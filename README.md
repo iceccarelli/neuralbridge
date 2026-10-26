@@ -106,12 +106,14 @@ software does not do.
 | **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
 | **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
-Re-checking someone else's evidence needs no account and no key: 20 a day per
-address, and no daily cap on Register and Cell (`POST /v1/evidence/verify`
-spends a unit of the same daily allowance as the Article 14 validator; the cap is
-an anti-abuse limit, not a price). The audience for a piece of evidence is a
-regulator, an insurer or a customer's customer, and evidence only a paying
-customer can check is worth nothing.
+Re-checking someone else's evidence needs no account and no key. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (`POST /v1/evidence/verify`, and `/verify` on this site) allows 20 a day
+per address; manifest diff allows 10 a day. Register and Cell have no daily cap
+on either. The file verifier spends a unit of the same daily allowance as the
+Article 14 validator; the cap is an anti-abuse limit, not a price. The audience
+for a piece of evidence is a regulator, an insurer or a customer's customer, and
+evidence only a paying customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.

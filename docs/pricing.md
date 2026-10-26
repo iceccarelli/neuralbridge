@@ -1,7 +1,6 @@
 # Pricing
 
-Assurance tiers are computed from the weakest input, never passed in. If it
-is not gated in code, it is not on this page — `GET /v1/plans` on a running
+If it is not gated in code, it is not on this page — `GET /v1/plans` on a running
 instance returns this same table, generated from the entitlements
 `src/assurance/billing/plans.py` enforces.
 
@@ -28,15 +27,16 @@ These prices are launch hypotheses; they have not been validated with paying cus
 
 Re-checking someone else's evidence needs no account and no API key — the
 audience for a piece of evidence is a regulator, an insurer, or a customer's
-customer, none of whom should need one here. `POST /v1/evidence/verify` is
-metered only as an anti-abuse allowance: 20 a day per address without an
-account (the same 20 a day on a Validator account); Register and Cell have no
-daily cap on it. Nothing here promises that stays so — `GET /v1/plans` is what
-the software enforces.
+customer, none of whom should need one here. Declaration, evidence-bundle,
+passport and attestation checks are not metered. The file verifier
+(`POST /v1/evidence/verify`, and `/verify` on this site) allows 20 a day per
+address; manifest diff allows 10 a day. Register and Cell have no daily cap on
+either. These are anti-abuse allowances, not prices; nothing here promises they
+stay so — `GET /v1/plans` is what the software enforces.
 
-See the live, purchasable version of this table at
-[neuralbridge.io/#pricing](https://neuralbridge.io/#pricing) — clicking Buy
-there calls the real `POST /v1/checkout` route once a deployment exists.
+This page is the same table as the one at
+[neuralbridge.io/#pricing](https://neuralbridge.io/#pricing); purchase only works on a deployment with Stripe prices configured (none today), and until then
+`POST /v1/checkout` answers 503 `price_not_configured`.
 
 There is also a fourth, unlisted tier — **Supplier** — for component
 suppliers who want to publish signed advisories to a hosted feed. It has no
