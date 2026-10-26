@@ -78,8 +78,11 @@ jobs:
       NEURALBRIDGE_AI_PG_USER: neuralbridge
       NEURALBRIDGE_AI_PG_PASSWORD: neuralbridge_dev
       NEURALBRIDGE_AI_PG_TEST_DATABASE: neuralbridge_ai_test
-      # tests/test_golden_path_postgres.py: with the service above, an unreachable
-      # Postgres is a failure there, never a silent skip.
+      # With the service above, a test skipped for want of PostgreSQL is a FAILURE, not a
+      # silent skip (tests/require_postgres_plugin.py, loaded by tests/conftest.py).
+      # Limitation: the Postgres tests drop and create ai_test_customers in one shared
+      # database, so two jobs or processes running them against the same server at once can
+      # corrupt each other; each matrix job here has its own service container.
       NEURALBRIDGE_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
