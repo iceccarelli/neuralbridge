@@ -19,6 +19,7 @@ export async function generateMetadata({ params }: { params: DocParams }): Promi
   if (!doc) return { title: 'Documentation' };
   return {
     title: `${doc.title} | Docs | Industrial Autonomous Assurance`,
+    description: doc.description || `${doc.title}: Industrial Autonomous Assurance documentation.`,
     alternates: { canonical: slug?.length ? `/docs/${slug.join('/')}` : '/docs' },
   };
 }

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { REPO } from '../../lib/links';
 import { IMAGES } from '../../lib/images';
 import RotatingImage from '../../components/RotatingImage';
+import ImageryNote from '../../components/ImageryNote';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -142,6 +143,7 @@ uvicorn assurance.api.service:app`}</pre>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

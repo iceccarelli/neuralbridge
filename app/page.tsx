@@ -1,10 +1,13 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import structuredOffers from './lib/structured-offers.json';
+import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
 import { IMAGES } from './lib/images';
 import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import RotatingImage from './components/RotatingImage';
+import ImageryNote from './components/ImageryNote';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
@@ -128,20 +131,25 @@ const products = [
   },
 ] as const;
 
-const platformStatus = [
-  { area: 'FastAPI backend', status: 'Supported' },
-  { area: 'Connection management model', status: 'Supported' },
-  { area: 'MCP tool listing / invocation', status: 'Supported' },
-  { area: 'Dashboard foundation (separate admin UI, not wired to the assurance API)', status: 'Evolving' },
-  { area: 'Basic audit trail (in memory by default; cleared on restart)', status: 'Evolving' },
-  { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
-  { area: 'Broad adapter ecosystem', status: 'Evolving' },
-  { area: 'Enterprise certifications and compliance attestations (none held)', status: 'Not claimed' },
+// Offers and Products are emitted on the home page only (where the prices are shown), not on every
+// route: /checkout/success, /assurance and /status are noindex and should carry no price markup.
+// Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
+// pins the numbers and the period to billing/plans.py.
+const structuredDataBlocks = [
+  structuredOffers.softwareApplication,
+  ...structuredOffers.products,
 ];
 
 export default function IndustrialAutonomousAssuranceSite() {
   return (
     <main id="top">
+      {structuredDataBlocks.map((block) => (
+        <script
+          key={`${block['@type']}-${'name' in block ? block.name : ''}`}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(block) }}
+        />
+      ))}
       {/* HERO */}
       <section className="hero">
         <div className="shell hero-grid">
@@ -276,9 +284,10 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <span className="eyebrow">Start here</span>
             <h2>Find your answer in one click.</h2>
             <p>
-              Each output below is what the shipped command printed on this repository&apos;s synthetic example
-              files (machine names and hashes are fixtures, not a customer&apos;s). Re-run the command shown to
-              reproduce it.
+              Each output below is an excerpt of what the shipped command printed on this repository&apos;s synthetic
+              example files (machine names and hashes are fixtures, not a customer&apos;s); a line shown as &hellip;
+              was left out. <code>tests/test_site_honesty.py</code> re-runs each command and fails if a line shown is
+              not in its output. Re-run the command shown to reproduce it.
             </p>
           </div>
           <IntentModule />
@@ -329,10 +338,10 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <div className="hero-panel-title">The free CRA Article 14 validator &mdash; try it right here</div>
             <ValidatorPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/spec/validate</code> endpoint. A prior run against this exact
-              service flagged five missing required fields and that <strong>Switzerland is not an EU Member
-              State</strong> &mdash; a live regulatory check, not a mockup. See the pricing section for whether this
-              route is hosted publicly right now.
+              This calls the real <code>POST /v1/spec/validate</code> endpoint: it reports missing required fields and
+              listed territories that are not EU Member States (<strong>Switzerland is not an EU Member State</strong>)
+              &mdash; a live regulatory check, not a mockup. See the pricing section for whether this route is hosted
+              publicly right now.
             </p>
           </div>
 
@@ -394,10 +403,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <span className="eyebrow">Pricing</span>
             <h2>Three tiers. Re-checking someone else&apos;s evidence needs no account.</h2>
             <p>
-              Assurance tiers are computed from the weakest input, never passed in. If it is not gated in code, it is
-              not on this page — <code>GET /v1/plans</code> returns this same table, generated from the
-              entitlements the software enforces. Re-checking evidence is allowed 20 a day per address without an
-              account; Register and Cell have no daily cap on it.
+              If it is not gated in code, it is not on this page — <code>GET /v1/plans</code> returns this same
+              table, generated from the entitlements the software enforces. Re-checking someone else&apos;s evidence
+              needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered.
+              The file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site)
+              allows 20 a day per address; manifest diff allows 10 a day.
+              Register and Cell have no daily cap on either.
             </p>
           </div>
 
@@ -526,7 +537,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>NeuralBridge: the integration layer the assurance product is built on.</h2>
             <p>
               A lightweight integration hub: a FastAPI backend, an MCP gateway for AI tool exposure, a small set of
-              supported adapters, and a dashboard. It is intentionally narrower than it once claimed to be.
+              adapters (supported scope intended, see the table), and a dashboard. It is intentionally narrower than
+              it once claimed to be. The rows below are the README&apos;s own table, word for word.
             </p>
           </div>
           <RotatingImage
@@ -544,13 +556,14 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                 </tr>
               </thead>
               <tbody>
-                {platformStatus.map((row) => (
+                {PLATFORM_STATUS.map((row) => (
                   <tr key={row.area}>
-                    <td>{row.area}</td>
                     <td>
-                      <span className={`status-pill ${row.status === 'Supported' ? 'supported' : 'evolving'}`}>
-                        {row.status}
-                      </span>
+                      {row.area}
+                      {row.note ? <span className="status-note">{row.note}</span> : null}
+                    </td>
+                    <td>
+                      <span className={`status-pill ${row.pill}`}>{row.status}</span>
                     </td>
                   </tr>
                 ))}
@@ -589,6 +602,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

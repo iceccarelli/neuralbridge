@@ -106,12 +106,14 @@ software does not do.
 | **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
 | **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
-Re-checking someone else's evidence needs no account and no key: 20 a day per
-address, and no daily cap on Register and Cell (`POST /v1/evidence/verify`
-spends a unit of the same daily allowance as the Article 14 validator; the cap is
-an anti-abuse limit, not a price). The audience for a piece of evidence is a
-regulator, an insurer or a customer's customer, and evidence only a paying
-customer can check is worth nothing.
+Re-checking someone else's evidence needs no account and no key. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (`POST /v1/evidence/verify`, and `/verify` on this site) allows 20 a day
+per address; manifest diff allows 10 a day. Register and Cell have no daily cap
+on either. The file verifier has the same limit as the Article 14 validator, counted separately
+(it spends its own `evidence_verify` counter, not the validator's); the cap is an anti-abuse limit, not a price. The audience
+for a piece of evidence is a regulator, an insurer or a customer's customer, and
+evidence only a paying customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
@@ -204,9 +206,13 @@ This README therefore focuses on the smaller product that the repository can gro
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+
+No enterprise certification or compliance attestation is held.
+
 ## Product Direction
 The way to describe NeuralBridge today is this:
-> NeuralBridge is a lightweight integration hub that helps AI workflows interact with external systems through a clean backend, a gateway layer, and a small set of supported adapters.
+> NeuralBridge is a lightweight integration hub that helps AI workflows interact with external systems through a clean backend, a gateway layer, and a small set of adapters (supported scope intended, not yet claimed).
 
 That is a narrower claim than the original vision, but it is a stronger foundation. The current priority is not maximum breadth. It is a smaller platform that can be run, tested, and understood end-to-end.
 
@@ -328,7 +334,7 @@ The most valuable first-run checks are the following:
 | Open `/docs` | Confirms the backend starts |
 | Create a connection object | Confirms the core backend model works |
 | Use an MCP list call | Confirms the gateway path is alive |
-| Run one supported adapter flow | Confirms an actual integration path works |
+| Run one adapter flow | Confirms an actual integration path works |
 | Inspect audit output | Confirms actions are being recorded |
 
 ## Example Interaction Model
@@ -339,7 +345,7 @@ flowchart LR
     A[Start Backend] --> B[Open API Docs]
     B --> C[Create Connection]
     C --> D[Expose Tool via Gateway]
-    D --> E[Invoke Supported Adapter]
+    D --> E[Invoke Adapter]
     E --> F[Return Response]
     F --> G[Review Audit Entry]
 ```
@@ -395,7 +401,7 @@ The most valuable tests for the reduced-scope version of the project are:
 |---|---|
 | Backend startup | Ensures the project boots cleanly |
 | Connection creation | Protects the basic workflow |
-| Supported adapters | Proves real integration value |
+| Adapters (intended supported scope) | Proves an integration path works |
 | MCP tool listing and invocation | Proves the gateway path |
 | Audit trail behavior | Proves system actions are traceable |
 | Auth and access control | Protects the minimum secure boundary |
@@ -417,7 +423,7 @@ The long-term direction remains broader than the current public promise, but the
 
 ```mermaid
 flowchart LR
-    A[Stable Backend Runtime] --> B[Supported Adapter Set]
+    A[Stable Backend Runtime] --> B[Small Adapter Set]
     B --> C[Gateway and Audit Reliability]
     C --> D[Cleaner Dashboard Experience]
     D --> E[Stronger Security Boundaries]

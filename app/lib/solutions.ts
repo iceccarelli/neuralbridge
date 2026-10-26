@@ -91,14 +91,14 @@ export const SOLUTIONS: SolutionPage[] = [
     lead:
       'A manufacturer hands you a Declaration of Conformity, an attestation, or a safety verification bundle. Your job is to check whether it is internally consistent and still matches the machine it describes — and you should not need to buy anything to do it. A check like this shows consistency, not that the people who produced it were right.',
     clockAngle:
-      'The regulations create the paper trail you are checking: CRA Art. 14 records (applies since 11 Sep 2026) and Machinery Reg. Annex III 1.1.9 evidence of intervention (applies 20 Jan 2027). Re-checking that evidence is not gated in code at any tier: those routes never call the meter, because the audience for a piece of evidence is a regulator or an insurer, not an account holder.',
+      'The regulations create the paper trail you are checking: CRA Art. 14 records (applies since 11 Sep 2026) and Machinery Reg. Annex III 1.1.9 evidence of intervention (applies 20 Jan 2027). Re-checking someone else’s evidence needs no account, because the audience for a piece of evidence is a regulator or an insurer, not an account holder. Declaration, evidence-bundle, passport and attestation checks are not metered. The file verifier (POST /v1/evidence/verify, and /verify on this site) allows 20 a day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either.',
     painPoints: [
       { title: 'A hash chain only proves editing was caught', body: 'A chain rebuilt from genesis after deleting inconvenient records still verifies. Counter-signed head attestation is the part that catches deletion, and you can verify a signature without an account.' },
       { title: 'A label can lie about the bytes', body: 'The firmware says 3.9.0; the supplier’s published hash for 3.9.0 does not match what is on the machine. That mismatch is a first-class, reportable finding — not silently ignored.' },
-      { title: 'You need to check, not take their word for it', body: 'Every re-check route — Declaration check, manifest diff, bundle re-check, attestation verify — runs with no account, by design.' },
+      { title: 'You need to check, not take their word for it', body: 'Declaration check, manifest diff, bundle re-check, passport check, attestation verify and the file verifier all run with no account, by design. Only the file verifier and manifest diff carry a daily allowance; the others are not metered.' },
     ],
     proof: [
-      { title: 'Free to re-check, by design', body: 'Declaration check, bundle re-verification, and attestation verification never call the meter in code — the buyer or auditor is never the paying customer.', href: '/#pricing' },
+      { title: 'Free to re-check, by design', body: 'Declaration check, bundle re-verification, passport check and attestation verification are not metered in code, so the buyer or auditor is never the paying customer. The file verifier and manifest diff carry small daily allowances.', href: '/#pricing' },
       { title: 'Counter-signed head attestation', body: 'A signature over the ledger head by a key the operator does not hold — the one thing that catches a ledger that was quietly shortened.', href: `/docs/assurance/attest` },
     ],
     primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
@@ -109,18 +109,18 @@ export const SOLUTIONS: SolutionPage[] = [
     slug: 'ai-ops',
     role: 'AI / ops platform team',
     kicker: 'For teams building on top of the platform layer',
-    headline: 'The assurance product sits on a real integration layer — not a demo.',
+    headline: 'The assurance product is built on an integration layer you can run from source.',
     lead:
       'NeuralBridge is the FastAPI backend, MCP gateway, and connection model the assurance product is built on. If your team is exposing tools to AI agents or wiring up connection state, this is the layer underneath, not a separate pitch.',
     clockAngle:
       'The compliance clocks (CRA Art. 14 since 11 Sep 2026; Machinery Reg. Annex III 1.1.9 from 20 Jan 2027) are what the assurance layer answers to. The platform layer underneath is judged by a narrower, honest standard: what is actually supported today, not the roadmap.',
     painPoints: [
-      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small supported adapter set (PostgreSQL, REST) — not a universal enterprise middleware claim.' },
+      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small adapter set (PostgreSQL, REST) whose supported scope is intended, not yet claimed — not a universal enterprise middleware claim.' },
       { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard is a separate Vite/React admin UI that makes no calls to the assurance API — it is not integrated with the assurance product. The working surfaces are /console and /ai on this site. Said plainly, not glossed over.' },
       { title: 'Broad adapter coverage is evolving, not shipped', body: 'Treat anything not marked Supported in the README as evolving. That is the honest line, and it is the one this page holds too.' },
     ],
     proof: [
-      { title: 'The platform status table', body: 'What is Supported vs Evolving today, generated from the same README the rest of this site is checked against.', href: '/#platform' },
+      { title: 'The platform status table', body: 'The README’s status table, word for word — a test compares the site’s rows with it.', href: '/#platform' },
       { title: 'MCP gateway', body: 'Tool listing and invocation for AI agents, sitting underneath the assurance API.', href: '/#platform' },
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },
