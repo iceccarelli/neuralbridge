@@ -30,13 +30,13 @@
     "currency": "EUR",
     "price_note": "Register and Cell prices are launch hypotheses, not validated with paying customers, and not a quote. Purchase works only where the operator has deployed the hosted API.",
     "tiers": [
-      { "name": "Validator", "price": 0, "period": null, "self_serve": true, "note": "No card. Daily allowances apply (for example 20 evidence re-checks a day per address without an account); GET /v1/plans is what the software enforces." },
-      { "name": "Register", "price": 390, "period": "month", "self_serve": true, "price_status": "unvalidated_list_price" },
-      { "name": "Cell", "price": 1290, "period": "month", "self_serve": true, "price_status": "unvalidated_list_price" },
+      { "name": "Validator", "price": 0, "period": null, "self_serve": true, "note": "No card. Daily allowances apply (for example the file verifier allows 20 a day per address without an account; Declaration, bundle, passport and attestation checks are not metered); GET /v1/plans is what the software enforces." },
+      { "name": "Register", "price": 390, "period": "month", "self_serve": false, "purchasable_now": false, "price_status": "unvalidated_list_price", "note": "Not purchasable today: POST /v1/checkout answers 503 price_not_configured until an operator configures Stripe prices on a deployed API." },
+      { "name": "Cell", "price": 1290, "period": "month", "self_serve": false, "purchasable_now": false, "price_status": "unvalidated_list_price", "note": "Not purchasable today: POST /v1/checkout answers 503 price_not_configured until an operator configures Stripe prices on a deployed API." },
       { "name": "Supplier", "price": null, "period": "month", "self_serve": false, "note": "Sales-assigned pricing, no self-serve price yet." }
     ]
   },
-  "honesty_note": "Checkout and the live plans API are real code paths, but they only activate once the operator finishes deploying the hosted API and setting NEXT_PUBLIC_ASSURANCE_API_URL. Do not report purchase as available unless you have independently confirmed the live API responds.",
+  "honesty_note": "Purchase is inactive today. Checkout and the live plans API are real code paths, but they only activate once the operator finishes deploying the hosted API with Stripe prices configured and sets NEXT_PUBLIC_ASSURANCE_API_URL; until then POST /v1/checkout returns 503 price_not_configured. Do not report purchase as available unless you have independently confirmed the live API responds and a plan lists purchasable: true.",
   "contact": {
     "issues": "https://github.com/iceccarelli/neuralbridge/issues",
     "sales": "https://neuralbridge.io/contact"

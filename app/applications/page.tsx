@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { REPO, SALES } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
+import ImageryNote from '../components/ImageryNote';
 
 export const metadata: Metadata = {
   title: 'Applications | Industrial Autonomous Assurance',
@@ -137,6 +138,7 @@ export default function ApplicationsPage() {
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

@@ -3,6 +3,7 @@ import { REPO, SRC } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import { ROUTES, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
+import ImageryNote from '../components/ImageryNote';
 import openapi from '../../public/openapi.json';
 
 const SITE_URL = 'https://neuralbridge.io';
@@ -171,6 +172,7 @@ else:
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }
