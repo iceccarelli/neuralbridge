@@ -30,6 +30,7 @@ Each step asserts on parsed JSON, never on a substring of rendered text.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import hmac
@@ -43,6 +44,7 @@ import pytest
 
 from assurance.change.store import OPENED_KIND
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.evidence.verify_export import _SAME_PARTY
 
 from . import interfaces_fixtures as fx
 from .interfaces_scenario import PERSON, Plant, run_cli, run_started
@@ -82,11 +84,19 @@ class Hosted:
         assert r.status_code in (200, 201), f"{method} {path}: {r.status_code} {r.text[:400]}"
         return r.json()
 
-    def webhook(self, event: dict[str, Any]) -> httpx.Response:
-        """A Stripe event signed the way Stripe signs it, with a throwaway secret."""
+    def close(self) -> None:
+        self.http.close()
+
+    def webhook(self, event: dict[str, Any], *, signed_with: str = WEBHOOK_SECRET,
+                age: int = 0) -> httpx.Response:
+        """A Stripe event signed the way Stripe signs it, with a throwaway secret.
+
+        ``signed_with`` and ``age`` (seconds the timestamp is in the past) exist to send the
+        forgeries: a signature made with another secret, and a captured request replayed late.
+        """
         raw = json.dumps(event).encode()
-        stamp = str(int(time.time()))
-        sig = hmac.new(WEBHOOK_SECRET.encode(), f"{stamp}.".encode() + raw,
+        stamp = str(int(time.time()) - age)
+        sig = hmac.new(signed_with.encode(), f"{stamp}.".encode() + raw,
                        hashlib.sha256).hexdigest()
         return self.http.post("/v1/billing/webhook", content=raw, headers={
             "stripe-signature": f"t={stamp},v1={sig}", "content-type": "application/json"})
@@ -100,15 +110,31 @@ class Hosted:
         session, customer = f"cs_golden_{name}", f"cus_golden_{name}"
         before = self.call("GET", "/v1/checkout/complete", session_id=session)
         assert before.status_code == 202 and before.json()["detail"]["status"] == "pending"
-        granted = self.webhook({
+        event = {
             "id": f"evt_golden_{name}", "created": int(time.time()),
             "type": "checkout.session.completed",
             "data": {"object": {
                 "id": session, "payment_status": "paid", "customer": customer,
                 "subscription": f"sub_golden_{name}",
                 "customer_details": {"email": f"{name}@golden.example"},
-                "metadata": {"tier": tier, "company": f"Golden {name}"}}}})
+                "metadata": {"tier": tier, "company": f"Golden {name}"}}}}
+        accounts = self.live.accounts
+        known = len(accounts.list_accounts())
+        # a forged or replayed-late webhook grants nothing and mints no key
+        for forged in (self.webhook(event, signed_with="whsec_not_the_secret"),
+                       self.webhook(event, age=3600)):
+            assert forged.status_code == 400, forged.text
+            assert forged.json()["detail"]["error"] == "signature_rejected"
+        assert self.call("GET", "/v1/checkout/complete", session_id=session).status_code == 202
+        assert len(accounts.list_accounts()) == known
+        granted = self.webhook(event)
         assert granted.status_code == 200 and granted.json()["tier"] == tier, granted.text
+        assert len(accounts.list_accounts()) == known + 1
+        # the same signed event delivered again: acknowledged as a duplicate, nothing new
+        replay = self.webhook(event)
+        assert replay.status_code == 200 and replay.json()["duplicate"] is True, replay.text
+        assert len(accounts.list_accounts()) == known + 1
+        assert len(accounts.keys_for(granted.json()["account_id"])) == 1
         handed = self.call("GET", "/v1/checkout/complete", session_id=session)
         assert handed.status_code == 200, handed.text
         body = handed.json()
@@ -143,6 +169,8 @@ def outcome_of(bundle: dict[str, Any]) -> str:
     if case["status"] == "closed" and states == {"waived"} and waivers \
             and not supports(case):
         return "waived"
+    if case["status"] == "closed" and states == {"waived"} and waivers and supports(case):
+        return "waived_citing_unattested_evidence"
     if case["status"] == "awaiting_reverification" and states \
             and all(s == "below_validated:community" for s in states):
         return "refused_below_validated"
@@ -250,11 +278,15 @@ def env(live_api, tmp_path, monkeypatch):
     monkeypatch.setenv("ASSURANCE_ATTEST_LOGS", str(tmp_path / "attestations"))
     for var in ("STRIPE_SECRET_KEY", "ASSURANCE_PRICE_REGISTER", "ASSURANCE_PRICE_CELL"):
         monkeypatch.delenv(var, raising=False)
-    return live_api, Hosted(live_api), tmp_path
+    hosted = Hosted(live_api)
+    try:
+        yield live_api, hosted, tmp_path
+    finally:
+        hosted.close()
 
 
 class TestTheGoldenPath:
-    def test_provision_collect_drift_close_three_ways_sign_and_verify(self, env):
+    def test_provision_collect_drift_close_three_ways_sign_and_verify(self, env, monkeypatch):
         live, hosted, tmp = env
 
         # -- provision: A (Cell), B (Cell), R (Register) through the real handover -------
@@ -307,14 +339,67 @@ class TestTheGoldenPath:
         assert case0501["before_hash"] == baseline["configuration_hash"]
         assert case0501["after_hash"] != case0501["before_hash"]
         assert hosted.ok("GET", "/v1/change/cases", b_key)["cases"] == []
-        # ... and they live in A's own ledger file: not B's, not the operator's shared one
+        # ... and they live in A's own ledger file: A's is not empty; B's is empty; the
+        # operator's shared ledger exists and holds exactly nothing
         a_ledger, b_ledger = live.tenant_ledger(a_id), live.tenant_ledger(b_id)
+        # The service creates the shared ledger lazily and nothing here should ever touch it,
+        # so create it empty first: "holds exactly nothing" is then a statement about a file
+        # that exists, not about one that happens not to.
         operator_db = live.root / "operator.db"
+        operator_ledger = EvidenceLedger(operator_db)
         for serial in SERIALS:
             assert [e.kind for e in a_ledger.entries(subject=cid[serial])] == [OPENED_KIND]
-            assert b_ledger.entries(subject=cid[serial]) == []
-            assert not operator_db.exists() or \
-                EvidenceLedger(operator_db).entries(subject=cid[serial]) == []
+
+        def tenancy_holds() -> None:
+            assert list(a_ledger.entries()) != []
+            assert list(b_ledger.entries()) == []
+            assert operator_db.exists()
+            assert list(operator_ledger.entries()) == []
+
+        tenancy_holds()
+
+        # -- the other paid routes keep the same gate: 401 / 401 / 402 ---------------------
+        now = run_started().strftime("%Y-%m-%dT%H:%M:%SZ")
+        when = run_started()
+        run = trace(when, trace_id="RUN-GATE-PROBE")
+        paid = [
+            ("POST", "/v1/machinery/manifest", {
+                "manifest": json.loads(baseline_path.read_text(encoding="utf-8")),
+                "actor": "m.keller"}),
+            ("POST", "/v1/machine/verify", {
+                "envelope": envelope_dict(), "trace": run.hashable_payload(),
+                "actor": PERSON, "subject": key_of(VALIDATED)}),
+            ("POST", "/v1/watch/report", {
+                "watch_id": "WATCH-GATE-PROBE", "run_started_at": now, "machines": [{
+                    "serial": "0777", "status": "uncollectable", "observed_at": now,
+                    "collection_complete": False, "detail": "probe"}]}),
+            ("GET", "/v1/operators", None),
+            ("POST", "/v1/operators", {"name": "x.operator", "role": "decider"})]
+        for method, path, body in paid:
+            assert hosted.call(method, path, None, body).status_code == 401, path
+            assert hosted.call(method, path, "asr_not_a_key", body).status_code == 401, path
+            refused = hosted.call(method, path, r_key, body)
+            assert refused.status_code == 402, (path, refused.status_code, refused.text[:200])
+            assert refused.json()["detail"]["tier"] == "register", path
+        # the Register plan DOES include the Article 14 register: the boundary is exact
+        late_signal = {
+            "received_at": "2026-09-18T21:40:00Z", "channel": "customer_or_integrator",
+            "description": "Gate probe", "reference": "T-1",
+            "actor": {"identifier": PERSON, "role": "Head of Engineering"}}
+        # FINDING, pinned as found: a keyless write to the register on a deployment with NO
+        # operator key configured is 503 ("refuses unauthenticated writes by default"), not
+        # 401; CLAUDE.md says 401. The deployment sets ASSURANCE_API_KEYS (the e2e script
+        # does), and then it is the 401 below. /v1/change, /v1/machine etc. are 401 either way.
+        unconfigured = hosted.call("POST", "/v1/cases/CASE-GATE/signal", None, late_signal)
+        assert unconfigured.status_code == 503
+        operator_key = "golden-path-throwaway-operator-key"
+        monkeypatch.setenv("ASSURANCE_API_KEYS", operator_key)
+        assert hosted.call("POST", "/v1/cases/CASE-GATE/signal", None,
+                           late_signal).status_code == 401
+        assert hosted.call("POST", "/v1/cases/CASE-GATE/signal", "asr_not_a_key",
+                           late_signal).status_code == 401
+        assert hosted.call("POST", "/v1/cases/CASE-GATE/signal", r_key,
+                           late_signal).status_code == 201
 
         # -- refusals on A's case ---------------------------------------------------------
         target = f"/v1/change/cases/{cid[VALIDATED]}"
@@ -356,14 +441,27 @@ class TestTheGoldenPath:
             assert missing.status_code == 404, (path, missing.status_code, missing.text[:200])
             assert missing.json()["detail"] == {"error": "case_not_found",
                                                 "case_id": cid[VALIDATED]}
+        # -- who may make a human decision: a decider OPERATOR, never an account key ------
         decision = {"disposition": "rejected", "reason": "r", "actor": PERSON}
-        by_account = hosted.call("POST", f"{target}/decision", a_key, decision)
-        assert by_account.status_code == 403
-        assert by_account.json()["detail"]["error"] == "operator_required"
         someone_else = hosted.call("POST", f"{target}/decision", decider,
                                    {**decision, "actor": "not.the.operator"})
         assert someone_else.status_code == 403
         assert someone_else.json()["detail"]["error"] == "actor_mismatch"
+        contributor = hosted.ok("POST", "/v1/operators", decider,
+                                {"name": "c.contributor", "role": "contributor"})
+        assert contributor["role"] == "contributor"
+        human_bodies = {
+            "decision": decision, "resume": {"reason": "r", "actor": PERSON},
+            "resolve-decision": {"decision": "q", "resolution": "r", "actor": PERSON},
+            "waive-reverification": {"entry": "SF-01", "reason": "r", "actor": PERSON}}
+        for verb, body in human_bodies.items():
+            by_account = hosted.call("POST", f"{target}/{verb}", a_key, body)
+            assert by_account.status_code == 403, (verb, by_account.status_code)
+            assert by_account.json()["detail"]["error"] == "operator_required", verb
+            by_contributor = hosted.call("POST", f"{target}/{verb}", contributor["api_key"],
+                                         {**body, "actor": "c.contributor"})
+            assert by_contributor.status_code == 403, (verb, by_contributor.status_code)
+            assert by_contributor.json()["detail"]["error"] == "decider_role_required", verb
         # every refusal left the case exactly as the push opened it
         assert hosted.ok("GET", target, a_key)["status"] == "open"
 
@@ -416,6 +514,7 @@ class TestTheGoldenPath:
 
         bundles = {s: hosted.ok("GET", f"/v1/change/cases/{cid[s]}/export", a_key,
                                 skeleton="true") for s in SERIALS}
+        exports_seen = list(bundles.values())     # scanned for secrets at the end
         outcomes = {s: outcome_of(b) for s, b in bundles.items()}
         assert outcomes == {VALIDATED: "validated", WAIVED: "waived",
                             REFUSED: "refused_below_validated"}
@@ -428,6 +527,23 @@ class TestTheGoldenPath:
         assert {d["by"] for d in waiver_case["resolved_decisions"]} == {PERSON}
         assert "waived" not in final_case(bundles[VALIDATED])["evidence_current"].values()
         assert "current" not in waiver_case["evidence_current"].values()
+        # who did it, as the export records it: every waiver and the closing decision carry
+        # an operator-bound credential; claim / advance / re-verify were an account key's
+        # declared names; the case was opened by the hosted watch report (automation)
+        for serial in (VALIDATED, WAIVED):
+            entries = bundles[serial]["entries"]
+            assert entries[0]["evidence"]["actor"]["identifier"] == "hosted-watch-report"
+            assert entries[0]["evidence"]["actor"]["kind"] == "automation"
+            by_operator = [e for e in entries
+                           if "attribution=authenticated_operator" in e["evidence"]["actor"]["role"]]
+            by_account_key = [e for e in entries
+                              if "attribution=declared_by_account_key" in e["evidence"]["actor"]["role"]]
+            human_steps = len(final_case(bundles[serial])["resolved_decisions"]) + 1
+            assert len(by_operator) == human_steps, (serial, len(by_operator), human_steps)
+            assert entries[-1] in by_operator          # the close is the operator's
+            assert {e["evidence"]["actor"]["identifier"] for e in by_operator} == {PERSON}
+            assert {e["evidence"]["actor"]["kind"] for e in by_operator} == {"person"}
+            assert len(by_account_key) + len(by_operator) + 1 == len(entries), serial
 
         # -- verify independently: offline with the key, and anonymously over HTTP -------
         public_pem = public_key.read_text(encoding="utf-8")
@@ -440,6 +556,11 @@ class TestTheGoldenPath:
             anon = verify_anonymously(live, bundle, public_pem)
             assert anon["ok"] is True and anon["completeness"] == "anchored", (serial, anon)
             assert anon["problems"] == []
+            # "anchored" is never a stronger claim than it is: the verifier still says the
+            # party holding a hosted ledger could hold the signing key too
+            for said in (offline, anon):
+                assert said["assumptions"], serial
+                assert _SAME_PARTY in said["assumptions"], (serial, said["assumptions"])
             # the same bundle with no key is only internally consistent, and says so
             keyless = run_cli("evidence", "verify", tmp / f"export-{serial}.json", "--json")
             assert keyless.returncode == 0
@@ -456,13 +577,51 @@ class TestTheGoldenPath:
         head = bundles[VALIDATED]["attestation"]["head_seq"]
         tail_cut = _cut_tail(bundles[VALIDATED], head - 1)
         assert tail_cut["attestation"]["head_seq"] == head - 1
+        # ... and the forger who also re-points the embedded anchor at the shorter head but
+        # cannot sign it: the signature is garbage of the right shape
+        repointed = copy.deepcopy(tail_cut)
+        repointed["anchor"] = {
+            **bundles[VALIDATED]["anchor"],
+            "ledger_length": tail_cut["attestation"]["length"],
+            "head_seq": tail_cut["attestation"]["head_seq"],
+            "head_link_hash": tail_cut["attestation"]["head_link_hash"],
+            "signature": base64.b64encode(bytes(64)).decode()}
+        assert repointed["anchor"]["signature"] != bundles[VALIDATED]["anchor"]["signature"]
         for label, forged in (("edited", edited), ("truncated", cut),
-                              ("tail-cut-and-rewritten", tail_cut)):
+                              ("tail-cut-and-rewritten", tail_cut),
+                              ("tail-cut-with-forged-anchor", repointed)):
             code, offline = verify_offline(forged, tmp, f"forged-{label}", public_key)
             anon = verify_anonymously(live, forged, public_pem)
             assert code != 0 and offline["ok"] is False, (label, offline)
             assert offline["completeness"] != "anchored", (label, offline)
             assert anon["ok"] is False and anon["completeness"] != "anchored", (label, anon)
+
+        # a perfectly good export checked against somebody else's key is not anchored either
+        other = run_cli("attest", "keygen", "--out", tmp / "secrets" / "other.pem",
+                        "--public-out", tmp / "other.pub")
+        assert other.returncode == 0, other.stderr
+        code, offline = verify_offline(bundles[VALIDATED], tmp, "wrong-key", tmp / "other.pub")
+        anon = verify_anonymously(live, bundles[VALIDATED],
+                                  (tmp / "other.pub").read_text(encoding="utf-8"))
+        assert code != 0 and offline["ok"] is False and offline["completeness"] != "anchored"
+        assert anon["ok"] is False and anon["completeness"] != "anchored", anon
+
+        # a head the service was only TOLD (POST /v1/ledger/attest, signed by the same
+        # key) is never an anchor: embedded in the same export it reads declared_head
+        monkeypatch.setenv("ASSURANCE_ATTEST_KEY", str(signing_key))
+        told = bundles[VALIDATED]["attestation"]
+        counter = hosted.ok("POST", "/v1/ledger/attest", a_key, {
+            "ledger_length": told["length"], "head_seq": told["head_seq"],
+            "head_link_hash": told["head_link_hash"], "note": "declared by the holder"})
+        assert counter["attestation"]["basis"] == "declared_by_holder"
+        bare = hosted.ok("GET", f"{target}/export", a_key, skeleton="true", anchor="false")
+        assert "anchor" not in bare
+        declared = {**bare, "anchor": counter["attestation"]}
+        code, offline = verify_offline(declared, tmp, "declared-head", public_key)
+        anon = verify_anonymously(live, declared, public_pem)
+        assert code == 3 and offline["completeness"] == "declared_head", offline
+        assert anon["completeness"] == "declared_head", anon
+        assert offline["anchor"]["basis"] == "declared_by_holder"
 
         # -- a record sealed after the signature is covered by no signature --------------
         # ("anchored" must be earned: a head that stops short of the ledger is partial)
@@ -471,6 +630,7 @@ class TestTheGoldenPath:
             "description": "Recorded after the head was signed", "reference": "T-1",
             "actor": {"identifier": PERSON, "role": "Head of Engineering"}})
         late = hosted.ok("GET", f"{target}/export", a_key, skeleton="true")
+        exports_seen.append(late)
         code, partial = verify_offline(late, tmp, "late", public_key)
         assert code == 3 and partial["completeness"] == "anchored_partial", partial
         assert partial["anchor"]["records_after_anchor"] == 1
@@ -479,6 +639,7 @@ class TestTheGoldenPath:
         # the operator signs the new head, and the same export is anchored again
         assert attest_sign(tmp, a_id, signing_key)["basis"] == "read_from_ledger"
         again = hosted.ok("GET", f"{target}/export", a_key, skeleton="true")
+        exports_seen.append(again)
         code, offline = verify_offline(again, tmp, "resigned", public_key)
         assert code == 0 and offline["completeness"] == "anchored", offline
         assert verify_anonymously(live, again, public_pem)["completeness"] == "anchored"
@@ -509,6 +670,7 @@ class TestTheGoldenPath:
         lapsed = hosted.call("GET", f"/v1/cases/{cid[VALIDATED]}/export", a_key,
                              skeleton="true")
         assert lapsed.status_code == 200
+        exports_seen.append(lapsed.json())
         assert lapsed.headers["x-assurance-access"] == "evidence-readout-only"
         assert outcome_of(lapsed.json()) == "validated"
         code, offline = verify_offline(lapsed.json(), tmp, "lapsed", public_key)
@@ -517,6 +679,33 @@ class TestTheGoldenPath:
         # B, who never lapsed, is untouched and still sees none of A's evidence
         assert hosted.ok("GET", "/v1/change/cases", b_key)["cases"] == []
         assert hosted.call("GET", f"{target}/export", b_key).status_code == 404
+
+        # nothing leaked sideways, before or after any of it
+        tenancy_holds()
+        # a lapsed account's read-out lists every SUBJECT in its own ledger.
+        # FOUNDER DECISION (open, see docs/claims-registry.md): GET /v1/cases is documented as
+        # the readout of "your cases" but lists change-case ids and machine keys too, while
+        # GET /v1/cases/{id} answers 404 for a change case. Pinned as found.
+        listing = hosted.ok("GET", "/v1/cases", a_key)
+        assert set(cid.values()) <= set(listing)
+        assert {key_of(s) for s in SERIALS} <= set(listing)
+        assert hosted.call("GET", f"/v1/cases/{cid[VALIDATED]}", a_key).status_code == 404
+
+        # no secret of any party is in any export (key PREFIXES such as `asr_55TknW`, the
+        # first 11 characters, appear in actor roles BY DESIGN; only full values are scanned)
+        signing_body = "".join(line for line in signing_key.read_text(encoding="utf-8").split()
+                               if not line.startswith("-----"))
+        assert len(signing_body) > 40
+        secrets = {"A key": a_key, "B key": b_key, "R key": r_key, "A decider key": decider,
+                   "B decider key": b_op["api_key"],
+                   "A contributor key": contributor["api_key"],
+                   "operator key": operator_key, "webhook secret": WEBHOOK_SECRET,
+                   "signing key": signing_body}
+        assert len(exports_seen) == 6
+        for n, bundle in enumerate(exports_seen):
+            text = json.dumps(bundle)
+            for name, value in secrets.items():
+                assert value not in text, f"export {n} contains the {name}"
 
 
 class TestWithoutAServerRecorderTrustList:
@@ -563,4 +752,4 @@ class TestWithoutAServerRecorderTrustList:
         assert set(case["evidence_current"].values()) == {"waived"}
         assert [d["kind"] for d in case["resolved_decisions"]] == ["waiver"] * len(
             case["evidence_current"])
-        assert outcome_of(exported) != "validated"
+        assert outcome_of(exported) == "waived_citing_unattested_evidence"
