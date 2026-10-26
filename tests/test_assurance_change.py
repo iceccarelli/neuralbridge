@@ -152,6 +152,20 @@ def _same_inputs_as(bundle):
     return _INPUTS[bundle.content_hash]
 
 
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    """Run every test at noon UTC of the real date, ticking a second a call.
+
+    The advisory-case tests seal evidence "an hour after the case opened". A recording in the
+    future cannot be attested (an attestation may not be dated in the future), so with the real
+    clock after ~22:55 UTC the evidence crossed midnight and the case never reached
+    ``ready_to_close``: the same four tests failed every night. Pinning the clock removes the
+    time-of-day dependency without touching an assertion (``tests/support_clock.py``)."""
+    from .support_clock import install, today_at_noon
+
+    install(monkeypatch, today_at_noon())
+
+
 @pytest.fixture
 def ledger(tmp_path):
     return EvidenceLedger(tmp_path / "change.db")
