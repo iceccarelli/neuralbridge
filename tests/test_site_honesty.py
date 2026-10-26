@@ -491,14 +491,14 @@ class TestPrivacyDisclosesWhatTheCodeStores:
     def test_the_request_fingerprint_is_disclosed_as_a_hash_stored_only_with_an_idempotency_key(self):
         deps = read("src/assurance/api/deps.py")
         assert 'if idempotency_key is not None else ""' in deps and "hashlib.sha256()" in deps
-        item = self._item("fingerprint")
+        item = self._item("has a fingerprint")
         assert "SHA-256" in item and "Idempotency-Key" in item and "not the body" in item
 
     def test_usage_event_retention_is_the_one_in_the_store(self):
         source = read("src/assurance/billing/accounts.py")
         days = int(re.search(r"_INCLUDED_RETENTION = timedelta\(days=(\d+)\)", source).group(1))
         assert "billed_state='included' AND occurred_at <" in source
-        item = self._item("usage_events")
+        item = self._item("Usage events inside the free allowance")
         assert f"{days} days" in item and "billable" in item and "kept" in item
 
     def test_the_app_server_access_log_is_disclosed_as_on_by_default(self):
@@ -1044,7 +1044,7 @@ class TestDocsDescriptions:
             source = read(doc["file"])
             description = doc["description"]
             assert description, doc["slug"]
-            for token in re.findall(r"[A-Za-z0-9_./-]+", description.rstrip("\u2026")):
+            for token in re.findall(r"[A-Za-z0-9_]+(?:[./-][A-Za-z0-9_]+)*", description.rstrip("\u2026")):
                 assert token in source, f"{doc['slug']}: {token!r} is not in {doc['file']} (markup stripped too eagerly?)"
             assert not re.search(r"[`<>]|\]\(|\*\*", description), doc["slug"]
             assert not re.search(r"\(\d[\d,]* tests?\)|\b\d[\d,]* tests\b", description), \

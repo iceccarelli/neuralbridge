@@ -89,6 +89,14 @@ test('every docs page has its own meta description taken from its text', async (
   }
 });
 
+test('docs descriptions keep identifiers and carry no stale counts', async ({ request }) => {
+  const html = await (await request.get('/docs/assurance/attest')).text();
+  const d = /<meta[^>]+name="description"[^>]+content="([^"]*)"/.exec(html)?.[1] ?? '';
+  expect(d).toContain('verify_chain');
+  const index = await (await request.get('/docs/assurance')).text();
+  expect(/<meta[^>]+name="description"[^>]+content="([^"]*)"/.exec(index)?.[1] ?? '').not.toMatch(/\d+ tests/);
+});
+
 test('every page that shows generated imagery says so, in visible text', async ({ request }) => {
   const { paths } = await sitemap(request);
   const caption = 'Illustrative images, not photographs of a customer site.';

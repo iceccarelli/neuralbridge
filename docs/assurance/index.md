@@ -1,7 +1,7 @@
 # Assurance engines
 
 Every row below maps to code that runs — verified in this repository's own
-`pytest tests/ -q` (747 tests) and the cold-start CI job that installs from
+`pytest tests/ -q` suite and the cold-start CI job that installs from
 a bare checkout and runs the offline kit end to end.
 
 | Engine | Command | The finding nobody else produces |

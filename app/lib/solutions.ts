@@ -109,7 +109,7 @@ export const SOLUTIONS: SolutionPage[] = [
     slug: 'ai-ops',
     role: 'AI / ops platform team',
     kicker: 'For teams building on top of the platform layer',
-    headline: 'The assurance product sits on a real integration layer — not a demo.',
+    headline: 'The assurance product is built on an integration layer you can run from source.',
     lead:
       'NeuralBridge is the FastAPI backend, MCP gateway, and connection model the assurance product is built on. If your team is exposing tools to AI agents or wiring up connection state, this is the layer underneath, not a separate pitch.',
     clockAngle:

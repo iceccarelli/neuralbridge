@@ -25,13 +25,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/security`, changeFrequency: 'monthly', priority: 0.4 },
     ...SOLUTIONS.map((s) => ({
       url: `${SITE_URL}/solutions/${s.slug}`,
-     
+
       changeFrequency: 'monthly' as const,
       priority: 0.8,
     })),
     ...listDocSlugs().map(({ slug }) => ({
       url: `${SITE_URL}/docs${slug.length ? `/${slug.join('/')}` : ''}`,
-     
+
       changeFrequency: 'weekly' as const,
       priority: slug.length === 0 ? 0.6 : 0.5,
     })),
