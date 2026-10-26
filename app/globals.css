@@ -1449,6 +1449,7 @@ table.compare-table td.check {
 }
 
 .intent-proof-source {
+  overflow-wrap: anywhere;
   font-size: 0.78rem;
   color: var(--ink-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -1627,6 +1628,19 @@ table.status-table tbody tr:last-child td {
 .status-pill.supported {
   background: #eaf6f0;
   color: var(--success);
+}
+
+.status-pill.not-claimed {
+  background: var(--surface-alt);
+  color: var(--ink-soft);
+}
+
+.status-note {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--ink-soft);
 }
 
 .status-pill.evolving {

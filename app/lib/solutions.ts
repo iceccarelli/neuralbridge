@@ -115,12 +115,12 @@ export const SOLUTIONS: SolutionPage[] = [
     clockAngle:
       'The compliance clocks (CRA Art. 14 since 11 Sep 2026; Machinery Reg. Annex III 1.1.9 from 20 Jan 2027) are what the assurance layer answers to. The platform layer underneath is judged by a narrower, honest standard: what is actually supported today, not the roadmap.',
     painPoints: [
-      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small supported adapter set (PostgreSQL, REST) — not a universal enterprise middleware claim.' },
+      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small adapter set (PostgreSQL, REST) whose supported scope is intended, not yet claimed — not a universal enterprise middleware claim.' },
       { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard is a separate Vite/React admin UI that makes no calls to the assurance API — it is not integrated with the assurance product. The working surfaces are /console and /ai on this site. Said plainly, not glossed over.' },
       { title: 'Broad adapter coverage is evolving, not shipped', body: 'Treat anything not marked Supported in the README as evolving. That is the honest line, and it is the one this page holds too.' },
     ],
     proof: [
-      { title: 'The platform status table', body: 'What is Supported vs Evolving today, generated from the same README the rest of this site is checked against.', href: '/#platform' },
+      { title: 'The platform status table', body: 'The README’s status table, word for word — a test compares the site’s rows with it.', href: '/#platform' },
       { title: 'MCP gateway', body: 'Tool listing and invocation for AI agents, sitting underneath the assurance API.', href: '/#platform' },
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },
