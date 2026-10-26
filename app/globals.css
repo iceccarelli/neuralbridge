@@ -3071,3 +3071,8 @@ table.status-table tbody tr:last-child td {
   color: var(--ink-soft);
   text-align: center;
 }
+
+.privacy-body h2 {
+  font-size: 1.2rem;
+  margin: 2rem 0 0.5rem;
+}

@@ -18,12 +18,15 @@ interface Intent {
 
 // Each "output" block is an EXCERPT of what the shipped command printed on this repository's
 // synthetic example files (examples/). Every line shown is a whole line of the real output, in
-// order; a line that is only "…" marks lines left out. tests/test_site_honesty.py re-runs the
-// commands in `commands` (and the API call for the validator; the "sealed as <id>" line is left out
-// because the id changes with the date of the run) and fails if a line shown is not
-// there (the "sealed as <id>" line is left out: the id changes with the date of the run), if the verdict line is not first, or if a failing line is hidden. The README status
-// table is not command output: it renders from app/lib/platformStatus.ts, which the same test
-// compares with README.md.
+// order. A line that is only "…" marks lines left out; "… N more not shown" follows the shown
+// lines of a "not checked" list and says how many of its lines are left out.
+//
+// tests/test_site_honesty.py re-runs the commands in `commands` (and the API call for the
+// validator) and fails if a line shown is not in the output, if the verdict line is not first, if a
+// failing or never-run line is hidden, if the first line of a "not checked" or "provenance" section
+// is hidden, or if an N is wrong. The "sealed as <id>" line is left out because the id changes with
+// the date of the run. The README status table is not command output: it renders from
+// app/lib/platformStatus.ts, which the same test compares with README.md.
 const INTENTS: Intent[] = [
   {
     key: 'manufacturing',
@@ -43,7 +46,10 @@ CTRL-2026-11 (ControlCo, safety_relevant) — NEEDS REVIEW — matches found, no
       the artefact on this machine is byte-identical to one ControlCo named as affected (aaaaaaaaaaaa).
       SF-01  Protective stop on zone intrusion  (coverage already never verified)
       SF-02  Speed limit in collaborative operation  (coverage already never verified)
-…
+  not checked:
+    - 1 machine(s) carry at least one item with no hash. An affected component hiding in an unhashed item would not be found by this assessment.
+    - 1 machine(s) are known only from a declared baseline (Grimaldi/AR-7#0412): what is installed on them was never observed, so a match or a clear here is about the paperwork.
+  … 1 more not shown
   provenance:
     - This advisory is not signed, or its signature was not checked. It arrived as a file. Acting on it means changing a safety system on the authority of something anyone could have written — which is the attack this mechanism exists to prevent. Ask the supplier to publish a signed feed; it costs them one command.`,
   },
@@ -68,7 +74,10 @@ CTRL-2026-11 (ControlCo, safety_relevant) — NEEDS REVIEW — matches found, no
            t=1.000s measured 1800.0 > 500.0 mm/s (by 1300.0)
 …
   This result may NOT be used to claim how the hardware behaves.
-…`,
+  The trace's provenance ('field') is the filer's own declaration; no recorder attestation was accepted under a trust list this verifier holds, so it does not lift the tier above community.
+  not checked:
+    - 130 samples ran at a speed above the one the stopping distance was measured at (500 mm/s). Ss for those samples is a constant-deceleration model, not a measurement.
+  … 6 more not shown`,
   },
   {
     key: 'compliance',
@@ -104,7 +113,10 @@ CTRL-2026-11 (ControlCo, safety_relevant) — NEEDS REVIEW — matches found, no
            no verification in the ledger has ever run ssm_separation, stop_characterisation for this machine.
   [never ] SF-02 [PL d]  Speed limit in collaborative operation
            no verification in the ledger has ever run speed_limit for this machine.
-  Interventions on safety-bearing items with nothing re-run: INT-0007`,
+  Interventions on safety-bearing items with nothing re-run: INT-0007
+  not checked:
+    - 1 manifest item(s) carry no hash, so a change to them would not appear in a divergence report and would only reach this assessment if somebody wrote an intervention record by hand.
+  … 2 more not shown`,
   },
   {
     key: 'ai-ops',

@@ -80,8 +80,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <h4>Industrial Autonomous Assurance</h4>
                 <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
                   Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
-                  else&apos;s evidence needs no account. The file verifier allows 20 a day per address; the other
-                  re-checks are not metered.
+                  else&apos;s evidence needs no account. The file verifier allows 20 a day per address and manifest
+                  diff 10; declaration, bundle, passport and attestation checks are not metered.
                 </p>
               </div>
 

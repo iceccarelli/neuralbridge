@@ -22,12 +22,9 @@ the same rows; `tests/test_site_honesty.py` fails if the three differ.
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
-What "small set of working adapters" means today: the candidates are
-PostgreSQL and REST. PostgreSQL has been exercised against a real server
-only by the `/ai` control-plane and MCP tests (they skip without one). The
-REST adapter sends no HTTP request: its calls are commented out behind
-canned mock data, and its tests construct it and read that data. No
-enterprise certification or compliance attestation is held.
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+
+No enterprise certification or compliance attestation is held.
 
 Treat anything not marked **Supported** as evolving, whatever older marketing
 copy elsewhere in this repository's history might have claimed. `src/dashboard`

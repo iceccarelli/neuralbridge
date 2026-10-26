@@ -121,7 +121,10 @@ export function firstParagraph(markdown: string): string {
     if (!text || /^(#|\||>|[-*+] |\d+\. |!!!|--8<--|<|---)/.test(text)) continue;
     const plain = text
       .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/[`*_]/g, '')
+      .replace(/`/g, '')
+      // Emphasis markers come off only where they open or close a span: snake_case and 2*3 keep theirs.
+      .replace(/(\*\*|__)(\S(?:.*?\S)?)\1/g, '$2')
+      .replace(/(^|[\s(])([*_])(\S(?:.*?\S)?)\2(?=$|[\s).,;:!?])/g, '$1$3')
       .replace(/\s+/g, ' ')
       .trim();
     if (plain.length < 20) continue;
