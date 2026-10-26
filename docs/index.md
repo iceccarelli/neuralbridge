@@ -46,9 +46,8 @@ Your ledger, your disk. No account, no API key, no upload. See
 | **Register** | €390 / month | The Article 14 register for one manufacturer: both deadline clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
 | **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, counter-signed head attestation |
 
-Re-checking someone else's evidence needs no account (20 a day per address; no daily cap on Register and Cell) — see [Pricing](pricing.md) for
-the full comparison, or [neuralbridge.io](https://neuralbridge.io/#pricing)
-for the live, purchasable version of this same table.
+Re-checking someone else's evidence needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered. The file verifier (`POST /v1/evidence/verify`, and `/verify` on this site) allows 20 a day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either. See [Pricing](pricing.md) for
+the full comparison. [neuralbridge.io](https://neuralbridge.io/#pricing) shows the same table; purchase only works on a deployment with Stripe prices configured (none today).
 
 ## The platform underneath
 

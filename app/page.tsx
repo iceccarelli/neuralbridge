@@ -1,4 +1,5 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import structuredOffers from './lib/structured-offers.json';
 import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
 import { IMAGES } from './lib/images';
@@ -6,6 +7,7 @@ import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import RotatingImage from './components/RotatingImage';
+import ImageryNote from './components/ImageryNote';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
@@ -129,9 +131,25 @@ const products = [
   },
 ] as const;
 
+// Offers and Products are emitted on the home page only (where the prices are shown), not on every
+// route: /checkout/success, /assurance and /status are noindex and should carry no price markup.
+// Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
+// pins the numbers and the period to billing/plans.py.
+const structuredDataBlocks = [
+  structuredOffers.softwareApplication,
+  ...structuredOffers.products,
+];
+
 export default function IndustrialAutonomousAssuranceSite() {
   return (
     <main id="top">
+      {structuredDataBlocks.map((block) => (
+        <script
+          key={`${block['@type']}-${'name' in block ? block.name : ''}`}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(block) }}
+        />
+      ))}
       {/* HERO */}
       <section className="hero">
         <div className="shell hero-grid">
@@ -387,9 +405,10 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <p>
               If it is not gated in code, it is not on this page — <code>GET /v1/plans</code> returns this same
               table, generated from the entitlements the software enforces. Re-checking someone else&apos;s evidence
-              needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered. The
-              file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site) allows 20 a
-              day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either.
+              needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered.
+              The file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site)
+              allows 20 a day per address; manifest diff allows 10 a day.
+              Register and Cell have no daily cap on either.
             </p>
           </div>
 
@@ -583,6 +602,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

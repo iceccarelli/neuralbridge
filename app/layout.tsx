@@ -58,66 +58,6 @@ const organizationData = {
   sameAs: [REPO],
 };
 
-// Prices are launch hypotheses, not validated with paying customers, and no public
-// deployment is selling anything yet. Say so inside the markup that states them.
-// tests/test_site_copy_parity.py pins the numbers to billing/plans.py.
-const LIST_PRICE_NOTE =
-  'Unvalidated launch list price, not a quote. Purchase works only where the operator has deployed the hosted API.';
-
-const structuredData = {
-  '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'Industrial Autonomous Assurance',
-  url: `${SITE_URL}/`,
-  applicationCategory: 'BusinessApplication',
-  operatingSystem: 'Cross-platform',
-  offers: [
-    { '@type': 'Offer', name: 'Validator', price: '0', priceCurrency: 'EUR', description: 'No card. Daily allowances apply; GET /v1/plans is what the software enforces.' },
-    { '@type': 'Offer', name: 'Register', price: '390', priceCurrency: 'EUR', description: LIST_PRICE_NOTE },
-    { '@type': 'Offer', name: 'Cell', price: '1290', priceCurrency: 'EUR', description: LIST_PRICE_NOTE },
-  ],
-  description:
-    'Evidence infrastructure for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230): a hash-chained record of what is on each machine, which checks were run against it, and when.',
-  creator: {
-    '@type': 'Person',
-    name: 'Vincenzo Grimaldi',
-    url: 'https://github.com/iceccarelli',
-  },
-  sameAs: [REPO],
-};
-
-const registerProductData = {
-  '@context': 'https://schema.org',
-  '@type': 'Product',
-  name: 'Register',
-  brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
-  description:
-    'The Article 14 register: both regulatory clocks and a hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
-  offers: {
-    '@type': 'Offer',
-    price: '390',
-    priceCurrency: 'EUR',
-    description: LIST_PRICE_NOTE,
-    url: `${SITE_URL}/#pricing`,
-  },
-};
-
-const cellProductData = {
-  '@context': 'https://schema.org',
-  '@type': 'Product',
-  name: 'Cell',
-  brand: { '@type': 'Brand', name: 'Industrial Autonomous Assurance' },
-  description:
-    'Machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation.',
-  offers: {
-    '@type': 'Offer',
-    price: '1290',
-    priceCurrency: 'EUR',
-    description: LIST_PRICE_NOTE,
-    url: `${SITE_URL}/#pricing`,
-  },
-};
-
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
@@ -140,7 +80,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <h4>Industrial Autonomous Assurance</h4>
                 <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
                   Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
-                  else&apos;s evidence needs no account (20 a day per address).
+                  else&apos;s evidence needs no account. The file verifier allows 20 a day per address; the other
+                  re-checks are not metered.
                 </p>
               </div>
 
@@ -198,7 +139,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/privacy">Privacy</a></li>
                   <li><CookiePreferencesLink className="footer-link-button" /></li>
                   <li><a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a></li>
-                  <li><a href="/status">Deploy status</a></li>
+                  <li><a href="/status">Deploy checklist</a></li>
                 </ul>
               </div>
             </div>
@@ -215,18 +156,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationData) }}
-        />
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
-        />
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(registerProductData) }}
-        />
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(cellProductData) }}
         />
       </body>
     </html>
