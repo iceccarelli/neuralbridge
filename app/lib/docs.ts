@@ -132,6 +132,19 @@ export function firstParagraph(markdown: string): string {
   return '';
 }
 
+/**
+ * A page has one h1. Some engine guides concatenate several documents (WATCH.md has five `# `
+ * headings), so every h1 after the first is rendered as an h2 instead of a second page title.
+ */
+export function singleH1(html: string): string {
+  let opens = 0;
+  let closes = 0;
+  return html.replace(/<(\/?)h1\b/g, (match, slash: string) => {
+    if (slash) return ++closes === 1 ? match : '</h2';
+    return ++opens === 1 ? match : '<h2';
+  });
+}
+
 export function loadDoc(slug: string[] | undefined): { title: string; html: string; editPath: string; description: string } | null {
   const resolved = resolveDocSource(slug);
   if (!resolved) return null;
@@ -141,7 +154,7 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
   const title = resolved.title === 'Documentation' ? firstHeading(raw, 'Documentation') : resolved.title;
-  const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
+  const html = singleH1(marked.parse(rewriteLinks(raw), { async: false }) as string);
 
   return { title, html, editPath: resolved.file, description: firstParagraph(raw) };
 }
@@ -155,7 +168,7 @@ export function loadRootDoc(file: string, title: string): { title: string; html:
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
-  const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
+  const html = singleH1(marked.parse(rewriteLinks(raw), { async: false }) as string);
 
   return { title, html, editPath: file };
 }
