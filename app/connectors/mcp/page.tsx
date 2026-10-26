@@ -3,6 +3,7 @@ import { SRC } from '../../lib/links';
 import { IMAGES } from '../../lib/images';
 import { ROUTES, TIER_LABEL, type Tier } from '../../lib/routes';
 import RotatingImage from '../../components/RotatingImage';
+import ImageryNote from '../../components/ImageryNote';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -255,6 +256,7 @@ neuralbridge-ai-mcp`}</pre>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }
