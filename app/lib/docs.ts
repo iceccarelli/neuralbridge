@@ -108,7 +108,31 @@ export function resolveDocSource(slug: string[] | undefined): { file: string; ti
   return null;
 }
 
-export function loadDoc(slug: string[] | undefined): { title: string; html: string; editPath: string } | null {
+/**
+ * The first plain-prose paragraph of a markdown document, as one line of text for a meta
+ * description: headings, HTML comments, fenced code, tables, lists, block quotes and include
+ * directives are skipped; links, code and emphasis are reduced to their words; the result is cut
+ * at a word boundary at or before 200 characters. Empty string when the document has no prose.
+ */
+export function firstParagraph(markdown: string): string {
+  const body = markdown.replace(/<!--[\s\S]*?-->/g, '').replace(/^(```|~~~)[\s\S]*?^\1/gm, '');
+  for (const block of body.split(/\n\s*\n/)) {
+    const text = block.trim();
+    if (!text || /^(#|\||>|[-*+] |\d+\. |!!!|--8<--|<|---)/.test(text)) continue;
+    const plain = text
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[`*_]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (plain.length < 20) continue;
+    if (plain.length <= 200) return plain;
+    const cut = plain.slice(0, 200);
+    return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 1)).replace(/[,;:]$/, '')}…`;
+  }
+  return '';
+}
+
+export function loadDoc(slug: string[] | undefined): { title: string; html: string; editPath: string; description: string } | null {
   const resolved = resolveDocSource(slug);
   if (!resolved) return null;
 
@@ -119,7 +143,7 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
   const title = resolved.title === 'Documentation' ? firstHeading(raw, 'Documentation') : resolved.title;
   const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
 
-  return { title, html, editPath: resolved.file };
+  return { title, html, editPath: resolved.file, description: firstParagraph(raw) };
 }
 
 // Root-level meta docs (ROADMAP.md, SECURITY.md) ported on-site the same

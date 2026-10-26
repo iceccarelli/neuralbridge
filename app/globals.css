@@ -992,6 +992,7 @@ img {
   margin-bottom: 0.5rem;
 }
 
+.section-head h1,
 .section-head h2 {
   font-size: clamp(1.5rem, 2.4vw, 2rem);
   margin: 0 0 0.6rem;
@@ -1829,6 +1830,11 @@ table.status-table tbody tr:last-child td {
   padding: 0.6rem 0.9rem;
 }
 
+.search-input-row:focus-within {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
 .search-icon {
   color: var(--ink-soft);
 }
@@ -1836,7 +1842,6 @@ table.status-table tbody tr:last-child td {
 .search-input {
   flex: 1 1 auto;
   border: none;
-  outline: none;
   font-size: 1rem;
   background: none;
   color: var(--ink);
@@ -3055,3 +3060,14 @@ table.status-table tbody tr:last-child td {
 .aw-kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0; font-size: 0.9rem; }
 .aw-kv dt { color: var(--ink-soft); }
 .aw-kv dd { margin: 0; }
+
+/* ====================== IMAGERY DISCLOSURE ====================== */
+.imagery-note {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 1.25rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  text-align: center;
+}

@@ -3,6 +3,7 @@ import { REPO, SRC } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import { CLI_DOMAINS, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
+import ImageryNote from '../components/ImageryNote';
 
 export const metadata: Metadata = {
   title: 'CLI | Industrial Autonomous Assurance',
@@ -119,6 +120,7 @@ python -m assurance kit check plant/kit.json`}</pre>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }
