@@ -107,14 +107,38 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+MORE = re.compile(r"^\u2026 (\d+) more not shown$")
+
+
+def _sections(real: str) -> list[tuple[str, list[str]]]:
+    """The ``not checked:`` / ``provenance:`` sections of a real output: header and bullet lines."""
+    raw = [line.strip() for line in real.splitlines()]
+    found, i = [], 0
+    while i < len(raw):
+        if re.fullmatch(r"(not checked|provenance):", raw[i]):
+            j = i + 1
+            while j < len(raw) and raw[j].startswith("- "):
+                j += 1
+            found.append((raw[i], raw[i + 1:j]))
+            i = j
+        else:
+            i += 1
+    return found
+
+
 def _assert_excerpt(block: str, real: str) -> None:
-    """Every line shown is a whole line of the real output, in order; nothing is re-wrapped."""
+    """Every line shown is a whole line of the real output, in order; nothing is re-wrapped.
+
+    An excerpt may not hide what the command says it did NOT establish: the first line of every
+    ``not checked`` / ``provenance`` section is shown, a provenance caveat line is shown, and bullets
+    left out are announced by a ``... N more not shown`` line whose N is checked against the output.
+    """
     real_lines, pos = _lines(real), 0
     shown = _lines(block)
     assert shown, "empty sample block"
     assert shown[0] == real_lines[0], f"the first line must be the verdict line {real_lines[0]!r}"
     for line in shown:
-        if line == OMITTED:
+        if line == OMITTED or MORE.match(line):
             continue
         try:
             pos = real_lines.index(line, pos) + 1
@@ -125,6 +149,24 @@ def _assert_excerpt(block: str, real: str) -> None:
     assert must_show, "the reference output has no failing lines: pick a command that shows them"
     hidden = [ln for ln in must_show if ln not in shown]
     assert not hidden, f"the homepage block hides lines the command printed: {hidden}"
+
+    sections = _sections(real)
+    assert sections, "the reference output has no not-checked section: pick a command that shows one"
+    announced = 0
+    for header, bullets in sections:
+        assert header in shown, f"the {header!r} section is not shown"
+        assert bullets[0] in shown, f"the first line under {header!r} is hidden: {bullets[0]!r}"
+        left_out = [b for b in bullets if b not in shown]
+        if left_out:
+            last = max(shown.index(b) for b in bullets if b in shown)
+            marker = MORE.match(shown[last + 1]) if last + 1 < len(shown) else None
+            assert marker, f"{len(left_out)} lines under {header!r} are left out and the block does not say so"
+            assert int(marker.group(1)) == len(left_out), (marker.group(0), len(left_out))
+            announced += 1
+    assert sum(1 for ln in shown if MORE.match(ln)) == announced, "a 'more not shown' line with nothing behind it"
+    caveats = [ln for ln in real_lines if re.search(r"provenance", ln, re.I)
+               and not ln.startswith("- ") and not ln.endswith(":")]
+    assert not [c for c in caveats if c not in shown], "a provenance caveat the command printed is hidden"
 
 
 def _run_cli(command: str, ledger: Path) -> subprocess.CompletedProcess:
@@ -303,8 +345,8 @@ class TestPlatformStatusIsTheReadmeTable:
 PRIVACY = "app/privacy/page.tsx"
 
 
-def _browser_storage() -> tuple[set[str], set[str]]:
-    """Mechanisms and the key names actually passed to get/set/removeItem anywhere under ``app/``."""
+def _storage_map() -> dict[str, set[str]]:
+    """key -> mechanisms, for every key passed to get/set/removeItem anywhere under ``app/``."""
     files = {p: p.read_text(encoding="utf-8") for p in (ROOT / "app").rglob("*.ts*")}
     constants = {}
     for source in files.values():
@@ -313,22 +355,29 @@ def _browser_storage() -> tuple[set[str], set[str]]:
     for source in files.values():
         for body in re.findall(r"LEGACY_KEYS\s*=\s*\[([^\]]*)\]", source):
             legacy.update(re.findall(r"'([^']+)'", body))
-    mechanisms, keys = set(), set()
+    found: dict[str, set[str]] = {}
     for source in files.values():
         for name in ("localStorage", "sessionStorage"):
             for arg in re.findall(rf"window\.{name}\.(?:get|set|remove)Item\(\s*([\w']+)", source):
-                mechanisms.add(name)
                 if arg.startswith("'"):
-                    keys.add(arg.strip("'"))
+                    keys = {arg.strip("'")}
                 elif arg in constants:
-                    keys.add(constants[arg])
+                    keys = {constants[arg]}
                 elif arg == "legacy":
-                    keys.update(legacy)
+                    keys = set(legacy)
                 else:
                     pytest.fail(f"storage key {arg!r} is not a constant this test can resolve")
+                for key in keys:
+                    found.setdefault(key, set()).add(name)
         if re.search(r"document\.cookie\s*=", source):
-            mechanisms.add("cookie")
-    return mechanisms, keys
+            found.setdefault("<cookie>", set()).add("cookie")
+    return found
+
+
+def _browser_storage() -> tuple[set[str], set[str]]:
+    found = _storage_map()
+    return ({m for ms in found.values() for m in ms},
+            {k for k in found if k != "<cookie>"})
 
 
 class TestPrivacyDisclosesWhatTheCodeStores:
@@ -363,6 +412,108 @@ class TestPrivacyDisclosesWhatTheCodeStores:
         text = page_text(read(PRIVACY))
         assert re.search(rf"\b{days} days\b", text), f"the store drops counters after {days} days"
         assert "ip:" in text and "usage_events" in text and "address" in text
+
+    @staticmethod
+    def _items() -> list[str]:
+        return [page_text(m) for m in re.findall(r"<li>(.*?)</li>", read(PRIVACY), re.S)]
+
+    def _item(self, needle: str) -> str:
+        hits = [i for i in self._items() if needle in i]
+        assert hits, f"no list item on the privacy page mentions {needle!r}"
+        return hits[0]
+
+    def test_each_key_is_filed_under_the_mechanism_the_code_uses_with_its_lifetime(self):
+        for key, mechanisms in _storage_map().items():
+            if key.startswith(("nb-console-api-key", "nb-ai-api-key")):
+                continue  # the legacy keys are read-only; named inside the nb-api-key item
+            (mechanism,) = mechanisms
+            item = self._item(key)
+            assert mechanism in item, (key, mechanism)
+            other = ({"localStorage", "sessionStorage"} - {mechanism}).pop()
+            assert other not in item.replace("nb-api-key", ""), (key, "names the wrong mechanism")
+            if mechanism == "sessionStorage":
+                assert re.search(r"gone when the tab closes", item), key
+            else:
+                assert re.search(r"until you clear site data", item), key
+
+    def test_the_legacy_keys_are_named_and_said_to_be_read_not_written(self):
+        item = self._item("nb-api-key")
+        for legacy in ("nb-console-api-key", "nb-ai-api-key"):
+            assert legacy in item
+            writes = [p for p in (ROOT / "app").rglob("*.ts*") if re.search(rf"setItem\(\s*'{legacy}'", p.read_text(encoding="utf-8"))]
+            assert not writes
+        assert "never writes to them" in item
+
+    def test_the_api_key_item_states_who_can_read_it_and_where_it_goes(self):
+        item = self._item("nb-api-key")
+        for phrase in ("any script running on this origin", "browser extensions", "X-API-Key header", "API host this build is configured with"):
+            assert phrase in item, phrase
+
+    def test_the_site_sets_no_cookies_and_sends_storage_only_to_the_api(self):
+        assert "<cookie>" not in _storage_map()
+        assert not [p for p in (ROOT / "app").rglob("*.ts*")
+                    if re.search(r"navigator\.sendBeacon|new XMLHttpRequest|new WebSocket|new EventSource", p.read_text(encoding="utf-8"))]
+        for path in (ROOT / "app").rglob("*.ts*"):
+            for call in re.findall(r"\bfetch\(\s*([^,)]*)", path.read_text(encoding="utf-8")):
+                if call.startswith("`$"):
+                    assert re.match(r"`\$\{(API_BASE|apiBase)\}", call), f"{path.name}: fetch({call})"
+        text = page_text(read(PRIVACY))
+        assert "It sets no cookies." in text
+        assert "None of it is sent anywhere except, where stated, to the API you configured." in text
+
+    def test_the_address_is_described_as_the_ipv4_address_or_ipv6_prefix_the_code_stores(self):
+        from assurance.api.deps import _bucket
+
+        assert _bucket("2001:db8:1:2:3:4:5:6") == "2001:db8:1:2::/64" and _bucket("203.0.113.9") == "203.0.113.9"
+        item = self._item("ip:")
+        assert "IPv4 address, or the IPv6 /64 prefix" in item and "full address" not in item
+
+    def test_the_metered_families_are_listed_as_metered_and_the_rest_as_writing_nothing(self):
+        metered = self._item("carry a daily allowance")
+        assert "write that counter" in metered
+        for family in ("POST /v1/spec/validate", "separation calculator", "manifest diff", "advisory check",
+                       "POST /v1/evidence/verify"):
+            assert family in metered, family
+        assert set(METERED_SCOPES) == {"validate", "separation", "machinery_diff", "advisory_check"}
+        unmetered = self._item("not metered and write nothing")
+        for family in ("Declaration", "evidence-bundle", "passport", "attestation"):
+            assert family in unmetered, family
+
+    def test_ai_reads_are_disclosed_with_the_limit_and_the_attribution_headers_the_code_uses(self):
+        assert 'spend(principal, "ai_reads", principal.plan.ai_reads_per_day, accounts)' in read(
+            "src/neuralbridge/ai/entitlements.py")
+        limit = PLANS["free"].ai_reads_per_day
+        item = self._item("ai_reads")
+        assert f"{limit} a day per address" in item and "/ai" in item
+        assert "X-NB-Actor" in item and "X-NB-Session" in item
+        assert "'X-NB-Actor': actorId" in read("app/components/AiWorkspace.tsx")
+
+    def test_the_request_fingerprint_is_disclosed_as_a_hash_stored_only_with_an_idempotency_key(self):
+        deps = read("src/assurance/api/deps.py")
+        assert 'if idempotency_key is not None else ""' in deps and "hashlib.sha256()" in deps
+        item = self._item("fingerprint")
+        assert "SHA-256" in item and "Idempotency-Key" in item and "not the body" in item
+
+    def test_usage_event_retention_is_the_one_in_the_store(self):
+        source = read("src/assurance/billing/accounts.py")
+        days = int(re.search(r"_INCLUDED_RETENTION = timedelta\(days=(\d+)\)", source).group(1))
+        assert "billed_state='included' AND occurred_at <" in source
+        item = self._item("usage_events")
+        assert f"{days} days" in item and "billable" in item and "kept" in item
+
+    def test_the_app_server_access_log_is_disclosed_as_on_by_default(self):
+        docker = read("deploy/assurance/Dockerfile")
+        cmd = re.search(r'^CMD \[(.*)\]', docker, re.M).group(1)
+        assert '"uvicorn"' in cmd and "--no-access-log" not in cmd
+        item = self._item("access log")
+        for phrase in ("uvicorn", "access line", "peer address", "by default"):
+            assert phrase in item, phrase
+
+    def test_headings_do_not_skip_a_level(self):
+        for relative in ("app/privacy/page.tsx", "app/contact/page.tsx"):
+            levels = [int(n) for n in re.findall(r"<h([1-6])\b", read(relative))]
+            assert levels[0] == 1, relative
+            assert all(b - a <= 1 for a, b in zip(levels, levels[1:], strict=False)), (relative, levels)
 
     def test_an_anonymous_call_leaves_a_counter_keyed_by_address_and_nothing_else(self, client, tmp_path):
         done = client.post(
@@ -494,7 +645,8 @@ class TestAgentDescriptorMatchesCheckout:
             assert tiers[name]["self_serve"] is False, name
             assert tiers[name]["purchasable_now"] is False, name
         assert tiers["Validator"]["price"] == 0 and tiers["Validator"]["self_serve"] is True
-        assert "503" in data["honesty_note"] or "inactive" in data["honesty_note"].lower()
+        assert data["honesty_note"].startswith("Purchase is inactive today.")
+        assert "503 price_not_configured" in data["honesty_note"]
 
     def test_the_descriptor_agrees_with_the_catalogue_flag(self, client):
         data = json.loads(read("public/.well-known/agent.json"))
@@ -516,6 +668,14 @@ class TestPricingProseIsHonest:
 
     def test_that_statement_is_true_of_the_code(self, client):
         assert client.post("/v1/checkout", json={"tier": "cell", "email": "a@example.de"}).status_code == 503
+
+    def test_nothing_the_site_serves_calls_the_pricing_table_live_purchasable(self):
+        pattern = re.compile(r"live,? purchasable", re.I)
+        files = [p for r in (ROOT / "app", ROOT / "docs", ROOT / "public") for p in r.rglob("*")
+                 if p.is_file() and p.suffix in {".ts", ".tsx", ".md", ".json", ".txt"}] + [ROOT / "README.md"]
+        offenders = [str(p.relative_to(ROOT)) for p in files
+                     if pattern.search(ts_strings(p.read_text(encoding="utf-8", errors="ignore")))]
+        assert not offenders, offenders
 
     @pytest.mark.parametrize("relative", ["app/page.tsx", "docs/pricing.md", "docs/index.md", "public/llms.txt"])
     def test_the_verification_tier_rule_is_not_in_pricing_copy(self, relative):
@@ -603,22 +763,66 @@ class TestRecheckWordingIsUniformAndTrue:
             assert re.search(r"file verifier|validator|validation|evidence re-checks|separation", m.group(0), re.I), \
                 f"{relative}: {m.group(0)!r} attaches a per-address cap to something unspecific"
 
-    def test_the_layout_footer_states_the_account_rule_and_the_verifier_cap(self):
+    def test_the_layout_footer_states_the_account_rule_and_both_allowances(self):
         no_account, _ = _allowance_sentences()
+        free = PLANS["free"]
+        diff = getattr(free, METERED_SCOPES["machinery_diff"])
         text = page_text(read("app/layout.tsx"))
         assert no_account in text
-        assert f"file verifier allows {PLANS['free'].validations_per_day} a day per address" in text
+        sentence = (f"The file verifier allows {free.validations_per_day} a day per address and manifest diff {diff}; "
+                    "declaration, bundle, passport and attestation checks are not metered.")
+        assert sentence in text, f"the footer must say: {sentence}"
+        assert not re.search(r"other re-checks are not metered|every re-check is unmetered", text, re.I)
+
+    def test_the_file_verifier_has_the_validators_limit_but_its_own_counter(self, client):
+        limit = PLANS["free"].validations_per_day
+        assert PLANS["free"].validations_per_day == limit  # the same number ...
+        body = {"track": "actively_exploited_vulnerability", "stage": "early_warning", "payload": {}}
+        assert [client.post("/v1/spec/validate", json=body).status_code for _ in range(limit)] == [200] * limit
+        assert client.post("/v1/spec/validate", json=body).status_code == 429
+        # ... counted separately: the verifier still answers from the same address.
+        assert client.post("/v1/evidence/verify", content=b"{}",
+                           headers={"Content-Type": "application/json"}).status_code != 429
+        assert "evidence_verify" not in METERED_SCOPES and "validate" in METERED_SCOPES
+
+    @pytest.mark.parametrize("relative", ["README.md", "docs/pricing.md", "docs/index.md", "docs/claims-registry.md"])
+    def test_no_copy_says_the_verifier_shares_the_validators_allowance(self, relative):
+        text = page_text(read(relative))
+        assert not re.search(r"same daily allowance|same allowance as|spends a unit of the same|shared? (?:the )?counter",
+                             text, re.I), relative
+
+    def test_the_readme_says_same_limit_counted_separately(self):
+        text = page_text(read("README.md"))
+        assert re.search(r"same limit as the Article 14 validator, counted separately", text)
 
 
 # ---------------------------------------------------------------------------
 # 10. /ai: the demo connection is a demo
 # ---------------------------------------------------------------------------
 class TestAiPageIsHonestAboutTheDemoConnection:
-    def test_no_copy_says_the_control_plane_runs_against_a_real_connection_not_a_demo(self):
-        for relative in ("app/ai/page.tsx", "app/Header.tsx", "public/llms.txt"):
+    def test_no_file_says_the_control_plane_or_platform_is_a_real_connection_not_a_demo(self):
+        pattern = re.compile(r"not a demo|real connection(?! wizard)|real integration layer", re.I)
+        offenders = []
+        roots = [ROOT / "app", ROOT / "docs"]
+        files = [p for r in roots for p in r.rglob("*") if p.is_file() and p.suffix in {".ts", ".tsx", ".md", ".json"}]
+        files += [p for p in (ROOT / "public").rglob("*") if p.is_file() and p.suffix in {".txt", ".json"}]
+        files += [ROOT / "README.md"]
+        for path in files:
+            text = ts_strings(path.read_text(encoding="utf-8", errors="ignore"))
+            if pattern.search(text):
+                offenders.append(str(path.relative_to(ROOT)))
+        assert not offenders, offenders
+
+    def test_the_ai_ops_solution_is_described_without_overclaiming(self):
+        text = ts_strings(read("app/lib/solutions.ts"))
+        headline = re.search(r"slug: 'ai-ops'.*?headline: '([^']+)'", text, re.S).group(1)
+        assert "demo" not in headline.lower() and "real" not in headline.lower(), headline
+        assert re.search(r"integration layer", headline)
+
+    def test_llms_txt_and_the_page_both_say_the_demo_connection_is_read_only(self):
+        for relative in ("app/ai/page.tsx", "public/llms.txt"):
             text = page_text(read(relative))
-            assert not re.search(r"not a demo", text, re.I), relative
-            assert not re.search(r"discover a real connection", text, re.I), relative
+            assert "shared demo connection" in text and "read-only" in text, relative
 
     def test_the_page_says_what_is_read_only_and_for_whom(self):
         text = page_text(read("app/ai/page.tsx"))
@@ -790,3 +994,92 @@ class TestSmallerItems:
                 "outline is removed from .search-input and nothing shows focus instead"
         assert not removed, "outline: none on the search input; show focus on the row instead"
         assert re.search(r"\.search-input-row:focus-within\s*\{[^}]*outline:\s*[^;]*solid", css)
+
+
+# ---------------------------------------------------------------------------
+# docs descriptions are built by the real function, on the real documents
+# ---------------------------------------------------------------------------
+def _node(script: str) -> object:
+    import shutil
+
+    node = shutil.which("node")
+    assert node, "node is not installed; the docs.ts checks need it"
+    version = subprocess.run([node, "--version"], capture_output=True, text=True, check=True).stdout  # noqa: S603
+    assert int(version.strip().lstrip("v").split(".")[0]) >= 22, "node >= 22 runs docs.ts directly"
+    done = subprocess.run(  # noqa: S603 - fixed argv; the script is a constant in this file
+        [node, "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script],
+        capture_output=True, text=True, check=False, cwd=ROOT, timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+class TestDocsDescriptions:
+    def test_first_paragraph_keeps_identifiers_and_drops_markup(self):
+        sample = ("# Title\n\n<!-- note -->\n\nCall `verify_chain` on [the ledger](ledger.md) with **care**, "
+                  "_not_ haste; snake_case_word and 2*3 stay. More words follow so that the paragraph is long enough.\n")
+        out = _node("const m = await import('./app/lib/docs.ts');"
+                    f"process.stdout.write(JSON.stringify(m.firstParagraph({json.dumps(sample)})));")
+        assert out.startswith("Call verify_chain on the ledger with care, not haste; snake_case_word and 2*3 stay.")
+        assert "](" not in out and "`" not in out and "**" not in out
+
+    def test_a_long_paragraph_is_cut_at_a_word_boundary_within_200_characters(self):
+        sample = "word " * 80
+        out = _node("const m = await import('./app/lib/docs.ts');"
+                    f"process.stdout.write(JSON.stringify(m.firstParagraph({json.dumps(sample)})));")
+        assert len(out) <= 201 and out.endswith("\u2026") and "wor\u2026" not in out
+
+    def test_every_real_docs_description_is_made_of_words_that_are_in_its_source(self):
+        docs = _node("""
+          const m = await import('./app/lib/docs.ts');
+          const out = [];
+          for (const { slug } of m.listDocSlugs()) {
+            const d = m.loadDoc(slug.length ? slug : undefined);
+            out.push({ slug: slug.join('/'), description: d.description, file: d.editPath });
+          }
+          process.stdout.write(JSON.stringify(out));
+        """)
+        assert len(docs) >= 14
+        for doc in docs:
+            source = read(doc["file"])
+            description = doc["description"]
+            assert description, doc["slug"]
+            for token in re.findall(r"[A-Za-z0-9_./-]+", description.rstrip("\u2026")):
+                assert token in source, f"{doc['slug']}: {token!r} is not in {doc['file']} (markup stripped too eagerly?)"
+            assert not re.search(r"[`<>]|\]\(|\*\*", description), doc["slug"]
+            assert not re.search(r"\(\d[\d,]* tests?\)|\b\d[\d,]* tests\b", description), \
+                f"{doc['slug']}: a test count in metadata goes stale: {description!r}"
+
+    def test_the_stale_test_count_is_out_of_the_docs_source(self):
+        assert not re.search(r"\(\d+ tests\)", read("docs/assurance/index.md"))
+
+
+# ---------------------------------------------------------------------------
+# README: one adapter vocabulary, taken from its own status table
+# ---------------------------------------------------------------------------
+class TestReadmeAdapterWordingIsConsistent:
+    def test_nothing_in_the_readme_calls_the_adapters_supported(self):
+        text = read("README.md")
+        assert not re.search(r"supported[- ]adapter|Supported Adapter", text, re.I)
+        assert not re.search(r"small set of supported", text, re.I)
+
+    def test_the_readme_carries_the_same_adapter_note_as_the_site_and_docs(self):
+        note = ts_strings(next(r["note"] for r in _site_status_rows() if r["area"] == "Small set of working adapters"))
+        assert note in page_text(read("README.md"))
+        assert note in page_text(read("docs/platform.md"))
+
+
+# ---------------------------------------------------------------------------
+# tidiness
+# ---------------------------------------------------------------------------
+class TestSourceTidiness:
+    @pytest.mark.parametrize("relative", ["app/sitemap.ts", "app/components/IntentModule.tsx", "app/lib/platformStatus.ts"])
+    def test_no_whitespace_only_or_trailing_space_lines(self, relative):
+        bad = [n for n, line in enumerate(read(relative).splitlines(), 1) if line != line.rstrip()]
+        assert not bad, f"{relative}: trailing whitespace on lines {bad}"
+
+    def test_the_intent_header_comment_says_each_thing_once(self):
+        head = read("app/components/IntentModule.tsx").split("const INTENTS")[0]
+        assert head.count("tests/test_site_honesty.py") == 1
+        assert head.count("sealed as") == 1
+        assert not re.search(r"fails\s+// if|and fails if a line shown is not\s+// there", head)
