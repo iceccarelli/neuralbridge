@@ -13,6 +13,9 @@ from collections.abc import Generator
 import pytest
 from fastapi.testclient import TestClient
 
+# NEURALBRIDGE_REQUIRE_POSTGRES: a Postgres skip becomes a failure (see the module).
+from .require_postgres_plugin import pytest_runtest_makereport  # noqa: F401
+
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:

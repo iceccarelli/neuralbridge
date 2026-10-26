@@ -1,8 +1,10 @@
 """A real assurance API on a real socket, for the cross-interface tests.
 
-Servers here use ports 18400-18499 only. Accounts, keys and per-account ledgers
-are the real ones (``assurance.api.deps``), in a temp directory; nothing about
-the domain or the HTTP layer is mocked.
+Each server listens on a socket this module binds itself, to a port the kernel chooses
+(loopback only), and hands that socket to uvicorn: there is no probe-then-bind gap, so
+two runs on one machine cannot end up talking to each other's server. Accounts, keys and
+per-account ledgers are the real ones (``assurance.api.deps``), in a temp directory;
+nothing about the domain or the HTTP layer is mocked.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,18 +24,17 @@ import uvicorn
 
 from .support_recorder import server_trust
 
-PORT_RANGE = range(18400, 18500)
 
-
-def free_port() -> int:
-    for port in PORT_RANGE:
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-            return port
-    raise RuntimeError("no free port in 18400-18499")
+def listening_socket() -> socket.socket:
+    """A loopback socket, bound and listening on a port the kernel picked, owned by the caller."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(128)
+    except OSError:
+        sock.close()
+        raise
+    return sock
 
 
 @dataclass
@@ -60,6 +62,45 @@ class LiveApi:
         return httpx.Client(base_url=self.url, timeout=30.0)
 
 
+@contextmanager
+def serve(app: Any, *, startup_timeout: float = 15.0) -> Iterator[str]:
+    """Serve ``app`` on a loopback port the kernel chose and yield its base URL.
+
+    The listening socket is bound here and handed to uvicorn, and it is released (and the
+    server thread joined) on every exit path, including a server that never starts.
+    """
+    sock = listening_socket()
+    server: uvicorn.Server | None = None
+    thread: threading.Thread | None = None
+    try:
+        port = sock.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="error"))
+        failures: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                server.run(sockets=[sock])
+            except BaseException as exc:  # noqa: BLE001  (reported to the caller below)
+                failures.append(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + startup_timeout
+        while not server.started:
+            if not thread.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("the server did not come up") from (
+                    failures[0] if failures else None)
+            time.sleep(0.02)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        if server is not None:
+            server.should_exit = True
+        if thread is not None:
+            thread.join(timeout=10)
+        sock.close()
+
+
 @pytest.fixture
 def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveApi]:
     from assurance.api import deps
@@ -72,29 +113,15 @@ def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveAp
     server_trust(monkeypatch, tmp_path)
     monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
     monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
-    deps._register_for.cache_clear()
-    deps._accounts_for.cache_clear()
-    deps._tenant_register_for.cache_clear()
 
-    port = free_port()
-    server = uvicorn.Server(uvicorn.Config(
-        create_app(), host="127.0.0.1", port=port, log_level="error"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            httpx.get(f"{url}/healthz", timeout=0.5)
-            break
-        except httpx.TransportError:
-            time.sleep(0.1)
-    else:
-        raise RuntimeError("assurance API did not come up")
-    try:
-        yield LiveApi(url=url, accounts=deps.get_accounts(), root=tmp_path)
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
+    def clear() -> None:
         deps._register_for.cache_clear()
         deps._accounts_for.cache_clear()
         deps._tenant_register_for.cache_clear()
+
+    clear()
+    try:
+        with serve(create_app()) as url:
+            yield LiveApi(url=url, accounts=deps.get_accounts(), root=tmp_path)
+    finally:
+        clear()
