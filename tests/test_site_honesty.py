@@ -42,7 +42,8 @@ def read(relative: str) -> str:
 
 def page_text(source: str) -> str:
     """The words a visitor reads in a TSX/MD/TXT source: tags and code fences dropped, entities decoded."""
-    text = re.sub(r"<[^>]+>", " ", source)
+    text = re.sub(r"</?(?:code|strong|em|a|span|b|i)\b[^>]*>", "", source)
+    text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
     text = text.replace("’", "'").replace("`", "")
     return re.sub(r"\s+", " ", text).strip()
@@ -84,10 +85,10 @@ OMITTED = "…"  # a line that is only this marks lines left out of an excerpt
 def _intents() -> dict[str, dict]:
     source = read(INTENT_TSX)
     found: dict[str, dict] = {}
-    for m in re.finditer(r"\n  \{\n    key: '(\w+)',(.*?)\n  \},", source, re.S):
+    for m in re.finditer(r"\n  \{\n    key: '([\w-]+)',(.*?)\n  \},", source, re.S):
         body = m.group(2)
         cmds = re.search(r"commands: \[(.*?)\],\n", body, re.S)
-        out = re.search(r"output: (`(?:[^`\\]|\\.)*`|\w+\(\)),\n", body, re.S)
+        out = re.search(r"output: (`(?:[^`\\]|\\.)*`|\w+\(\)),?\s*$", body, re.S)
         assert cmds and out, f"intent {m.group(1)!r} needs `commands` and `output`"
         found[m.group(1)] = {
             "commands": [c.replace("\\'", "'") for c in re.findall(r"'((?:[^'\\]|\\.)*)'", cmds.group(1))],
@@ -120,7 +121,7 @@ def _assert_excerpt(block: str, real: str) -> None:
         except ValueError:
             pytest.fail(f"homepage shows {line!r}, which the command does not print there")
     # An excerpt may not hide a failing or never-run line: those are the point of the output.
-    must_show = [ln for ln in real_lines if re.match(r"\[(?!ok|n/a)", ln)]
+    must_show = [ln for ln in real_lines if re.match(r"(\[(?!ok|n/a)|!!)", ln)]
     assert must_show, "the reference output has no failing lines: pick a command that shows them"
     hidden = [ln for ln in must_show if ln not in shown]
     assert not hidden, f"the homepage block hides lines the command printed: {hidden}"
@@ -224,7 +225,7 @@ def _site_status_rows() -> list[dict[str, str]]:
     source = read("app/lib/platformStatus.ts")
     rows = []
     for m in re.finditer(r"\{\s*area: '((?:[^'\\]|\\.)*)',\s*status: '((?:[^'\\]|\\.)*)',\s*pill: '(\w[\w-]*)'"
-                         r"(?:,\s*note: '((?:[^'\\]|\\.)*)')?\s*\}", source):
+                         r"(?:,\s*note:\s*'((?:[^'\\]|\\.)*)')?,?\s*\}", source):
         rows.append({"area": m.group(1).replace("\\'", "'"), "status": m.group(2).replace("\\'", "'"),
                      "pill": m.group(3), "note": (m.group(4) or "").replace("\\'", "'")})
     return rows
@@ -266,25 +267,23 @@ class TestPlatformStatusIsTheReadmeTable:
             assert row["pill"] == expected, row
         assert ".status-pill.not-claimed" in read("app/globals.css")
 
-    def test_adapters_row_says_what_was_exercised_and_the_tests_agree(self):
+    def test_adapters_row_says_what_was_exercised_and_the_code_agrees(self):
         rows = {r["area"]: r for r in _site_status_rows()}
         note = rows["Small set of working adapters"]["note"]
         assert "PostgreSQL" in note and "real server" in note and "/ai" in note
-        assert "REST" in note and "constructor" in note
-        # PostgreSQL really is exercised against a server only by the /ai tests ...
-        ai = read("tests/test_ai.py")
-        assert "NEURALBRIDGE_AI_PG_HOST" in ai or "NEURALBRIDGE_AI_PG" in ai
-        others = [p for p in (ROOT / "tests").glob("test_*.py")
-                  if "NEURALBRIDGE_AI_PG_HOST" in p.read_text(encoding="utf-8")]
-        assert all(p.name.startswith(("test_ai", "test_site_honesty", "conftest")) for p in others), others
-        # ... and the REST adapter's only tests construct it.
-        rest_class = re.search(r"class TestRESTAdapter:(.*?)\nclass ", read("tests/test_adapters.py") + "\nclass ", re.S)
-        assert rest_class and "await" not in rest_class.group(1) and ".execute(" not in rest_class.group(1)
-        assert "RestApiAdapter(" in rest_class.group(1)
+        assert "REST" in note and "canned" in note and "no HTTP request" in note
+        # PostgreSQL is exercised against a real server only by the /ai and MCP integration tests ...
+        owners = sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
+                        if "NEURALBRIDGE_AI_PG_HOST" in p.read_text(encoding="utf-8"))
+        assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty")) for n in owners), owners
+        # ... and the REST adapter sends no request: its calls are commented out behind canned data.
+        rest = read("src/neuralbridge/adapters/apis/rest.py")
+        assert not re.search(r"^\s*(?:response = )?await self\._client\.(get|post|put|patch|delete|head)\(", rest, re.M)
+        assert rest.count("MOCK:") >= 2 and '"mock_data"' in rest
 
     def test_docs_platform_carries_the_same_adapter_note(self):
         text = page_text(read("docs/platform.md"))
-        assert "real server" in text and "constructor" in text
+        assert "real server" in text and "canned" in text and "no HTTP request" in text
 
     def test_no_copy_claims_to_be_generated_from_the_readme(self):
         for relative in ("app/lib/solutions.ts", INTENT_TSX, "app/page.tsx", "docs/platform.md"):
