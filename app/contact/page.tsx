@@ -21,7 +21,7 @@ export default function ContactPage() {
         <div className="shell" style={{ maxWidth: '640px' }}>
           <div className="section-head">
             <span className="eyebrow">Contact</span>
-            <h2>Talk to a human</h2>
+            <h1>Talk to a human</h1>
             <p>
               Register and Cell are sales-assisted today — no self-serve checkout is live yet (see{' '}
               <a href="/#pricing">pricing</a> for why). The Supplier tier is unlisted and sales-assigned by design.
