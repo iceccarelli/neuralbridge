@@ -49,6 +49,7 @@ from .interfaces_scenario import PERSON, Plant, run_cli, run_started
 from .interfaces_support import envelope, envelope_dict, trace
 from .support import write_export
 from .support_recorder import RECORDER
+from .test_assurance_export_completeness import _cut_tail
 
 live_api = fx.live_api
 
@@ -449,7 +450,14 @@ class TestTheGoldenPath:
         edited["entries"][-1]["evidence"]["body"]["case"]["status"] = "closed"
         cut = copy.deepcopy(bundles[VALIDATED])
         cut["entries"] = cut["entries"][:-1]
-        for label, forged in (("edited", edited), ("truncated", cut)):
+        # the careful forger: the ledger's last record removed from the entries AND the
+        # skeleton, the unsigned head rewritten to match, so every internal check agrees;
+        # only the signed anchor still remembers the longer ledger
+        head = bundles[VALIDATED]["attestation"]["head_seq"]
+        tail_cut = _cut_tail(bundles[VALIDATED], head - 1)
+        assert tail_cut["attestation"]["head_seq"] == head - 1
+        for label, forged in (("edited", edited), ("truncated", cut),
+                              ("tail-cut-and-rewritten", tail_cut)):
             code, offline = verify_offline(forged, tmp, f"forged-{label}", public_key)
             anon = verify_anonymously(live, forged, public_pem)
             assert code != 0 and offline["ok"] is False, (label, offline)
