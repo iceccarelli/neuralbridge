@@ -26,6 +26,11 @@ env/
 .env.local
 .env.production
 
+# Staging rehearsal (DEPLOY_NOW.md): redacted phase records and the untracked staging fly config
+rehearsal-out/
+.rehearsal/
+deploy/assurance/fly.staging.toml
+
 # Testing
 .coverage
 htmlcov/
