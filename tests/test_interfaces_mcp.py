@@ -43,6 +43,8 @@ ALLOWED = [
     ("POST", rf"/v1/change/cases/{_ID}/claim"),
     ("POST", rf"/v1/change/cases/{_ID}/advance"),
     ("POST", rf"/v1/change/cases/{_ID}/reverification"),
+    ("POST", r"/v1/change/assess/drift"),
+    ("POST", r"/v1/change/assess/intervention"),
 ]
 #: Path segments that mean a human decision. None may appear in any call.
 FORBIDDEN = ("decision", "resume", "resolve", "waive", "reject", "defer", "close")
@@ -61,6 +63,17 @@ async def test_the_tool_list_is_exactly_what_is_documented() -> None:
     from assurance.mcp import server
 
     assert {t.name for t in await server.mcp.list_tools()} == documented_tools()
+
+
+@pytest.mark.asyncio
+async def test_no_tool_assesses_an_advisory() -> None:
+    """An advisory is third-party content; a case opened from an unsigned one is the
+    attack the signed feed exists to stop. Only a person opens that case."""
+    from assurance.mcp import server
+
+    for tool in await server.mcp.list_tools():
+        assert "advisory" not in tool.name, tool.name
+        assert "/assess/advisory" not in (tool.description or ""), tool.name
 
 
 @pytest.mark.asyncio
