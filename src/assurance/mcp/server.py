@@ -15,7 +15,9 @@ always-free routes (``plans``, ``spec_validate``), two paid routes
 calling them on the wrong plan or with no key surfaces the API's real, structured
 401/402 shape, and the change queue: three reads (``change_cases``,
 ``change_case``, ``change_export``) and three writes an agent may make
-(``change_claim``, ``change_advance``, ``change_reverify``). There is no tool that
+(``change_claim``, ``change_advance``, ``change_reverify``) and two that open a case
+from a machine's own manifests (``change_assess_drift``, ``change_assess_intervention``).
+There is no tool that assesses an advisory, and no tool that
 closes, rejects, defers or resumes a case, answers its open questions or waives a
 re-verification: those are a named person's, on the CLI or the HTTP API.
 
@@ -296,6 +298,41 @@ async def change_reverify(
     return await _call("POST", path,
                        json_body={"manifest": manifest, "actor": actor,
                                   "verification_content_hash": verification_content_hash})
+
+
+@mcp.tool()
+async def change_assess_drift(
+    baseline: dict[str, Any], observed: dict[str, Any], actor: str,
+) -> dict[str, Any]:
+    """POST /v1/change/assess/drift — compare a machine's baseline manifest with the one
+    observed now; if the divergence puts a safety function in question, a change case
+    is opened (otherwise the body says why not).
+
+    Cell-tier only. Both manifests are the caller's claim about the machine, and the
+    engine judges them as such; this opens a case for a person to work, it does not
+    clear or close anything. ``actor`` is the named person this step is taken for.
+    """
+    return await _call("POST", "/v1/change/assess/drift",
+                       json_body={"baseline": baseline, "observed": observed, "actor": actor})
+
+
+@mcp.tool()
+async def change_assess_intervention(
+    manifest: dict[str, Any], intervention_id: str, actor: str,
+) -> dict[str, Any]:
+    """POST /v1/change/assess/intervention — did an intervention already sealed in the
+    account's ledger invalidate standing evidence on this machine? Opens a change case
+    when it did.
+
+    Cell-tier only. ``intervention_id`` must name an intervention already sealed
+    (``POST /v1/machinery/intervention``); an unknown one is the API's own 4xx. There
+    is deliberately no tool to assess an advisory: an advisory is third-party content,
+    and a case opened from an unsigned one is the attack the signed feed exists to
+    stop, so that stays with a named person on the CLI or the HTTP API.
+    """
+    return await _call("POST", "/v1/change/assess/intervention",
+                       json_body={"manifest": manifest, "intervention_id": intervention_id,
+                                  "actor": actor})
 
 
 def main() -> None:
