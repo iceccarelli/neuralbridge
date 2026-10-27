@@ -715,3 +715,23 @@ class TestClockIntegrity:
         reg.record_user_notification("c1", first, "affected users", "notice", ACTOR)
         reg.record_user_notification("c1", AWARE + timedelta(days=9), "all users", "again", ACTOR)
         assert reg.case("c1").users_informed_at == first
+
+    def test_a_filing_cannot_predate_awareness(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        with pytest.raises(CaseError, match="precede"):
+            reg.record_filing("c1", Stage.EARLY_WARNING, AWARE - timedelta(hours=1), {}, ACTOR)
+        assert "early_warning" not in reg.case("c1").filings
+
+    def test_a_user_notice_cannot_predate_awareness(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        with pytest.raises(CaseError, match="before the manufacturer became aware"):
+            reg.record_user_notification(
+                "c1", AWARE - timedelta(days=1), "affected users", "notice", ACTOR
+            )
+        assert reg.case("c1").users_informed_at is None
