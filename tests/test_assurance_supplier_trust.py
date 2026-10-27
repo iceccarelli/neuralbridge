@@ -890,6 +890,38 @@ class TestApi:
         f"a.engineer (operator {accounts.operators_for(account.id)[0]['id']}, "
         f"account {account.id})")
 
+    def test_feed_baseline_accepts_only_a_feed_that_would_be_trusted(self, api, tmp_path, key):
+        client, accounts = api
+        h, account = _hdr(accounts)
+        f = AdvisoryFeed(tmp_path / "f.jsonl")
+        publish(_adv(), IDENTITY, key, f)
+        body = {"feed": f.path.read_text(), "reason": "supplier re-issued its feed"}
+
+        # No pin: the feed would not be trusted, so it cannot become the baseline.
+        refused = client.post("/v1/supplier/trust/feed-baseline", headers=h, json=body)
+        assert refused.status_code == 409
+        assert refused.json()["detail"]["error"] == "trust_decision_refused"
+
+        client.post("/v1/supplier/trust/pin", headers=h, json={
+            "supplier_id": "controlco", "public_key_pem": _pem(key), "obtained_via": "phone"})
+        ok = client.post("/v1/supplier/trust/feed-baseline", headers=h, json=body)
+        assert ok.status_code == 200, ok.text
+        baseline = ok.json()["baseline"]
+        assert baseline["supplier_id"] == "controlco" and baseline["sequence"] == 1
+        assert baseline["head_hash"] == f.read()[-1].content_hash()
+        hist = client.get("/v1/supplier/trust", headers=h).json()["history"]
+        assert hist[-1]["event"] == "feed_head_reset" and hist[-1]["reason"] == body["reason"]
+        assert "a.engineer" in hist[-1]["actor"]
+
+    def test_feed_baseline_is_a_decider_operator_decision(self, api, tmp_path, key):
+        client, accounts = api
+        h, _ = _hdr(accounts, "plain@b.de", role=None)
+        f = AdvisoryFeed(tmp_path / "f.jsonl")
+        publish(_adv(), IDENTITY, key, f)
+        r = client.post("/v1/supplier/trust/feed-baseline", headers=h,
+                        json={"feed": f.path.read_text(), "reason": "r"})
+        assert r.status_code == 403 and r.json()["detail"]["error"] == "operator_required"
+
     def test_the_operator_ledger_never_holds_pins(self, key):
         from fastapi import HTTPException
 

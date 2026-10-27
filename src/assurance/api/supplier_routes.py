@@ -319,6 +319,11 @@ class OverrideIn(EvaluateIn):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class FeedBaselineIn(EvaluateIn):
+    actor: str = Field(default="", max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 def account_trust_store(principal: Principal, register: Any) -> SupplierTrustStore:
     """The trust store in this caller's OWN ledger, or a 403.
 
@@ -514,3 +519,39 @@ def post_override(
         raise _trust_refusal(exc) from exc
     return {"override": done, "note": "Bound to this advisory's content hash. It does "
             "not pin the key, and a changed advisory is not covered."}
+
+
+# A supplier that legitimately re-issued its feed no longer extends the history this
+# account remembered, so it stays untrusted. A decider operator can accept the feed
+# in the request as the new baseline, but only if it is one that would be trusted
+# (valid signatures under a pinned key, intact chain): the head is read from that
+# feed, never typed, so an unsigned or foreign history cannot become the baseline.
+@supplier_router.post(
+    "/trust/feed-baseline",
+    summary="Accept a re-issued, trusted feed as the new baseline for rollback detection",
+)
+def post_feed_baseline(
+    body: FeedBaselineIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    who = _actor(body.actor, principal)
+    store = account_trust_store(principal, register)
+    records, error = load_feed_records(body)
+    if error:
+        raise _unprocessable("unreadable_feed", error)
+    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
+                          candidate_key=_candidate(body.candidate_public_key_pem))
+    if not trust.policy_satisfied or not records:
+        raise _trust_refusal(SupplierTrustError(
+            "this feed would not be trusted (" + trust.trust_state + "), so it cannot "
+            "become the baseline. Pin the supplier's key and supply a feed that verifies."))
+    head = records[-1]
+    try:
+        store.reset_feed_head(trust.supplier_id, head.sequence, head.content_hash(),
+                              actor=who, reason=body.reason)
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"baseline": {"supplier_id": trust.supplier_id, "sequence": head.sequence,
+                         "head_hash": head.content_hash()},
+            "note": "Later passes are compared with this head. It does not make an "
+                    "untrusted feed trusted, and it moves no key."}
