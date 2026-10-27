@@ -277,6 +277,30 @@ class TestAffectedClearOrNeither:
             assert got is want, (publishes, v, h, got, want)
 
 
+class TestARangeInWordsIsNeverReadAsClear:
+    """version_note is displayed and never parsed, so it cannot clear a version.
+
+    Regression: a supplier saying "all versions up to 4.2" while listing only 4.2
+    made a machine on 4.0 match nothing, which reads as clear.
+    """
+
+    NOTE = "all versions up to and including 3.8.2"
+
+    def test_an_unlisted_label_with_a_range_note_needs_a_person(self):
+        adv = advisory(artefact(content_hashes=(), version_note=self.NOTE))
+        found = match_item(adv, item(version="3.5.0", content_hash=OTHER))
+        assert found is not None and found[0] is MatchBasis.NAME_ONLY
+        assert found[0].needs_a_human and self.NOTE in found[1]
+
+    def test_without_a_note_an_unlisted_label_is_still_clear(self):
+        adv = advisory(artefact(content_hashes=()))
+        assert match_item(adv, item(version="3.5.0", content_hash=OTHER)) is None
+
+    def test_a_label_the_supplier_names_as_fixed_is_clear_despite_the_note(self):
+        adv = advisory(artefact(content_hashes=(), version_note=self.NOTE))
+        assert match_item(adv, item(version="3.9.0", content_hash=OTHER)) is None
+
+
 class TestOrderOfAdvisoryEntriesDoesNotChangeTheAnswer:
     def entries(self):
         return (
