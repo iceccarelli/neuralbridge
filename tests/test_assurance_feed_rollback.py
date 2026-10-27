@@ -12,7 +12,13 @@ import pytest
 
 from assurance.attest.keys import SigningKey
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
-from assurance.supplier.publish import AdvisoryFeed, SupplierIdentity, publish, verify_feed, withdraw
+from assurance.supplier.publish import (
+    AdvisoryFeed,
+    SupplierIdentity,
+    publish,
+    verify_feed,
+    withdraw,
+)
 
 NOW = datetime(2026, 9, 12, tzinfo=UTC)
 ID = SupplierIdentity("controlco", "ControlCo GmbH", "datasheet p.2")
