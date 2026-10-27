@@ -39,7 +39,7 @@ trail. The shared operator ledger must never be passed in.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -143,6 +143,8 @@ class _State:
     events: tuple[dict[str, Any], ...]
     problems: tuple[str, ...]
     head: int
+    #: supplier id -> (highest feed sequence a trusted evaluation saw, that record's hash)
+    feed_heads: dict[str, tuple[int, str]] = field(default_factory=dict)
 
 
 def _fp_of(pem: str) -> str:
@@ -169,6 +171,7 @@ class SupplierTrustStore:
         overrides: list[_Override] = []
         events: list[dict[str, Any]] = []
         problems: list[str] = []
+        heads: dict[str, tuple[int, str]] = {}
         head = 0
         for entry in self.ledger.entries(subject=TRUST_SUBJECT, kind=TRUST_KIND):
             head = entry.seq
@@ -203,6 +206,12 @@ class SupplierTrustStore:
                     pins[old.fingerprint] = _with(
                         old, status="revoked", revoked_at=str(body["revoked_at"]),
                         reason=str(body.get("reason", "")))
+            elif kind in ("feed_head", "feed_head_reset"):
+                sup = str(body["supplier_id"])
+                seq = int(body["sequence"])
+                # A recorded head only moves forward; only a person's reset moves it back.
+                if kind == "feed_head_reset" or seq > heads.get(sup, (0, ""))[0]:
+                    heads[sup] = (seq, str(body["head_hash"]))
             elif kind == "override":
                 overrides.append(_Override(
                     supplier_id=str(body["supplier_id"]),
@@ -210,7 +219,52 @@ class SupplierTrustStore:
                     advisory_hash=str(body["advisory_hash"]),
                     actor=ev.actor.identifier, reason=str(body.get("reason", "")),
                     at=entry.at, ledger_seq=entry.seq))
-        return _State(pins, tuple(overrides), tuple(events), tuple(problems), head)
+        return _State(pins, tuple(overrides), tuple(events), tuple(problems), head, heads)
+
+    def feed_head(self, supplier_id: str) -> tuple[int, str] | None:
+        """The newest feed record a trusted evaluation has seen for this supplier.
+
+        ``(sequence, content hash)``, or None when none has been recorded. Passed to
+        :func:`evaluate_feed` as ``min_sequence`` / ``expect_head`` so a feed that has
+        been cut back, or swapped for an older copy, is not trusted.
+        """
+        return self._replay().feed_heads.get(supplier_id.strip())
+
+    def record_feed_head(self, supplier_id: str, sequence: int, head_hash: str, *,
+                         actor: str = "assurance.watch") -> bool:
+        """Remember the newest record of a feed that was just trusted.
+
+        Best effort and monotonic: returns False, writing nothing, when the head has not
+        advanced or the store changed while this was prepared (the next pass records it).
+        Not a trust decision, so it carries the automation that observed it.
+        """
+        supplier_id = supplier_id.strip()
+        state = self._replay()
+        if state.problems or sequence <= state.feed_heads.get(supplier_id, (0, ""))[0]:
+            return False
+        try:
+            self._append(state, {
+                "event": "feed_head", "supplier_id": supplier_id,
+                "sequence": int(sequence), "head_hash": head_hash,
+            }, actor, "newest record of a trusted feed")
+        except SupplierTrustError:
+            return False
+        return True
+
+    def reset_feed_head(self, supplier_id: str, sequence: int, head_hash: str, *,
+                        actor: str, reason: str) -> None:
+        """A named person accepts a different history as the new baseline.
+
+        For the case where a supplier legitimately re-issued its feed. Without this a
+        feed that no longer extends the remembered one stays untrusted (inspect only).
+        """
+        if not reason.strip():
+            raise SupplierTrustError("resetting a feed baseline needs a reason.")
+        supplier_id = supplier_id.strip()
+        self._append(self._replay(), {
+            "event": "feed_head_reset", "supplier_id": supplier_id,
+            "sequence": int(sequence), "head_hash": head_hash, "reason": reason,
+        }, actor, "feed baseline reset by a person")
 
     def pins(self, supplier_id: str = "") -> list[KeyPin]:
         state = self._replay()
