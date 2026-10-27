@@ -86,3 +86,15 @@ def test_a_rewritten_history_fails_the_head_hash(feed, tmp_path):
     publish(adv(9), ID, key, other, now=NOW)  # record 3 differs from the one seen
     v = verify_feed(other.read(), key.verifying, min_sequence=3, expect_head=seen.head_hash)
     assert v.ok is False
+
+
+def test_trust_evaluation_marks_a_rolled_back_feed_not_intact(feed):
+    from assurance.supplier.trust import evaluate_feed
+
+    f, key = feed
+    seen = verify_feed(f.read(), key.verifying)
+    truncate(f, 2)
+    t = evaluate_feed(f.read(), None, min_sequence=seen.head_sequence)
+    assert t.chain_valid is False and not t.policy_satisfied
+    assert any("removed" in p for p in t.chain_problems)
+    assert evaluate_feed(f.read(), None).chain_valid is True  # nothing pinned: unchanged
