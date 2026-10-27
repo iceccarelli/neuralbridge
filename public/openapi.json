@@ -736,6 +736,52 @@
         "title": "EvaluateIn",
         "type": "object"
       },
+      "FeedBaselineIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "candidate_public_key_pem": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Candidate Public Key Pem",
+            "type": "string"
+          },
+          "expect_supplier": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expect Supplier",
+            "type": "string"
+          },
+          "feed": {
+            "default": "",
+            "maxLength": 4194304,
+            "title": "Feed",
+            "type": "string"
+          },
+          "hosted_feed_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Hosted Feed Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "FeedBaselineIn",
+        "type": "object"
+      },
       "FeedIn": {
         "additionalProperties": false,
         "properties": {
@@ -7597,6 +7643,83 @@
           }
         },
         "summary": "What is this feed, state by state, under your pinned keys?",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/trust/feed-baseline": {
+      "post": {
+        "operationId": "post_feed_baseline_v1_supplier_trust_feed_baseline_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedBaselineIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Feed Baseline V1 Supplier Trust Feed Baseline Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept a re-issued, trusted feed as the new baseline for rollback detection",
         "tags": [
           "supplier"
         ]

@@ -58,6 +58,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/supplier/trust/revoke', tier: 'cell', summary: 'Revoke a supplier key' },
   { method: 'POST', path: '/v1/supplier/trust/evaluate', tier: 'cell', summary: 'Evaluate a feed against the pinned keys' },
   { method: 'POST', path: '/v1/supplier/trust/override', tier: 'cell', summary: 'Attributed manual override for one advisory' },
+  { method: 'POST', path: '/v1/supplier/trust/feed-baseline', tier: 'cell', summary: 'Accept a re-issued, trusted feed as the new rollback baseline' },
   { method: 'POST', path: '/v1/check/fleet-machine', tier: 'cell', summary: 'Machine Assurance Check — an enrolled machine, its ledger history and the fleet fan-out' },
   { method: 'POST', path: '/v1/fleet/declare', tier: 'cell', summary: 'Bind a Declaration of Conformity to a configuration' },
   { method: 'POST', path: '/v1/ledger/attest', tier: 'cell', summary: 'Counter-sign the head of your ledger' },
