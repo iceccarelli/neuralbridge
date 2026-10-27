@@ -70,7 +70,9 @@ TRUST_SUBJECT = "supplier-trust"
 TRUST_STATEMENT = (
     "A signed advisory proves who signed these bytes. It does not prove that the "
     "advisory is correct, complete or timely: a supplier who has not noticed a "
-    "defect publishes nothing, and no signature can tell you that."
+    "defect publishes nothing, and no signature can tell you that. Nor can a feed "
+    "show that its newest records are present unless the reader supplies the highest "
+    "sequence it has already seen."
 )
 
 
@@ -548,6 +550,8 @@ def evaluate_feed(
     expect_supplier: str = "",
     candidate_key: VerifyingKey | None = None,
     now: datetime | None = None,
+    min_sequence: int = 0,
+    expect_head: str = "",
 ) -> FeedTrust:
     """Judge a feed under the account's pinned keys. Never raises on a bad feed.
 
@@ -614,6 +618,22 @@ def evaluate_feed(
             signature_valid_under_candidate=candidate_ok if pin is None else None))
 
     chain_problems = _chain_problems(items)
+    # A valid chain cannot show that the newest records were cut off or an older copy
+    # was served. A reader that remembers the highest sequence (and that record's
+    # hash) can: a shorter or rewritten feed is not an intact chain.
+    if min_sequence:
+        tip = items[-1].sequence if items else 0
+        if tip < min_sequence:
+            chain_problems.append(
+                f"the feed ends at record {tip} but record {min_sequence} was seen "
+                "before: newer records were removed or an older copy was served, and a "
+                "withdrawal may be missing")
+        elif expect_head:
+            seen = [r for r in items if r.sequence == min_sequence]
+            if not seen or seen[0].content_hash() != expect_head:
+                chain_problems.append(
+                    f"record {min_sequence} is not the record seen before: the feed was "
+                    "rewritten or replaced")
     problems.extend(chain_problems)
 
     # duplicates and conflicts: same id, same content vs different content
