@@ -324,6 +324,7 @@ def _handle_subscription(
         event_id=event_id, kind=kind, stripe_customer_id=customer,
         status=state.status, tier=state.tier, event_created=created,
         hold_if_unknown=state.ours,
+        stripe_subscription_id=obj.get("id", "") or "",
     )
     return _subscription_response(kind, outcome, state.label)
 

@@ -604,14 +604,21 @@ class AccountStore:
         tier: str | None,
         event_created: int,
         only_from: frozenset[str] | None = None,
+        subscription_id: str = "",
     ) -> str:
         row = db.execute(
-            "SELECT id, status, last_event_at, past_due_since FROM accounts "
+            "SELECT id, status, last_event_at, past_due_since, stripe_subscription_id "
+            "FROM accounts "
             "WHERE stripe_customer_id = ?",
             (customer,),
         ).fetchone() if customer else None
         if row is None:
             return "unknown_customer"
+        if (status == "cancelled" and subscription_id and row["stripe_subscription_id"]
+                and subscription_id != row["stripe_subscription_id"]):
+            # The customer holds a different, current subscription (an upgrade bought
+            # as a new checkout). Ending the old one must not end this account's access.
+            return "other_subscription"
         if event_created and row["last_event_at"] > event_created:
             return "stale"
         if (event_created and row["last_event_at"] == event_created
@@ -705,10 +712,13 @@ class AccountStore:
         event_created: int,
         hold_if_unknown: bool,
         only_from: frozenset[str] | None = None,
+        stripe_subscription_id: str = "",
     ) -> str:
         """Apply one subscription state change, at most once per event id.
 
-        Returns ``duplicate``, ``applied``, ``stale``, ``not_applicable``
+        Returns ``duplicate``, ``applied``, ``stale``, ``other_subscription`` (a
+        cancellation of a subscription that is not the account's current one),
+        ``not_applicable``
         (``only_from`` names the statuses this change may start from, and the
         account is in another), ``held`` or ``unknown_customer``. ``held`` means the customer has no account yet
         (``customer.subscription.updated`` can overtake
@@ -722,7 +732,8 @@ class AccountStore:
                 return "duplicate"
             self._purge_db(db)
             result = self._apply_state_db(
-                db, stripe_customer_id, status, tier, event_created, only_from
+                db, stripe_customer_id, status, tier, event_created, only_from,
+                stripe_subscription_id,
             )
             if result == "unknown_customer" and hold_if_unknown and stripe_customer_id:
                 held = db.execute(

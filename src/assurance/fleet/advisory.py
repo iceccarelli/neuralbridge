@@ -380,6 +380,20 @@ def _match_artefact(
     if machine_hash and machine_hash in fixed_hashes:
         return None  # demonstrably remedied
 
+    if label and label in fixed_versions:
+        return None  # the supplier names this version as not affected
+
+    if label and artefact.version_note.strip():
+        # The supplier expressed a range in free text, which is displayed and never
+        # parsed. A version the list does not name may still sit inside that range,
+        # so an unlisted label is not evidence of "not affected".
+        return MatchBasis.NAME_ONLY, (
+            f"this is {artefact.supplier} {artefact.name} version {item.version!r}, which "
+            f"the advisory does not list, but {advisory.issued_by} also gives a range in "
+            f"words ({artefact.version_note.strip()!r}) that is not parsed. Somebody has "
+            "to read it against this version." + set_aside
+        )
+
     if label and (versions or fixed_versions):
         return None  # a known version that is not on the affected list
 
