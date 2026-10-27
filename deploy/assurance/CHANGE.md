@@ -393,11 +393,14 @@ Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
 no new plan was added. 401 with no or an invalid key, 402 when authenticated but
 not entitled, always from the account's own ledger.
 
-MCP tools (exactly these): plans, spec_validate, machine_verify, register_cases, change_cases, change_case, change_export, change_claim, change_advance, change_reverify
+MCP tools (exactly these): plans, spec_validate, machine_verify, register_cases, change_cases, change_case, change_export, change_claim, change_advance, change_reverify, change_assess_drift, change_assess_intervention
 
 The change tools are thin relays to the routes above, with no local logic:
 `change_cases`, `change_case` and `change_export` read; `change_claim`,
-`change_advance` and `change_reverify` write. There is **deliberately no MCP
+`change_advance`, `change_reverify`, `change_assess_drift` and
+`change_assess_intervention` write. The two assess tools open a case from a machine's
+own manifests; there is **no tool that assesses an advisory** (third-party content: a case
+opened from an unsigned one is the attack the signed feed exists to stop). There is **deliberately no MCP
 tool for `decide`, `resume`, `resolve-decision` or `waive-reverification`** (nor
 for closing, rejecting or deferring): the MCP server is the surface an agent
 drives, and those are the decisions an agent must not make.

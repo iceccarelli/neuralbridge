@@ -88,7 +88,8 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
     tool_names = {t.name for t in tools}
     assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
                          "change_cases", "change_case", "change_export", "change_claim",
-                         "change_advance", "change_reverify"}
+                         "change_advance", "change_reverify", "change_assess_drift",
+                         "change_assess_intervention"}
 
 
 @pytest.mark.asyncio
