@@ -98,3 +98,78 @@ def test_trust_evaluation_marks_a_rolled_back_feed_not_intact(feed):
     assert t.chain_valid is False and not t.policy_satisfied
     assert any("removed" in p for p in t.chain_problems)
     assert evaluate_feed(f.read(), None).chain_valid is True  # nothing pinned: unchanged
+
+
+# ---------------------------------------------------------------------------
+# The remembered head: the account's trust store, and the watch pass that uses it
+# ---------------------------------------------------------------------------
+
+def _store(tmp_path):
+    from assurance.evidence.ledger import EvidenceLedger
+    from assurance.supplier.trust import SupplierTrustStore
+
+    return SupplierTrustStore(EvidenceLedger(tmp_path / "trust.db"))
+
+
+def _pinned(tmp_path, key):
+    store = _store(tmp_path)
+    store.pin("controlco", key.verifying.pem(), actor="a.engineer",
+              obtained_via="read aloud by ControlCo PSIRT on the phone",
+              effective_from=datetime(2020, 1, 1, tzinfo=UTC))
+    return store
+
+
+def test_the_store_remembers_only_a_head_that_moves_forward(tmp_path):
+    store = _store(tmp_path)
+    assert store.feed_head("controlco") is None
+    assert store.record_feed_head("controlco", 2, "h2") is True
+    assert store.record_feed_head("controlco", 2, "h2") is False  # not advanced: nothing written
+    assert store.record_feed_head("controlco", 1, "h1") is False  # never backwards
+    assert store.record_feed_head("controlco", 3, "h3") is True
+    assert store.feed_head("controlco") == (3, "h3")
+    assert store.feed_head("other") is None
+
+
+def test_only_a_named_person_with_a_reason_moves_the_head_back(tmp_path):
+    from assurance.supplier.trust import SupplierTrustError
+
+    store = _store(tmp_path)
+    store.record_feed_head("controlco", 5, "h5")
+    with pytest.raises(SupplierTrustError):
+        store.reset_feed_head("controlco", 2, "h2", actor="m.braun", reason=" ")
+    store.reset_feed_head("controlco", 2, "h2", actor="m.braun", reason="supplier re-issued feed")
+    assert store.feed_head("controlco") == (2, "h2")
+
+
+def test_a_pass_over_a_trusted_feed_records_its_head_and_a_cut_feed_is_then_untrusted(
+        feed, tmp_path):
+    from assurance.watch.advisories import _read_feed_pinned
+
+    f, key = feed
+    store = _pinned(tmp_path, key)
+
+    records, failure, notes, trust = _read_feed_pinned("controlco", str(f.path), store)
+    assert failure is None and trust.policy_satisfied
+    assert any("No earlier head" in n for n in notes)  # first pass could not check newness
+    assert store.feed_head("controlco") == (3, records[-1].content_hash())
+
+    _, _, notes2, trust2 = _read_feed_pinned("controlco", str(f.path), store)
+    assert trust2.policy_satisfied and not any("No earlier head" in n for n in notes2)
+
+    truncate(f, 2)  # the withdrawal is cut off, so ADV-1 would stand again
+    _, _, _, cut = _read_feed_pinned("controlco", str(f.path), store)
+    assert cut.policy_satisfied is False and cut.trust_state.startswith("untrusted")
+    assert any("removed" in p for p in cut.chain_problems)
+    assert store.feed_head("controlco")[0] == 3  # the cut feed did not become the baseline
+
+
+def test_a_feed_that_only_grew_stays_trusted_and_advances_the_head(feed, tmp_path):
+    from assurance.watch.advisories import _read_feed_pinned
+
+    f, key = feed
+    store = _pinned(tmp_path, key)
+    _read_feed_pinned("controlco", str(f.path), store)
+    publish(adv(3), ID, key, f, now=NOW)
+    records, _, _, trust = _read_feed_pinned("controlco", str(f.path), store)
+    assert trust.policy_satisfied
+    assert store.feed_head("controlco") == (4, records[-1].content_hash())
