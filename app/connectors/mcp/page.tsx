@@ -22,6 +22,8 @@ const MCP_TOOLS: McpTool[] = [
   { name: 'change_claim', route: 'POST /v1/change/cases/{case_id}/claim', tier: 'cell', agentWrite: true },
   { name: 'change_advance', route: 'POST /v1/change/cases/{case_id}/advance', tier: 'cell', agentWrite: true },
   { name: 'change_reverify', route: 'POST /v1/change/cases/{case_id}/reverification', tier: 'cell', agentWrite: true },
+  { name: 'change_assess_drift', route: 'POST /v1/change/assess/drift', tier: 'cell', agentWrite: true },
+  { name: 'change_assess_intervention', route: 'POST /v1/change/assess/intervention', tier: 'cell', agentWrite: true },
 ];
 const TOOL_BY_ROUTE = new Map(MCP_TOOLS.map((t) => [t.route, t]));
 const TOOL_COUNT = MCP_TOOLS.length;
@@ -175,15 +177,17 @@ neuralbridge-ai-mcp`}</pre>
               cover; the highlighted rows are what ships in <code>assurance-mcp</code> today.
             </p>
             <p>
-              <strong>What an agent may write.</strong> Of the change-queue tools, three write:{' '}
+              <strong>What an agent may write.</strong> Of the change-queue tools, {WRITE_TOOLS.length} write:{' '}
               {WRITE_TOOLS.map((t, i) => (
                 <span key={t.name}>
                   {i > 0 ? (i === WRITE_TOOLS.length - 1 ? ', and ' : ', ') : ''}
                   <code>{t.name}</code>
                 </span>
               ))}{' '}
-              — claim a case, move it to the next stop its own required work names, and submit a re-verification for
-              the engine to judge. Closing, waiving, rejecting or deferring a case, resuming it and resolving its open
+              — open a case from a machine's own manifests (drift, or a sealed intervention), claim it, move it to the
+              next stop its own required work names, and submit a re-verification for the engine to judge. Assessing
+              an <strong>advisory</strong> is not a tool either: it is third-party content, and a case opened from an
+              unsigned one is the attack the signed feed exists to stop. Closing, waiving, rejecting or deferring a case, resuming it and resolving its open
               decisions are <strong>human-only</strong>: they have no MCP tool, by design, and stay on the CLI and the
               HTTP API. Each write takes an <code>actor</code> name; it is asserted by the caller and recorded, not
               proven — the API refuses a blank one but does not check who is behind the key.
