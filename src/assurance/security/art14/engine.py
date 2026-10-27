@@ -392,6 +392,12 @@ class Art14Register:
             assert deadlines is not None
             deadlines.require_final()  # raises ClockError with the reason
 
+        if submitted_at < case.awareness.established_at:
+            raise CaseError(
+                "a filing cannot precede the awareness it answers "
+                f"({format_utc(submitted_at)} < {format_utc(case.awareness.established_at)}); "
+                "a submission time before awareness would make a late filing read as on time"
+            )
         validation = validate_payload(payload, case.track, stage)
         evidence = self._append(
             case_id,
@@ -427,6 +433,12 @@ class Art14Register:
         be limited to the users concerned, particularly where publishing
         technical detail would itself increase risk.
         """
+        case, head = self._load_at_head(case_id)
+        if case.awareness is not None and at < case.awareness.established_at:
+            raise CaseError(
+                "users cannot be informed before the manufacturer became aware "
+                f"({format_utc(at)} < {format_utc(case.awareness.established_at)})"
+            )
         return self._append(
             case_id,
             CASE_KIND["user_notice"],
@@ -445,6 +457,7 @@ class Art14Register:
                     "(guidance §§219-221)"
                 ),
             ),
+            expect_head=head,
         )
 
     # -- reading ----------------------------------------------------------
