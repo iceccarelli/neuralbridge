@@ -289,8 +289,20 @@ def _read_feed_pinned(
         return [], FeedOutcome(
             supplier_id=supplier_id, status="unreadable",
             detail=f"{path} could not be read: {exc}"), [], None
-    trust = evaluate_feed(records, store, expect_supplier=supplier_id)
-    return records, None, [trust.trust_statement], trust
+    seen = store.feed_head(supplier_id)
+    trust = evaluate_feed(
+        records, store, expect_supplier=supplier_id,
+        min_sequence=seen[0] if seen else 0, expect_head=seen[1] if seen else "")
+    if trust.policy_satisfied and records:
+        # Only a feed that was trusted moves the remembered head; one that is not
+        # trusted must not become the baseline a later feed is compared with.
+        store.record_feed_head(supplier_id, records[-1].sequence, records[-1].content_hash())
+    notes = [trust.trust_statement]
+    if not seen:
+        notes.append(
+            "No earlier head of this feed was on record, so whether it has been cut "
+            "back could not be checked on this pass; later passes compare against it.")
+    return records, None, notes, trust
 
 
 def check_feeds(
