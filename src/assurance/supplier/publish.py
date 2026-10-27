@@ -534,6 +534,11 @@ class FeedVerdict:
     #: ``live`` and a failed withdrawal never cancels anything, whether or not
     #: the caller chooses to proceed on a feed that did not verify.
     failed_signatures: tuple[int, ...] = ()
+    #: The newest record this verdict saw. A caller that stores these can pass them
+    #: back next time (``min_sequence`` / ``expect_head``) and so detect a feed that
+    #: was rolled back or had its newest records cut off.
+    head_sequence: int = 0
+    head_hash: str = ""
 
     def summary(self) -> str:
         if self.checked == 0:
@@ -553,6 +558,8 @@ def verify_feed(
     key: VerifyingKey,
     *,
     expect_supplier: str = "",
+    min_sequence: int = 0,
+    expect_head: str = "",
 ) -> FeedVerdict:
     """Check a supplier feed before anything acts on it.
 
@@ -560,6 +567,15 @@ def verify_feed(
     predecessor, one supplier throughout, no advisory id published twice. A
     feed that fails any of these must not drive a change to a safety system,
     which is what ``assurance fleet advisory`` enforces by refusing it.
+
+    The chain shows a record removed from the middle; it cannot show the newest
+    records cut off, or an older complete prefix served in place of the current
+    feed, because nothing after the last record says more should follow. That would
+    bring a withdrawn advisory back as standing. A caller that remembers what it saw
+    last passes ``min_sequence`` (the highest sequence seen) and, optionally,
+    ``expect_head`` (that record's content hash); a shorter feed, or one whose record
+    at that position differs, fails. Without them the verdict says this was not
+    checked.
     """
     items = list(records)
     problems: list[str] = []
@@ -663,6 +679,27 @@ def verify_feed(
             "over its own span; this check used one."
         )
 
+    if min_sequence and (not items or items[-1].sequence < min_sequence):
+        problems.append(
+            f"the feed ends at record {items[-1].sequence if items else 0} but record "
+            f"{min_sequence} was seen before. Newer records were removed, or an older "
+            "copy was served; a withdrawal may be missing."
+        )
+    if expect_head:
+        at_head = [r for r in items if r.sequence == min_sequence]
+        if min_sequence and (not at_head or at_head[0].content_hash() != expect_head):
+            problems.append(
+                f"record {min_sequence} is not the record seen before (expected hash "
+                f"{expect_head[:12]}); the feed was rewritten or replaced."
+            )
+    if not min_sequence:
+        skipped.append(
+            "Whether this is the supplier's NEWEST state was not checked. A feed with "
+            "its newest records removed, or an older copy served in its place, still "
+            "verifies, and a withdrawn advisory would read as standing. Remember the "
+            "highest sequence and head hash seen and pass them as min_sequence / "
+            "expect_head next time."
+        )
     skipped.append(
         f"Whether key {key.fingerprint} belongs to this supplier was not "
         "checked, and cannot be checked from inside the feed. Confirm the "
@@ -687,4 +724,6 @@ def verify_feed(
         live=tuple(live.values()),
         withdrawn=tuple(withdrawn),
         failed_signatures=tuple(failed),
+        head_sequence=items[-1].sequence if items else 0,
+        head_hash=items[-1].content_hash() if items else "",
     )

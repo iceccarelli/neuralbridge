@@ -98,11 +98,10 @@ python -m assurance kit check plant/kit.json`}</pre>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Wiring an agent to this</span>
-            <h2>The CLI today, MCP tomorrow</h2>
+            <h2>The CLI, and the MCP server that wraps the same API</h2>
             <p>
-              Every CLI verb above maps 1:1 to a FastAPI route or a local file operation — the same surface an MCP
-              server would expose as tools. See <a href="/connectors/mcp">the MCP connector page</a> for the current
-              tool table and what ships today versus what a future <code>mcp/</code> package still needs.
+              The CLI and the installable <code>assurance-mcp</code> server both call the same FastAPI routes.{' '}
+              See <a href="/connectors/mcp">the MCP connector page</a> for the tool table and what it does not cover (it exposes a subset of the API, not every CLI verb).
             </p>
           </div>
         </div>
