@@ -619,3 +619,99 @@ class TestReports:
         assert report["ledger"]["chain_verified"] is True
         assert any("non-binding" in c for c in report["checks_skipped"])
         assert any("sensitive or important" in c for c in report["checks_skipped"])
+
+
+# =====================================================================
+# clock-moving writes: concurrency and last-wins
+# =====================================================================
+class TestClockIntegrity:
+    """A later write must not be able to move a legal deadline.
+
+    Regression: awareness's "once" guard was a check-then-append, so concurrent
+    writers all succeeded and the last one moved every deadline; and a later
+    measure/filing/user-notice record silently replaced the earlier one.
+    """
+
+    @staticmethod
+    def _register(tmp_path):
+        return Art14Register(EvidenceLedger(tmp_path / "ledger.db"))
+
+    @staticmethod
+    def _opened(reg):
+        reg.record_signal(
+            "c1", Signal(AWARE, SignalChannel.CVD_INBOX, "m.braun", "report received"), ACTOR
+        )
+        reg.record_awareness(
+            "c1", Awareness(AWARE, AWARE, AWARE, "m.braun", "reasonable certainty"),
+            Track.VULNERABILITY, ACTOR,
+        )
+
+    def test_concurrent_awareness_records_write_exactly_one(self, tmp_path):
+        import threading
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        reg.record_signal(
+            "c1", Signal(AWARE, SignalChannel.CVD_INBOX, "m.braun", "report received"), ACTOR
+        )
+        barrier = threading.Barrier(8)
+        outcomes: list[str] = []
+
+        def go(i: int) -> None:
+            at = AWARE + timedelta(days=i)
+            aw = Awareness(at, AWARE, at, "m.braun", "reasonable certainty")
+            barrier.wait()
+            try:
+                reg.record_awareness("c1", aw, Track.VULNERABILITY, ACTOR)
+                outcomes.append("ok")
+            except CaseError:
+                outcomes.append("refused")
+
+        threads = [threading.Thread(target=go, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        written = [e for e in reg.ledger.entries(subject="c1") if "awareness" in e.kind]
+        assert outcomes.count("ok") == 1 and len(written) == 1
+        assert outcomes.count("refused") == 7
+
+    def test_a_later_measure_cannot_push_the_14_day_clock_out(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        early = AWARE + timedelta(days=2)
+        reg.record_measure_available("c1", early, "workaround", ACTOR)
+        reg.record_measure_available("c1", AWARE + timedelta(days=30), "patch", ACTOR)
+        # Art. 14(2)(c): the clock runs from the first measure available.
+        assert reg.case("c1").measure_available_at == early
+
+    def test_an_earlier_measure_recorded_later_moves_the_clock_earlier(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        reg.record_measure_available("c1", AWARE + timedelta(days=9), "patch", ACTOR)
+        reg.record_measure_available("c1", AWARE + timedelta(days=2), "workaround", ACTOR)
+        assert reg.case("c1").measure_available_at == AWARE + timedelta(days=2)
+
+    def test_a_second_filing_cannot_replace_the_first_submission_time(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        first = AWARE + timedelta(hours=5)
+        reg.record_filing("c1", Stage.EARLY_WARNING, first, {}, ACTOR)
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=20), {}, ACTOR)
+        assert reg.case("c1").filings[Stage.EARLY_WARNING.value] == first
+
+    def test_a_second_user_notice_cannot_replace_the_first(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        self._opened(reg)
+        first = AWARE + timedelta(days=1)
+        reg.record_user_notification("c1", first, "affected users", "notice", ACTOR)
+        reg.record_user_notification("c1", AWARE + timedelta(days=9), "all users", "again", ACTOR)
+        assert reg.case("c1").users_informed_at == first
