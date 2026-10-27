@@ -1,14 +1,19 @@
 # The assurance register, as a deployable service.
 #
 # Deliberately not the NeuralBridge image: this package has no runtime
-# dependencies of its own beyond a web server, and shipping it alone keeps the
-# attack surface of a regulatory register down to what it actually needs.
+# dependencies of its own beyond a web server (and `cryptography`, for the
+# Ed25519 attestation keys: `assurance.api.service` imports it at start-up, and
+# an image without it does not boot), and shipping it alone keeps the attack
+# surface of a regulatory register down to what it actually needs.
+# tests/test_assurance_dockerfile_deps.py fails if a module the service loads
+# imports a package this line does not install.
 
 FROM python:3.12-slim AS build
 
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir --prefix=/install \
-      'fastapi>=0.110.0' 'uvicorn[standard]>=0.27.0' 'pydantic>=2.6.0' 'httpx>=0.27.0'
+      'fastapi>=0.110.0' 'uvicorn[standard]>=0.27.0' 'pydantic>=2.6.0' 'httpx>=0.27.0' \
+      'cryptography>=42.0.0'
 
 FROM python:3.12-slim
 
