@@ -103,15 +103,26 @@ def test_exact_versions_range_and_fixed_are_mapped_as_the_publisher_wrote_them()
     ex100 = next(x for x in a.affected if x.name == "EX-100")
     assert ex100.versions == ("V2.001", "vers:all/<V2.001")
     assert ex100.version_note == "vers:all/<V2.001"
-    assert a.fixed_versions == ("V2.002",)
+    # Changed from `a.fixed_versions == ("V2.002",)`: that was the bug. A fixed version was
+    # unioned across the whole advisory and used to clear a machine inside another
+    # product's (or another CVE's) range. A fixed version is now kept per component, and a
+    # component that has a range keeps none, because one fix is not the end of every range.
+    assert a.fixed_versions == () and ex100.fixed_versions == ()
 
 
 def test_matching_follows_the_publishers_facts():
     a = imported().advisory
     assert match_item(a, item("EX-100", "V2.001"))[0] is MatchBasis.VERSION
-    assert match_item(a, item("EX-100", "V2.002")) is None            # fixed
     assert match_item(a, item("EX-50", "V1.006"))[0] is MatchBasis.VERSION
     assert match_item(a, item("EX-999", "V2.001")) is None            # another product
+    # Changed from `... "V2.002")) is None  # fixed`: EX-100 also carries a range, so its
+    # fixed version clears nothing (see the test above); a person looks.
+    assert match_item(a, item("EX-100", "V2.002"))[0] is MatchBasis.NAME_ONLY
+    # Without a range, the component's own fixed version still clears.
+    plain = csaf()
+    plain["product_tree"]["branches"][0]["branches"][0]["branches"].pop(1)   # drop the range
+    plain["vulnerabilities"][0]["product_status"]["known_affected"].remove("P2")
+    assert match_item(advisory_from_csaf(plain).advisory, item("EX-100", "V2.002")) is None
 
 
 def test_a_range_is_never_a_clear_for_a_version_the_matcher_cannot_place():
@@ -130,12 +141,20 @@ def test_a_mitigation_is_not_presented_as_a_vendor_fix():
 
 
 def test_known_not_affected_never_clears_anything():
+    # Rewritten: the old assertion (a product the advisory never names reads None) passed
+    # whether known_not_affected was honoured or ignored. Here P3 (EX-100 V2.002) appears
+    # ONLY as known_not_affected. Honoured as "not affected" it would read None; ignored, a
+    # machine on V2.002 is a label the advisory does not list, which is for a person.
     doc = csaf()
+    doc["product_tree"]["branches"][0]["branches"][0]["branches"].pop(1)     # drop the range
     doc["vulnerabilities"][0]["product_status"] = {
         "known_affected": ["P1"], "known_not_affected": ["P3", "P4"]}
     a = advisory_from_csaf(doc).advisory
     assert a.fixed_versions == ()
-    assert match_item(a, item("EX-50", "V1.006")) is None  # unlisted, not cleared by a claim
+    assert all(not x.fixed_versions for x in a.affected)
+    found = match_item(a, item("EX-100", "V2.002"))
+    assert found is not None and found[0] is MatchBasis.NAME_ONLY
+    assert match_item(a, item("EX-50", "V1.006")) is None      # EX-50 is not in the advisory
 
 
 def test_under_investigation_is_kept_as_affected_and_says_so():
