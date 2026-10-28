@@ -151,6 +151,13 @@ def _cmd_diff(args: argparse.Namespace) -> int:
 def _cmd_coverage(args: argparse.Namespace) -> int:
     manifest = SafetyManifest.from_json(args.manifest)
     ledger = EvidenceLedger.open_existing(args.ledger)
+    chain_ok, chain_problems = ledger.verify_chain()
+    if not chain_ok:
+        # A gate that reads rows from a ledger whose chain is broken can be made to pass by
+        # deleting the record that invalidated a function (an intervention).
+        print("error: the ledger chain does not verify, so coverage was not assessed: "
+              + "; ".join(chain_problems[:3]), file=sys.stderr)
+        return 2
     key = manifest.machine.key
     report = assess_coverage(
         manifest,
