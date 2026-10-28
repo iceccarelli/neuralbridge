@@ -34,7 +34,7 @@ from assurance.collect.plan import CollectionPlan
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
-from assurance.machinery.manifest import ManifestSource
+from assurance.machinery.manifest import HashSource, ManifestSource
 from assurance.machinery.record import manifests_from_ledger, record_manifest
 from assurance.watch.ingest import ingest_report
 from assurance.watch.observations import fleet_observations
@@ -70,7 +70,10 @@ def make_manifest(base: Path, serial: str = "0412", *, fw: bytes = b"firmware 3.
     plan = CollectionPlan.from_dict(plan_dict())
     result = collect(plan, root, serial=serial, taken_by=SCANNER, site="Plant 2",
                      country="DE", source=ManifestSource.AS_FOUND,
-                     taken_at=when or now())
+                     taken_at=when or now(),
+                     # The harness plays a collector running ON the machine; an export
+                     # folder is no longer labelled that implicitly (B6).
+                     hash_source=HashSource.READ_FROM_MACHINE)
     return result.manifest.to_dict()
 
 

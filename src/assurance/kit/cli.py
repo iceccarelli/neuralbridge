@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -32,12 +33,39 @@ from assurance.core.errors import AssuranceError
 from assurance.kit.enrol import (
     KitConfig,
     KitError,
-    _is_placeholder,
+    describe_placeholders,
+    find_placeholders,
     run_kit,
     starter_config,
 )
 
 __all__ = ["build_parser", "main"]
+
+#: The steps ``kit init`` prints and the kit README lists. One source, so the two
+#: cannot disagree about how many things a person has to do.
+_STEPS = (
+    "Open `kit.json` and put your company (`organisation`), your site and your name "
+    "or e-mail (`prepared_by`) in it, and list your machines.",
+    "Open `plans/cell.json` and replace every `CHANGE ME`: the machine's `manufacturer` "
+    "and `model`, and the `supplier` of each item. Make the four `source` entries match "
+    "the file names your tools actually produce. That file is the only one that needs "
+    "any thought, and getting it wrong is visible: the run says which items it could "
+    "not find.",
+    "For each machine, make a folder under `exports/` named after its serial and drop "
+    "that machine's vendor exports into it: the scanner zone file, the robot parameter "
+    "export, the safety PLC project, the controller firmware. Do not rename them.",
+    "Run `python -m assurance kit check kit.json`. It reads only, names every "
+    "placeholder still in your files and every item that matches no file, and writes "
+    "nothing. Fix what it names, then run the kit.",
+)
+
+
+def _steps_text(indent: str, hang: str) -> str:
+    return "\n".join(
+        textwrap.fill(step, width=78, initial_indent=f"{indent}{n}. ",
+                      subsequent_indent=hang)
+        for n, step in enumerate(_STEPS, 1))
+
 
 _README = """# Offline enrolment kit — {kit_id}
 
@@ -45,19 +73,13 @@ This folder records what safety-relevant software is on your machines, seals it
 into an evidence ledger **that stays on this disk**, and produces a report you
 can hand to an auditor, an insurer or a customer.
 
-Nothing is uploaded. Nothing is registered. There is no account and no key.
+Nothing is uploaded. Nothing is registered. There is no account and no key to
+run this kit. (Having the ledger head counter-signed is a separate, optional,
+hosted step; that one does need an account.)
 
 ## Before you run it
 
-1. Open `kit.json` and put your company, site and name in it.
-2. For each machine, make a folder under `exports/` named after its serial and
-   drop that machine's vendor exports into it — the scanner zone file, the robot
-   parameter export, the safety PLC project, the controller firmware. Whatever
-   your tools produce. Do not rename them.
-3. Open `plans/cell.json` and make the four `source` entries match the file
-   names your tools actually produce. That file is the only thing you have to
-   edit that needs any thought, and getting it wrong is visible: the run will
-   say which items it could not find.
+{steps}
 
 ## Run it
 
@@ -70,6 +92,12 @@ You get, in `out/`:
     run.json                     machine-by-machine, what was recorded
     attestation-request.json     three numbers, if you ever want the head
                                  counter-signed by somebody who is not you
+
+Files read from an export folder are labelled `supplied_by_vendor` (tier ceiling
+`community`): a folder cannot show which machine it came off. If this kit really
+runs on the machine itself, pass `--read-from-machine`; that is your assertion,
+and it is recorded as such. The headline `COMPLETE` means only that every item the
+plan names was found and hashed.
 
 ## Before you let it near anything
 
@@ -157,6 +185,13 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", type=Path, default=Path("out"))
     r.add_argument("--allow-loopback", action="store_true",
                    help="permit connections to this machine only; recorded either way")
+    r.add_argument("--read-from-machine", action="store_true",
+                   help="assert that this kit runs ON the machines, so the hashes describe "
+                        "the units. Without it every item is labelled supplied_by_vendor "
+                        "(community ceiling): a folder of exported files cannot show which "
+                        "machine it came from. The assertion is the operator's, it is "
+                        "recorded in each manifest and in the report, and the software "
+                        "cannot check it")
     r.add_argument("--json", action="store_true")
 
     c = verbs.add_parser("check", help="what this kit would do, touching nothing")
@@ -182,7 +217,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
     (folder / "plans" / "cell.json").write_text(
         json.dumps(_PLAN, indent=2) + "\n", encoding="utf-8")
     (folder / "README.md").write_text(
-        _README.format(kit_id=args.kit_id), encoding="utf-8")
+        _README.format(kit_id=args.kit_id, steps=_steps_text("", "    ")),
+        encoding="utf-8")
     (folder / "exports" / "CELL-0412" / "PUT-EXPORTS-HERE.txt").write_text(
         "Drop this machine's vendor exports into this folder, then delete this "
         "file.\n\nThe plan in plans/cell.json expects, by name:\n"
@@ -192,12 +228,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "renamed export is one more thing nobody can reproduce later.\n",
         encoding="utf-8")
 
-    print(f"kit written to {folder}")
-    print("\n  1. edit kit.json          your company, site, and machines")
-    print("  2. edit plans/cell.json   the four source file names")
-    print("  3. fill exports/<serial>/ with the vendor exports")
-    print(f"\n  then: python -m assurance kit run {folder}/kit.json --out {folder}/out")
-    print(f"  first: python -m assurance kit check {folder}/kit.json")
+    print(f"kit written to {folder}\n")
+    print(_steps_text("  ", "     "))
+    print(f"\n  check: python -m assurance kit check {folder}/kit.json")
+    print(f"  run:   python -m assurance kit run {folder}/kit.json --out {folder}/out")
     return 0
 
 
@@ -210,7 +244,24 @@ def _cmd_check(args: argparse.Namespace) -> int:
     item is the failure mode this whole package exists to prevent. Better to
     find it here, before the engineer walks away thinking they are done.
     """
-    config = KitConfig.from_json(args.config)
+    placeholders = find_placeholders(args.config)
+    try:
+        config = KitConfig.from_json(args.config)
+    except KitError:
+        if not placeholders:
+            raise
+        # Not a crash and not one refusal at a time: everything still to fill in,
+        # named once. `check` only reads, and says so.
+        if args.json:
+            print(json.dumps({"ready": False, "problems": len(placeholders),
+                              "machines": [], "placeholders": placeholders}, indent=2))
+        else:
+            print("not ready, and check only read these files (nothing was run or "
+                  "written):", file=sys.stderr)
+            for line in describe_placeholders(placeholders):
+                print(f"  {line}", file=sys.stderr)
+            print("Fill them in, then run check again.", file=sys.stderr)
+        return 2
     rows: list[dict[str, Any]] = []
     problems = 0
 
@@ -236,16 +287,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
                 row["problem"] = f"plan is unusable: {exc}"
             else:
                 row["plan_id"] = plan.plan_id
-                placeholders = [
-                    f"{label}={value!r}"
-                    for label, value in (("manufacturer", plan.manufacturer),
-                                         ("model", plan.model))
-                    if _is_placeholder(value)
-                ]
-                if placeholders:
-                    row["problem"] = (
-                        "plan still carries template values: "
-                        + ", ".join(placeholders))
+                in_plan = [p for p in placeholders if p["file"] == entry.plan]
+                if in_plan:
+                    row["problem"] = " ".join(describe_placeholders(in_plan))
                 for spec in plan.items:
                     found = sorted(
                         f.name for f in exports.glob(spec.source) if f.is_file())
@@ -265,8 +309,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
         rows.append(row)
 
     if args.json:
-        print(json.dumps({"kit_id": config.kit_id, "machines": rows,
-                          "problems": problems}, indent=2))
+        print(json.dumps({"kit_id": config.kit_id, "ready": not problems,
+                          "machines": rows, "problems": problems,
+                          "placeholders": placeholders}, indent=2))
         return 1 if problems else 0
 
     print(f"{config.kit_id} — {config.organisation}"
@@ -305,7 +350,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     config = KitConfig.from_json(args.config)
-    run = run_kit(config, args.out, allow_loopback=args.allow_loopback)
+    run = run_kit(config, args.out, allow_loopback=args.allow_loopback,
+                  read_from_machine=args.read_from_machine)
 
     if args.json:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))

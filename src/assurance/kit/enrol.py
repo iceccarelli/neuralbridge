@@ -46,12 +46,14 @@ from ..core.errors import AssuranceError
 from ..core.evidence import Actor, Evidence, Origin, ValidationState
 from ..core.identity import format_utc, utc_now
 from ..evidence.ledger import EvidenceLedger
-from ..machinery.manifest import ManifestSource
+from ..machinery.manifest import HashSource, ManifestSource
 from ..machinery.record import record_manifest
 from ..report.render import ReportInput, render_report
 from .airgap import AIRGAP_LIMITS, AirgapResult, no_network
 
 __all__ = [
+    "describe_placeholders",
+    "find_placeholders",
     "AIRGAP_KIND",
     "KIT_RUN_KIND",
     "KitConfig",
@@ -82,6 +84,76 @@ _PLACEHOLDERS = frozenset({
 
 def _is_placeholder(value: str) -> bool:
     return value.strip().lower() in _PLACEHOLDERS
+
+
+def find_placeholders(config_path: str | Path) -> list[dict[str, str]]:
+    """Every template value still in ``kit.json`` or in the plans it names, at once.
+
+    Reads only, and tolerates what is not there yet: ``check`` calls this before the
+    configuration is loaded, so a person who has not filled anything in is told about
+    all of it in one answer instead of one refusal per run. Each entry is
+    ``{"file", "field", "value"}``; ``file`` is the path as ``kit.json`` writes it.
+    """
+    path = Path(config_path)
+    out: list[dict[str, str]] = []
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return out
+    if not isinstance(data, dict):
+        return out
+    for name in ("organisation", "prepared_by", "site"):
+        value = data.get(name)
+        if isinstance(value, str) and _is_placeholder(value):
+            out.append({"file": path.name, "field": name, "value": value})
+    seen: set[str] = set()
+    for entry in data.get("machines") or ():
+        rel = entry.get("plan") if isinstance(entry, dict) else None
+        if not isinstance(rel, str) or rel in seen:
+            continue
+        seen.add(rel)
+        plan_path = Path(rel) if Path(rel).is_absolute() else path.parent / rel
+        try:
+            plan = json.loads(plan_path.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(plan, dict):
+            continue
+        for name in ("manufacturer", "model"):
+            value = plan.get(name)
+            if isinstance(value, str) and _is_placeholder(value):
+                out.append({"file": rel, "field": name, "value": value})
+        for item in plan.get("items") or ():
+            if isinstance(item, dict):
+                value = item.get("supplier")
+                if isinstance(value, str) and _is_placeholder(value):
+                    out.append({"file": rel,
+                                "field": f"items.{item.get('item_id', '?')}.supplier",
+                                "value": value})
+    return out
+
+
+def describe_placeholders(placeholders: list[dict[str, str]]) -> list[str]:
+    """One sentence per file: what is still a template value there, named exactly."""
+    by_file: dict[str, list[dict[str, str]]] = {}
+    for ph in placeholders:
+        by_file.setdefault(ph["file"], []).append(ph)
+    lines = []
+    for file, rows in by_file.items():
+        is_plan = any(r["field"] in ("manufacturer", "model") or r["field"].startswith("items.")
+                      for r in rows)
+        names = []
+        for r in rows:
+            if r["field"].startswith("items."):
+                names.append(f"supplier of {r['field'].split('.')[1]}")
+            else:
+                names.append(r["field"])
+        if is_plan:
+            lines.append(f"{file} still has CHANGE ME placeholders: {', '.join(names)}.")
+        else:
+            lines.append(f"{file} still has template values: "
+                         + ", ".join(f"{r['field']}={r['value']!r}" for r in rows) + ".")
+    return lines
 
 
 @dataclass(frozen=True)
@@ -239,6 +311,9 @@ class KitRun:
     attest_request_path: str
     head: dict[str, Any]
     checks_skipped: tuple[str, ...]
+    #: Whether the operator asserted (``--read-from-machine``) that the collector ran
+    #: on the machines. False means the manifests are ``supplied_by_vendor``.
+    read_from_machine_asserted: bool = False
 
     @property
     def enrolled(self) -> tuple[MachineResult, ...]:
@@ -284,6 +359,7 @@ class KitRun:
             "attest_request": self.attest_request_path,
             "head": self.head,
             "checks_skipped": list(self.checks_skipped),
+            "read_from_machine_asserted": self.read_from_machine_asserted,
         }
 
 
@@ -305,8 +381,27 @@ _KIT_LIMITS: tuple[str, ...] = (
     "the distance its datasheet claims; that needs a recorded run against a "
     "declared safety envelope.",
     "Manifests were read from exported files, not from the machines. They are "
-    "as good as the export, and the export is as good as whoever produced it.",
+    "labelled supplied_by_vendor (tier ceiling community): the files are as good "
+    "as the export, the export is as good as whoever produced it, and a folder of "
+    "files cannot show which machine it came from. Such a manifest is not accepted "
+    "as a look at the machine by the change workflow or by hosted ingest.",
 )
+
+#: The same last limit when the operator passed ``--read-from-machine``.
+_ASSERTED_LIMIT = (
+    "The operator asserted that this collector ran on the machines themselves "
+    "(--read-from-machine), so the manifests are labelled read_from_machine. "
+    "That label is the operator's statement; this software cannot check that the "
+    "files in the export folders came off those machines, and the assertion is "
+    "recorded in each manifest."
+)
+
+
+def kit_limits(read_from_machine: bool) -> tuple[str, ...]:
+    """What one offline run cannot establish, with the provenance limit that applies."""
+    if not read_from_machine:
+        return _KIT_LIMITS
+    return (*_KIT_LIMITS[:-1], _ASSERTED_LIMIT)
 
 
 def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
@@ -335,6 +430,7 @@ def _enrol_one(
     config: KitConfig,
     ledger: EvidenceLedger,
     taken_at: datetime | None,
+    read_from_machine: bool = False,
 ) -> MachineResult:
     plan_path = config.resolve(entry.plan)
     exports = config.resolve(entry.exports)
@@ -377,6 +473,8 @@ def _enrol_one(
             source=ManifestSource.AS_FOUND,
             taken_at=taken_at,
             notes=entry.notes,
+            hash_source=HashSource.READ_FROM_MACHINE if read_from_machine
+            else HashSource.SUPPLIED_BY_VENDOR,
         )
     except AssuranceError as exc:
         return MachineResult(
@@ -384,6 +482,12 @@ def _enrol_one(
             plan_id=plan.plan_id, detail=str(exc))
 
     record_manifest(ledger, result.manifest, actor=config.actor)
+    template_suppliers = sorted(
+        {i.item_id for i in plan.items if _is_placeholder(i.supplier)})
+    warnings = tuple(result.warnings) + ((
+        f"the supplier of {', '.join(template_suppliers)} is still a template value in "
+        f"{plan_path.name}; an advisory matches on the supplier, so it will not match "
+        "these items until it is filled in.",) if template_suppliers else ())
     return MachineResult(
         serial=entry.serial,
         # "incomplete" is a first-class outcome: a manifest missing a required
@@ -392,7 +496,7 @@ def _enrol_one(
         items=len(result.manifest.items),
         configuration_hash=result.manifest.configuration_hash(),
         plan_id=plan.plan_id,
-        warnings=tuple(result.warnings),
+        warnings=warnings,
         detail=result.summary().splitlines()[0] if result.summary() else "",
     )
 
@@ -403,12 +507,16 @@ def run_kit(
     *,
     allow_loopback: bool = False,
     now: datetime | None = None,
+    read_from_machine: bool = False,
 ) -> KitRun:
     """Enrol every machine in *config*, offline, into a ledger under *out_dir*.
 
     Everything substantive happens under the airgap guard. The airgap record is
     sealed afterwards — see the module docstring for why — and the head is read
     last so that it covers that record too.
+
+    ``read_from_machine`` is the operator's assertion that the kit ran on the
+    machines; without it every item is ``supplied_by_vendor``.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -424,7 +532,7 @@ def run_kit(
 
     with no_network(allow_loopback=allow_loopback) as airgap:
         for entry in config.machines:
-            results.append(_enrol_one(entry, config, ledger, now))
+            results.append(_enrol_one(entry, config, ledger, now, read_from_machine))
 
     # Outside the guard, deliberately: a record of a guard cannot be written
     # while the guard it describes is still running.
@@ -453,6 +561,7 @@ def run_kit(
     )
 
     finished = format_utc(now if now is not None else utc_now())
+    limits = kit_limits(read_from_machine)
     run = KitRun(
         kit_id=config.kit_id,
         started_at=started,
@@ -464,7 +573,8 @@ def run_kit(
         report_path=str(report_path),
         attest_request_path=str(request_path),
         head={},
-        checks_skipped=_KIT_LIMITS,
+        checks_skipped=limits,
+        read_from_machine_asserted=read_from_machine,
     )
 
     # The run record is sealed before the head is read, so that the attestation
@@ -482,7 +592,7 @@ def run_kit(
                 method="offline enrolment kit",
             ),
             validation_state=ValidationState.VERIFIED,
-            checks_skipped=_KIT_LIMITS,
+            checks_skipped=limits,
         ).seal(),
         subject=config.kit_id,
     )
@@ -493,7 +603,7 @@ def run_kit(
             organisation=config.organisation,
             prepared_by=config.prepared_by,
             generated_at=now,
-            extra_limits=AIRGAP_LIMITS + _KIT_LIMITS,
+            extra_limits=AIRGAP_LIMITS + limits,
         )),
         encoding="utf-8")
 
