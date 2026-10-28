@@ -229,24 +229,30 @@ async def post_webhook(
         return _handle_checkout(accounts, kind, obj, event_id, created)
 
     if kind == "invoice.payment_failed":
-        # Stripe retries the charge on its own schedule and tells us when it
-        # gives up (customer.subscription.updated/deleted). Until then the
-        # account keeps its plan and is flagged. Only an active account moves:
-        # a retry that fails after the subscription was cancelled must not
-        # turn a cancelled account back into one that is entitled.
-        customer = obj.get("customer", "") or ""
-        outcome = accounts.apply_subscription_event(
-            event_id=event_id, kind=kind, stripe_customer_id=customer,
-            status="past_due", tier=None, event_created=created,
-            hold_if_unknown=False, only_from=frozenset({"active"}),
-        )
-        return _subscription_response(kind, outcome, "marked_past_due")
+        return _handle_payment_failed(accounts, kind, obj, event_id, created)
 
     if kind in {"customer.subscription.updated", "customer.subscription.deleted"}:
         return _handle_subscription(accounts, kind, obj, event_id, created)
 
     # Everything else is acknowledged and ignored, so Stripe stops retrying.
     return {"handled": None, "ignored": kind}
+
+
+def _handle_payment_failed(
+    accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
+) -> dict[str, Any]:
+    # Stripe retries the charge on its own schedule and tells us when it
+    # gives up (customer.subscription.updated/deleted). Until then the
+    # account keeps its plan and is flagged. Only an active account moves:
+    # a retry that fails after the subscription was cancelled must not
+    # turn a cancelled account back into one that is entitled.
+    customer = obj.get("customer", "") or ""
+    outcome = accounts.apply_subscription_event(
+        event_id=event_id, kind=kind, stripe_customer_id=customer,
+        status="past_due", tier=None, event_created=created,
+        hold_if_unknown=False, only_from=frozenset({"active"}),
+    )
+    return _subscription_response(kind, outcome, "marked_past_due")
 
 
 def _handle_checkout(
