@@ -98,6 +98,18 @@ operators. The local CLI and open mode still take a declared `--actor`.
 `assess-intervention` remain for one-off use and for deployments that do not
 run the watch.
 
+**Behaviour changes to know about when upgrading** (they affect scripts):
+- `assess-advisory` and `POST /v1/change/assess/advisory` used to open a case from a bare
+  advisory as "automation" when no actor was given. They now refuse that (exit 1 / HTTP 409);
+  pass `--actor NAME` / `actor`.
+- A pre-work re-look at an *advisory* case (open, or in review with nothing re-verified) is now
+  additive for every advisory: it never drops a machine or a link to the advisory it was
+  opened on. Drift and intervention cases are unchanged.
+- Cases already in a ledger keep their ids and carry no marker. A bare file whose advisory id
+  matches such a case does not update it (it says so and exits non-zero).
+- `POST /v1/fleet/advisory/signed` rows for an unsigned import are inspect-only
+  (`automated_consequences_permitted: false`) even under a pinned key.
+
 **An advisory nobody has authenticated opens a case only for a named person.**
 `assess-advisory --advisory FILE` and `POST /v1/change/assess/advisory` take the
 advisory as a file or a body, so it carries no signature: both refuse it unless
