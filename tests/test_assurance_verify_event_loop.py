@@ -174,7 +174,9 @@ class TestAtMostAFewRunAtOnce:
             self, live_api, monkeypatch):
         from assurance.api import machine_routes
 
-        bound = machine_routes.MAX_CONCURRENT_VERIFICATIONS
+        # the documented bound (docs/claims-registry.md), not read back from the code
+        bound = 4
+        assert machine_routes.MAX_CONCURRENT_VERIFICATIONS == bound
         real = machine_routes.build_bundle
         lock = threading.Lock()
         over_bound = threading.Event()
