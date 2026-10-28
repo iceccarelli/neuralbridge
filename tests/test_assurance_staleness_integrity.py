@@ -217,6 +217,15 @@ class TestADateTheFilerControlsNeverMakesEvidenceLookFresher:
         assert recs[0].date_suspect
         assert report.functions[0].coverage is not Coverage.CURRENT
 
+    def test_a_function_resting_only_on_an_undatable_pass_names_why_it_is_stale(self, ledger):
+        """A stale function must name what made it so (the passport checker requires it)."""
+        seal_raw_body(ledger, raw_body("not a date", verified=CHECKS))
+        report, recs = coverage_of(ledger, [])
+        fn = report.functions[0]
+        assert fn.coverage is Coverage.STALE
+        assert fn.invalidated_by == f"undatable:{recs[0].content_hash[:12]}"
+        assert fn.last_verified_hash == recs[0].content_hash
+
     def test_an_undatable_pass_older_than_any_change_is_stale_not_current(self, ledger):
         seal_raw_body(ledger, raw_body("not a date", verified=CHECKS))
         report, _ = coverage_of(ledger, [update(when=datetime(2026, 1, 1, tzinfo=UTC))])
@@ -469,6 +478,9 @@ class TestReadingHandTypedFunctionIds:
     ])
     def test_an_id_is_read_as_the_manifests_own_spelling(self, typed, resolved):
         assert manifest().resolve_function_ids([typed]) == (resolved, ())
+
+    def test_the_same_function_typed_twice_is_resolved_once(self):
+        assert manifest().resolve_function_ids(["SF-1", "sf-1", " SF-1"]) == (("SF-1",), ())
 
     def test_an_id_that_matches_nothing_is_unknown_and_kept_as_typed(self):
         assert manifest().resolve_function_ids(["SF-1", "SF-9", "SF-9"]) == (
@@ -807,6 +819,17 @@ class TestWhichManifestDifferencesAreChanges:
         assert report.functions[0].coverage is Coverage.STALE
         assert report.functions[0].invalidated_by.startswith("implied:")
 
+    def test_a_record_for_another_item_does_not_explain_the_change(self, ledger):
+        doc = SafetyItem("doc", ItemKind.PARAMETER_SET, "readme", "1", "c" * 64,
+                         HashSource.READ_FROM_MACHINE)
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A", extra_items=(doc,)))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_intervention(ledger, update(when=utc_now() - timedelta(hours=1), item="doc",
+                                           from_hash="c" * 64, to_hash=HASH_B, affects=()))
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B", extra_items=(doc,)))
+        assert any(i.intervention_id.startswith("implied:") and i.item_id == "fw"
+                   for i in interventions_from_ledger(ledger, KEY))
+
     def test_an_intervention_dated_after_the_manifest_was_filed_does_not_explain_it(
             self, ledger):
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
@@ -1140,3 +1163,19 @@ class TestDerivedChangesAreNotCountedAsRecords:
             "was produced."]
         fn = built.coverage.functions[0]
         assert fn.coverage is Coverage.STALE and fn.invalidated_by.startswith("unreadable:")
+
+    def test_cutting_the_tail_off_the_chain_passes_verify_chain_but_not_a_published_head(
+            self, ledger):
+        """The documented limit of an unsigned head (docs/claims-registry.md): the chain
+        alone cannot show that records at its end are missing. A head attestation kept
+        outside the ledger can."""
+        verified_machine(ledger)
+        record_intervention(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC)))
+        published = ledger.head_attestation()
+        db = sqlite3.connect(ledger.path)
+        db.execute("delete from chain where seq=?", (published["head_seq"],))
+        db.commit()
+        db.close()
+        assert ledger.verify_chain() == (True, [])
+        assert ledger.head_attestation()["head_seq"] < published["head_seq"]
+        assert ledger.head_attestation()["head_link_hash"] != published["head_link_hash"]
