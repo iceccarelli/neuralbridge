@@ -164,25 +164,15 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         VerificationRecord.from_ledger(ledger, subject=key),
         interventions_from_ledger(ledger, key),
     )
-    chain_ok, chain_problems = ledger.verify_chain()
     if args.json:
-        print(json.dumps({**report.to_dict(), "ledger_chain_verified": chain_ok,
-                          "ledger_chain_problems": chain_problems[:3]}, indent=2))
+        print(json.dumps(report.to_dict(), indent=2))
     else:
-        if not chain_ok:
-            print(_CHAIN_WARNING + "\n")
         print(report.summary())
         if report.checks_skipped:
             print("\n  not checked:")
             for c in report.checks_skipped:
                 print(f"    - {c}")
-    if not chain_ok:
-        return 2        # could not vouch: nothing read from a broken chain is covered
     return _exit_for(report.verdict)
-
-
-_CHAIN_WARNING = ("THE LEDGER CHAIN DOES NOT VERIFY — every statement below is drawn from a "
-                  "store whose integrity is in question.")
 
 
 def _exit_for(verdict: str) -> int:

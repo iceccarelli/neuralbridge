@@ -24,7 +24,7 @@ assurance machinery coverage        manifest.json --ledger register.db
 | 0 | `covered` | every declared function is current on evidence at `validated` or better |
 | 3 | `covered_at_community` | every function reads current, but on evidence whose provenance the filer only declared (`community`): the recorded evidence stands, it was not a demonstration on the machine |
 | 1 | `gaps`, `no_functions_declared` | at least one function is not current |
-| 2 | | could not vouch: an error (an unreadable file or ledger), or the ledger's chain does not verify (the report is printed after a warning; a passport sealed from such a ledger has verdict `ledger_chain_not_verified`, INDETERMINATE, never covered) |
+| 2 | | could not vouch: an error (an unreadable file or ledger), or the ledger's chain does not verify (`coverage` assesses nothing and says why on stderr; a passport sealed from such a ledger has verdict `ledger_chain_not_verified`, INDETERMINATE, never covered) |
 
 **Passport format.** A passport is `assurance.machinery.passport/1` when an older verifier can
 express its verdict (`covered`, `gaps`, `no_functions_declared`) and

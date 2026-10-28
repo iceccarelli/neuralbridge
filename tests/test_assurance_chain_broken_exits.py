@@ -62,18 +62,15 @@ def broken(tmp_path, request):
     return led
 
 
-def test_machinery_coverage_exits_2(tmp_path, broken, capsys):
+def test_machinery_coverage_exits_2_and_assesses_nothing(tmp_path, broken, capsys):
+    """Refused before any row is read (a gate that read rows from a broken chain can be made
+    to pass by deleting the record that invalidated a function)."""
     m, _ = _files(tmp_path)
     rc = machinery_cli(["coverage", str(m), "--ledger", str(broken.path), "--json"])
-    out = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
     assert rc == 2
-    assert out["ledger_chain_verified"] is False
-
-
-def test_machinery_coverage_text_says_it_first(tmp_path, broken, capsys):
-    m, _ = _files(tmp_path)
-    machinery_cli(["coverage", str(m), "--ledger", str(broken.path)])
-    assert "DOES NOT VERIFY" in capsys.readouterr().out.splitlines()[0]
+    assert captured.out == ""
+    assert "chain does not verify" in captured.err
 
 
 def test_machinery_passport_exits_2_and_does_not_seal_a_covered_verdict(
@@ -124,6 +121,6 @@ def test_a_whole_chain_is_unchanged(tmp_path, capsys):
     attested_bundle(KEY, file_under=led)
     m, d = _files(tmp_path)
     assert machinery_cli(["coverage", str(m), "--ledger", str(led.path), "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["ledger_chain_verified"] is True
+    assert json.loads(capsys.readouterr().out)["verdict"] == "covered"
     assert fleet_cli(["declaration", str(d), "--manifest", str(m), "--ledger",
                       str(led.path), "--json"]) == 0
