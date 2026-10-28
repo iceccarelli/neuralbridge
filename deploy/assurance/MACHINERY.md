@@ -24,7 +24,15 @@ assurance machinery coverage        manifest.json --ledger register.db
 | 0 | `covered` | every declared function is current on evidence at `validated` or better |
 | 3 | `covered_at_community` | every function reads current, but on evidence whose provenance the filer only declared (`community`): the recorded evidence stands, it was not a demonstration on the machine |
 | 1 | `gaps`, `no_functions_declared` | at least one function is not current |
-| 2 | | an error (an unreadable file or ledger) |
+| 2 | | could not vouch: an error (an unreadable file or ledger), or the ledger's chain does not verify (the report is printed after a warning; a passport sealed from such a ledger has verdict `ledger_chain_not_verified`, INDETERMINATE, never covered) |
+
+**Passport format.** A passport is `assurance.machinery.passport/1` when an older verifier can
+express its verdict (`covered`, `gaps`, `no_functions_declared`) and
+`assurance.machinery.passport/2` when it carries `covered_at_community` or
+`ledger_chain_not_verified`. `machinery check` of this release accepts both and still accepts a
+passport written by the previous release; an older `machinery check` refuses a `/2` passport by name
+("schema is ..., expected ...passport/1") instead of calling its verdict a tamper. Re-verify a `/2`
+passport with this release or newer. Fixture: `tests/fixtures/passport_a135c0e_covered_at_community.json`.
 
 Per function, `coverage` is one of `current`, `stale` (verified, then a recorded intervention
 disturbed it), `failing` (a check's newest run VIOLATED it), `unchecked` (the newest run left the
