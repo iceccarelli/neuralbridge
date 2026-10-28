@@ -47,7 +47,7 @@ def neutralise(text: object, *, multiline: bool = False) -> str:
     for char in str(text):
         if multiline and char in "\n\t":
             out.append(char)
-        elif _unsafe(char) or char in "\n\r\t":
+        elif _unsafe(char):
             out.append(_escape(char))
         else:
             out.append(char)
@@ -58,7 +58,7 @@ def invisible_characters(text: str) -> list[str]:
     """Each distinct unsafe character in ``text`` as ``U+XXXX``, in order of appearance."""
     found: list[str] = []
     for char in text:
-        if _unsafe(char) or char in "\n\r\t":
+        if _unsafe(char):
             label = f"U+{ord(char):04X}"
             if label not in found:
                 found.append(label)

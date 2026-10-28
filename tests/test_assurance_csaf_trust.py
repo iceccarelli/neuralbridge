@@ -965,6 +965,27 @@ class TestAnImportNeverRewritesAnotherAdvisorysCase:
         links = {r["content_hash"] for r in store.get(first.case_id).linked_evidence}
         assert {first.linked_evidence[0]["content_hash"], reissued.content_hash()} <= links
 
+    def test_a_bare_file_with_the_same_id_never_rewrites_a_trusted_advisorys_case(
+            self, tmp_path, capsys):
+        ledger = tmp_path / "l.jsonl"
+        make_ledger(ledger, manifest("A", item("EX-100", "V1")),
+                    manifest("B", item("EX-100", "V2")))
+        first = self._open_trusted(ledger)
+        narrower = tmp_path / "narrower.json"
+        narrower.write_text(json.dumps({
+            **self._trusted().to_dict(), "title": "doctored",
+            "affected": [{"supplier": VENDOR, "name": "EX-100", "versions": ["V1"]}]}),
+            encoding="utf-8")
+        rc, *_ = change_cli(capsys, "assess-advisory", "--advisory", str(narrower),
+                            "--ledger", str(ledger), "--actor", "a.integrator")
+        assert rc == 0
+        (only,) = case_store(ledger).list()
+        assert only.case_id == first.case_id
+        assert only.machines == first.machines
+        assert only.linked_evidence == first.linked_evidence
+        assert only.changed_items == first.changed_items
+        assert "advisory_trust" not in only.provenance
+
     def test_a_repeat_look_before_work_starts_never_drops_a_machine_or_a_link(self, tmp_path):
         from assurance.change import assess_advisory
         from assurance.fleet.impact import assess_impact
@@ -1047,6 +1068,14 @@ class TestHostileTextAndUnreadMetadata:
             assert ch not in adv["title"]
         assert any("title" in n for n in adv["import_record"]["notes"])
 
+    def test_control_characters_in_the_publisher_name_are_removed_and_said(self, tmp_path):
+        d = simple_doc()
+        d["document"]["publisher"]["name"] = "Example\x1b[2J Controls GmbH\u202e"
+        rc, adv, _ = run_import(tmp_path, d)
+        assert rc == 0
+        assert "\x1b" not in adv["issued_by"] and "\u202e" not in adv["issued_by"]
+        assert any("publisher name" in n for n in adv["import_record"]["notes"])
+
     @pytest.mark.parametrize("where", ["product_name", "product_version", "vendor"])
     def test_an_invisible_character_in_a_matching_field_is_refused_naming_the_field(
             self, tmp_path, capsys, where):
@@ -1104,6 +1133,8 @@ class TestHostileInputIsAMessageAndExit2:
         ("notes is a number", lambda d: d["document"].update(notes=3)),
         ("branches is an object",
          lambda d: d["product_tree"]["branches"][0].update(branches={"a": 1})),
+        ("a branch is a string",
+         lambda d: d["product_tree"]["branches"][0]["branches"].append("EX-100")),
         ("a vulnerability is not an object",
          lambda d: d["vulnerabilities"].append("not a mapping")),
         ("product_status is a list",
