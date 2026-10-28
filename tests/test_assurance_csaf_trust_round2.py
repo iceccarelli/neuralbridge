@@ -522,18 +522,30 @@ class TestCostAndCaps:
         from assurance.fleet.impact import assess_impact
         from assurance.fleet.registry import Fleet
 
-        n = 50_000
         ledger = make_ledger(
             tmp_path / "l.jsonl",
             *[manifest(f"S{i}", item("EX-100", "V1"), item("EX-200", "V1", iid="ITM-2"),
                        item("EX-300", "V1", iid="ITM-3")) for i in range(30)])
-        d = doc([name_branch(f"EX-{i}", [leaf(f"P{i}", "V9")]) for i in range(n)],
-                affected(*[f"P{i}" for i in range(n)]))
-        advisory = advisory_from_csaf(d).advisory
         fleet = Fleet.from_ledger(ledger)
-        start = time.perf_counter()
-        report = assess_impact(advisory, fleet)
-        assert time.perf_counter() - start < 3.0, "the matcher is linear in artefacts x items"
+
+        def assess(n):
+            d = doc([name_branch(f"EX-{i}", [leaf(f"P{i}", "V9")]) for i in range(n)],
+                    affected(*[f"P{i}" for i in range(n)]))
+            advisory = advisory_from_csaf(d).advisory
+            best, report = None, None
+            for _ in range(3):
+                start = time.perf_counter()
+                report = assess_impact(advisory, fleet)
+                took = time.perf_counter() - start
+                best = took if best is None else min(best, took)
+            return best, report
+
+        # A ratio, not a wall-clock bound: 5x the artefacts must cost far less than the 25x a
+        # matcher that is quadratic in artefacts would.
+        small, _ = assess(10_000)
+        large, report = assess(50_000)
+        assert large < max(12.0 * small, 0.5), "the matcher is superlinear in artefacts"
+        assert large < 30.0, "the matcher is far too slow"
         assert report.verdict == "needs_review"      # EX-100 V1 is an unlisted label of EX-100
 
     def test_the_file_cap_is_proved_with_valid_json_just_over_it(self, tmp_path, monkeypatch):

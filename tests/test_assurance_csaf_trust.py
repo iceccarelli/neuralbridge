@@ -1260,13 +1260,26 @@ class TestHostileInputIsAMessageAndExit2:
         assert src.read_bytes() == before
 
     def test_a_forty_thousand_product_document_imports_quickly(self):
-        n = 40_000
-        d = doc([name_branch("EX-100", [leaf(f"P{i}", f"V{i}") for i in range(n)])],
-                affected(*[f"P{i}" for i in range(n)]))
-        start = time.perf_counter()
-        advisory = advisory_from_csaf(d).advisory
-        assert time.perf_counter() - start < 2.0, "the importer is quadratic again"
-        assert len(advisory.affected[0].versions) == n
+        # Wall-clock bounds flake on a loaded runner; quadratic growth does not hide in a
+        # ratio. 4x the products must cost far less than the 16x a quadratic importer needs.
+        def build(n):
+            return doc([name_branch("EX-100", [leaf(f"P{i}", f"V{i}") for i in range(n)])],
+                       affected(*[f"P{i}" for i in range(n)]))
+
+        def best_of_three(d):
+            best = None
+            for _ in range(3):
+                start = time.perf_counter()
+                advisory = advisory_from_csaf(d).advisory
+                took = time.perf_counter() - start
+                best = took if best is None else min(best, took)
+            return best, advisory
+
+        small, _ = best_of_three(build(10_000))
+        large, advisory = best_of_three(build(40_000))
+        assert len(advisory.affected[0].versions) == 40_000
+        assert large < max(8.0 * small, 0.5), "the importer is quadratic again"
+        assert large < 30.0, "the importer is far too slow"
 
     def test_a_document_over_the_stated_product_limit_is_refused(self, tmp_path, monkeypatch):
         assert isinstance(csaf_module.MAX_PRODUCTS, int) and csaf_module.MAX_PRODUCTS >= 40_000
