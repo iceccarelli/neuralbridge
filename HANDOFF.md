@@ -186,7 +186,11 @@ Verified by running the suite against a local PostgreSQL 16: **4262 passed, 0 sk
   states (readable / signature / key trust / chain / duplicates / conflicts / withdrawals),
   attributed manual override, classified fleet impact (hash / version-only / name-only /
   contradictory / unknown). The watch runner passes the trust store, so an untrusted
-  advisory is inspect-only and opens no case. `fleet advisory --unsigned-anyway` now needs
+  advisory is inspect-only and opens no case. That is true of the watch runner only: a hand-written bare advisory file or body handed
+  to `change assess-advisory` / `POST /v1/change/assess/advisory` opens a case for a named person
+  (no flag) and the case carries `unauthenticated_*`; an **unsigned CSAF import** additionally
+  needs `--accept-unsigned` / `accept_unsigned` plus a reason, which the hosted API takes only
+  from an operator key with the decider role. `fleet advisory --unsigned-anyway` now needs
   `--override-actor` and never lets failed-signature records drive the verdict.
 - **Re-verification** refuses a newest manifest that was declared rather than read off the
   unit, a bundle whose trace cannot be dated, and one trace filed for two machines.

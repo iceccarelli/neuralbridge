@@ -30,11 +30,12 @@ from typing import TypeVar
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import Divergence, Severity
-from assurance.machinery.intervention import Intervention
+from assurance.machinery.intervention import IMPLIED_PREFIX, Intervention
 from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
@@ -58,7 +59,9 @@ __all__ = [
     "CaseNotFoundError",
     "CaseTransitionError",
     "UnknownInterventionError",
+    "UntrustedAdvisoryError",
     "advance",
+    "advisory_case_id",
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
@@ -67,6 +70,7 @@ __all__ = [
     "case_id_for",
     "claim",
     "decide",
+    "named_person_problem",
     "note_advisory_withdrawn",
     "resolve_decision",
     "resume",
@@ -97,6 +101,14 @@ class UnknownInterventionError(AssuranceError):
     """The intervention id names no intervention sealed for that machine."""
 
 
+class UntrustedAdvisoryError(CaseTransitionError):
+    """A case was asked for on an advisory nobody has authenticated, without the override.
+
+    A subclass of :class:`CaseTransitionError`, so every interface that already maps that to
+    a refusal (HTTP 409, the command line's ``finding:``) refuses this one the same way.
+    """
+
+
 def _case_id(trigger_type: TriggerType, trigger_id: str) -> str:
     """Deterministic, so the same trigger folds into the same case.
 
@@ -111,6 +123,27 @@ def _case_id(trigger_type: TriggerType, trigger_id: str) -> str:
 def case_id_for(trigger_type: TriggerType, trigger_id: str) -> str:
     """The id a trigger's case has (or would have), without building the case."""
     return _case_id(trigger_type, trigger_id)
+
+
+def _advisory_trigger(impact: ImpactReport) -> str:
+    """The trigger id of an advisory case.
+
+    An advisory that is not an import keeps the id it always had: the advisory id, so the
+    cases already in a ledger do not move. An import's trigger names its trust class and its
+    publisher too, so an unsigned document that happens to reuse a tracking id can never fold
+    into (or rewrite) the case of a different advisory, and two publishers who number their
+    advisories alike do not share one.
+    """
+    record = impact.advisory_import
+    if record is None:
+        return impact.advisory_id
+    return (f"{impact.advisory_id} [{record.get('trust')} {record.get('origin')} from "
+            f"{neutralise(impact.issued_by)}]")
+
+
+def advisory_case_id(impact: ImpactReport) -> str:
+    """The id the case for this advisory report has (or would have)."""
+    return _case_id(TriggerType.SUPPLIER_ADVISORY, _advisory_trigger(impact))
 
 
 #: Names no person is called. A caller that labels itself one of these is saying
@@ -250,6 +283,19 @@ def _links_union(
     return tuple(out)
 
 
+def _append_links(
+    existing: Sequence[dict[str, str]], new: Sequence[dict[str, str]],
+) -> tuple[dict[str, str], ...]:
+    """Every existing link, then each new link that is not already there.
+
+    Unlike :func:`_links_union` this does not fold a new link into an old one because they
+    share a note: two advisories can both be "advisory X from Y" and are different evidence.
+    """
+    out = list(existing)
+    out.extend(r for r in new if r not in out)
+    return tuple(out)
+
+
 def _carry_workflow(existing: ChangeAssuranceCase, new: ChangeAssuranceCase,
                     ) -> ChangeAssuranceCase:
     """``new`` with everything that is the human workflow taken from ``existing``."""
@@ -291,21 +337,50 @@ def _merge(
     pre_work = existing.status in (CaseStatus.OPEN, CaseStatus.IN_REVIEW) \
         and not existing.reverified_at
     if pre_work:
-        # Links the case earned itself (a prior closure it follows) survive.
-        kept = tuple(r for r in existing.linked_evidence
-                     if r.get("note", "").startswith("prior closure by"))
-        # The facts are replaced; the work is not. A later look may name more, but
-        # it never names less than what is already outstanding: dropping a
-        # re-verification, an action or a question takes a re-verification or a
-        # person's recorded waiver or answer, not a repeat observation.
+        if existing.trigger_type is not TriggerType.SUPPLIER_ADVISORY:
+            # Drift and intervention cases are keyed by what happened (the observed
+            # configuration, the intervention id), so a repeat look at the same trigger is
+            # the same fact read again: the freshest reading replaces the facts and the
+            # pointers to the evidence it rests on (a re-collected manifest is the one
+            # that was actually sealed). Links the case earned itself survive.
+            kept = tuple(r for r in existing.linked_evidence
+                         if r.get("note", "").startswith("prior closure by"))
+            # The facts are replaced; the work is not. A later look may name more, but
+            # it never names less than what is already outstanding: dropping a
+            # re-verification, an action or a question takes a re-verification or a
+            # person's recorded waiver or answer, not a repeat observation.
+            return replace(
+                base,
+                required_reverifications=_union(existing.required_reverifications,
+                                                new.required_reverifications),
+                required_actions=_union(existing.required_actions, new.required_actions),
+                human_decisions_required=_union(existing.human_decisions_required,
+                                                fresh_decisions),
+                linked_evidence=_links_union(new.linked_evidence, kept))
+        # An advisory id does not determine an advisory's content: the same id re-issued
+        # narrower, or by another document, is a different reading. So here a later look
+        # only ever adds. It refreshes a row it re-reads, but it never drops a machine the
+        # case names, never overwrites the link to the advisory the case was opened on
+        # (the new advisory's link is appended), and never narrows the work.
+        fresh_keys = {_key(i) for i in new.changed_items}
+        rows = (*new.changed_items,
+                *(i for i in existing.changed_items if _key(i) not in fresh_keys))
         return replace(
             base,
+            machines=_union(existing.machines, new.machines),
+            sites=_union(existing.sites, new.sites),
+            changed_items=tuple(rows),
+            affected_functions=_union(existing.affected_functions, new.affected_functions),
+            evidence_before={**existing.evidence_before, **new.evidence_before},
+            evidence_current={**existing.evidence_current, **new.evidence_current},
             required_reverifications=_union(existing.required_reverifications,
                                             new.required_reverifications),
             required_actions=_union(existing.required_actions, new.required_actions),
             human_decisions_required=_union(existing.human_decisions_required,
                                             fresh_decisions),
-            linked_evidence=_links_union(new.linked_evidence, kept))
+            linked_evidence=_append_links(existing.linked_evidence, new.linked_evidence),
+            checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
+            provenance={**new.provenance, **existing.provenance})
 
     items = list(existing.changed_items)
     known = {_key(i) for i in items}
@@ -344,8 +419,12 @@ def _merge(
         required_actions=_union(existing.required_actions, added_actions),
         required_reverifications=reverifs,
         human_decisions_required=decisions,
-        linked_evidence=_links_union(existing.linked_evidence, new.linked_evidence),
+        linked_evidence=(
+            _append_links(existing.linked_evidence, new.linked_evidence)
+            if existing.trigger_type is TriggerType.SUPPLIER_ADVISORY
+            else _links_union(existing.linked_evidence, new.linked_evidence)),
         checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
+        provenance={**new.provenance, **existing.provenance},
     )
 
 
@@ -569,6 +648,12 @@ def assess_drift(
     if divergence.verdict != "safety_relevant_drift":
         return None
 
+    # The drift under assessment is this case's finding, not evidence for it. Once the
+    # observed manifest is sealed the ledger derives an implied change from it; leaving
+    # that in would make a re-assessment after sealing read differently from the first,
+    # which ran before the manifest was sealed (so a crash between the two is a no-op).
+    own = f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}@"
+    interventions = [i for i in interventions if not i.intervention_id.startswith(own)]
     coverage = assess_coverage(manifest, verifications, interventions)
     affected = divergence.affected_functions
     evidence_current = {f.function_id: f.coverage.value
@@ -645,8 +730,86 @@ def assess_drift(
 # Trigger B — supplier advisory
 # ---------------------------------------------------------------------------
 
-def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> ChangeAssuranceCase | None:
+def _attribution_basis(actor: Actor) -> str:
+    """How the actor's name was established, as the surface that built the actor recorded it.
+
+    ``authenticated_operator`` is a credential bound to a named operator; ``declared_*`` is a
+    name an account-level key or an open-mode caller typed; ``declared_locally`` is the
+    command line, where whoever owns the shell and the ledger file declares it.
+    """
+    found = re.search(r"attribution=([a-z_]+)", actor.role or "")
+    return found.group(1) if found else "declared_locally"
+
+
+def named_person_problem(identifier: str) -> str:
+    """Why ``identifier`` cannot be the name of a person, or ``""`` if it can."""
+    return _name_problem(identifier) if identifier.strip() else "no name was given"
+
+
+def _untrusted_marker(
+    impact: ImpactReport, actor: Actor, accept_unsigned: bool, reason: str,
+) -> dict[str, str]:
+    """Refuse, or say plainly, that a case rests on an advisory nobody has authenticated.
+
+    ``{}`` for an advisory that is not an import and was not handed over as a bare file or
+    body (a signed, pinned supplier feed, or a caller that states no provenance). Otherwise
+    only a named person may open the case, and an unsigned import additionally needs that
+    person's explicit override. The result is written into the case's provenance, so the
+    case, its export and every later reader can see it.
+    """
+    record = impact.advisory_import
+    given = impact.provenance or {}
+    if record is None and not given.get("inspect_only"):
+        return {}
+    shown = neutralise(impact.advisory_id)
+    _require_human(actor, f"opening a case from advisory {shown}, which nobody has "
+                          "authenticated,")
+    if record is not None and not accept_unsigned:
+        raise UntrustedAdvisoryError(
+            f"advisory {shown} is an unsigned, inspect-only import "
+            f"({record.get('origin')}). A case is a record people must work, and nothing "
+            "has checked that this advisory is genuine. If a named person has read it "
+            "against the publisher's own page and wants the case anyway, pass the "
+            "override explicitly (`--accept-unsigned` with `--actor NAME`; the API's "
+            "`accept_unsigned` with `actor`). Nothing was opened.")
+    if record is not None and not reason.strip():
+        raise UntrustedAdvisoryError(
+            f"advisory {shown} is an unsigned import and the override needs a reason in the "
+            "person's own words (`--reason`; the API's `reason`): what was checked, against "
+            "what. Nothing was opened.")
+    marker: dict[str, str] = {
+        "advisory_trust": str(record["trust"] if record else
+                              given.get("trust_state") or "unauthenticated"),
+        "advisory_origin": str(record["origin"] if record else
+                               given.get("source") or "unknown"),
+        "advisory_issuer": neutralise(impact.issued_by),
+        "advisory_accepted_by": actor.identifier.strip(),
+        "advisory_accepted_basis": _attribution_basis(actor),
+        "advisory_accept_reason": " ".join(neutralise(reason).split())[:500],
+    }
+    if record is not None:
+        marker.update({
+            "advisory_partial": "true" if record.get("partial") else "false",
+            "advisory_dropped_products": ", ".join(
+                neutralise(i) for i in impact.dropped_products),
+            "advisory_severity_source": neutralise(record.get("severity_source")),
+            "advisory_tlp": neutralise(record.get("tlp")),
+            "advisory_tracking_status": neutralise(record.get("tracking_status")),
+            "advisory_document_category": neutralise(record.get("document_category")),
+            "advisory_document_date": neutralise(record.get("document_date")),
+        })
+    return marker
+
+
+def assess_advisory(
+    store: CaseStore, impact: ImpactReport, *, actor: Actor,
+    accept_unsigned: bool = False, reason: str = "",
+) -> ChangeAssuranceCase | None:
     """A supplier advisory now touches this fleet.
+
+    An advisory nobody has authenticated (an unsigned import, or a bare file or body: see
+    :func:`_untrusted_marker`) opens a case only for a named person, an unsigned import only
+    with ``accept_unsigned`` as well, and the case says so in its provenance.
 
     One case per advisory, naming every machine :func:`assess_impact` found —
     not one case per machine, because the decision this drives ("does this
@@ -658,6 +821,8 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
     """
     if impact.verdict == "clear":
         return None
+    marker = _untrusted_marker(impact, actor, accept_unsigned, reason)
+    imported = impact.advisory_import is not None
 
     def _row(e: Exposure) -> dict[str, object]:
         return {
@@ -687,6 +852,20 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
     human_decisions: list[str] = []
     required_actions: list[str] = []
     actions_by_fid: dict[str, list[str]] = {}
+    if imported:
+        human_decisions.append(
+            f"The advisory behind this case is an unsigned, inspect-only CSAF import "
+            f"(accepted by {marker['advisory_accepted_by']}). Confirm it against the "
+            "publisher's own page and key before any change is made to a safety system "
+            "on its authority.")
+        if impact.incomplete:
+            gone = ", ".join(repr(i) for i in impact.dropped_products)
+            why = "; ".join(neutralise(r) for r in impact.incomplete_reasons)
+            human_decisions.append(
+                "The advisory is an incomplete translation of its source"
+                + (f": affected product(s) {gone} were not imported, so machines running "
+                   "them are NOT in this case" if gone else "")
+                + f". Check the source document against the fleet by hand ({why}).")
     for exposure in impact.contradictory:
         human_decisions.append(
             f"{exposure.machine_key}/{exposure.item_id}: label and artefact hash "
@@ -715,9 +894,9 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
             actions_by_fid.setdefault(key, []).append(action)
 
     case = ChangeAssuranceCase(
-        case_id=_case_id(TriggerType.SUPPLIER_ADVISORY, impact.advisory_id),
+        case_id=advisory_case_id(impact),
         trigger_type=TriggerType.SUPPLIER_ADVISORY,
-        trigger_id=impact.advisory_id,
+        trigger_id=_advisory_trigger(impact),
         status=CaseStatus.OPEN,
         machines=impact.machines_affected,
         sites=tuple(dict.fromkeys(e.site for e in impact.exposures if e.site)),
@@ -730,11 +909,29 @@ def assess_advisory(store: CaseStore, impact: ImpactReport, *, actor: Actor) -> 
         required_reverifications=tuple(dict.fromkeys(required_reverifications)),
         human_decisions_required=tuple(dict.fromkeys(human_decisions)),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
-                          "note": f"advisory {impact.advisory_id} from {impact.issued_by}"},),
-        checks_skipped=impact.checks_skipped,
-        confidence="high" if impact.confirmed else "medium",
-        provenance={"changed_items": "assurance.fleet.impact.assess_impact"},
+                          "note": f"advisory {neutralise(impact.advisory_id)} from "
+                                  f"{neutralise(impact.issued_by)}"
+                                  + (" (unsigned CSAF import)" if imported else "")},),
+        checks_skipped=(
+            impact.checks_skipped if not marker else (
+                f"this case rests on an advisory nobody has authenticated "
+                f"({marker['advisory_trust']}), opened on the authority of "
+                f"{marker['advisory_accepted_by']}; no signature was checked.",
+                *impact.checks_skipped)),
+        confidence=("high" if impact.confirmed and not marker else "medium"),
+        provenance={"changed_items": "assurance.fleet.impact.assess_impact", **marker},
     )
+    if marker and not imported:
+        # A bare file or body shares its case id with a case opened from a signed or
+        # pinned feed (ids of existing cases must not move). It must not alter that case:
+        # an unauthenticated reading never rewrites one that carries no such marker.
+        current = store.get(case.case_id)
+        if current is not None and not current.provenance.get("advisory_trust"):
+            raise UntrustedAdvisoryError(
+                f"case {current.case_id} for advisory {neutralise(impact.advisory_id)} was "
+                "opened from a source that carries no unauthenticated marker (a signed feed "
+                "or the watch), and an unauthenticated file does not update it. The case is "
+                "not updated; this reading was not applied.")
     return _open_or_update(
         store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"advisory {impact.advisory_id}: {len(impact.machines_affected)} "

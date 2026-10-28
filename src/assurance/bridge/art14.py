@@ -27,11 +27,15 @@ register then enforces the rest in the order the Regulation requires.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
+from assurance.change.service import advisory_case_id
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor, Evidence
+from assurance.core.identity import utc_now
+from assurance.core.text import neutralise
 from assurance.fleet.advisory import ComponentAdvisory, MatchBasis
 from assurance.fleet.impact import ImpactReport
 from assurance.fleet.registry import Fleet
@@ -70,6 +74,10 @@ class CaseDraft:
     checks_skipped: tuple[str, ...]
     advisory_id: str = ""
     advisory_hash: str = ""
+    #: The advisory's translation record when it is an unsigned import (origin, trust,
+    #: partial, dropped products, TLP, ...), else empty. Said in the signal text as well,
+    #: because that text is what is sealed and what the SRP prefill carries.
+    advisory_provenance: dict[str, Any] = field(default_factory=dict)
 
     @property
     def can_complete_field_5(self) -> bool:
@@ -109,15 +117,30 @@ class CaseDraft:
             "decisions_required": list(self.decisions_required),
             "srp_prefill": self.srp_prefill(),
             "checks_skipped": list(self.checks_skipped),
+            "advisory_provenance": dict(self.advisory_provenance),
         }
 
     def summary(self) -> str:
         lines = [
-            f"{self.case_id} — intake drafted from {self.advisory_id}",
+            f"{neutralise(self.case_id)} — intake drafted from "
+            f"{neutralise(self.advisory_id)}",
             f"  {len(self.machines)} affected machine(s) in "
             f"{len(self.member_states)} Member State(s): "
             + (", ".join(self.member_states) or "—"),
         ]
+        if self.advisory_provenance:
+            lines.append(
+                "  !! UNSIGNED CSAF IMPORT, inspect only: nobody has authenticated the "
+                "advisory behind this intake"
+                + (f"; TLP:{neutralise(self.advisory_provenance['tlp'])}"
+                   if self.advisory_provenance.get("tlp") else ""))
+            if self.advisory_provenance.get("partial"):
+                lines.append(
+                    "  !! PARTIAL TRANSLATION: affected product(s) not imported: "
+                    + (", ".join(neutralise(d.get("product_id"))
+                                 for d in self.advisory_provenance.get("dropped") or ())
+                       or "see the advisory's partial_reasons")
+                    + ". Machines running them are not in this intake.")
         if self.other_markets:
             lines.append(f"  outside the EU: {', '.join(self.other_markets)} "
                          "(Article 14(8) may apply; field 5 does not)")
@@ -135,7 +158,8 @@ class CaseDraft:
         lines.append("  still to be decided by a person:")
         for d in self.decisions_required:
             lines.append(f"    - {d}")
-        return "\n".join(lines)
+        # Much of this is text from an advisory nobody here wrote.
+        return neutralise("\n".join(lines), multiline=True)
 
 
 def draft_from_advisory(
@@ -146,12 +170,18 @@ def draft_from_advisory(
     case_id: str = "",
     received_by: str,
     product_name: str = "",
+    received_at: datetime | None = None,
 ) -> CaseDraft:
     """Assemble the intake an advisory implies, and nothing more.
 
     ``received_by`` is required: a signal nobody received is not a signal, and
     the interval from receipt to awareness is the number a market surveillance
     authority asks about.
+
+    ``received_at`` is when this intake received the signal. For an unsigned import it is
+    never the document's own release date (that is when the publisher says it was written,
+    not when anything here saw it), so it defaults to now and the document's date is said in
+    the description beside it.
     """
     if not received_by:
         raise BridgeError(
@@ -169,10 +199,18 @@ def draft_from_advisory(
             needing_a_human.append(exposure.machine_key)
 
     if not affected and not needing_a_human:
+        if impact.incomplete:
+            raise BridgeError(
+                f"advisory {neutralise(advisory.advisory_id)} matches no machine in this "
+                "fleet, but it is an INCOMPLETE translation (not imported: "
+                + ", ".join(repr(neutralise(i)) for i in impact.dropped_products)
+                + "), so that is not a statement that no machine is affected. Check the "
+                "source document against the fleet by hand.")
         raise BridgeError(
             f"advisory {advisory.advisory_id} matches no machine in this fleet. "
             "There is nothing to open a case about from here."
         )
+    import_rec = advisory.import_record
 
     states: set[str] = set()
     other: set[str] = set()
@@ -242,6 +280,17 @@ def draft_from_advisory(
             "in. They are affected and contribute nothing to field 5."
         )
 
+    if import_rec is not None:
+        decisions.insert(0, (
+            "Whether the advisory is genuine. It is an unsigned, inspect-only CSAF import: "
+            "no signature was checked, so confirm it against the publisher's own page "
+            "before treating it as a signal about this product."))
+        if impact.incomplete:
+            decisions.insert(1, (
+                "The advisory is an incomplete translation of its source (not imported: "
+                + ", ".join(repr(i) for i in impact.dropped_products)
+                + "): machines running those products are not in this intake. Check the "
+                "source against the fleet by hand."))
     caveats = [
         "this is an intake, not a filing. No track has been set and no awareness "
         "timestamp has been established; the Article 14 register will refuse a "
@@ -257,13 +306,13 @@ def draft_from_advisory(
     ]
 
     return CaseDraft(
-        case_id=case_id or f"CASE-{advisory.advisory_id}",
+        case_id=case_id or _default_case_id(advisory, impact),
         signal=Signal(
-            received_at=advisory.issued_at,
+            received_at=(received_at or (utc_now() if import_rec is not None
+                                         else advisory.issued_at)),
             channel=SignalChannel.SUPPLIER_ADVISORY,
             received_by=received_by,
-            description=f"{advisory.issued_by} advisory {advisory.advisory_id}: "
-                        f"{advisory.title}. {advisory.summary}",
+            description=_signal_description(advisory),
             product_name=products[0].product_name if products else "",
             version=products[0].version_range if products else "",
             reference=advisory.reference,
@@ -278,7 +327,33 @@ def draft_from_advisory(
         checks_skipped=tuple(dict.fromkeys(caveats)),
         advisory_id=advisory.advisory_id,
         advisory_hash=impact.advisory_hash,
+        advisory_provenance=import_rec.to_dict() if import_rec is not None else {},
     )
+
+
+def _default_case_id(advisory: ComponentAdvisory, impact: ImpactReport) -> str:
+    """``CASE-<advisory id>`` as it always was; an unsigned import's id carries the same
+    trust-and-publisher derivation as its change case, so opening it first can never take
+    the id a trusted advisory with the same tracking id will need."""
+    if advisory.import_record is None:
+        return f"CASE-{advisory.advisory_id}"
+    return f"CASE-{advisory.advisory_id}-{advisory_case_id(impact)[len('case-'):][:8]}"
+
+
+def _signal_description(advisory: ComponentAdvisory) -> str:
+    text = (f"{neutralise(advisory.issued_by)} advisory {neutralise(advisory.advisory_id)}: "
+            f"{neutralise(advisory.title)}. {neutralise(advisory.summary)}")
+    record = advisory.import_record
+    if record is None:
+        return text
+    flags = ["UNSIGNED CSAF IMPORT", "inspect only"]
+    if record.partial:
+        flags.append("PARTIAL, not imported: " + (
+            ", ".join(neutralise(i) for i in record.dropped_ids) or "see partial_reasons"))
+    if record.tlp:
+        flags.append(f"TLP:{neutralise(record.tlp)}")
+    flags.append(f"document dated {neutralise(record.document_date)}")
+    return f"[{'; '.join(flags)}] {text}"
 
 
 def open_case(

@@ -52,10 +52,15 @@ from assurance.core.identity import content_hash_of, format_utc, parse_utc
 from assurance.machinery.manifest import SafetyItem
 
 __all__ = [
+    "IMPORT_ORIGINS",
+    "IMPORT_TRUSTS",
+    "TRUST_UNSIGNED_INSPECT_ONLY",
     "AdvisoryError",
     "AdvisorySeverity",
     "AffectedArtefact",
     "ComponentAdvisory",
+    "DroppedProduct",
+    "ImportRecord",
     "MatchBasis",
     "fold_hash",
     "fold_text",
@@ -151,6 +156,11 @@ class AffectedArtefact:
     content_hashes: tuple[str, ...] = ()
     #: Free text where the supplier expressed a range. Displayed, never parsed.
     version_note: str = ""
+    #: Versions the supplier names as fixed *for this component*. Unlike
+    #: :attr:`ComponentAdvisory.fixed_versions` (one list for the whole advisory), these
+    #: cannot clear a machine that runs a different component. Optional, and absent from
+    #: :meth:`to_dict` when empty, so an advisory that does not use it hashes as it always did.
+    fixed_versions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not fold_text(self.supplier) or not fold_text(self.name):
@@ -164,6 +174,10 @@ class AffectedArtefact:
                 "nor a hash, so it would match every version of this component ever "
                 "shipped. List the affected versions, or the hashes."
             )
+        if any(not fold_text(v) for v in self.fixed_versions):
+            raise AdvisoryError(
+                f"{self.supplier} {self.name}: a fixed version is empty. A blank 'fixed' "
+                "entry would read as demonstrably remedied.")
         if any(not fold_text(v) for v in self.versions) or any(
                 not fold_hash(h) for h in self.content_hashes):
             raise AdvisoryError(
@@ -173,12 +187,15 @@ class AffectedArtefact:
             )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "supplier": self.supplier, "name": self.name,
             "versions": list(self.versions),
             "content_hashes": list(self.content_hashes),
             "version_note": self.version_note,
         }
+        if self.fixed_versions:
+            out["fixed_versions"] = list(self.fixed_versions)
+        return out
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> AffectedArtefact:
@@ -187,6 +204,111 @@ class AffectedArtefact:
             versions=tuple(str(v) for v in (d.get("versions") or ())),
             content_hashes=tuple(str(h) for h in (d.get("content_hashes") or ())),
             version_note=str(d.get("version_note", "")),
+            fixed_versions=tuple(str(v) for v in (d.get("fixed_versions") or ())),
+        )
+
+
+#: The only origin and trust an import record may carry. There is deliberately no value
+#: here that means "signed" or "trusted": a record that says so is refused when it is read.
+IMPORT_ORIGINS = ("csaf_import",)
+TRUST_UNSIGNED_INSPECT_ONLY = "unsigned_inspect_only"
+IMPORT_TRUSTS = (TRUST_UNSIGNED_INSPECT_ONLY,)
+SEVERITY_SOURCES = ("defaulted_by_importer", "operator_flag")
+
+
+@dataclass(frozen=True)
+class DroppedProduct:
+    """An affected product the translation could not carry over, and why."""
+
+    product_id: str
+    reason: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"product_id": self.product_id, "reason": self.reason}
+
+
+@dataclass(frozen=True)
+class ImportRecord:
+    """What a translation of third-party content did, written into the advisory it produced.
+
+    A translation that dropped something is not the document it came from. If that fact lived
+    only on standard error, the file would read as complete to every later reader and a
+    machine running the dropped product would be "clear". So the record is part of the
+    advisory: it survives :meth:`ComponentAdvisory.from_dict`, it is covered by
+    :meth:`ComponentAdvisory.content_hash`, and every consumer that fans the advisory out
+    reads it.
+
+    ``trust`` can only be ``unsigned_inspect_only``: an import is, by construction, content
+    nobody has authenticated.
+    """
+
+    origin: str
+    trust: str
+    partial: bool
+    dropped: tuple[DroppedProduct, ...]
+    severity_source: str
+    tlp: str
+    tracking_status: str
+    document_category: str
+    #: The document's own ``current_release_date``. When the publisher says it was released;
+    #: not when anyone here received or read it.
+    document_date: str
+    notes: tuple[str, ...] = ()
+    #: Why the translation is partial, one sentence each: the dropped products, a draft
+    #: status. Empty exactly when :attr:`partial` is false.
+    partial_reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.origin not in IMPORT_ORIGINS:
+            raise AdvisoryError(f"import record origin {self.origin!r} is not one of "
+                                f"{', '.join(IMPORT_ORIGINS)}.")
+        if self.trust not in IMPORT_TRUSTS:
+            raise AdvisoryError(
+                f"import record trust {self.trust!r} is refused. An imported advisory is "
+                f"{TRUST_UNSIGNED_INSPECT_ONLY}; nothing in a file can make it more.")
+        if self.severity_source not in SEVERITY_SOURCES:
+            raise AdvisoryError(f"import record severity_source {self.severity_source!r} "
+                                f"is not one of {', '.join(SEVERITY_SOURCES)}.")
+        if self.dropped and not self.partial:
+            raise AdvisoryError("an import record that dropped products must be partial.")
+        if self.partial and not (self.partial_reasons or self.dropped):
+            raise AdvisoryError("a partial import record must say why it is partial.")
+
+    @property
+    def dropped_ids(self) -> tuple[str, ...]:
+        return tuple(d.product_id for d in self.dropped)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "origin": self.origin, "trust": self.trust, "partial": self.partial,
+            "dropped": [d.to_dict() for d in self.dropped],
+            "severity_source": self.severity_source, "tlp": self.tlp,
+            "tracking_status": self.tracking_status,
+            "document_category": self.document_category,
+            "document_date": self.document_date, "notes": list(self.notes),
+            "partial_reasons": list(self.partial_reasons),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ImportRecord:
+        if not isinstance(d, dict):
+            raise AdvisoryError("import_record must be an object.")
+        if not isinstance(d.get("partial"), bool):
+            raise AdvisoryError("import_record.partial must be true or false.")
+        dropped = d.get("dropped") or []
+        if not isinstance(dropped, list) or not all(isinstance(x, dict) for x in dropped):
+            raise AdvisoryError("import_record.dropped must be a list of objects.")
+        return cls(
+            origin=str(d.get("origin", "")), trust=str(d.get("trust", "")),
+            partial=d["partial"],
+            dropped=tuple(DroppedProduct(str(x.get("product_id", "")), str(x.get("reason", "")))
+                          for x in dropped),
+            severity_source=str(d.get("severity_source", "")), tlp=str(d.get("tlp", "")),
+            tracking_status=str(d.get("tracking_status", "")),
+            document_category=str(d.get("document_category", "")),
+            document_date=str(d.get("document_date", "")),
+            notes=tuple(str(n) for n in (d.get("notes") or ())),
+            partial_reasons=tuple(str(n) for n in (d.get("partial_reasons") or ())),
         )
 
 
@@ -214,6 +336,10 @@ class ComponentAdvisory:
     #: Versions or hashes the supplier says are not affected.
     fixed_versions: tuple[str, ...] = ()
     fixed_hashes: tuple[str, ...] = ()
+    #: Set only by an importer. ``None`` for an advisory a person wrote or a supplier
+    #: published, and then absent from the serialised form: existing advisories and the
+    #: signatures over them are unchanged.
+    import_record: ImportRecord | None = None
 
     def __post_init__(self) -> None:
         if not self.advisory_id or not self.issued_by:
@@ -242,7 +368,7 @@ class ComponentAdvisory:
         return any(a.content_hashes for a in self.affected)
 
     def hashable_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "advisory_id": self.advisory_id,
             "issued_by": self.issued_by,
             "issued_at": format_utc(self.issued_at),
@@ -255,6 +381,9 @@ class ComponentAdvisory:
             "fixed_versions": list(self.fixed_versions),
             "fixed_hashes": list(self.fixed_hashes),
         }
+        if self.import_record is not None:
+            payload["import_record"] = self.import_record.to_dict()
+        return payload
 
     def content_hash(self) -> str:
         return content_hash_of(self.hashable_payload())
@@ -276,6 +405,8 @@ class ComponentAdvisory:
             reference=str(d.get("reference", "")),
             fixed_versions=tuple(str(v) for v in (d.get("fixed_versions") or ())),
             fixed_hashes=tuple(str(h) for h in (d.get("fixed_hashes") or ())),
+            import_record=(ImportRecord.from_dict(d["import_record"])
+                           if d.get("import_record") is not None else None),
         )
 
     @classmethod
@@ -322,12 +453,27 @@ def _match_artefact(
                 "not say who made it, so this can be neither confirmed nor cleared. "
                 "Somebody has to look."
             )
+        if advisory.import_record is not None:
+            # (match_item only offers entries whose component name equals the item's.)
+            # An import takes its supplier from a document somebody else wrote, and the
+            # integrator typed the machine's by hand. The same component under a supplier
+            # string that differs ("Example Controls" for "Example Controls GmbH") is more
+            # likely one spelling away than two companies with a product of one name, and
+            # a false clear is the worse mistake. Policy: engineering's; the founder may
+            # relax it.
+            return MatchBasis.NAME_ONLY, (
+                f"supplier differs: advisory says {artefact.supplier!r}, machine says "
+                f"{item.supplier!r}, for the component {item.name!r} that the advisory "
+                "concerns. Imported advisories carry the supplier as the publisher spelled "
+                "it, so this can be neither confirmed nor cleared. Somebody has to look."
+            )
         return None
 
     versions = {fold_text(v) for v in artefact.versions}
     affected_hashes = {fold_hash(h) for h in artefact.content_hashes}
     fixed_hashes = {fold_hash(h) for h in advisory.fixed_hashes}
     fixed_versions = {fold_text(v) for v in advisory.fixed_versions}
+    own_fixed = {fold_text(v) for v in artefact.fixed_versions}
     label = fold_text(item.version)
 
     # A hash is evidence about this machine only if it was read from this
@@ -378,23 +524,57 @@ def _match_artefact(
         )
 
     if machine_hash and machine_hash in fixed_hashes:
-        return None  # demonstrably remedied
+        return None  # demonstrably remedied (the artefact itself is the supplier's fixed one)
 
-    if label and label in fixed_versions:
+    imported = advisory.import_record is not None
+    if label and label in fixed_versions and not imported:
+        # A supplier-authored list: the supplier wrote the range and the fixed version
+        # together, so a fixed label is explicit and outranks the range text.
         return None  # the supplier names this version as not affected
 
-    if label and artefact.version_note.strip():
-        # The supplier expressed a range in free text, which is displayed and never
-        # parsed. A version the list does not name may still sit inside that range,
-        # so an unlisted label is not evidence of "not affected".
+    if label and imported and (label in fixed_versions or label in own_fixed):
+        # An import collects "fixed" across every vulnerability it lists, and a version fixed
+        # for one is not thereby fixed for another that affects the same component. The
+        # publisher's fix list is shown, never used to clear.
+        listed = ", ".join(sorted({*artefact.fixed_versions, *advisory.fixed_versions}))
         return MatchBasis.NAME_ONLY, (
             f"this is {artefact.supplier} {artefact.name} version {item.version!r}, which "
-            f"the advisory does not list, but {advisory.issued_by} also gives a range in "
-            f"words ({artefact.version_note.strip()!r}) that is not parsed. Somebody has "
+            f"{advisory.issued_by} lists as fixed ({listed}) for at least one vulnerability. "
+            "An imported advisory does not say it is fixed for every vulnerability that "
+            "affects this component, so a fixed label is not used to clear it. Somebody "
+            "has to look." + set_aside
+        )
+
+    note = artefact.version_note.strip()
+    if label and note:
+        # The supplier expressed a range in free text, which is displayed and never
+        # parsed. A version the list does not name may still sit inside that range, so an
+        # unlisted label is not evidence of "not affected". Neither is a "fixed" label in
+        # an IMPORT: its fixed versions were collected across vulnerabilities, and one
+        # vulnerability's fix is not the end of another's range.
+        return MatchBasis.NAME_ONLY, (
+            f"this is {artefact.supplier} {artefact.name} version {item.version!r}, which "
+            f"the advisory does not list as affected, but {advisory.issued_by} also gives a "
+            f"range in words ({note!r}) that is not parsed. Somebody has "
             "to read it against this version." + set_aside
         )
 
-    if label and (versions or fixed_versions):
+    if label and (label in fixed_versions or label in own_fixed):
+        return None  # the supplier names this version as not affected
+
+    if label and (versions or fixed_versions or own_fixed):
+        if imported:
+            # An import carries the publisher's labels as written. A machine that
+            # spells the same version differently ("2.001" for "V2.001"), or one
+            # the publisher never mentioned, cannot be told apart from a version the
+            # publisher left out of the list. That is a question for a person.
+            return MatchBasis.NAME_ONLY, (
+                f"this is {artefact.supplier} {artefact.name} version {item.version!r}, "
+                f"which this imported advisory does not list. {advisory.issued_by}'s "
+                "labels were copied as written and are not interpreted, so a label "
+                "spelled differently or never mentioned is not known to be unaffected. "
+                "Somebody has to look." + set_aside
+            )
         return None  # a known version that is not on the affected list
 
     return MatchBasis.NAME_ONLY, (
@@ -404,6 +584,16 @@ def _match_artefact(
            if item.version else "not recorded")
         + ". Somebody has to look." + set_aside
     )
+
+
+def _entries_named(advisory: ComponentAdvisory, name: str) -> tuple[AffectedArtefact, ...]:
+    index = advisory.__dict__.get("_name_index")
+    if index is None:
+        index = {}
+        for artefact in advisory.affected:
+            index.setdefault(fold_text(artefact.name), []).append(artefact)
+        object.__setattr__(advisory, "_name_index", index)
+    return tuple(index.get(fold_text(name), ()))
 
 
 def match_item(
@@ -422,7 +612,9 @@ def match_item(
     folds them, and never by prefix.
     """
     best: tuple[MatchBasis, str] | None = None
-    for artefact in advisory.affected:
+    # Every branch of _match_artefact that can answer needs the component NAMES to be equal,
+    # so only the entries of that name are tried (an advisory may list tens of thousands).
+    for artefact in _entries_named(advisory, item.name):
         found = _match_artefact(advisory, artefact, item)
         if found is None:
             continue
