@@ -1374,6 +1374,11 @@ class AccountStore:
 
     def resolve_key(self, key: str) -> Principal | None:
         """Look up a presented key. Returns None for unknown or revoked keys."""
+        # An unknown or revoked key (a guess, a flood) is answered from a read: the write
+        # lock, which every billing event and every metered call queues for, is taken only
+        # for a key that exists, to record its use.
+        if self.peek_key(key) is None:
+            return None
         digest = hash_key(key)
         with self._txn() as db:
             row = db.execute(
