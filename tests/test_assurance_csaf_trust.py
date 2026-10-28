@@ -595,6 +595,17 @@ class TestACaseFromAnUnsignedImportNeedsANamedPersonsOverride:
         assert marked and all(p["advisory_trust"] == "unsigned_inspect_only" for p in marked)
         assert all(p["advisory_tlp"] == "AMBER" for p in marked)
 
+    def test_the_text_view_of_the_case_carries_the_marker_too(self, tmp_path, capsys):
+        ledger = _ledger_with_a_machine(tmp_path)
+        path = imported_file(tmp_path, partial_doc(), "--severity", "stop_use")
+        change_cli(capsys, "assess-advisory", "--advisory", str(path), "--ledger",
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+        (case,) = case_store(ledger).list()
+        _, shown, _ = change_cli(capsys, "show", "--ledger", str(ledger), case.case_id)
+        marker = next(line for line in shown.splitlines() if "UNAUTHENTICATED ADVISORY" in line)
+        assert "unsigned_inspect_only" in marker and "a.integrator" in marker
+        assert "PARTIAL" in marker and "operator flag" in marker
+
     def test_a_hand_written_bare_advisory_needs_a_named_person_and_the_case_says_so(
             self, tmp_path, capsys):
         ledger = _ledger_with_a_machine(tmp_path)
@@ -1005,6 +1016,29 @@ class TestHostileTextAndUnreadMetadata:
         for ch in ("\x1b", "\x07", "‮", "​"):
             assert ch not in out
 
+    def test_a_case_built_from_a_hostile_advisory_prints_no_raw_escape(self, tmp_path, capsys):
+        ledger = _ledger_with_a_machine(tmp_path)
+        hand = ComponentAdvisory(
+            advisory_id="H-4", issued_by="Example\x1b[31m Controls GmbH\u202e",
+            issued_at=datetime(2026, 10, 1, tzinfo=UTC), title="t", summary="s",
+            severity=AdvisorySeverity.SAFETY_RELEVANT,
+            affected=(AffectedArtefact("Example\x1b[31m Controls GmbH\u202e", "EX-100",
+                                       versions=("V2.001",)),),
+            reference="https://example.invalid/h")
+        item_ = SafetyItem("ITM-9", ItemKind.FIRMWARE, "EX-100", "V2.001", "",
+                           HashSource.DECLARED, supplier="Example\x1b[31m Controls GmbH\u202e",
+                           implements=("SF-01",))
+        make_ledger(tmp_path / "l2.jsonl", manifest("0777", item_))
+        path = tmp_path / "h.json"
+        path.write_text(json.dumps(hand.to_dict()), encoding="utf-8")
+        change_cli(capsys, "assess-advisory", "--advisory", str(path), "--ledger",
+                   str(tmp_path / "l2.jsonl"), "--actor", "a.integrator")
+        (case,) = case_store(tmp_path / "l2.jsonl").list()
+        _, shown, _ = change_cli(capsys, "show", "--ledger", str(tmp_path / "l2.jsonl"),
+                                 case.case_id)
+        assert "\x1b" not in shown and "\u202e" not in shown
+        assert ledger.exists()
+
     def test_the_importer_neutralises_control_and_bidi_characters_in_display_text(
             self, tmp_path):
         rc, adv, _ = run_import(tmp_path, simple_doc(title=self.BAD_TITLE))
@@ -1130,6 +1164,14 @@ class TestHostileInputIsAMessageAndExit2:
         rc, adv, _ = run_import(tmp_path, simple_doc())
         assert rc == 2 and adv is None
 
+    def test_a_device_is_never_read_as_a_document(self, capsys):
+        from assurance.fleet.cli import main
+
+        # /dev/zero is endless: reading it to the end would exhaust memory.
+        capsys.readouterr()
+        assert main(["import-csaf", "/dev/zero"]) == 2
+        assert "not a regular file" in capsys.readouterr().err
+
     def test_a_bom_is_read_as_the_text_it_precedes(self, tmp_path):
         rc, adv, _ = run_import(tmp_path, None, raw=b"\xef\xbb\xbf" + json.dumps(simple_doc()).encode())
         assert rc == 0 and adv["advisory_id"] == "EX-2026-001"
@@ -1144,7 +1186,7 @@ class TestHostileInputIsAMessageAndExit2:
 
         capsys.readouterr()
         assert main(["import-csaf", str(tmp_path)]) == 2
-        assert "directory" in capsys.readouterr().err
+        assert "is a directory, not a CSAF document" in capsys.readouterr().err
 
     def test_an_invisible_character_in_the_tracking_id_is_refused(self, tmp_path, capsys):
         capsys.readouterr()

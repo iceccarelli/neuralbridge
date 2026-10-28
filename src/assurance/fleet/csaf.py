@@ -143,12 +143,16 @@ def load_csaf_document(path: Path) -> Any:
     try:
         if path.is_dir():
             raise AdvisoryError(f"{path} is a directory, not a CSAF document.")
-        size = path.stat().st_size
-        if size > MAX_FILE_BYTES:
+        if not path.is_file():
             raise AdvisoryError(
-                f"{path} is {size:,} bytes; the importer reads at most {MAX_FILE_BYTES:,} "
-                "and will not guess at a larger document.")
-        raw = path.read_bytes()
+                f"{path} is not a regular file (a device or a pipe is never read as a "
+                "document).")
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            raise AdvisoryError(
+                f"{path} is larger than {MAX_FILE_BYTES:,} bytes; the importer reads at "
+                "most that much and will not guess at a larger document.")
     except FileNotFoundError:
         raise
     except OSError as exc:
