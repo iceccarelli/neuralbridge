@@ -35,15 +35,24 @@ That record is what this builds.
 ## Start here: one command, inside your plant, nothing uploaded
 
 ```bash
-pip install -e '.[assurance-attest]'
+pip install cryptography                       # the one third-party package the offline kit imports
+export PYTHONPATH=src                          # run from this checkout; nothing else is installed
 python -m assurance kit init plant/            # a runnable kit
 python -m assurance kit check plant/kit.json   # what it would open. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
 You get `plant/out/report.html`, `plant/out/evidence.db` and
-`plant/out/attestation-request.json`. **Your ledger, your disk.** No account, no
-API key, no upload, nothing to procure.
+`plant/out/attestation-request.json`. **Your ledger, your disk.** For the kit:
+no account, no API key, no upload, nothing to procure. (That is true of the kit
+and of the other offline commands. It is not true of the hosted service below,
+which needs an account and a key.)
+
+`pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
+this project declares 22 core dependencies unconditionally (fastapi, sqlalchemy,
+asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
+platform, and the extra adds only `cryptography` to them. The offline kit imports
+`cryptography` and nothing else outside the standard library.
 
 The run arms a guard over the process's socket layer, refuses every outbound
 connection — including name resolution, because resolving a name has already

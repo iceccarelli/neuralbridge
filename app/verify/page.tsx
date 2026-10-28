@@ -116,7 +116,7 @@ export default function VerifyPage() {
           </div>
           <p className="code-panel-label">From a checkout of the source</p>
           <pre className="code-panel">{`git clone ${REPO}.git && cd neuralbridge
-pip install -e '.[assurance-attest]'
+pip install cryptography && export PYTHONPATH=src
 python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
 python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head (exit 0 only if anchored)
 python -m assurance machine check bundle.json                   # machine bundle

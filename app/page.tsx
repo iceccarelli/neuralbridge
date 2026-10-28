@@ -192,7 +192,7 @@ export default function IndustrialAutonomousAssuranceSite() {
             </div>
             <div className="hero-panel">
               <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-              <div className="hero-code">{`pip install -e '.[assurance-attest]'
+              <div className="hero-code">{`pip install cryptography && export PYTHONPATH=src
 python -m assurance kit init plant/
 python -m assurance kit check plant/kit.json
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
