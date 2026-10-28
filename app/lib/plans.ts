@@ -114,7 +114,7 @@ export const FALLBACK_PLANS: Plan[] = [
     tier: 'cell',
     name: 'Cell',
     blurb:
-      'For a manufacturer or integrator shipping machines: everything in Register, plus machine safety assurance: check a recorded run against the safety envelope you declared, track what safety software is on each machine and who changed it, and know which safety functions still have evidence that describes the machine as it is today.',
+      'For a manufacturer or integrator shipping machines: everything in Register, plus machine safety assurance: check a recorded run against the safety envelope you declared, track what safety software is on each machine and who changed it, and know which safety functions have a recorded verification dated after the last recorded change.',
     price: '€1,290 / month',
     purchasable: false,
     includes: [
@@ -124,12 +124,12 @@ export const FALLBACK_PLANS: Plan[] = [
       'Separation, speed, workspace, stop characterisation, power-and-force and mode-consistency checks, each with its worst margin',
       'Evidence bundles anyone can re-verify without an account',
       'Machinery Regulation Annex III 1.1.9: the safety software manifest, the intervention record, and the machine passport',
-      'Coverage: which declared safety functions still have valid evidence, and which intervention invalidated the rest',
+      'Coverage: which declared safety functions have a recorded verification dated after the last recorded change, and which change came after the rest',
       'Fleet: every enrolled machine ranked worst-first, and a supplier advisory fanned out to serial numbers and the safety functions it puts in question',
       'Declarations of Conformity bound to a configuration hash, so a declaration can be shown to have stopped describing the machine',
       CASES_NOT_METERED,
       "Change-assurance cases over /v1/change/*: open, claim, advance and submit re-verification evidence. Closure is a named human decision. A validated verification needs a recorder attestation accepted under a trust list the operator configures; no such list is configured in a default deployment, so a required re-verification is closed in practice by a named person's waiver",
-      'Counter-signed head attestation: POST /v1/ledger/attest signs the head of your ledger with a key you do not hold, so a rewind contradicts a signed statement. Your ledger is never uploaded — we sign three numbers and never see a record',
+      'Counter-signed head attestation: POST /v1/ledger/attest signs the head of your ledger with a key you do not hold, so a rewind contradicts a signed statement. It answers 503 until the operator configures a service signing key, and none is configured on any deployment today. Attestation sends three numbers and never a record; machine verification (POST /v1/machine/verify) does receive the full trace you submit',
     ],
     limits: {
       validations_per_day: null,

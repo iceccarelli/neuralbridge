@@ -167,7 +167,9 @@ class TestTheReproducedDefect:
         assert out["result"]["provenance_basis"] == "declared_by_filer"
         assert machine_cli(args) == 0
         text = capsys.readouterr().out
-        assert "at tier community" in text and "declared_by_filer" in text
+        # The headline of a PASS over a self-declared trace says what it is (wording pass).
+        assert "PASS (self-declared trace, not hardware-validated; tier community)" in text
+        assert "declared_by_filer" in text
         assert "filer's own declaration" in text
 
     def test_the_engine_was_bumped_so_old_bundles_are_never_reinterpreted(self):

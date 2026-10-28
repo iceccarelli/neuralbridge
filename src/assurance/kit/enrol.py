@@ -366,6 +366,10 @@ class KitRun:
 #: What one offline run cannot establish, whatever it finds. Carried into the
 #: run record and printed at the end, because the gap is the argument.
 _KIT_LIMITS: tuple[str, ...] = (
+    "COMPLETE, in this run's headline, means only that every item the collection plan "
+    "names was found in an export folder and hashed. It does not say the plan names "
+    "everything that is safety-relevant, that the files are current, that they came "
+    "off the machine, or that anything was verified.",
     "This run recorded what was in the export folders at one moment. Nothing "
     "here watches for the next change; a firmware update tomorrow strands every "
     "sign-off in this ledger and nothing will say so until somebody runs this "

@@ -79,7 +79,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Machinery Annex III',
-    body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
+    body: 'What safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change.',
     href: `/docs/assurance/machinery`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-annex-iii',
