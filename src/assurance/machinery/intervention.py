@@ -324,6 +324,15 @@ class ImpliedIntervention(Intervention):
     """
 
     ledger_seq: int = 0
+    #: The configuration hash of the manifest that showed the change: the id the watch's
+    #: drift case for this change is filed under, so a change that case already owns is
+    #: not answered for twice.
+    observed_configuration: str = ""
+    #: The recorded intervention that accounts for this change, when one does. An
+    #: explanation never removes the change: it names it, and the change is dated no later
+    #: than that record was FILED (a back-dated ``occurred_at`` is the filer's word and
+    #: moves nothing). A verification must still begin after that.
+    explained_by: str = ""
 
 
 @dataclass(frozen=True)

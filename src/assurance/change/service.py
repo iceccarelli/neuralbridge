@@ -573,7 +573,7 @@ def assess_drift(
     # observed manifest is sealed the ledger derives an implied change from it; leaving
     # that in would make a re-assessment after sealing read differently from the first,
     # which ran before the manifest was sealed (so a crash between the two is a no-op).
-    own = f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}:"
+    own = f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}@"
     interventions = [i for i in interventions if not i.intervention_id.startswith(own)]
     coverage = assess_coverage(manifest, verifications, interventions)
     affected = divergence.affected_functions

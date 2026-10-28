@@ -68,6 +68,7 @@ from .test_assurance_staleness_integrity import (
     update,
     verified_machine,
 )
+from .test_assurance_staleness_integrity import clock as _clock
 
 client, store = _client, _store
 live_api = fx.live_api
@@ -80,21 +81,7 @@ def ledger(tmp_path: Path) -> EvidenceLedger:
     return EvidenceLedger(tmp_path / "ledger.db")
 
 
-class Clock:
-    """The ledger's clock, held and moved by the test (what ``at`` is stamped from)."""
-
-    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.now = D1
-        monkeypatch.setattr("assurance.evidence.ledger.utc_now", lambda: self.now)
-
-    def at(self, hour: int, minute: int = 0, day: int = 1) -> datetime:
-        self.now = datetime(2026, 10, day, hour, minute, tzinfo=UTC)
-        return self.now
-
-
-@pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
-    return Clock(monkeypatch)
+clock = _clock
 
 
 def stamp(moment: datetime) -> str:
