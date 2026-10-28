@@ -40,10 +40,12 @@ def work(tmp_path) -> Path:
     (tmp_path / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
         "targets": [
+            # read_from_machine: the harness plays a watch running ON the machine; an
+            # export folder does not say so, and then an unchanged hash is not "quiet".
             {"serial": "0412", "plan": "plan.json", "root": "0412",
-             "site": "Plant 2", "country": "DE"},
+             "site": "Plant 2", "country": "DE", "read_from_machine": True},
             {"serial": "0501", "plan": "plan.json", "root": "0501",
-             "site": "Plant 7", "country": "IT"},
+             "site": "Plant 7", "country": "IT", "read_from_machine": True},
         ],
     }))
     return tmp_path
