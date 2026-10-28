@@ -1224,7 +1224,13 @@ class TestDerivedChangesAreNotCountedAsRecords:
         edit_payload(ledger, _intervention_seq(ledger),
                      lambda p: p["body"]["intervention"].update(reason="cosmetic"))
         built = build_passport(ledger, manifest(), actor=TECH, seal=False)
-        assert built.verdict == "gaps"
+        # What the coverage read is "gaps" (the unreadable record disturbs the function); the
+        # passport's own verdict is "ledger_chain_not_verified", because the edit also broke
+        # the chain and a passport read from such a ledger vouches for nothing. Both are
+        # non-covered; the second says why the first could not be relied on either way.
+        assert built.coverage.verdict == "gaps"
+        assert built.evidence.body["coverage_verdict"] == "gaps"
+        assert built.verdict == "ledger_chain_not_verified"
         assert built.evidence.validation_state.value != "verified"
         out = built.write(tmp_path / "passport.json")
         ok, problems = verify_passport(out)

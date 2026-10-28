@@ -387,10 +387,17 @@ class TestDeclaration:
                 issued_at=datetime(2026, 1, 1, tzinfo=UTC),
                 configuration_hash="a" * 64, legislation=())
 
-    def test_an_unchanged_machine_is_still_described(self):
+    def test_an_unchanged_machine_with_no_coverage_assessment_is_not_yet_described(self):
+        # This test used to assert DESCRIBES_THE_MACHINE here, with the statement "every
+        # declared safety function has evidence that still stands", for a check that was
+        # never given any evidence to look at. That was the bug (unassessed read as pass);
+        # the passing case is pinned in test_assurance_unassessed_is_not_pass.py.
         man = manifest()
         status = check_declaration(self._doc(man), man)
-        assert status.verdict is DeclarationVerdict.DESCRIBES_THE_MACHINE
+        assert status.verdict is \
+            DeclarationVerdict.CONFIGURATION_MATCHES_COVERAGE_NOT_ASSESSED
+        assert status.evidence_assessed is False
+        assert status.is_sound is False
 
     def test_a_changed_configuration_is_the_finding(self):
         man = manifest()

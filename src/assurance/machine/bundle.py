@@ -142,8 +142,9 @@ class EvidenceBundle:
 
 
 def _body(result: VerificationResult, envelope: SafetyEnvelope,
-          limits: LimitsTable | None, trace: Trace) -> dict[str, Any]:
-    return {
+          limits: LimitsTable | None, trace: Trace,
+          unit_key: str = "") -> dict[str, Any]:
+    body = {
         "schema": BUNDLE_SCHEMA,
         "product": envelope.product,
         "product_version": envelope.product_version,
@@ -176,6 +177,15 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         "tier": result.tier.value,
         "checks": [c.to_dict() for c in result.checks],
     }
+    if unit_key:
+        # The unit this verification was SEALED FOR, whole (``maker/model#serial``), part of
+        # the hashed content. A recorder attestation signs a serial and the product, never a
+        # maker or model, so the service binds the bundle to the unit key it was sealed for
+        # and every ledger reader compares the whole key with the subject it is filed under.
+        # Omitted for a product line (no unit): a bundle without it is capped at
+        # ``community`` under a unit-key subject.
+        body["unit_key"] = unit_key
+    return body
 
 
 def _judgement(res: VerificationResult) -> tuple[ValidationState, Confidence]:
@@ -272,6 +282,60 @@ def resolve_machine_serial(subject: str, machine_serial: str = "") -> str:
     return machine_serial or in_subject or ""
 
 
+def unit_key_problems(body: dict[str, Any]) -> list[str]:
+    """Is the ``unit_key`` a bundle records (if any) a unit key for the serial it records?
+
+    No trust is involved. ``unit_key`` is optional: a bundle sealed for a product line, or
+    sealed before the field existed, has none. When present it must be a well-formed unit
+    key (``maker/model#serial``, the grammar of :func:`resolve_machine_serial`) whose serial
+    is the ``machine_serial`` the attestation was matched against.
+    """
+    if "unit_key" not in body:
+        return []
+    key = body["unit_key"]
+    if not isinstance(key, str) or not key or "#" not in key:
+        return [f"the bundle records unit_key {key!r}, which is not a unit key "
+                "(maker/model#serial)."]
+    try:
+        serial = resolve_machine_serial(key)
+    except MachineSubjectError as exc:
+        return [f"the bundle records a malformed unit_key: {exc}"]
+    if serial != str(body.get("machine_serial") or ""):
+        return [f"the bundle records unit_key {key!r} (serial {serial!r}) but "
+                f"machine_serial {body.get('machine_serial')!r}: the recorder attestation "
+                "was matched against a different unit than the one the bundle names."]
+    return []
+
+
+def _refuse_a_second_validated_claim(
+    ledger: EvidenceLedger, trace_hash: str, unit_key: str,
+    recorder_trust: RecorderTrust | None,
+) -> None:
+    """One recording is the validated evidence of one ENROLLED unit key only.
+
+    The readers (``VerificationRecord.from_ledger``) cap the later claimant at community;
+    this refuses to seal it in the first place, so the answer a caller gets back never says
+    ``validated`` for a bundle every reader will read as ``community``. It asks the very same
+    question the readers do (:class:`~assurance.machinery.staleness.UnitClaims`): only a
+    filing that still reads ``validated`` under ``recorder_trust`` (a revoked key holds
+    nothing) and sits under a unit key a manifest was sealed for in this ledger holds the
+    recording. A mistyped or hostile key nobody enrolled therefore blocks nothing.
+
+    This is a check followed by the caller's append, not one atomic step: two processes
+    sealing the same recording at once can both pass; the readers still cap the later one.
+    """
+    from assurance.machinery.staleness import UnitClaims
+
+    held = UnitClaims.build(ledger, recorder_trust, only={trace_hash}).holder(trace_hash)
+    if held is not None and held[1] != unit_key:
+        raise MachineSubjectError(
+            f"this recording ({trace_hash[:12]}) is already the validated evidence of "
+            f"{held[1]!r}, a unit enrolled in this ledger, and one recording is evidence about "
+            f"one unit, so it cannot also be sealed for {unit_key}. The ledger is append-only "
+            f"and has no withdrawal: if {held[1]!r} is the mistaken key, the way forward is a "
+            f"new recording on {unit_key} with its own attestation.")
+
+
 def build_bundle(
     envelope: SafetyEnvelope,
     trace: Trace,
@@ -314,6 +378,7 @@ def build_bundle(
     a trace it says nothing about.
     """
     serial = resolve_machine_serial(subject, machine_serial)
+    unit_key = subject if "#" in subject else ""
     res = result if result is not None else verify(
         envelope, trace, limits=limits, limits_reviews=limits_reviews,
         review_trust=review_trust, recorder_attestations=recorder_attestations,
@@ -322,11 +387,14 @@ def build_bundle(
         _refuse_foreign_result(result, envelope, trace, recorder_attestations,
                                recorder_trust, serial)
 
+    if ledger is not None and unit_key and res.tier.rank >= AssuranceTier.VALIDATED.rank:
+        _refuse_a_second_validated_claim(ledger, res.trace_hash, unit_key, recorder_trust)
+
     state, confidence = _judgement(res)
 
     evidence = Evidence(
         kind=BUNDLE_KIND,
-        body=_body(res, envelope, limits, trace),
+        body=_body(res, envelope, limits, trace, unit_key),
         actor=actor,
         origin=Origin(
             system="assurance.machine",
@@ -575,6 +643,7 @@ def _coherence_problems(
             "'validated', are rejected here for the same reason.)")
     if body.get("provenance_basis") == _ATTESTED:
         problems.extend(_attested_claim_problems(body))
+    problems.extend(unit_key_problems(body))
     if len(problems) == tier_problems:
         verified.append(
             f"the recorded tier {tier_name!r} is one the engine can produce from the "
@@ -1228,7 +1297,12 @@ def _replay_differences(
     """
     body = evidence.body
     out: list[str] = []
-    expected = _body(replay, envelope, limits, trace)
+    # The unit key is what the SERVICE bound the bundle to; the inputs cannot give it back.
+    # It is compared for coherence with the serial (``unit_key_problems``), so the replay
+    # takes the recorded one rather than reporting it as a difference.
+    recorded_unit = body.get("unit_key")
+    expected = _body(replay, envelope, limits, trace,
+                     recorded_unit if isinstance(recorded_unit, str) else "")
     expected = _without_assessed_on(expected)
     body = _without_assessed_on(body)
     for key in sorted(set(expected) | set(body), key=str):

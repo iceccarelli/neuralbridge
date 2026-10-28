@@ -477,6 +477,15 @@ def _verify_sync(
             detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
+    if not body.seal and "#" in body.subject:
+        # Nothing was compared with the ledger: whether this recording already belongs to
+        # another unit (one recording, one unit) is checked only when sealing, and a refusal
+        # or a downgrade can follow then. The tier above is the sealing engine's, not a reader's.
+        payload["unit_binding_note"] = (
+            "not sealed: the tier shown was not compared with the ledger, so whether this "
+            f"recording is already the validated evidence of another unit than {body.subject!r} "
+            "was not checked. Sealing may be refused (422 invalid_subject), and a reader never "
+            "believes more than the unit key the bundle was sealed for.")
     # The hash a re-verification cites (``verification_content_hash`` on
     # POST /v1/change/cases/{id}/reverification); also at evidence.content_hash.
     payload["content_hash"] = bundle.content_hash

@@ -162,9 +162,12 @@ class TestCustomerVerdictsAreNotFlattering:
         build_bundle(env, run, actor=ENG, ledger=ledger, subject=m.machine.key)
         return m.machine.key
 
-    def test_the_baseline_good_case_is_verified(self, ledger):
+    def test_the_baseline_good_case_is_verified_at_community_only(self, ledger):
+        # The bundle's trace provenance is only declared (tier community): the standing
+        # evidence reads `verified_at_community`, never `verified`.
         key = self.enrol_verified(ledger)
-        assert run_enrolled_check(ledger, key).verdict is AssuranceVerdict.VERIFIED
+        assert run_enrolled_check(ledger, key).verdict is \
+            AssuranceVerdict.VERIFIED_AT_COMMUNITY
 
     def test_a_machine_with_no_declared_safety_functions_is_not_verified(self, ledger):
         m = manifest(functions=())

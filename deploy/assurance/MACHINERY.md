@@ -17,8 +17,27 @@ assurance machinery record-change   intervention.json --ledger register.db
 assurance machinery coverage        manifest.json --ledger register.db
 ```
 
-`coverage` exits non-zero when any declared safety function is not currently
-covered, so it is a gate, not a report.
+`coverage` (and `passport`) is a gate, not a report. Exit codes:
+
+| exit | verdict | meaning |
+|---|---|---|
+| 0 | `covered` | every declared function is current on evidence at `validated` or better |
+| 3 | `covered_at_community` | every function reads current, but on evidence whose provenance the filer only declared (`community`): the recorded evidence stands, it was not a demonstration on the machine |
+| 1 | `gaps`, `no_functions_declared` | at least one function is not current |
+| 2 | | could not vouch: an error (an unreadable file or ledger), or the ledger's chain does not verify (`coverage` assesses nothing and says why on stderr; a passport sealed from such a ledger has verdict `ledger_chain_not_verified`, INDETERMINATE, never covered) |
+
+**Passport format.** A passport is `assurance.machinery.passport/1` when an older verifier can
+express its verdict (`covered`, `gaps`, `no_functions_declared`) and
+`assurance.machinery.passport/2` when it carries `covered_at_community` or
+`ledger_chain_not_verified`. `machinery check` of this release accepts both and still accepts a
+passport written by the previous release; an older `machinery check` refuses a `/2` passport by name
+("schema is ..., expected ...passport/1") instead of calling its verdict a tamper. Re-verify a `/2`
+passport with this release or newer. Fixture: `tests/fixtures/passport_a135c0e_covered_at_community.json`.
+
+Per function, `coverage` is one of `current`, `stale` (verified, then a recorded intervention
+disturbed it), `failing` (a check's newest run VIOLATED it), `unchecked` (the newest run left the
+function's checks unchecked, so nothing was shown and nothing failed), `incomplete` (some checks
+verified, others left unchecked), `never_verified` or `not_demonstrable`. Only `current` is cover.
 
 ## What a manifest is
 
@@ -93,7 +112,7 @@ Grimaldi/AR-7#0412 — GAPS
   [STALE ] SF-01 [PL d]  Protective stop on zone intrusion
            last verified by c0f9dcda3cd6 on 2026-02-09; invalidated by INT-0007
            on 2026-03-14, which changed ITM-FW and re-ran nothing with sealed evidence.
-           running 183 day(s) without valid evidence for this function.
+           running 183 day(s) without a standing verification for this function.
   [n/a   ] SF-03 [PL d]  Emergency stop
            this function declares no verification check, so no verification can cover it.
 ```

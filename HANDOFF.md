@@ -9,6 +9,71 @@ below were observed on 2026-10-21, not carried forward from older text.
 
 ---
 
+## 0.00 Changes on 2026-10-28 — trust hardening (branch `claude/trust-hardening`, not merged)
+
+Found by an independent adversarial review of `origin/main` a135c0e (PR #54 and the recorder-attestation
+machinery); each item has a red-first regression test. Nothing here changes a price, a plan flag, a Stripe
+object or a route's entitlement. Zero revenue, customers, pilots and production deployment remain the
+standing facts; none of this is customer-validated.
+
+- **An evidence position nobody assessed is not a pass.** `check_declaration` returned
+  `describes_the_machine` ("... every declared safety function has evidence that still stands") whenever no
+  coverage was supplied, and the anonymous `POST /v1/fleet/declaration/check` supplies none by default. New
+  verdict `configuration_matches_coverage_not_assessed` (not sound; `evidence_assessed: false`; the fleet CLI
+  exits 2). Also used for a manifest with no declared function and for a coverage report of another
+  machine or configuration. *Tests:* `tests/test_assurance_unassessed_is_not_pass.py`. (A
+  `unknown_overlay`-style pattern does not exist on `origin/main`; there was nothing to preserve.)
+- **A unit's `validated` tier rests on a bundle sealed for that unit's whole key.** #54 bound the serial only,
+  so a bundle validated for `Acme/AR-7#0001` stayed `validated` refiled under `Beta/XY-9#0001`. The recorder
+  attestation signs `(product, product_version, machine_serial)` and cannot carry a maker or model without a
+  format change, which this does not make. Instead the sealed bundle body records `unit_key` (hashed content)
+  and every ledger reader compares the whole key with the subject it is filed under, case- and
+  whitespace-sensitively. **A bundle sealed before the field existed is `community` under a unit-key subject;
+  there is no grandfathering** (re-seal it with the unit's key as `subject`). One recording is the validated
+  evidence of one unit key: a later claimant is `community` with a named reason, and
+  `POST /v1/machine/verify` refuses to seal it (422 `invalid_subject`). A recording claimed under a mistyped
+  maker/model with the right serial keeps that claim; there is no un-file. A stored `certified` is read as
+  `validated` at most. *Tests:* `tests/test_assurance_unit_binding_full.py`.
+- **Cover on declared-provenance evidence no longer reads `covered`/`verified`.** `CoverageReport.verdict` is
+  `covered_at_community` (fleet summary `covered_at_community`, check verdict `verified_at_community`,
+  declaration verdict `configuration_intact_evidence_below_validated`); `machinery coverage|passport`,
+  `fleet list` and `fleet declaration` exit 3 for it. This is a behaviour change for any script that gated on
+  exit 0 with community evidence: it now fails the gate, on purpose. *Tests:*
+  `tests/test_assurance_community_is_not_verified.py`.
+- **`unchecked` and `incomplete` are coverage states** (they were folded into `failing`, "did not pass").
+  *Tests:* `tests/test_assurance_coverage_states.py`.
+- **Round 2 (re-review of the above, same branch).** The first one-recording-one-unit scan made a
+  fleet read quadratic (150 attested machines 0.5 s on `main`, 16.6 s on the first version, 0.7 s now;
+  300 machines 1.0 s / 68 s / 1.6 s); `UnitClaims` is built once per ledger read and shared. A mistyped
+  or hostile first claim could burn a recording for the real unit; now only a claim under a unit
+  **enrolled in the same ledger** (a manifest sealed there) holds it, and the refusal names the
+  remedy. Residual: whoever can enrol a manifest for a hostile key and seal first still holds it, there
+  is no withdrawal in an append-only ledger, and the refusal is check-then-append (readers cap the
+  later of two simultaneous seals). The unit-binding reason now reaches the re-verification case
+  (`blocked_reason` code `below_validated_unit_binding`), the fleet row (`tier_notes`) and the panel.
+  A broken ledger chain is exit 2 on `machinery coverage|passport` and `fleet declaration`; a passport
+  sealed from one is `ledger_chain_not_verified`. Passports at `covered_at_community` /
+  `ledger_chain_not_verified` are schema `/2` (an older verifier refuses them by name). Unchecked and
+  incomplete functions are required work again in the check pipeline; `watch` calls a function
+  recovered only at `validated`; "valid evidence" copy narrowed (route summaries, OpenAPI, the
+  `routes.ts` pin). Not built: a decider-recorded claim withdrawal; scoping the recorder trust list
+  to a tenant or serial.
+- **Docs corrected:** the two `LIFTING_BASES is empty` / `no recorder-attestation signer exists` statements in
+  §0.0 below were already false on `main` (see the inline corrections); `docs/claims-registry.md` now says what
+  the signature binds (product, version, serial, the recording) and what the service binds (the unit key), and
+  that the recorder trust list is server-wide and not scoped to a tenant, machine or serial.
+- **Merged with `main` after PR #58 (CSAF unsigned-import trust) and PR #61 (staleness integrity).** Date
+  ordering, the intervention-to-function join, event-loop blocking in `/v1/machine/verify` and the CSAF
+  matcher are no longer open: they landed on `main`. The two bodies of work compose as follows. A bundle row
+  the reader cannot use is a stand-in assumed to have failed (`FAILING`, never `unchecked`, never current), and
+  the one-recording-one-unit claim map reads through the same damage-tolerant reader, so a corrupt row
+  neither stops a fleet read nor enrols a unit or holds a recording. A chain that does not verify demotes
+  `covered` **and** `covered_at_community` to `gaps` in the fleet, and the passport is
+  `ledger_chain_not_verified`. The fleet read costs about three SQLite connections per machine
+  (`tests/test_assurance_staleness_integrity_round2.py` bounds it at `4N + 10`) and one shared walk over the
+  bundles. *Tests:* `tests/test_assurance_merge_interactions.py`. Still open: MCP `machine_verify` takes no
+  `subject`, so an MCP-sealed verification is filed under `product@version` and never counts for a unit.
+
 ## 0.0 Changes on 2026-10-23 (supersede §0.1 where they differ)
 
 Branch `claude/serene-gauss-va283c`, not merged. Verified locally against PostgreSQL 16;
@@ -18,10 +83,16 @@ had no further independent review).
 
 - **Declared provenance can no longer lift a tier** (`machine/provenance_trust.py`, engine 5).
   Whoever files a trace declares its `provenance`, so every verification is capped at
-  `community` with `provenance_basis: declared_by_filer`. `LIFTING_BASES` is empty: **no
-  machine verification can be `validated` today**, and the public bundle checker rejects any
-  bundle that says otherwise. A signed recorder attestation (not built) is the intended way
-  to lift it. Consequence, deliberate and a **founder decision before merge**: a required
+  `community` with `provenance_basis: declared_by_filer`. *(Corrected
+  2026-10-28: as written here this paragraph was already stale. `LIFTING_BASES` is
+  `{recorder_attested}` (`machine/provenance_trust.py`): engine 6 adds a signed recorder
+  attestation (`machine/recorder_attestation.py`, signer `assurance machine recorder-sign`, trust
+  format `assurance.machine.recorder-trust.v1`). A declared provenance alone is still capped at
+  `community`, and the public bundle checker still rejects a bundle that claims `validated`
+  without an attestation it can re-assess under the checker's own list. `validated` is reachable
+  only when the verifier holds a trust list naming the recorder's key; the hosted service reads
+  only `ASSURANCE_RECORDER_TRUST`, unset by default, so in a default deployment nothing is
+  `validated`.)* Consequence, deliberate and a **founder decision before merge**: a required
   re-verification can no longer clear a change case by evidence; it is closed only by a
   named decider's `waive_reverification` (reads `waived`). `blocked_reason` explains this in
   the service, API, CLI, MCP and workspace; plan copy and the claims registry were reworded to
@@ -139,8 +210,12 @@ fixes themselves have had no independent review yet):
   the same question with different words.
 - `change` routes run blocking work on the event loop; the torn-tail look-again in `latest_anchor`
   sleeps up to ~0.12 s there, only when a torn tail is present.
-- No recorder-attestation signer or trust format exists, so `validated` is unreachable and change cases
-  needing a re-verification close only by a decider's waiver.
+- *(Corrected 2026-10-28.)* A recorder-attestation signer and trust format exist (engine 6), but the
+  hosted service trusts only the list in `ASSURANCE_RECORDER_TRUST`, which is unset by default; with no list
+  nothing is accepted, `validated` is unreachable in that deployment, and change cases needing a
+  re-verification close only by a decider's waiver. The list is **server-wide**: it is not scoped to a
+  tenant, a machine or a serial, so any key it names can attest any serial for any account. What an
+  accepted attestation does and does not bind is in `docs/claims-registry.md`.
 - Hosted exports carry no anchor until an operator runs `assurance attest sign` against the tenant
   ledger; there is no customer-reachable route. Whoever holds the ledger and the signing key can
   re-sign a shorter ledger.

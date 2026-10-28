@@ -556,7 +556,9 @@ def assess_impact(
 
     for e in exposures:
         for f in e.functions:
-            if f.coverage_before is Coverage.NEVER_VERIFIED and not f.last_verified_at:
+            if (f.coverage_before in (Coverage.NEVER_VERIFIED, Coverage.UNCHECKED,
+                                      Coverage.INCOMPLETE)
+                    and not f.last_verified_at):
                 continue
             prior.append({
                 "machine": e.machine_key, "function_id": f.function_id,

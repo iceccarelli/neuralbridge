@@ -374,6 +374,63 @@ Reusing an attestation for a *different* trace is impossible (the trace hash is
 signed); reusing it for the same trace is the same fact. Nothing here detects the
 same attestation being submitted to two different accounts.
 
+### The whole unit key is bound, by the service (not by the recorder's signature)
+
+The recorder key signs `(product, product_version, machine_serial)` and the recording. It
+cannot name a maker or model: `machine_ref` has no such field and **the attestation format is
+not changed by this**. A serial alone does not identify a unit (`Acme/AR-7#0001` and
+`Beta/XY-9#0001` share one), so the *service* binds the verification to the unit key it was
+sealed for:
+
+- when the subject is a unit key, the sealed bundle body records it as `unit_key`
+  (hashed content; absent for a product line). `check_bundle_data` requires it to be a
+  well-formed key whose serial is the body's `machine_serial`; replay takes the recorded value;
+- every ledger reader (`VerificationRecord.from_ledger`: coverage, passport, fleet, check,
+  declaration, change cases) reads a stored `validated` as `validated` under a unit-key subject
+  **only if** `unit_key` equals that subject exactly. `acme/AR-7#0001`, `Acme /AR-7#0001` and a
+  Cyrillic `А` are different units; the answer is `community` with the reason in
+  `VerificationRecord.tier_note` and in the coverage caveats;
+- **a bundle sealed before this field existed, or sealed for a product line, carries no
+  `unit_key` and is `community` under a unit-key subject.** There is no silent grandfathering:
+  re-seal it with the unit's key as `subject` (the recorder's attestation is unchanged);
+- one recording is the validated evidence of ONE **enrolled** unit key. Only a filing that still
+  reads `validated` under the reader's trust list AND sits under a unit key a manifest was sealed
+  for in the same ledger holds the recording (`UnitClaims`, built once per ledger read; the first
+  such filing wins). A later claimant is `community`, with the holder named in `tier_note`.
+  A filing under a key nobody enrolled (a typo, `Evil/Co#0001`) holds nothing, so it cannot burn
+  the recording for the real unit: seal the real unit's manifest and its bundle, and the typo's
+  claim then reads `community`. `POST /v1/machine/verify` with `seal` refuses to seal a claim the
+  reader would cap (422 `invalid_subject`, naming the holder and the remedy);
+  `change.service.reverify` has always refused it. Because the question is the reader's, a first
+  claim whose recorder key was later revoked blocks nothing;
+- a stored `certified` tier (only a resealed body can carry one; the checker rejects it) is read
+  as `validated` at most. Nothing in this product certifies.
+
+**Residual, stated.** Someone who can enrol a manifest for a hostile or mistyped key and seal the
+recording under it first still holds it: the ledger is append-only and has no withdrawal, so the
+remedy is a new recording on the real unit with its own attestation (the refusal says so). A
+decider-recorded withdrawal is not built. Where nothing is enrolled (a ledger that holds bundles
+and no manifests), two unit keys can each read `validated` for one recording: the
+one-recording-one-unit rule is enforced among enrolled units only.
+
+**Concurrency.** The refusal at sealing is a check followed by the append, not one atomic step.
+With several API workers, two simultaneous seals of the same recording for two enrolled units can
+both return 200 `validated`; every reader still caps the later one (`tier_note`), so the fleet,
+passport and cases never believe both.
+
+**Unsealed runs.** `POST /v1/machine/verify` with `seal: false` and a unit-key subject compares
+nothing with the ledger; the response says so in `unit_binding_note` and the tier shown is the
+sealing engine's, not what a reader would believe if the run were filed.
+
+**Why it is not the reader's problem.** `Fleet.from_ledger` builds the claim map once and each
+machine's read asks it, so a fleet read is linear in its bundles (150 attested machines: 0.5 s on
+the previous release, 16 s with the first version of this rule, under 1 s now).
+
+**What this does not do.** The recorder trust list is the *server's* and is not scoped to a
+tenant, a machine or a serial: any key it names can attest any serial for any account. The seal
+is a hash, not a signature: whoever can write the ledger file can reseal a body with another
+`unit_key`. An attestation proves what a key signed, not that the machine is safe.
+
 ### Sealing, replay and the checker
 
 The sealed body (engine 6) records the assessment (`recorder_attestation`: statuses,

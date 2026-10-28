@@ -147,6 +147,7 @@ tbody tr:hover{background:var(--panel)}
 .pill.current{background:var(--good-soft);color:var(--good)}
 .pill.stale{background:var(--bad-soft);color:var(--bad)}
 .pill.failing{background:var(--bad);color:#fff}
+.pill.unchecked,.pill.incomplete{background:var(--warn);color:#fff}
 .pill.never_verified{background:var(--warn-soft);color:var(--warn)}
 .pill.not_demonstrable{background:var(--panel);color:var(--muted);
   box-shadow:inset 0 0 0 1px var(--rule-firm)}
@@ -201,6 +202,8 @@ _COVERAGE_WORDS = {
     "current": "Current",
     "stale": "Stale",
     "failing": "Failing",
+    "unchecked": "Unchecked",
+    "incomplete": "Incomplete",
     "never_verified": "Never verified",
     "not_demonstrable": "Not demonstrable",
 }
@@ -261,7 +264,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             + f"<span class='pill {e(f.coverage.value)}'>"
               f"{e(_COVERAGE_WORDS[f.coverage.value])}</span></div>"
             f"<div class='why'>{e(f.detail)}</div>"
-            + (f"<div class='days'>Running {days} day(s) without valid evidence "
+            + (f"<div class='days'>Running {days} day(s) without a standing verification "
                "for this function.</div>" if days is not None else "")
             + "</div>")
 
@@ -281,7 +284,8 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             "<th>Re-run</th></tr></thead><tbody>" + rows + "</tbody></table></div>")
 
     if status is not None:
-        tone = "" if status.is_sound else "bad"
+        tone = ("" if status.is_sound
+                else "warn" if status.verdict.is_unassessed else "bad")
         out.append(f"<div class='note {tone}'><b>{e(status.doc_id)}</b> — "
                    f"{e(status.verdict.value.replace('_', ' '))}. "
                    f"{e(status.statement)}</div>")
@@ -486,8 +490,15 @@ def render_report(data: ReportInput) -> str:
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
+    below_validated = sum(1 for r in fleet.records
+                          if r.coverage.verdict == "covered_at_community")
     parts.append(_tile(functions - uncovered, "functions with current evidence",
-                       "good" if uncovered == 0 else ""))
+                       "good" if (uncovered == 0 and not below_validated
+                                  and fleet.chain_verified) else ""))
+    if below_validated:
+        # Current is not demonstrated: say so beside the tile that says "current".
+        parts.append(_tile(below_validated, "machine(s) current only on evidence below "
+                           "validated", "warn"))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
                        "warn" if uncovered - stale else ""))

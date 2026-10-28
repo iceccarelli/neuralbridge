@@ -55,6 +55,7 @@ __all__ = [
     "MANIFEST_KIND",
     "PASSPORT_KIND",
     "PASSPORT_SCHEMA",
+    "PASSPORT_SCHEMA_V2",
     "MachinePassport",
     "PassportError",
     "build_passport",
@@ -76,6 +77,11 @@ INTERVENTION_KIND = "machinery.intervention"
 DIVERGENCE_KIND = "machinery.divergence"
 PASSPORT_KIND = "machinery.passport"
 PASSPORT_SCHEMA = "assurance.machinery.passport/1"
+#: The format of a passport whose verdict an older verifier cannot express: ``covered_at_community``
+#: and ``ledger_chain_not_verified``. An older verifier refuses it by name ("schema is ...,
+#: expected ...passport/1") instead of reporting that the verdict "implies covered".
+PASSPORT_SCHEMA_V2 = "assurance.machinery.passport/2"
+_NEWER_VERDICTS = ("covered_at_community", "ledger_chain_not_verified")
 
 
 class PassportError(AssuranceError):
@@ -527,11 +533,17 @@ class MachinePassport:
 
     @property
     def verdict(self) -> str:
-        return self.coverage.verdict
+        """The coverage verdict, or ``ledger_chain_not_verified`` when the ledger it was read
+        from does not verify: nothing read from such a ledger is covered."""
+        return str(self.evidence.body.get("verdict", self.coverage.verdict))
+
+    @property
+    def schema(self) -> str:
+        return PASSPORT_SCHEMA_V2 if self.verdict in _NEWER_VERDICTS else PASSPORT_SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": PASSPORT_SCHEMA,
+            "schema": self.schema,
             "evidence": self.evidence.to_dict(),
             "manifest": self.manifest.to_dict(),
             "coverage": self.coverage.to_dict(),
@@ -545,7 +557,10 @@ class MachinePassport:
         return p
 
     def summary(self) -> str:
-        return (f"{self.coverage.summary()}\n"
+        warning = ("THE LEDGER CHAIN DOES NOT VERIFY — nothing below is covered: the verdict "
+                   "is ledger_chain_not_verified.\n"
+                   if self.verdict == "ledger_chain_not_verified" else "")
+        return (f"{warning}{self.coverage.summary()}\n"
                 f"  {len(self.interventions)} recorded intervention(s)\n"
                 f"  sealed as {self.content_hash[:16]}")
 
@@ -588,11 +603,14 @@ def build_passport(
                           + ". Every statement below is drawn from a store whose "
                             "integrity is in question.")
     floor = coverage.evidence_tier_floor
-    covered = coverage.verdict == "covered"
-    # A cover that rests on evidence under 'validated' is about a recorded file, not a
-    # demonstration on the machine, so the passport does not read VERIFIED / HIGH on it
-    # (see the engine's cap on declared provenance). It is capped at the tier floor.
-    capped = covered and not tier_reaches_validated(floor)
+    # ``covered`` already means demonstrated (evidence at 'validated' or better).
+    # A cover that rests on evidence under 'validated' is ``covered_at_community``: about a
+    # recorded file, not a demonstration on the machine, so the passport does not read
+    # VERIFIED / HIGH on it (see the engine's cap on declared provenance).
+    # A ledger whose chain does not verify vouches for nothing: no covered verdict is sealed.
+    covered = coverage.verdict == "covered" and chain_ok
+    capped = coverage.verdict == "covered_at_community" and chain_ok
+    verdict = coverage.verdict if chain_ok else "ledger_chain_not_verified"
     if capped:
         skipped.append(
             f"every function reads current, but only on evidence at tier {floor!r}, below "
@@ -610,12 +628,14 @@ def build_passport(
     evidence = Evidence(
         kind=PASSPORT_KIND,
         body={
-            "schema": PASSPORT_SCHEMA,
+            "schema": PASSPORT_SCHEMA_V2 if verdict in _NEWER_VERDICTS else PASSPORT_SCHEMA,
             "machine": manifest.machine.to_dict(),
             "manifest_id": manifest.manifest_id,
             "manifest_hash": manifest.content_hash(),
             "configuration_hash": manifest.configuration_hash(),
-            "verdict": coverage.verdict,
+            "verdict": verdict,
+            # what the coverage read, before the chain is taken into account
+            "coverage_verdict": coverage.verdict,
             "evidence_tier_floor": floor,
             "functions": [f.to_dict() for f in coverage.functions],
             "intervention_ids": [i.intervention_id for i in ivs],
@@ -632,10 +652,10 @@ def build_passport(
                    "intervention records through declared safety functions",
         ),
         validation_state=(
-            ValidationState.VERIFIED if covered and not capped
+            ValidationState.VERIFIED if covered
             else ValidationState.INDETERMINATE
         ),
-        confidence=Confidence.HIGH if (chain_ok and covered and not capped)
+        confidence=Confidence.HIGH if (chain_ok and covered)
         else Confidence.LOW,
         checks_skipped=tuple(dict.fromkeys(skipped)),
         relations=(
@@ -657,7 +677,8 @@ def build_passport(
     )
 
 
-_COVERAGE_STATES = ("current", "stale", "failing", "never_verified", "not_demonstrable")
+_COVERAGE_STATES = ("current", "stale", "failing", "unchecked", "incomplete",
+                    "never_verified", "not_demonstrable")
 
 
 def _passport_coherence(
@@ -701,32 +722,58 @@ def _passport_coherence(
                             "but names no intervention that made it so.")
     implied = ("no_functions_declared" if not functions
                else "covered" if not uncovered else "gaps")
-    if body.get("verdict") != implied:
+    verdict = body.get("verdict")
+    if verdict in _NEWER_VERDICTS and raw.get("schema") != PASSPORT_SCHEMA_V2:
         problems.append(
-            f"the passport records verdict {body.get('verdict')!r} but its own "
+            f"the passport records verdict {verdict!r}, which only the "
+            f"{PASSPORT_SCHEMA_V2!r} format can carry, under schema {raw.get('schema')!r}.")
+    if verdict == "ledger_chain_not_verified":
+        # Not a coverage claim: the coverage the passport read is kept beside it.
+        if body.get("ledger_chain_verified") is not False:
+            problems.append("the passport records verdict 'ledger_chain_not_verified' but "
+                            "does not record that the chain failed.")
+        verdict = body.get("coverage_verdict")
+        if verdict not in ("covered", "covered_at_community", "gaps", "no_functions_declared"):
+            problems.append(f"the passport records coverage_verdict {verdict!r}, which is "
+                            "not a coverage verdict.")
+        state_verdict = "ledger_chain_not_verified"
+    else:
+        state_verdict = verdict
+    # Cover at community is the same cover with a weaker floor; a passport filed before the
+    # state existed recorded it as plain 'covered' beside a floor under 'validated', and is
+    # still read as the cover it was (and as INDETERMINATE: see ``capped`` below).
+    if verdict != implied and not (implied == "covered"
+                                   and verdict == "covered_at_community"):
+        problems.append(
+            f"the passport records verdict {verdict!r} but its own "
             f"function list implies {implied!r} ({uncovered} not current).")
 
     floor = body.get("evidence_tier_floor")
+    covered_like = verdict in ("covered", "covered_at_community")
     if floor is None:
-        if body.get("verdict") == "covered":
+        if verdict == "covered":
             limits.append(
                 "NOT CHECKED: the passport records no evidence tier floor (it predates "
                 "the cap on declared provenance), so whether its 'verified' state rests "
                 "on evidence below 'validated' cannot be told from the file.")
-        capped = False
+        capped = verdict == "covered_at_community"
     elif not isinstance(floor, str):
         problems.append("the sealed evidence tier floor is not a string.")
         capped = True
     else:
-        capped = body.get("verdict") == "covered" and not tier_reaches_validated(floor)
-    want_state = ("verified" if body.get("verdict") == "covered" and not capped
+        capped = covered_like and not tier_reaches_validated(floor)
+        if verdict == "covered_at_community" and tier_reaches_validated(floor):
+            problems.append(
+                f"the passport records verdict 'covered_at_community' but an evidence "
+                f"tier floor of {floor!r}, which reaches 'validated'.")
+    want_state = ("verified" if state_verdict == "covered" and not capped
                   else "indeterminate")
     if evidence.validation_state.value != want_state:
         problems.append(
             f"the sealed validation state is {evidence.validation_state.value!r} but "
-            f"the verdict {body.get('verdict')!r} requires {want_state!r}.")
+            f"the verdict {verdict!r} requires {want_state!r}.")
     if evidence.confidence.value in ("high", "established") and not (
-            body.get("verdict") == "covered" and body.get("ledger_chain_verified") is True
+            verdict == "covered" and body.get("ledger_chain_verified") is True
             and not capped):
         problems.append(
             f"the sealed confidence is {evidence.confidence.value!r}, which a passport "
@@ -740,7 +787,7 @@ def _passport_coherence(
     elif not isinstance(printed_cov, dict):
         problems.append("the printed coverage block is not an object.")
     else:
-        if printed_cov.get("verdict") != body.get("verdict"):
+        if printed_cov.get("verdict") != verdict:
             problems.append(
                 f"the printed coverage says {printed_cov.get('verdict')!r}; the sealed "
                 f"evidence says {body.get('verdict')!r}. The coverage block was edited.")
@@ -808,8 +855,9 @@ def verify_passport(
     if not isinstance(raw, dict):
         return False, [f"the file holds a JSON {type(raw).__name__}, not a passport."]
 
-    if raw.get("schema") != PASSPORT_SCHEMA:
-        return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r}."]
+    if raw.get("schema") not in (PASSPORT_SCHEMA, PASSPORT_SCHEMA_V2):
+        return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r} or "
+                       f"{PASSPORT_SCHEMA_V2!r}."]
 
     try:
         evidence = Evidence.from_dict(raw["evidence"])
