@@ -231,7 +231,11 @@ own `evidence_current`): `code` is `below_validated_tier` (the evidence is under
 `tier_floor`, the `entries` and the reason per entry, and a sentence saying that a
 recorder attestation is what would lift the cap and that a `decider` operator may
 waive. The HTTP route returns it beside the case, the CLI prints `blocked: <code>`
-and the sentence (the exit code stays 0: the submission was accepted), the MCP tool
+and the sentence and **exits 3** (`assurance change reverify` exits 0 only when the
+case has nothing left to re-verify; 3 means "recorded, not cleared", the same code
+`assurance evidence verify` uses for "nothing wrong found, but something asked for is
+not established", and 1 stays "refused": a script reading `$?` cannot take an
+uncleared case for a cleared one), the MCP tool
 relays the route's body, and `/assurance` shows the same sentence under the case. The
 key is absent when nothing is blocked.
 
