@@ -301,11 +301,12 @@ def build_passport(
                           + ". Every statement below is drawn from a store whose "
                             "integrity is in question.")
     floor = coverage.evidence_tier_floor
+    # ``covered`` already means demonstrated (evidence at 'validated' or better).
+    # A cover that rests on evidence under 'validated' is ``covered_at_community``: about a
+    # recorded file, not a demonstration on the machine, so the passport does not read
+    # VERIFIED / HIGH on it (see the engine's cap on declared provenance).
     covered = coverage.verdict == "covered"
-    # A cover that rests on evidence under 'validated' is about a recorded file, not a
-    # demonstration on the machine, so the passport does not read VERIFIED / HIGH on it
-    # (see the engine's cap on declared provenance). It is capped at the tier floor.
-    capped = covered and not tier_reaches_validated(floor)
+    capped = coverage.verdict == "covered_at_community"
     if capped:
         skipped.append(
             f"every function reads current, but only on evidence at tier {floor!r}, below "
@@ -345,10 +346,10 @@ def build_passport(
                    "intervention records through declared safety functions",
         ),
         validation_state=(
-            ValidationState.VERIFIED if covered and not capped
+            ValidationState.VERIFIED if covered
             else ValidationState.INDETERMINATE
         ),
-        confidence=Confidence.HIGH if (chain_ok and covered and not capped)
+        confidence=Confidence.HIGH if (chain_ok and covered)
         else Confidence.LOW,
         checks_skipped=tuple(dict.fromkeys(skipped)),
         relations=(
@@ -414,32 +415,41 @@ def _passport_coherence(
                             "but names no intervention that made it so.")
     implied = ("no_functions_declared" if not functions
                else "covered" if not uncovered else "gaps")
-    if body.get("verdict") != implied:
+    verdict = body.get("verdict")
+    # Cover at community is the same cover with a weaker floor; a passport filed before the
+    # state existed recorded it as plain 'covered' beside a floor under 'validated', and is
+    # still read as the cover it was (and as INDETERMINATE: see ``capped`` below).
+    if verdict != implied and not (implied == "covered"
+                                   and verdict == "covered_at_community"):
         problems.append(
-            f"the passport records verdict {body.get('verdict')!r} but its own "
+            f"the passport records verdict {verdict!r} but its own "
             f"function list implies {implied!r} ({uncovered} not current).")
 
     floor = body.get("evidence_tier_floor")
+    covered_like = verdict in ("covered", "covered_at_community")
     if floor is None:
-        if body.get("verdict") == "covered":
+        if verdict == "covered":
             limits.append(
                 "NOT CHECKED: the passport records no evidence tier floor (it predates "
                 "the cap on declared provenance), so whether its 'verified' state rests "
                 "on evidence below 'validated' cannot be told from the file.")
-        capped = False
+        capped = verdict == "covered_at_community"
     elif not isinstance(floor, str):
         problems.append("the sealed evidence tier floor is not a string.")
         capped = True
     else:
-        capped = body.get("verdict") == "covered" and not tier_reaches_validated(floor)
-    want_state = ("verified" if body.get("verdict") == "covered" and not capped
-                  else "indeterminate")
+        capped = covered_like and not tier_reaches_validated(floor)
+        if verdict == "covered_at_community" and tier_reaches_validated(floor):
+            problems.append(
+                f"the passport records verdict 'covered_at_community' but an evidence "
+                f"tier floor of {floor!r}, which reaches 'validated'.")
+    want_state = "verified" if verdict == "covered" and not capped else "indeterminate"
     if evidence.validation_state.value != want_state:
         problems.append(
             f"the sealed validation state is {evidence.validation_state.value!r} but "
-            f"the verdict {body.get('verdict')!r} requires {want_state!r}.")
+            f"the verdict {verdict!r} requires {want_state!r}.")
     if evidence.confidence.value in ("high", "established") and not (
-            body.get("verdict") == "covered" and body.get("ledger_chain_verified") is True
+            verdict == "covered" and body.get("ledger_chain_verified") is True
             and not capped):
         problems.append(
             f"the sealed confidence is {evidence.confidence.value!r}, which a passport "

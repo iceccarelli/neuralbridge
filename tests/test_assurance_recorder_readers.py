@@ -170,8 +170,12 @@ def _floor(client, h):
                     headers=h)
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["verdict"] == "covered", d
-    return d["evidence_tier_floor"]
+    # every function is current in all of these; the verdict follows the tier floor: `covered`
+    # only at validated or better, `covered_at_community` below it (a revoked, removed or
+    # broken trust list reads validated evidence as community)
+    floor = d["evidence_tier_floor"]
+    assert d["verdict"] == ("covered" if floor == "validated" else "covered_at_community"), d
+    return floor
 
 
 def _passport_floor(client, h):

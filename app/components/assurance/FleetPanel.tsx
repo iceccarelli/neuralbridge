@@ -205,7 +205,10 @@ export default function FleetPanel({
             </p>
           )}
           <p data-testid="fleet-summary">
-            {data.summary.machines} machine(s): {data.summary.covered} with every declared safety function covered,{' '}
+            {data.summary.machines} machine(s): {data.summary.covered} with every declared safety function covered on
+            evidence at validated or better,{' '}
+            {data.summary.covered_at_community ?? 0} covered only on evidence below validated (a provenance the filer
+            declared: the recorded evidence stands, the behaviour was not demonstrated on the machine),{' '}
             {data.summary.with_gaps} not fully covered (a declared function with a gap, or no safety function declared
             at all — see each row).
           </p>
@@ -253,7 +256,17 @@ export default function FleetPanel({
                       <td>
                         <code>{m.configuration_hash.slice(0, 12)}</code>
                       </td>
-                      <td>{m.worst ?? 'no safety function declared'}</td>
+                      <td>
+                        {m.worst ?? 'no safety function declared'}
+                        {m.verdict === 'covered_at_community' && (
+                          <>
+                            <br />
+                            <span className="aw-note" data-testid="evidence-tier">
+                              covered at {m.evidence_tier_floor || 'community'} only — below validated
+                            </span>
+                          </>
+                        )}
+                      </td>
                       <td>{m.stale}</td>
                       <td>{m.uncovered}</td>
                     </tr>

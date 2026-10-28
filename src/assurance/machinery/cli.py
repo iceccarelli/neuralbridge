@@ -7,8 +7,12 @@
     passport          seal and export the machine's whole evidence position
     check             re-verify a passport somebody else produced
 
-``coverage`` exits non-zero when any declared safety function is not currently
-covered, which makes it a gate rather than a report.
+``coverage`` and ``passport`` exit non-zero unless every declared safety function is
+currently covered on evidence at ``validated`` or better, which makes them a gate rather
+than a report. Exit codes: 0 covered; 1 gaps (a function stale, failing, unchecked,
+incomplete, never verified or not demonstrable); 2 error; 3 covered only at community
+(every function reads current, but on evidence whose provenance the filer only declared:
+the recorded evidence stands, it was not a demonstration on the machine).
 """
 
 from __future__ import annotations
@@ -160,7 +164,12 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
             print("\n  not checked:")
             for c in report.checks_skipped:
                 print(f"    - {c}")
-    return 0 if report.verdict == "covered" else 1
+    return _exit_for(report.verdict)
+
+
+def _exit_for(verdict: str) -> int:
+    """0 covered, 3 covered at community, 1 anything else (gaps, none declared)."""
+    return {"covered": 0, "covered_at_community": 3}.get(verdict, 1)
 
 
 def _cmd_passport(args: argparse.Namespace) -> int:
@@ -180,7 +189,7 @@ def _cmd_passport(args: argparse.Namespace) -> int:
                 print(f"    - {c}")
         if args.out:
             print(f"\n  passport written to {args.out}")
-    return 0 if passport.verdict == "covered" else 1
+    return _exit_for(passport.verdict)
 
 
 def _cmd_check(args: argparse.Namespace) -> int:

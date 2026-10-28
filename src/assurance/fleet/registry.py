@@ -80,21 +80,33 @@ class MachineRecord:
             "interventions": len(self.interventions),
             "verifications": len(self.verifications),
             "tier_ceiling": self.manifest.tier_ceiling.value,
+            # The weakest tier among the verifications the current functions rest on
+            # ("" when none is current). `verdict` is `covered` only at validated or better.
+            "evidence_tier_floor": self.coverage.evidence_tier_floor,
         }
 
 
 @dataclass(frozen=True)
 class FleetSummary:
+    """``machines == covered + covered_at_community + with_gaps``.
+
+    ``covered`` counts machines whose every declared function is current on evidence at
+    ``validated`` or better. ``covered_at_community`` counts those current only on weaker
+    evidence (a declared provenance); they are not "covered" and not "with gaps".
+    """
+
     machines: int
     covered: int
     with_gaps: int
     by_worst: dict[str, int]
     sites: dict[str, int]
     chain_verified: bool
+    covered_at_community: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "machines": self.machines, "covered": self.covered,
+            "covered_at_community": self.covered_at_community,
             "with_gaps": self.with_gaps, "by_worst": self.by_worst,
             "sites": self.sites, "chain_verified": self.chain_verified,
         }
@@ -176,16 +188,24 @@ class Fleet:
 
     def with_gaps(self) -> tuple[MachineRecord, ...]:
         """Machines where at least one declared function is not currently covered."""
-        return tuple(r for r in self.records if r.coverage.verdict != "covered")
+        return tuple(r for r in self.records
+                     if r.coverage.verdict not in ("covered", "covered_at_community"))
+
+    def covered_at_community(self) -> tuple[MachineRecord, ...]:
+        """Machines fully current, but only on evidence below ``validated``."""
+        return tuple(r for r in self.records
+                     if r.coverage.verdict == "covered_at_community")
 
     def summary(self) -> FleetSummary:
         worst = Counter(r.worst.value for r in self.records if r.worst)
         sites = Counter(r.site or "(no site recorded)" for r in self.records)
         covered = sum(1 for r in self.records if r.coverage.verdict == "covered")
+        at_community = len(self.covered_at_community())
         return FleetSummary(
             machines=len(self.records),
             covered=covered,
-            with_gaps=len(self.records) - covered,
+            covered_at_community=at_community,
+            with_gaps=len(self.records) - covered - at_community,
             by_worst=dict(sorted(worst.items())),
             sites=dict(sorted(sites.items())),
             chain_verified=self.chain_verified,
@@ -228,5 +248,6 @@ class Fleet:
         s = self.summary()
         out.append("")
         out.append(f"{s.machines} machine(s): {s.covered} covered, "
+                   f"{s.covered_at_community} covered at community, "
                    f"{s.with_gaps} with gaps")
         return warning + "\n".join(out)

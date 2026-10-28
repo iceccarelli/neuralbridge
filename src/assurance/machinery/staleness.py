@@ -419,6 +419,9 @@ class FunctionCoverage:
     #: Whether that intervention re-ran anything with sealed evidence.
     intervention_revalidated: bool = False
     detail: str = ""
+    #: For a CURRENT function: the weakest tier among the verifications its cover rests on
+    #: (``profile`` | ``community`` | ``validated`` | ``certified``). Empty otherwise.
+    evidence_tier: str = ""
 
     @property
     def days_uncovered(self) -> int | None:
@@ -446,6 +449,7 @@ class FunctionCoverage:
             "intervention_revalidated": self.intervention_revalidated,
             "days_uncovered": self.days_uncovered,
             "detail": self.detail,
+            "evidence_tier": self.evidence_tier,
         }
 
 
@@ -470,10 +474,26 @@ class CoverageReport:
 
     @property
     def verdict(self) -> str:
-        """``covered`` | ``gaps`` | ``no_functions_declared``."""
+        """``covered`` | ``covered_at_community`` | ``gaps`` | ``no_functions_declared``.
+
+        ``covered`` means every declared function reads current AND the evidence each rests
+        on is at ``validated`` or better. Cover that rests on evidence below that (a trace
+        whose provenance the filer only declared is capped at ``community``) is
+        ``covered_at_community``: the recorded evidence still stands, but it describes a
+        model or a recorded file, not a demonstration on the machine, and it must not read
+        as ``covered`` in a headline, a count or an exit code.
+        """
         if not self.functions:
             return "no_functions_declared"
-        return "covered" if all(f.coverage.is_covered for f in self.functions) else "gaps"
+        if not all(f.coverage.is_covered for f in self.functions):
+            return "gaps"
+        return ("covered" if tier_reaches_validated(self.evidence_tier_floor)
+                else "covered_at_community")
+
+    @property
+    def is_demonstrated(self) -> bool:
+        """Is every declared function covered by evidence at ``validated`` or better?"""
+        return self.verdict == "covered"
 
     @property
     def stale(self) -> tuple[FunctionCoverage, ...]:
@@ -628,6 +648,7 @@ def assess_coverage(
                 function_id=fn.function_id, description=fn.description,
                 required_performance=fn.required_performance,
                 coverage=Coverage.CURRENT, checks=tuple(sorted(checks)),
+                evidence_tier=weakest,
                 last_verified_hash=last_good.content_hash,
                 last_verified_at=format_utc(last_good.effective_at),
                 detail=f"verified by {last_good.content_hash[:12]} on "
