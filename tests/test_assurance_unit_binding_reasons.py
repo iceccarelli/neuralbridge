@@ -122,3 +122,20 @@ class TestTheFleetRow:
         community_bundle(KEY, file_under=led)
         row = Fleet.from_ledger(led).to_dict()["machines"][0]
         assert row["verdict"] == "covered_at_community" and row["tier_notes"] == []
+
+
+def test_a_mix_of_reasons_names_both_remedies(ledger, store):
+    from dataclasses import replace
+    case, observed = _awaiting(ledger, store)
+    env, run = _inputs(LATER, "legacy")
+    legacy = build_attested_bundle(env, run, actor=ENG, machine_serial=MACHINE.serial)
+    case = _reverify_with(ledger, store, case, observed, legacy)
+    first, second = case.required_reverifications[:2]
+    mixed = replace(
+        case, required_reverifications=(first, second),
+        evidence_current={first: "below_validated_unit_binding:community",
+                          second: "below_validated:community"})
+    reason = blocked_reason(mixed)
+    assert reason["code"] == "below_validated_tier"
+    assert "unit binding" in reason["message"]
+    assert "recorder" in reason["message"]
