@@ -340,7 +340,7 @@ class TestExistingAdvisoriesAndSignaturesAreUntouched:
         from assurance.supplier import AdvisoryFeed, verify_feed
 
         golden = json.loads((FIXTURES / "legacy_hashes.json").read_text("utf-8"))
-        key = VerifyingKey.from_file(FIXTURES / "legacy_feed.pub.pem")
+        key = VerifyingKey.from_file(FIXTURES / "legacy_feed_public_key.txt")
         records = AdvisoryFeed(FIXTURES / "legacy_feed.jsonl").read()
         verdict = verify_feed(records, key, expect_supplier="controlco")
         assert verdict.ok, verdict
