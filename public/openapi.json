@@ -6383,7 +6383,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Which safety functions still have valid evidence",
+        "summary": "Which safety functions a recorded verification still stands for, at what tier",
         "tags": [
           "machinery"
         ]
@@ -8371,7 +8371,7 @@
       "name": "machine safety"
     },
     {
-      "description": "Machinery Regulation Annex III 1.1.9: safety software identity, evidence of intervention, and which safety functions still have valid evidence.",
+      "description": "Machinery Regulation Annex III 1.1.9: safety software identity, evidence of intervention, and which safety functions a recorded verification still stands for, at what tier.",
       "name": "machinery"
     },
     {

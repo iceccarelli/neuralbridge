@@ -264,7 +264,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             + f"<span class='pill {e(f.coverage.value)}'>"
               f"{e(_COVERAGE_WORDS[f.coverage.value])}</span></div>"
             f"<div class='why'>{e(f.detail)}</div>"
-            + (f"<div class='days'>Running {days} day(s) without valid evidence "
+            + (f"<div class='days'>Running {days} day(s) without a standing verification "
                "for this function.</div>" if days is not None else "")
             + "</div>")
 

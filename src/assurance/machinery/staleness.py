@@ -1,4 +1,4 @@
-"""Which of this machine's safety functions are still covered by valid evidence?
+"""Which of this machine's safety functions does a recorded verification still stand for?
 
 This is the join that neither half can make alone, and the reason both halves
 exist in one package.
@@ -485,7 +485,7 @@ class FunctionCoverage:
 
     @property
     def days_uncovered(self) -> int | None:
-        """Days the machine has run without valid evidence for this function."""
+        """Days the machine has run without a verification that stands for this function."""
         if self.coverage is not Coverage.STALE or not self.invalidated_at:
             return None
         try:
@@ -592,7 +592,7 @@ class CoverageReport:
             lines.append(f"           {f.detail}")
             days = f.days_uncovered
             if days is not None:
-                lines.append(f"           running {days} day(s) without valid evidence "
+                lines.append(f"           running {days} day(s) without a standing verification "
                              "for this function.")
         if self.unrevalidated_interventions:
             lines.append("  Interventions on safety-bearing items with nothing re-run: "
