@@ -78,3 +78,24 @@ def test_a_hundred_machines_are_read_in_a_generous_time(tmp_path):
     elapsed = time.perf_counter() - t0
     assert fleet.summary().covered == 100
     assert elapsed < 15.0, elapsed       # a135c0e: ~0.3 s; the quadratic scan: ~10 s on this box
+
+
+def test_a_fleet_read_scans_the_bundles_once_not_once_per_machine(tmp_path, monkeypatch):
+    """The claim map is shared: the ledger's bundles are listed 2 per machine (its own records)
+    plus a constant, not another full listing per machine."""
+    from assurance.evidence.ledger import EvidenceLedger
+    from assurance.machine.bundle import BUNDLE_KIND
+
+    led = ledger(tmp_path)
+    rec = seal_fleet(led, 20)
+    real, seen = EvidenceLedger.entries, {"full": 0}
+
+    def entries(self, *, subject=None, kind=None):
+        if kind == BUNDLE_KIND and subject is None:
+            seen["full"] += 1
+        return real(self, subject=subject, kind=kind)
+
+    monkeypatch.setattr(EvidenceLedger, "entries", entries)
+    Fleet.from_ledger(led, recorder_trust=rec.trust())
+    monkeypatch.undo()
+    assert seen["full"] <= 2, seen          # the one shared claim map (+ slack), not 20

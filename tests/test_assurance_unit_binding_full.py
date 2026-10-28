@@ -410,6 +410,7 @@ class TestTheHostedRoute:
             self, client, store, monkeypatch, tmp_path):
         server_trust(monkeypatch, tmp_path)
         h = keyed(store, "cell")
+        self._enrol(client, h, ("Acme", "AR-7", "0001"))    # a holder exists: it is this unit
         for _ in range(2):
             r = self._verify(client, h, "Acme/AR-7#0001")
             assert r.status_code == 200 and r.json()["tier"] == "validated"
