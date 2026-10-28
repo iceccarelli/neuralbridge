@@ -34,10 +34,14 @@ try:
 except ImportError as _exc:  # pragma: no cover - environment, not logic
     raise ImportError(
         "assurance.attest needs the `cryptography` package for Ed25519. Install "
-        "it with `pip install 'neuralbridge[assurance-attest]'` or "
-        "`pip install cryptography`. This is the one runtime dependency in the "
-        "assurance package, and it is here because writing a signature scheme by "
-        "hand would be the worst decision in this repository."
+        "it with `pip install cryptography`, and run from the checkout with "
+        "`PYTHONPATH=src`. It is the one third-party package the offline "
+        "kit imports, and it is here because writing a signature scheme by hand "
+        "would be the worst decision in this repository. (Installing the project "
+        "instead, `pip install -e '.[assurance-attest]'` from the checkout, also "
+        "works but installs all 22 core dependencies of the NeuralBridge "
+        "middleware, `neuralbridge-middleware`, beside it: the extra adds only "
+        "`cryptography`.)"
     ) from _exc
 
 from assurance.core.errors import AssuranceError
