@@ -210,3 +210,45 @@ class TestAtMostAFewRunAtOnce:
             t.join(timeout=120)
         assert statuses == [200] * (bound * 2)
         assert state["max"] == bound
+
+
+class TestTheMachineryRoutesAreOffTheLoopToo:
+    """Reading a ledger, verifying its chain and hashing manifests is disk and CPU work.
+    The machinery handlers are plain ``def`` routes, which FastAPI runs in a worker thread."""
+
+    def test_the_ledger_work_behind_each_route_runs_off_the_event_loop(
+            self, client, store, monkeypatch):
+        from datetime import UTC, datetime
+
+        from assurance.api import machinery_routes as routes
+
+        from .test_assurance_staleness_integrity import KEY, manifest, update
+
+        seen: dict[str, bool] = {}
+
+        def watched(name, real):
+            def inner(*args, **kwargs):
+                try:
+                    asyncio.get_running_loop()
+                    seen[name] = True
+                except RuntimeError:
+                    seen[name] = False
+                return real(*args, **kwargs)
+            return inner
+
+        for name in ("record_manifest", "check_intervention", "assess_coverage",
+                     "build_passport"):
+            monkeypatch.setattr(routes, name, watched(name, getattr(routes, name)))
+        headers = keyed(store, "cell")
+        m = manifest().to_dict()
+        assert client.post("/v1/machinery/manifest", headers=headers,
+                           json={"manifest": m}).status_code == 200
+        iv = update(when=datetime(2026, 10, 1, tzinfo=UTC), key=KEY)
+        assert client.post("/v1/machinery/intervention", headers=headers, json={
+            "intervention": iv.to_dict(), "actor": "t"}).status_code == 200
+        assert client.post("/v1/machinery/coverage", headers=headers,
+                           json={"manifest": m}).status_code == 200
+        assert client.post("/v1/machinery/passport", headers=headers, json={
+            "manifest": m, "actor": "t", "seal": False}).status_code == 200
+        assert seen == {"record_manifest": False, "check_intervention": False,
+                        "assess_coverage": False, "build_passport": False}

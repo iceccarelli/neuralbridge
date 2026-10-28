@@ -6485,7 +6485,7 @@
     },
     "/v1/machinery/intervention": {
       "post": {
-        "description": "Record a change to safety-relevant software.\n\nA change with no authorisation and no re-validation is recorded, not\nrefused \u2014 and its findings travel with it. Refusing would push the change\nback to where it lives now, which is nowhere.",
+        "description": "Record a change to safety-relevant software.\n\nA change with no authorisation and no re-validation is recorded, not\nrefused \u2014 and its findings travel with it. Refusing would push the change\nback to where it lives now, which is nowhere.\n\nWhat is refused is a change that could not be about anything the ledger holds:\n``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key\nwith another case or serial is a different unit), ``422 unknown_function`` naming any\nsafety function the sealed manifest does not declare. Function ids are written back\nas the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the\nfunctions the manifest says the changed item implements are disturbed regardless\n(``effective_affects_functions``).",
         "operationId": "post_intervention_v1_machinery_intervention_post",
         "parameters": [
           {

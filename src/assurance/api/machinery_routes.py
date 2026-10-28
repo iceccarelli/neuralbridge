@@ -54,6 +54,10 @@ __all__ = ["machinery_router"]
 
 machinery_router = APIRouter(prefix="/v1/machinery", tags=["machinery"])
 
+# Every handler here is a plain ``def``: FastAPI runs it in a worker thread. They read and
+# verify a ledger, hash manifests and compare up to MAX_ITEMS items, which is CPU and disk
+# work that must not stop the event loop (see ``machine_routes.verify_run``).
+
 #: A manifest larger than this is a fleet export, not one machine.
 MAX_ITEMS = 5_000
 
@@ -144,7 +148,7 @@ def _manifest(raw: dict[str, Any], what: str = "manifest") -> SafetyManifest:
     "/diff",
     summary="Is the machine still the configuration you signed off?",
 )
-async def diff(
+def diff(
     body: DiffIn,
     response: Response,
     meter: Annotated[MeterTicket, Metered("machinery_diff")],
@@ -168,7 +172,7 @@ async def diff(
 
 
 @machinery_router.post("/manifest", summary="Seal a safety software manifest")
-async def post_manifest(
+def post_manifest(
     body: ManifestIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -191,7 +195,7 @@ async def post_manifest(
 
 
 @machinery_router.post("/intervention", summary="Seal an intervention record")
-async def post_intervention(
+def post_intervention(
     body: InterventionIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -252,7 +256,7 @@ async def post_intervention(
     "/coverage",
     summary="Which safety functions still have valid evidence",
 )
-async def coverage(
+def coverage(
     body: CoverageIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -275,7 +279,7 @@ async def coverage(
 
 
 @machinery_router.post("/passport", summary="Seal the machine's evidence position")
-async def passport(
+def passport(
     body: PassportIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -298,7 +302,7 @@ async def passport(
     "/passport/check",
     summary="Re-verify a machine passport. Free, permanently, for anyone.",
 )
-async def check_passport(
+def check_passport(
     body: PassportCheckIn,
     principal: Annotated[Principal, Anyone],
 ) -> dict[str, Any]:
