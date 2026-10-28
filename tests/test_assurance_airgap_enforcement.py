@@ -17,9 +17,12 @@ it. ``NEURALBRIDGE_REQUIRE_NETNS=1`` turns "the OS does not allow it" into a fai
 
 from __future__ import annotations
 
+import _posixsubprocess
 import _socket
 import ast
 import json
+import multiprocessing
+import multiprocessing.util
 import os
 import shutil
 import socket
@@ -163,6 +166,114 @@ def test_the_other_process_creating_events_are_refused(event):
     assert result.attempts[0].api == event
 
 
+def _marker_child(marker: Path) -> bytes:
+    return f"echo ran > {marker}".encode()
+
+
+def test_multiprocessing_spawn_of_a_process_is_refused_and_recorded(tmp_path):
+    """multiprocessing's spawn and forkserver start children with ``_posixsubprocess.fork_exec``,
+    for which CPython emits no audit event: the guard wraps it for the run."""
+    marker = tmp_path / "child-ran"
+    with no_network() as result:
+        with pytest.raises(AirgapError):
+            multiprocessing.util.spawnv_passfds(
+                b"/bin/sh", [b"sh", b"-c", _marker_child(marker)], [])
+    assert not marker.exists()
+    assert not result.held
+    assert result.attempts[0].api == "_posixsubprocess.fork_exec"
+    assert "test_assurance_airgap_enforcement.py" in result.attempts[0].caller \
+        or "multiprocessing" in result.attempts[0].caller
+
+
+def test_a_spawn_process_pool_is_refused_and_recorded():
+    import concurrent.futures as cf
+
+    pool = cf.ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+    try:
+        with no_network() as result:
+            with pytest.raises(AirgapError):
+                pool.submit(os.getpid).result(timeout=20)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    assert [a.api for a in result.attempts] == ["_posixsubprocess.fork_exec"]
+
+
+def test_a_multiprocessing_spawn_context_process_is_refused(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    proc = ctx.Process(target=print)
+    with no_network() as result:
+        with pytest.raises(AirgapError):
+            proc.start()
+    assert not result.held and result.attempts[0].api == "_posixsubprocess.fork_exec"
+
+
+def test_fork_exec_is_restored_and_a_stale_binding_is_inert_after_the_block(tmp_path):
+    real = _posixsubprocess.fork_exec
+    with no_network():
+        wrapped = _posixsubprocess.fork_exec
+        assert wrapped is not real
+    assert _posixsubprocess.fork_exec is real
+    # a module that bound the wrapper while the block ran (``from _posixsubprocess import
+    # fork_exec``) must not keep refusing after release
+    marker = tmp_path / "ran-after-release"
+    _posixsubprocess.fork_exec = wrapped
+    try:
+        pid = multiprocessing.util.spawnv_passfds(
+            b"/bin/sh", [b"sh", b"-c", _marker_child(marker)], [])
+        os.waitpid(pid, 0)
+    finally:
+        _posixsubprocess.fork_exec = real
+    assert marker.exists()
+
+
+def test_leaving_the_block_restores_everything_even_if_the_guard_list_was_cleared():
+    from assurance.kit import airgap
+
+    real_connect = socket.socket.connect
+    real_fork_exec = _posixsubprocess.fork_exec
+    with no_network():
+        airgap._ACTIVE.clear()          # evasion from inside the process: documented
+    assert socket.socket.connect is real_connect
+    assert _posixsubprocess.fork_exec is real_fork_exec
+    assert socket.gethostbyname("localhost")
+
+
+def test_sendmsg_to_a_non_loopback_address_is_refused_by_the_audit_layer_alone():
+    """Through ``_socket`` directly, layer 1 (the patched ``socket.socket``) is not involved."""
+    with no_network(allow_loopback=True) as result:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        with pytest.raises(AirgapError):
+            s.sendmsg([b"x"], [], 0, UNREACHABLE)
+        s.close()
+    assert [a.api for a in result.attempts] == ["socket.sendmsg"]
+
+
+def test_bind_is_refused_by_the_audit_layer_unless_the_address_is_loopback():
+    with no_network(allow_loopback=True) as result:
+        s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        with pytest.raises(AirgapError):
+            s.bind(("0.0.0.0", 0))  # noqa: S104 - the point of the test
+        s.close()
+        assert [a.api for a in result.attempts] == ["socket.bind"]
+        ok = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        ok.bind(("127.0.0.1", 0))
+        ok.close()
+    assert result.loopback_used and len(result.attempts) == 1
+
+
+def test_the_limits_say_what_is_not_seen():
+    text = " ".join(AIRGAP_LIMITS)
+    assert "multiprocessing" in text and "fork_exec" in text
+    assert "ctypes" in text and "already" in text       # pre-existing connected sockets
+
+
+def test_the_kit_readme_does_not_claim_a_subprocess_is_covered_or_absent_without_basis():
+    from assurance.kit import cli
+
+    assert "spawns none" not in cli._README
+    assert "refuses" in cli._README and "ctypes" in cli._README
+
+
 def test_process_creation_is_not_exempted_by_allow_loopback():
     with no_network(allow_loopback=True) as result:
         with pytest.raises(AirgapError):
@@ -208,13 +319,15 @@ def test_the_record_names_its_layers_and_limits():
 # ---------------------------------------------------------------------------
 FORBIDDEN_IMPORTS = {"subprocess", "ssl", "http", "urllib", "ctypes", "multiprocessing", "pty",
                      "socketserver", "smtplib", "ftplib", "telnetlib", "xmlrpc", "asyncio",
-                     "httpx", "requests", "urllib3", "aiohttp", "stripe", "websockets"}
+                     "httpx", "requests", "urllib3", "aiohttp", "stripe", "websockets",
+                     # the C modules under socket and subprocess: no audit event for fork_exec
+                     "_posixsubprocess", "_socket"}
 FORBIDDEN_CALLS = {("os", n) for n in (
     "system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "execv", "execve",
     "execl", "execle", "execlp", "execlpe", "execvp", "execvpe", "spawnl", "spawnle",
     "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "startfile")}
-#: The one module of the kit's closure that may name ``socket``: it imports it to refuse it.
-MAY_IMPORT_SOCKET = {"assurance/kit/airgap.py"}
+#: The one module of the kit's closure that may name these: it imports them to refuse them.
+MAY_IMPORT = {"assurance/kit/airgap.py": {"socket", "_posixsubprocess"}}
 
 
 def make_kit(root: Path) -> Path:
@@ -309,7 +422,8 @@ def test_the_kit_import_closure_names_no_network_client_and_starts_no_process(ob
                 names = [node.module]
             for name in names:
                 root = name.split(".")[0]
-                if root in FORBIDDEN_IMPORTS or (root == "socket" and rel not in MAY_IMPORT_SOCKET):
+                if (root in FORBIDDEN_IMPORTS or root == "socket") \
+                        and root not in MAY_IMPORT.get(rel, set()):
                     offenders.append(f"{rel}:{node.lineno} imports {name}")
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
                     and (node.value.id, node.attr) in FORBIDDEN_CALLS:

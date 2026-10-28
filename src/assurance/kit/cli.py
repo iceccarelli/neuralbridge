@@ -81,11 +81,14 @@ refuses every outbound connection, recording any attempt with the line of code
 that made it — and seals that record into your own ledger. So "it does not phone
 home" is not a promise in a document; it is a hash in a file you hold.
 
-The guard covers this Python process's socket calls. It does not cover a
-subprocess (this kit spawns none), nor a C extension that opens a file
-descriptor itself, and it records intent rather than enforcing containment.
-Those four sentences are in the evidence record too, because a claim printed
-next to its limits is worth more to a reviewer than a broader claim with none.
+The guard covers this Python process: its socket calls and name lookups are refused,
+and so is creating a process (including through `multiprocessing`). It does not cover
+native code that reaches the kernel without Python (a C extension, `ctypes`), a socket
+that was already connected before the run began, or a process started some other way,
+and it records intent rather than enforcing containment. The operating system is the
+real control: run the kit in a network namespace with no interface (`unshare -rn`) or
+behind your firewall. These limits are in the evidence record too, because a claim
+printed next to its limits is worth more to a reviewer than a broader claim with none.
 
 ## What one run of this does not establish
 

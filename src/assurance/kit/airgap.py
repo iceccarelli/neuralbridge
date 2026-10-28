@@ -38,13 +38,17 @@ a vague answer is worse than a narrow one:
   Everything in the Python ecosystem that speaks TCP, UDP or TLS goes through it.
 * **Processes.** Creating a process from this one (``subprocess``,
   ``os.system``, ``os.exec*``, ``os.spawn*``, ``os.posix_spawn``, ``os.fork``) is
-  refused and recorded. A command that already existed, or is started by
-  something else, is outside it.
+  refused and recorded; so is ``_posixsubprocess.fork_exec``, which is what
+  ``multiprocessing`` (spawn, forkserver, ``ProcessPoolExecutor``) calls and for
+  which CPython announces nothing, so the guard wraps it for the run. A command
+  that already existed, or is started by something else, is outside it.
 * **What was seen but allowed** (a local ``socketpair``, loopback when the caller
   asked for it) is listed in the record, so "held" never hides what the process
   did.
 * It does **not** cover native code that reaches the kernel without going through
-  CPython — a C extension calling ``socket(2)``, ``ctypes``/FFI, a loaded library.
+  CPython — a C extension calling ``socket(2)``, ``ctypes``/FFI (``ctypes.dlopen`` is
+  recorded, a call through the loaded function is not), a loaded library. It does not
+  observe a socket that was **already connected** before the block began.
 * It is a **proof of intent, not a containment boundary**. The guard lives in the
   process it watches: code in that process determined to evade it (by flipping the
   module's own state) could. The real control is the operating system — run the kit
@@ -67,6 +71,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+try:  # POSIX only; what multiprocessing's spawn and forkserver start children with
+    import _posixsubprocess
+except ImportError:  # pragma: no cover - not POSIX
+    _posixsubprocess = None  # type: ignore[assignment]
+
 from ..core.errors import AssuranceError
 from ..core.identity import format_utc, utc_now
 
@@ -79,8 +88,9 @@ __all__ = [
     "no_network",
 ]
 
-#: The two layers a record is produced under, named in the record itself.
-AIRGAP_LAYERS: tuple[str, ...] = ("socket module functions", "sys.addaudithook")
+#: The layers a record is produced under, named in the record itself.
+AIRGAP_LAYERS: tuple[str, ...] = (
+    "socket module functions", "sys.addaudithook", "_posixsubprocess.fork_exec")
 
 #: Carried verbatim into every record this guard produces, and from there into
 #: the report. The limits are part of the claim, not a footnote to it.
@@ -94,13 +104,17 @@ AIRGAP_LIMITS: tuple[str, ...] = (
     "_socket module directly. Every Python HTTP and TLS client goes through "
     "that layer.",
     "It refuses and records creating a process from this one (subprocess, "
-    "os.system, os.exec*, os.spawn*, os.posix_spawn, os.fork). A subprocess "
-    "started some other way, or one that already existed, has its own socket "
-    "layer which this guard cannot see. This run's record lists what was "
-    "observed; anything refused makes it not hold.",
+    "os.system, os.exec*, os.spawn*, os.posix_spawn, os.fork) and, because "
+    "CPython announces no event for it, wraps _posixsubprocess.fork_exec for the "
+    "run, which is what multiprocessing's spawn and forkserver and "
+    "ProcessPoolExecutor call. A process started some other way, or one that "
+    "already existed, has its own socket layer which this guard cannot see. This "
+    "run's record lists what was observed; anything refused makes it not hold.",
     "It does not cover native code that reaches the kernel without going "
     "through CPython: a C extension calling socket(2) itself, ctypes or FFI "
-    "calls, a loaded library.",
+    "calls (a ctypes.dlopen is recorded, a call through the loaded function is "
+    "not), a loaded library. It does not see data sent on a socket that was "
+    "already connected before the block began.",
     "It records intent, it does not enforce containment. The guard and the audit "
     "hook live in the process they watch, so code in that process determined to "
     "evade them could, and the audit hook cannot defend against a hostile "
@@ -355,6 +369,7 @@ def no_network(*, allow_loopback: bool = False) -> Iterator[AirgapResult]:
     real_gethostbyname_ex = socket.gethostbyname_ex
     real_gethostbyaddr = socket.gethostbyaddr
     real_getnameinfo = socket.getnameinfo
+    real_fork_exec = getattr(_posixsubprocess, "fork_exec", None)
 
     def guarded_connect(self: Any, address: Any) -> Any:
         guard.refuse("socket.connect", address)
@@ -402,7 +417,18 @@ def no_network(*, allow_loopback: bool = False) -> Iterator[AirgapResult]:
         guard.refuse("socket.getnameinfo", sockaddr)
         return real_getnameinfo(sockaddr, flags)
 
+    def guarded_fork_exec(*args: Any, **kwargs: Any) -> Any:
+        # multiprocessing (spawn, forkserver, ProcessPoolExecutor) starts children here, and
+        # CPython emits no audit event for it. A module that bound this function while the
+        # block ran keeps it after release, so it is inert once the guard is no longer armed.
+        if guard in _ACTIVE:
+            argv = args[0] if args else ""
+            guard.refuse("_posixsubprocess.fork_exec", repr(argv)[:80], network=False)
+        return real_fork_exec(*args, **kwargs)  # type: ignore[misc]
+
     _install_hook()
+    if real_fork_exec is not None:
+        _posixsubprocess.fork_exec = guarded_fork_exec
     socket.socket.connect = guarded_connect  # type: ignore[method-assign]
     socket.socket.connect_ex = guarded_connect_ex  # type: ignore[method-assign]
     socket.socket.sendto = guarded_sendto  # type: ignore[method-assign]
@@ -418,16 +444,23 @@ def no_network(*, allow_loopback: bool = False) -> Iterator[AirgapResult]:
     try:
         yield result
     finally:
-        with _STATE_LOCK:
-            _ACTIVE.remove(guard)
-        socket.socket.connect = real_connect  # type: ignore[method-assign]
-        socket.socket.connect_ex = real_connect_ex  # type: ignore[method-assign]
-        socket.socket.sendto = real_sendto  # type: ignore[method-assign]
-        socket.socket.sendmsg = real_sendmsg  # type: ignore[method-assign]
-        socket.create_connection = real_create
-        socket.getaddrinfo = real_getaddrinfo
-        socket.gethostbyname = real_gethostbyname
-        socket.gethostbyname_ex = real_gethostbyname_ex
-        socket.gethostbyaddr = real_gethostbyaddr
-        socket.getnameinfo = real_getnameinfo
-        result.released_at = format_utc(utc_now())
+        try:
+            with _STATE_LOCK:
+                # Tolerant: code inside the block that emptied the list (documented evasion)
+                # must not turn the exit into an error that skips restoring the functions.
+                if guard in _ACTIVE:
+                    _ACTIVE.remove(guard)
+        finally:
+            socket.socket.connect = real_connect  # type: ignore[method-assign]
+            socket.socket.connect_ex = real_connect_ex  # type: ignore[method-assign]
+            socket.socket.sendto = real_sendto  # type: ignore[method-assign]
+            socket.socket.sendmsg = real_sendmsg  # type: ignore[method-assign]
+            socket.create_connection = real_create
+            socket.getaddrinfo = real_getaddrinfo
+            socket.gethostbyname = real_gethostbyname
+            socket.gethostbyname_ex = real_gethostbyname_ex
+            socket.gethostbyaddr = real_gethostbyaddr
+            socket.getnameinfo = real_getnameinfo
+            if real_fork_exec is not None:
+                _posixsubprocess.fork_exec = real_fork_exec
+            result.released_at = format_utc(utc_now())
