@@ -59,6 +59,7 @@ from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
+from assurance.machinery.intervention import ImpliedIntervention
 from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
 from assurance.machinery.record import (
     interventions_from_ledger,
@@ -739,6 +740,13 @@ def _assess_interventions(
     for intervention in interventions:
         cid = case_id_for(TriggerType.INTERVENTION, intervention.intervention_id)
         if store.get(cid) is not None:
+            continue
+        if isinstance(intervention, ImpliedIntervention) and intervention.observed_configuration \
+                and store.get(case_id_for(TriggerType.MACHINE_DRIFT,
+                                          intervention.observed_configuration)) is not None:
+            # The drift case for this very change exists, whatever has become of it (open,
+            # closed, waived, rejected). It owns the change; a person's ruling on it stands
+            # and is not answered with a second case the next run.
             continue
         declared = set(intervention.affects_functions)
         if declared and any(declared <= set(c.affected_functions) for c in open_cases):

@@ -408,6 +408,14 @@ export default function SignedResult({
                 {a.advisory_id} — {a.title || 'untitled'} ({a.severity || 'severity not stated'}), record {a.sequence}
               </h4>
               <TrustBasis row={a} />
+              {a.advisory_import && (
+                <p className="aw-alert" role="alert" data-testid="signed-import-marker" data-advisory-trust={a.advisory_import.trust}>
+                  <strong>Unsigned import inside a signed feed — inspect only.</strong> The signature covers the supplier&apos;s
+                  file; the file itself says this advisory is a translation of a CSAF document that nobody has authenticated
+                  {a.advisory_import.partial ? ' and that it is partial (products were not imported)' : ''}. No case can be
+                  opened from it here.
+                </p>
+              )}
               {a.impact ? (
                 <>
                   <p data-testid="signed-impact-summary">
@@ -464,7 +472,7 @@ export default function SignedResult({
                     told this feed&apos;s trust state; that is why it is offered only where the server permitted it.
                   </p>
                 )}
-                {!a.automated_consequences_permitted && !a.override_refused && (
+                {!a.automated_consequences_permitted && !a.override_refused && !a.advisory_import && (
                   <OverrideForm apiKey={apiKey} row={a} feedBody={feedBody} onDone={onRerun} />
                 )}
               </div>

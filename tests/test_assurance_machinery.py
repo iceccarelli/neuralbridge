@@ -485,16 +485,19 @@ class TestLedgerIntegration:
         assert ledger.entries(subject=MACHINE.key)[0].kind == "machinery.safety_manifest"
 
     def test_an_intervention_round_trips_through_the_ledger(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         record_intervention(ledger, intervention())
         back = interventions_from_ledger(ledger, MACHINE.key)
         assert [i.intervention_id for i in back] == ["INT-0007"]
 
     def test_an_unrevalidated_change_is_sealed_as_indeterminate_not_verified(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         e = record_intervention(ledger, intervention())
         assert e.validation_state is ValidationState.INDETERMINATE
         assert e.checks_skipped
 
     def test_the_findings_travel_with_the_sealed_record(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         e = record_intervention(ledger, intervention())
         assert any("nothing was re-run" in c for c in e.checks_skipped)
 

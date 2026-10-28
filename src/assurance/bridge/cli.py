@@ -20,9 +20,11 @@ import json
 import sys
 from pathlib import Path
 
-from assurance.bridge.art14 import draft_from_advisory, open_case
+from assurance.bridge.art14 import BridgeError, draft_from_advisory, open_case
+from assurance.change.service import named_person_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.fleet.impact import assess_impact
@@ -57,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="register ledger for --open; defaults to --ledger")
     a.add_argument("--actor", default="",
                    help="who is recording it; defaults to --received-by")
+    a.add_argument("--accept-unsigned", action="store_true",
+                   help="with --open: record the intake of an UNSIGNED import (e.g. from "
+                        "`fleet import-csaf`) anyway. Needs a named person (--actor or "
+                        "--received-by) and --reason")
+    a.add_argument("--reason", default="",
+                   help="why the unsigned advisory is being recorded as a signal (kept in "
+                        "the actor's role in the register)")
     a.add_argument("--out", type=Path, default=None)
     a.add_argument("--json", action="store_true")
 
@@ -65,6 +74,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _cmd_art14(args: argparse.Namespace) -> int:
     advisory = ComponentAdvisory.from_json(args.advisory)
+    who = args.actor or args.received_by
+    if args.open and advisory.import_record is not None:
+        # Recording a signal in the register is not a case, but it is a record that a
+        # filing clock can later be measured from, and it must not rest on a file nobody has
+        # authenticated unless a named person says so.
+        problem = named_person_problem(who)
+        missing = [text for text, absent in (
+            (f"a named person as --actor or --received-by ({problem})", bool(problem)),
+            ("--accept-unsigned", not args.accept_unsigned),
+            ("--reason", not args.reason.strip())) if absent]
+        if missing:
+            raise BridgeError(
+                "opening an unsigned import in the Article 14 register needs "
+                + ", ".join(missing) + ". Nothing was recorded.")
     fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
     impact = assess_impact(advisory, fleet)
     draft = draft_from_advisory(
@@ -75,8 +98,11 @@ def _cmd_art14(args: argparse.Namespace) -> int:
     opened = ""
     if args.open:
         register = Art14Register(EvidenceLedger(args.register or args.ledger))
-        actor = Actor(identifier=args.actor or args.received_by,
-                      role="product security", kind="person")
+        role = "product security"
+        if advisory.import_record is not None:
+            role += "; unsigned import accepted: " + " ".join(
+                neutralise(args.reason).split())[:200]
+        actor = Actor(identifier=who, role=role, kind="person")
         case_id, sealed = open_case(register, draft, actor)
         opened = f"{case_id}: {len(sealed)} record(s) sealed"
 
@@ -94,7 +120,7 @@ def _cmd_art14(args: argparse.Namespace) -> int:
         if draft.checks_skipped:
             print("\n  not checked:")
             for c in draft.checks_skipped:
-                print(f"    - {c}")
+                print(f"    - {neutralise(c)}")
         if args.out:
             print(f"\n  draft written to {args.out}")
         if opened:

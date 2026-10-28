@@ -72,6 +72,7 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.impact import assess_impact
+from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import compare
 from assurance.machinery.intervention import Intervention
@@ -110,7 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     aa = verbs.add_parser("assess-advisory", help="turn a fleet impact report into a case")
     ledger_arg(aa)
     aa.add_argument("--advisory", required=True, type=Path)
-    aa.add_argument("--actor", default="")
+    aa.add_argument("--actor", default="",
+                    help="who is opening the case. An advisory handed over as a file is "
+                         "unauthenticated, so this must be a named person")
+    aa.add_argument("--accept-unsigned", action="store_true",
+                    help="open a case on an UNSIGNED import (e.g. from `fleet import-csaf`) "
+                         "anyway. The named --actor takes responsibility; the case records "
+                         "it and carries the unsigned marker")
+    aa.add_argument("--reason", default="",
+                    help="why the unsigned advisory is being acted on (recorded)")
 
     ai = verbs.add_parser("assess-intervention",
                           help="did a recorded intervention invalidate evidence?")
@@ -245,13 +254,20 @@ def _cmd_assess_advisory(args: argparse.Namespace) -> int:
     advisory = ComponentAdvisory.from_dict(raw)
     ledger = EvidenceLedger(args.ledger)
     fleet = Fleet.from_ledger(ledger)
-    report = assess_impact(advisory, fleet)
-    case = assess_advisory(_store(args.ledger), report, actor=_actor(args.actor, "fleet"))
+    report = assess_impact(advisory, fleet, provenance=bare_provenance("file"))
+    case = assess_advisory(_store(args.ledger), report, actor=_actor(args.actor, "fleet"),
+                           accept_unsigned=args.accept_unsigned, reason=args.reason)
     if case is None:
         print(f"{report.verdict}: this advisory touches no machine in this fleet.")
         return 0
     print(f"case {case.case_id}  [{case.status.value.upper()}]  "
           f"{len(case.machines)} machine(s) affected")
+    if case.provenance.get("advisory_trust"):
+        print(f"  UNAUTHENTICATED advisory ({case.provenance['advisory_trust']}), opened "
+              f"on the authority of {case.provenance['advisory_accepted_by']}"
+              + ("; PARTIAL translation, not imported: "
+                 + case.provenance.get("advisory_dropped_products", "")
+                 if case.provenance.get("advisory_partial") == "true" else ""))
     return 0
 
 
