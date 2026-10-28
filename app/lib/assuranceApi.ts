@@ -14,6 +14,9 @@ export type FleetRow = {
   stale: number;
   uncovered: number;
   interventions: number;
+  // changes the ledger derived rather than read: an unexplained difference between two
+  // manifests, or a record it could not use. They disturb evidence; nobody sealed them.
+  unrecorded_changes: number;
   verifications: number;
   tier_ceiling: string;
 };

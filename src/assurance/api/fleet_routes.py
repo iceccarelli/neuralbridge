@@ -117,7 +117,7 @@ def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
     "/advisory/check",
     summary="Is this one machine affected by this advisory?",
 )
-async def advisory_check(
+def advisory_check(
     body: AdvisoryCheckIn,
     response: Response,
     meter: Annotated[MeterTicket, Metered("advisory_check")],
@@ -193,7 +193,7 @@ async def advisory_check(
 
 
 @fleet_router.get("/machines", summary="Every enrolled machine, worst coverage first")
-async def machines(
+def machines(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -204,7 +204,7 @@ async def machines(
     "/observations",
     summary="When was each machine last looked at, and did the last attempt work?",
 )
-async def observations(
+def observations(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -226,7 +226,7 @@ async def observations(
     "/advisory",
     summary="Which of your machines does this advisory touch?",
 )
-async def advisory_impact(
+def advisory_impact(
     body: AdvisoryIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -257,7 +257,7 @@ _BARE_ADVISORY = {
     "/advisory/signed",
     summary="Assess a signed supplier feed against your fleet, with its trust state",
 )
-async def advisory_impact_signed(
+def advisory_impact_signed(
     body: SignedAdvisoryIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -327,7 +327,7 @@ async def advisory_impact_signed(
     response_class=HTMLResponse,
     summary="The whole fleet on one page a plant manager can read",
 )
-async def report(
+def report(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
     organisation: str = "",
@@ -351,7 +351,7 @@ async def report(
 
 
 @fleet_router.post("/declare", summary="Bind a declaration to a configuration")
-async def declare(
+def declare(
     body: DeclareIn,
     principal: Annotated[Principal, Machine],
 ) -> dict[str, Any]:
@@ -380,7 +380,7 @@ async def declare(
     "/declaration/check",
     summary="Does this declaration still describe the machine? Free for anyone.",
 )
-async def declaration_check(
+def declaration_check(
     body: DeclarationCheckIn,
     principal: Annotated[Principal, Anyone],
     register: Annotated[Any, Depends(get_register)] = None,
