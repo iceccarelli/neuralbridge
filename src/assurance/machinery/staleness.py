@@ -139,7 +139,9 @@ def _tier_and_why(
             and provenance_lifts_tier(body)
             and (recorder_trust is None
                  or _reproduces(body, recorder_trust, unit.serial if unit else None))):
-        return stored, ""
+        # Nothing in this product certifies: a stored 'certified' (only a resealed body can
+        # carry one; the bundle checker rejects it) is read as 'validated' at most.
+        return "validated", ""
     return "community", ""
 
 
@@ -154,7 +156,7 @@ def _believed_tier(
     one that could not yet verify a recorder attestation (engine 5), or whose basis is
     not ``recorder_attested`` with a coherent accepted attestation recorded beside it,
     is read at ``community`` at most; the public bundle checker refuses the same bodies.
-    A lower stored tier is never raised.
+    A lower stored tier is never raised, and nothing is read above ``validated``.
 
     Filed under a unit key (``unit``), the body must also have been sealed for that exact
     key (``unit_key``, case- and whitespace-sensitive) and for its serial; a body that
