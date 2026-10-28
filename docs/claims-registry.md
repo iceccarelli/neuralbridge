@@ -123,4 +123,3 @@ These are things a reader might assume the service does. It does not; each is th
   `Fly-Client-IP` when `ASSURANCE_TRUST_FLY_PROXY=1` (and only if it parses as an address).
   Behind Fly the peer is never loopback, so forwarded headers are not honoured; on a host where a
   local proxy on the same machine forwards traffic they would be.
-
