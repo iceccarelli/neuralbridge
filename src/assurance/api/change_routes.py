@@ -49,6 +49,7 @@ from assurance.core.evidence import Actor
 from assurance.evidence.ledger import AnchorContradictsLedgerError
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.fleet.impact import assess_impact
+from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import compare
 from assurance.machinery.manifest import SafetyManifest
@@ -138,6 +139,9 @@ class AdvisoryIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     advisory: dict[str, Any]
+    #: Opening a case from an UNSIGNED import is refused unless a named person says so.
+    accept_unsigned: bool = False
+    reason: str = Field(default="", max_length=500)
     actor: str = Field(default="", max_length=200)
 
 
@@ -323,14 +327,17 @@ async def assess_advisory_route(
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "advisory") from exc
     fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
-    report = assess_impact(advisory, fleet)
+    report = assess_impact(advisory, fleet, provenance=bare_provenance("body"))
     store = CaseStore(register.ledger)
     try:
-        case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal))
+        case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal),
+                               accept_unsigned=body.accept_unsigned, reason=body.reason)
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
-           "verdict": report.verdict}
+            "verdict": report.verdict, "incomplete": report.incomplete,
+            "advisory_trust": report.provenance,
+            "advisory_import": report.advisory_import}
 
 
 @change_router.post("/assess/intervention", summary="Did a recorded intervention invalidate evidence?")

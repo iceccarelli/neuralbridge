@@ -236,6 +236,22 @@ class TestTheTranslationRecordIsInTheAdvisory:
         with pytest.raises(AdvisoryError):
             ComponentAdvisory.from_dict(adv)
 
+    @pytest.mark.parametrize("field, value", [
+        ("partial", "false"), ("partial", 0), ("origin", "supplier_feed"),
+        ("severity_source", "stated_by_publisher"), ("dropped", "B"),
+    ])
+    def test_a_malformed_record_is_refused_when_read(self, tmp_path, field, value):
+        _, adv, _ = run_import(tmp_path, simple_doc())
+        adv["import_record"][field] = value
+        with pytest.raises(AdvisoryError):
+            ComponentAdvisory.from_dict(adv)
+
+    def test_a_record_that_dropped_products_but_says_complete_is_refused(self, tmp_path):
+        _, adv, _ = run_import(tmp_path, partial_doc())
+        adv["import_record"]["partial"] = False
+        with pytest.raises(AdvisoryError):
+            ComponentAdvisory.from_dict(adv)
+
     def test_severity_chosen_by_the_importer_is_recorded_as_such(self, tmp_path):
         _, defaulted, _ = run_import(tmp_path, simple_doc())
         assert defaulted["severity"] == "safety_relevant"
@@ -356,6 +372,7 @@ class TestNothingInsideARangeOrBoundaryIsClear:
     @pytest.mark.parametrize("text", [
         "All versions < V3.1", "V2.x", "2.*", "vers:all/<V3.1", "<=V2.0", ">= V0.1",
         "V2.0 and earlier", "all", "earlier", "V1.0 - V3.0", "V2.0+", "up to V3.0 (inclusive)",
+        "vers:semver/1.2.3", "below", "ANY",
     ])
     def test_range_text_in_a_version_branch_is_not_an_exact_label(self, text):
         d = doc([name_branch("EX-100", [leaf("A", text)])], affected("A"))
@@ -375,7 +392,7 @@ class TestNothingInsideARangeOrBoundaryIsClear:
         assert verdict_of(d, "V2.5") is not None
         assert verdict_of(d, "V2.0") is not None
 
-    @pytest.mark.parametrize("machine_label", ["2.001", "v2.001", "V2.001.0", "V2.1"])
+    @pytest.mark.parametrize("machine_label", ["2.001", "V 2.001", "V2.001.0", "V2.1"])
     def test_a_label_the_advisory_does_not_list_is_for_a_person_not_a_clear(self, machine_label):
         found = verdict_of(simple_doc(), machine_label)
         assert found is not None and found[0] is MatchBasis.NAME_ONLY
@@ -388,6 +405,21 @@ class TestNothingInsideARangeOrBoundaryIsClear:
             affected=(AffectedArtefact(VENDOR, "EX-100", versions=("V2.001",)),),
             reference="https://example.invalid/h")
         assert match_item(hand, item("EX-100", "V2.002")) is None
+
+    def test_an_imported_advisory_never_lets_a_fixed_label_outrank_its_range(self):
+        # Defence in depth for a hand-edited import file: a global fixed list plus a range.
+        record = advisory_from_csaf(simple_doc()).advisory.import_record
+        adv = ComponentAdvisory(
+            advisory_id="I-1", issued_by=VENDOR, issued_at=datetime(2026, 10, 1, tzinfo=UTC),
+            title="t", summary="s", severity=AdvisorySeverity.SAFETY_RELEVANT,
+            affected=(AffectedArtefact(VENDOR, "EX-100", versions=("V1",),
+                                       version_note="vers:all/<V3"),),
+            fixed_versions=("V2",), reference="https://example.invalid/i", import_record=record)
+        assert match_item(adv, item("EX-100", "V2"))[0] is MatchBasis.NAME_ONLY
+        # ...while a supplier-authored advisory (no import record) keeps its designed meaning.
+        authored = ComponentAdvisory.from_dict({k: v for k, v in adv.to_dict().items()
+                                                if k != "import_record"})
+        assert match_item(authored, item("EX-100", "V2")) is None
 
     def test_a_range_group_does_not_use_a_fixed_version_to_clear(self):
         d = doc([name_branch("EX-100", [
@@ -556,10 +588,35 @@ class TestEveryOtherBoundaryCarriesTheMarker:
         assert received >= before.replace(microsecond=0), \
             "received_at was taken from the document's own date"
         assert "2026-10-02T08:30:00Z" in payload["signal"]["description"]
-        sealed = [e.evidence().body for e in EvidenceLedger(register).entries()
-                  if e.evidence().body.get("channel") == "component_supplier_advisory"]
+        sealed = [e.evidence().body["signal"] for e in EvidenceLedger(register).entries()
+                  if "signal" in e.evidence().body
+                  and e.evidence().body["signal"].get("channel") == "component_supplier_advisory"]
         assert sealed and "unsigned" in sealed[0]["description"].lower()
         assert sealed[0]["received_at"] == payload["signal"]["received_at"]
+
+    def test_an_art14_intake_from_a_partial_import_that_matches_nothing_says_why(
+            self, tmp_path, capsys):
+        from assurance.bridge.cli import main
+
+        ledger = make_ledger(tmp_path / "l.jsonl", manifest("0500", item("EX-200", "V1.0")))
+        del ledger
+        path = imported_file(tmp_path, partial_doc())
+        capsys.readouterr()
+        rc = main(["art14", str(path), "--ledger", str(tmp_path / "l.jsonl"),
+                   "--received-by", "a.integrator"])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "'B'" in err and "INCOMPLETE" in err
+
+    def test_the_art14_summary_carries_the_marker(self, tmp_path, capsys):
+        from assurance.bridge.cli import main
+
+        ledger = _ledger_with_a_machine(tmp_path)
+        path = imported_file(tmp_path, partial_doc())
+        capsys.readouterr()
+        main(["art14", str(path), "--ledger", str(ledger), "--received-by", "a.integrator"])
+        out = capsys.readouterr().out
+        assert "UNSIGNED CSAF IMPORT" in out and "PARTIAL TRANSLATION" in out
 
     def test_the_report_carries_the_marker_and_the_tlp(self, tmp_path):
         from assurance.report.cli import main
@@ -599,6 +656,45 @@ class TestEveryOtherBoundaryCarriesTheMarker:
         report = assess_impact(advisory, Fleet.from_ledger(ledger), provenance=trusted)
         assert report.provenance["inspect_only"] is True
         assert report.provenance["automated_consequences_permitted"] is False
+
+
+from .test_assurance_watch_advisories import plant  # noqa: E402,F401  (fixture)
+
+
+class TestTheWatchNeverActsOnAnUnsignedImport:
+    def test_an_import_inside_a_verified_signed_feed_is_inspect_only_and_opens_no_case(
+            self, request):
+        import dataclasses
+
+        from assurance.supplier import publish
+
+        from .test_assurance_watch_advisories import IDENTITY, _advisory, _run
+
+        env = request.getfixturevalue("plant")
+        _run(env)
+        record = advisory_from_csaf(simple_doc()).advisory.import_record
+        publish(dataclasses.replace(_advisory(), import_record=record), IDENTITY,
+                env["key"], env["feed"])
+        run = _run(env)
+        findings = [f for f in run.advisories.findings if f.advisory_id == "CTRL-2026-11"]
+        assert len(findings) == 1
+        assert findings[0].inspect_only is True and findings[0].state == "untrusted"
+        assert findings[0].machines == () and findings[0].stops_use is False
+        assert findings[0].case_id == ""
+        from assurance.change import CaseStore
+        assert CaseStore(env["ledger"]).list() == []
+
+    def test_the_same_advisory_without_the_record_is_acted_on_as_before(self, request):
+        from assurance.supplier import publish
+
+        from .test_assurance_watch_advisories import IDENTITY, _advisory, _run
+
+        env = request.getfixturevalue("plant")
+        _run(env)
+        publish(_advisory(), IDENTITY, env["key"], env["feed"])
+        run = _run(env)
+        (finding,) = [f for f in run.advisories.findings if f.advisory_id == "CTRL-2026-11"]
+        assert finding.inspect_only is False and finding.stops_use
 
 
 class TestHttpBoundaries:
@@ -925,6 +1021,26 @@ class TestHostileInputIsAMessageAndExit2:
         with pytest.raises(AdvisoryError, match="deep"):
             advisory_from_csaf(d)
 
+    def test_nan_and_infinity_are_not_json_and_are_refused(self, tmp_path):
+        text = json.dumps(simple_doc()).replace('"version": "1"', '"version": NaN')
+        rc, adv, _ = run_import(tmp_path, text)
+        assert rc == 2 and adv is None
+
+    def test_a_file_over_the_stated_size_limit_is_refused(self, tmp_path, monkeypatch):
+        assert csaf_module.MAX_FILE_BYTES >= 1024 * 1024
+        monkeypatch.setattr(csaf_module, "MAX_FILE_BYTES", 100)
+        rc, adv, _ = run_import(tmp_path, simple_doc())
+        assert rc == 2 and adv is None
+
+    def test_a_bom_is_read_as_the_text_it_precedes(self, tmp_path):
+        rc, adv, _ = run_import(tmp_path, None, raw=b"\xef\xbb\xbf" + json.dumps(simple_doc()).encode())
+        assert rc == 0 and adv["advisory_id"] == "EX-2026-001"
+
+    def test_a_missing_file_is_exit_2(self, tmp_path):
+        from assurance.fleet.cli import main
+
+        assert main(["import-csaf", str(tmp_path / "nope.json")]) == 2
+
     def test_a_directory_is_exit_2(self, tmp_path):
         from assurance.fleet.cli import main
 
@@ -978,9 +1094,9 @@ class TestHostileInputIsAMessageAndExit2:
         _, adv, _ = run_import(tmp_path, same)
         assert adv["import_record"]["partial"] is False
         assert any("duplicate" in n.lower() for n in adv["import_record"]["notes"])
-        clash = doc([name_branch("EX-100", [leaf("A", "V2.001"), leaf("A", "V9.999")])],
-                    affected("A", "C"),
-                    extra_tree={"full_product_names": [{"product_id": "C", "name": "x"}]})
+        clash = doc([name_branch("EX-100", [leaf("A", "V2.001"), leaf("A", "V9.999")]),
+                     name_branch("EX-50", [leaf("B", "V1.006")])],
+                    affected("A", "B"))
         _, adv, _ = run_import(tmp_path, clash)
         record = adv["import_record"]
         assert record["partial"] is True

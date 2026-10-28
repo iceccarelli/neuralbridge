@@ -30,7 +30,9 @@ test.describe('Assurance workspace — case lifecycle', () => {
     seed = JSON.parse(readFileSync(seedPath!, 'utf8'));
     const r = await request.post(`${apiBase}/v1/change/assess/advisory`, {
       headers: h(),
-      data: { advisory: seed.advisories.mismatch, actor: '' },
+      // A bare advisory body is unauthenticated, so a case on it needs a named person (the server
+      // used to record this as automation, which is the gap this seed step no longer relies on).
+      data: { advisory: seed.advisories.mismatch, actor: 'e2e.seed.operator' },
     });
     expect(r.status()).toBe(200);
     const body = await r.json();
