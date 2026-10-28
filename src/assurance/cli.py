@@ -1,8 +1,12 @@
 """Top-level command line: ``python -m assurance <domain> ...``.
 
 If the reader of the output goes away (``... | head``), the command ends quietly with exit
-141 (128 + SIGPIPE, as a shell reports it) and no traceback. Whatever it seals is sealed
-before it prints, so nothing is lost; the exit code is not the command's verdict.
+141 (128 + SIGPIPE, as a shell reports it) and no traceback. Whatever it seals (a ledger
+entry, a case) is sealed before it prints, so the records are complete; the exit code is not
+the command's verdict. The one thing that is NOT recoverable from the ledger is a secret
+printed once, so ``billing grant`` and ``billing issue-key`` handle a closed output
+themselves (they revoke the key they could not deliver and say so on stderr) instead of
+leaving it to this handler.
 """
 
 from __future__ import annotations
@@ -30,6 +34,14 @@ _DOMAINS = {
     "value": "assurance.value.cli",
     "billing": "assurance.billing.cli",
 }
+
+
+def silence_stdout() -> None:
+    """Point stdout at /dev/null so the interpreter's own flush at exit cannot fail again."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
 
 
 def _run(argv: list[str]) -> int:
@@ -63,10 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         # command seals (a ledger entry, a case) is sealed before it prints, so there
         # is nothing to repair and nothing to say. Point stdout at /dev/null so the
         # interpreter's own flush at exit does not raise the same error again.
-        try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except (OSError, ValueError):
-            pass
+        silence_stdout()
         return EXIT_BROKEN_PIPE
 
 

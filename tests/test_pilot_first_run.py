@@ -27,6 +27,14 @@ ENV = ROOT / "examples" / "machine" / "envelope.json"
 TRACE = ROOT / "examples" / "machine" / "trace.json"
 
 
+def _child_env() -> dict[str, str]:
+    """The child's environment WITHOUT PYTHONUNBUFFERED: unbuffered output fails at the print,
+    which would make the "fails only when flushed" case vacuous."""
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    env.pop("PYTHONUNBUFFERED", None)
+    return env
+
+
 def _tree(root: Path) -> list[str]:
     return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
 
@@ -225,7 +233,7 @@ class TestUncheckedIsAWord:
 class TestBrokenPipe:
     def test_machine_verify_piped_to_a_reader_that_left_exits_quietly(self, tmp_path):
         ledger = tmp_path / "ev.db"
-        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        env = _child_env()
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, "-m", "assurance", "machine", "verify",
              "--envelope", str(ENV), "--trace", str(TRACE), "--actor", "v.grimaldi",
@@ -245,7 +253,7 @@ class TestBrokenPipe:
 
     def test_a_short_output_that_only_fails_when_flushed_is_quiet_too(self):
         """Block-buffered: the error surfaces at the flush, not in the print."""
-        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        env = _child_env()
         for argv in ([], ["machine", "separation", "--envelope", str(ENV), "--speed", "400"]):
             proc = subprocess.Popen(  # noqa: S603
                 [sys.executable, "-m", "assurance", *argv],

@@ -125,7 +125,20 @@ python -m assurance billing grant --store /data/accounts.db \
   that is a decision a person takes on purpose.
 - The key is printed **once**; only its hash is stored. Hand it over directly. Lose it and
   `billing issue-key --account ID` prints another, `billing revoke-key --account ID
-  --prefix asr_xxxxxx` stops one at once.
+  --prefix asr_xxxxxx` stops one at once. If the output cannot be written (a dropped
+  `fly ssh` session, `| head`) the command revokes the key it just minted and says so on
+  stderr, with exit 2: a live key nobody holds is worse than none. The account stays; run
+  `issue-key` again where you can read the output.
+- `billing list` shows every key's prefix (not a secret), including keys the customer minted
+  themselves with `POST /v1/keys`.
+- **Ending a grant now:** `billing end --account ID --reason "..."` (or `--email`) revokes
+  **every** key of the account, customer-minted ones included, and cancels it, so it reads as
+  the free plan on the next request. Revoking by prefix cannot do that when the customer has
+  keys you do not know about, and `extend` will not take a date in the past. After `end`, the
+  same address can be granted again (a new account).
+- `--store` must be the account store. A file holding an evidence ledger, any other SQLite
+  file, or a file that is not SQLite is refused untouched (a ledger file has one writer);
+  an empty file needs `--create`. `billing list` opens the store read-only.
 - The account is marked `source: manual_grant`, with the note, `granted_at` and
   `granted_by`, in `GET /v1/me` (`account.source`, `account.grant`) and in `billing list`.
   It has no Stripe customer id and never gets one from this tool.
@@ -135,7 +148,10 @@ python -m assurance billing grant --store /data/accounts.db \
   ends at 00:00 UTC the next day with no job involved, because the date is compared on
   every request. After that the account reads as `free`: 402 on every gated route. Without
   `--expires-on` the grant never lapses by itself (the output says "no expiry").
-  `billing extend --account ID --expires-on DATE` takes effect on the next request.
+  `billing extend --account ID --expires-on DATE` takes effect on the next request;
+  `--no-expiry` removes the expiry and is a flag of its own, so an unset shell variable
+  cannot make a grant permanent. An expiry value the service cannot read ends the grant
+  (it fails closed).
 - **A lapsed grant gets no evidence read-out.** Stripe-paid customers whose subscription
   ended keep reading and exporting their own evidence (`EVIDENCE_READOUT_AFTER_LAPSE`),
   decided by whether Stripe ever bound a customer id to the account. A manual grant has
@@ -144,8 +160,19 @@ python -m assurance billing grant --store /data/accounts.db \
   tool does not change it, and `tests/test_pilot_manual_grant.py` pins today's behaviour so
   that a change is deliberate. Tell a pilot customer to export their evidence before the last
   day.
-- A second `grant` for the same email is refused, naming the existing account. The
+- **Converting a pilot** to a Stripe subscription is not automated and not done through
+  checkout: `POST /v1/checkout` with a pilot's key answers 409 `pilot_account`, because a
+  checkout would create a second Stripe customer, a second account and a second, empty
+  ledger beside the pilot's, splitting its evidence; the billing portal has no customer to
+  open. A pilot that converts today starts a new account, and its pilot ledger stays where
+  it is, on the pilot account. The 402 a pilot gets says to ask the operator who issued it.
+- A second `grant` for the same email (compared Unicode-case-folded, so `MÜLLER@x.de` and
+  `müller@x.de` are one person) is refused while the first is live, naming the existing
+  account. The
   reconciler skips these accounts (no Stripe customer id) and cannot change or cancel them.
+- **Do not roll back the build while manual grants are live.** An older build does not know
+  the grant columns, so it reads every manual grant as an ordinary paid account and an
+  expired one as in force. End or extend the grants first.
 - The shared SQLite store is written by this process while the service runs; WAL mode and
   the busy timeout make that safe. If your shell is root, check afterwards that the files
   (`ls -l /data/accounts.db*`) are still writable by the service user.
