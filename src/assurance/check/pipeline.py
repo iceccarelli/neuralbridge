@@ -198,8 +198,9 @@ def _tally(coverage: CoverageReport | None) -> tuple[
     """Fold a coverage report into the four evidence buckets a customer reads.
 
     ``stale``/``failing`` are both work to do, so both land in
-    ``required_actions``; ``never_verified`` has no prior evidence to lose, so
-    it is reported as insufficient rather than as work a change caused.
+    ``required_actions``; ``never_verified``, ``unchecked`` and ``incomplete`` have no
+    prior evidence to lose (nothing was shown, or only part), so they are reported as
+    insufficient rather than as work a change caused.
 
     ``valid`` counts functions current on evidence at ``validated`` or better; those
     current on weaker evidence are the last element, ``below_validated``.
@@ -223,7 +224,10 @@ def _tally(coverage: CoverageReport | None) -> tuple[
         elif f.coverage is Coverage.FAILING:
             insufficient += 1
             required.append(f.function_id)
-        elif f.coverage is Coverage.NEVER_VERIFIED:
+        elif f.coverage in (Coverage.NEVER_VERIFIED, Coverage.UNCHECKED,
+                            Coverage.INCOMPLETE):
+            # Nothing was shown for these (never run, or run and not judged): insufficient
+            # evidence, not a failure and not work a change caused.
             insufficient += 1
         elif f.coverage is Coverage.NOT_DEMONSTRABLE:
             cannot_determine += 1

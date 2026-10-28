@@ -371,7 +371,8 @@ def build_passport(
     )
 
 
-_COVERAGE_STATES = ("current", "stale", "failing", "never_verified", "not_demonstrable")
+_COVERAGE_STATES = ("current", "stale", "failing", "unchecked", "incomplete",
+                    "never_verified", "not_demonstrable")
 
 
 def _passport_coherence(

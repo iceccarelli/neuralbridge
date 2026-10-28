@@ -147,6 +147,7 @@ tbody tr:hover{background:var(--panel)}
 .pill.current{background:var(--good-soft);color:var(--good)}
 .pill.stale{background:var(--bad-soft);color:var(--bad)}
 .pill.failing{background:var(--bad);color:#fff}
+.pill.unchecked,.pill.incomplete{background:var(--warn);color:#fff}
 .pill.never_verified{background:var(--warn-soft);color:var(--warn)}
 .pill.not_demonstrable{background:var(--panel);color:var(--muted);
   box-shadow:inset 0 0 0 1px var(--rule-firm)}
@@ -201,6 +202,8 @@ _COVERAGE_WORDS = {
     "current": "Current",
     "stale": "Stale",
     "failing": "Failing",
+    "unchecked": "Unchecked",
+    "incomplete": "Incomplete",
     "never_verified": "Never verified",
     "not_demonstrable": "Not demonstrable",
 }
