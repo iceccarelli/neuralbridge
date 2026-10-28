@@ -451,8 +451,18 @@ def render_report(data: ReportInput) -> str:
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
-    parts.append(_tile(functions - uncovered, "functions with current evidence",
-                       "good" if uncovered == 0 else ""))
+    # The count is of functions with a verification recorded and no recorded change
+    # since. How much that verification is worth is its tier, so the tile shows the
+    # weakest tier among them and is coloured good only when that tier is validated.
+    tier_order = ("profile", "community", "validated", "certified")
+    floors = [r.coverage.evidence_tier_floor for r in fleet.records
+              if r.coverage.evidence_tier_floor in tier_order]
+    floor = min(floors, key=tier_order.index) if floors else ""
+    strong = floor in ("validated", "certified")
+    parts.append(_tile(
+        functions - uncovered,
+        "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),
+        ("good" if strong else "warn") if uncovered == 0 and floor else ""))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
                        "warn" if uncovered - stale else ""))
@@ -545,8 +555,9 @@ def render_report(data: ReportInput) -> str:
         "<p class='disclaimer'>This report is a record of what was collected, sealed and "
         "verified, and of what that evidence no longer supports. It is not a declaration "
         "of conformity and not a certification, and it does not say that any machine is "
-        "safe. Where it shows evidence as current, that means a recorded verification "
-        "still describes the configuration found, nothing more.</p>"
+        "safe. Where it shows evidence as current, that means no change has been recorded "
+        "since the verification run was recorded; the run is not bound to the "
+        "configuration found, and nothing more is claimed.</p>"
         "</footer></div></body></html>")
 
     return "".join(parts)

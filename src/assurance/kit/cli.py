@@ -357,6 +357,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
     else:
         print(run.summary())
+        print("  (COMPLETE means only that every item the plan names was found and hashed.)")
         print()
         for m in run.machines:
             print(f"  {m.status:<11} {m.serial:<16} {m.items} item(s)"

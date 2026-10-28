@@ -67,14 +67,17 @@ See [`deploy/assurance/KIT.md`](deploy/assurance/KIT.md).
 
 ## What it does, and where each claim is enforced
 
-Every row below maps to code that runs. Nothing is listed here that the
-software does not do.
+Every row below maps to code that runs, offline, on your own files. The hosted
+counter-signature (`POST /v1/ledger/attest`) is a separate thing: it answers 503
+`no_attestation_key_configured` until the service has a signing key, and no
+deployment has one configured today. Nothing is listed here that the software does
+not do; what it does not do is listed in each command's output.
 
 | | Command | What it establishes |
 |---|---|---|
 | **Collect** | `assurance collect run` | A sealed manifest of the safety-relevant software on one machine, with normalisation rules so a vendor export's own timestamps do not read as drift. `collect probe` finds those noisy rules for you before they produce a year of false alarms. |
 | **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
-| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine *as it is today*. |
+| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change. |
 | **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
 | **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |
 | **Attest** | `assurance attest sign` | A signature over the ledger head by a key the ledger's operator does not hold. A hash chain detects editing; only this detects **deletion**. |
@@ -93,7 +96,8 @@ software does not do.
   argument. Free to check (the route never calls the meter), because the person who most needs it is the
   buyer, not the seller.
 - **A ledger that was quietly shortened.** Caught by joining a counter-signature
-  back to the chain.
+  back to the chain: one you made yourself with a key held apart from the ledger
+  (`assurance attest sign`), since the hosted service has no signing key yet.
 
 ## Three rules this codebase is built on
 

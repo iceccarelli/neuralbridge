@@ -135,7 +135,9 @@ by nobody.
 ```
 
 POST that to `/v1/ledger/attest` with a Cell-plan key and the head is
-counter-signed by a key the plant does not hold. The ledger never moves. See
+counter-signed by a key the plant does not hold. The ledger never moves (the hosted
+counter-signature needs a service key that is not configured on any deployment today;
+until it is, this call answers 503). See
 `ATTEST.md` for what that buys and what it does not.
 
 Then, back inside the plant and still offline:
