@@ -37,8 +37,10 @@ from assurance.core.identity import format_utc, parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.bundle import (
     BUNDLE_KIND,
+    MachineSubjectError,
     provenance_lifts_tier,
     reassess_recorded_attestations,
+    resolve_machine_serial,
 )
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machine.verify import parse_engine_version
@@ -78,7 +80,24 @@ def tier_reaches_validated(tier: str) -> bool:
     return _TIER_RANK.get(tier, -1) >= _TIER_RANK["validated"]
 
 
-def _believed_tier(body: dict[str, Any], recorder_trust: RecorderTrust | None = None) -> str:
+def _unit_binding(subject: str | None) -> tuple[str, bool] | None:
+    """The unit a ledger subject names, as ``(serial, well_formed)``; None for a product line.
+
+    A subject with no ``#`` names a product line and binds nothing. One with a ``#`` is a
+    unit key (``maker/model#serial``); a malformed one cannot be tied to any unit.
+    """
+    if not subject or "#" not in subject:
+        return None
+    try:
+        return resolve_machine_serial(subject), True
+    except MachineSubjectError:
+        return "", False
+
+
+def _believed_tier(
+    body: dict[str, Any], recorder_trust: RecorderTrust | None = None,
+    unit: tuple[str, bool] | None = None,
+) -> str:
     """The tier a sealed verification body is worth *today*, whatever it says.
 
     The stored ``tier`` is a string the sealing engine wrote. A body sealed by an
@@ -104,16 +123,28 @@ def _believed_tier(body: dict[str, Any], recorder_trust: RecorderTrust | None = 
     stored = str(body.get("tier", ""))
     if not tier_reaches_validated(stored):
         return stored
+    if unit is not None:
+        # Filed under one unit's key: the evidence must have been sealed for that unit.
+        # A bundle sealed for a product line (no serial) accepts a recorder attestation
+        # made on ANY unit, so under a unit key it would otherwise lend unit B the
+        # recorder of unit A.
+        serial, well_formed = unit
+        if not well_formed or str(body.get("machine_serial") or "") != serial:
+            return "community"
     engine = parse_engine_version(body.get("engine_version")) or 0
     if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
             and provenance_lifts_tier(body)
-            and (recorder_trust is None or _reproduces(body, recorder_trust))):
+            and (recorder_trust is None
+                 or _reproduces(body, recorder_trust, unit[0] if unit else None))):
         return stored
     return "community"
 
 
-def _reproduces(body: dict[str, Any], recorder_trust: RecorderTrust) -> bool:
-    assessed = reassess_recorded_attestations(body, recorder_trust, now=None, machine_serial=None)
+def _reproduces(
+    body: dict[str, Any], recorder_trust: RecorderTrust, serial: str | None = None,
+) -> bool:
+    assessed = reassess_recorded_attestations(
+        body, recorder_trust, now=None, machine_serial=serial)
     pa = body.get("provenance_assessment")
     return bool(assessed is not None and assessed.attested and isinstance(pa, dict)
                 and assessed.attestation_hash == pa.get("attestation_hash"))
@@ -251,7 +282,7 @@ class VerificationRecord:
                 product=str(body.get("product", "")),
                 product_version=str(body.get("product_version", "")),
                 verdict=str(body.get("verdict", "")),
-                tier=_believed_tier(body, recorder_trust),
+                tier=_believed_tier(body, recorder_trust, _unit_binding(entry.subject)),
                 checks_verified=verified,
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
