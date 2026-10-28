@@ -117,7 +117,7 @@ _PLAN = {
          "supplier": "CHANGE ME", "implements": ["SF-01"],
          "modifiable_in_field": True,
          "rule": {"kind": "text_excluding",
-                  "patterns": ["^#\\\\s*Exported ", "^#\\\\s*Export sequence no:"],
+                  "patterns": ["^#\\s*Exported ", "^#\\s*Export sequence no:"],
                   "note": "most scanner tools stamp the time and the operator "
                           "into the header; run `assurance collect probe` to "
                           "find out what yours does."}},
