@@ -27,8 +27,12 @@ fi
 
 if command -v unshare >/dev/null 2>&1 && command -v setpriv >/dev/null 2>&1 \
     && sudo -n unshare -n true 2>/dev/null; then
+  # sudo resets PATH to its secure_path even with -E, so a bare `python` would be the system
+  # interpreter, not the caller's (setup-python's). Resolve the command here, before sudo.
+  cmd="$(command -v -- "$1")" || { echo "netns-run: command not found: $1" >&2; exit 127; }
+  shift
   exec sudo -n -E unshare -n setpriv --reuid="$(id -u)" --regid="$(id -g)" \
-    --clear-groups "$@"
+    --clear-groups "$cmd" "$@"
 fi
 
 echo "netns-run: cannot create a network namespace here (tried 'unshare -rn' and" >&2

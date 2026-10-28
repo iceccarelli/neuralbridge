@@ -49,7 +49,7 @@ jobs:
         # not quietly go back to trusting the program's own verdict.
         run: |
           set -euo pipefail
-          .github/scripts/netns-run.sh python - <<'PY'
+          .github/scripts/netns-run.sh "$(command -v python)" - <<'PY'
           import socket, sys
           try:
               socket.create_connection(("192.0.2.1", 9), timeout=2)
@@ -90,8 +90,8 @@ jobs:
           ]
           (base / "kit.json").write_text(json.dumps(cfg))
           PY
-          .github/scripts/netns-run.sh python -m assurance kit check plant/kit.json
-          .github/scripts/netns-run.sh python -m assurance kit run plant/kit.json --out plant/out
+          .github/scripts/netns-run.sh "$(command -v python)" -m assurance kit check plant/kit.json
+          .github/scripts/netns-run.sh "$(command -v python)" -m assurance kit run plant/kit.json --out plant/out
 
       - name: The run produced evidence, and it says nothing left the machine
         run: |

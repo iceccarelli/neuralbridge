@@ -471,8 +471,11 @@ def test_the_kit_runs_with_no_network_namespace_interface(tmp_path):
 
 def test_the_cold_start_job_runs_the_kit_in_a_namespace_and_does_not_skip_when_it_cannot():
     workflow = (REPO / ".github" / "workflows" / "assurance.yml").read_text(encoding="utf-8")
-    assert "netns-run.sh python -m assurance kit run" in workflow
-    assert "netns-run.sh python -m assurance kit check" in workflow
+    # the interpreter is passed by path: `sudo` resets PATH to its secure_path, so a bare
+    # `python` could be the system one, not setup-python's
+    assert 'netns-run.sh "$(command -v python)" -m assurance kit run' in workflow
+    assert 'netns-run.sh "$(command -v python)" -m assurance kit check' in workflow
+    assert "netns-run.sh python" not in workflow
     assert "fail closed" in workflow
     script = NETNS_RUN.read_text(encoding="utf-8")
     assert "exit 97" in script and "exec unshare -rn" in script
@@ -495,6 +498,40 @@ def test_the_script_fails_closed_when_it_cannot_make_a_namespace(tmp_path):
         capture_output=True, text=True, check=False, env={"PATH": str(bare)})
     assert r.returncode == 97, r.stdout + r.stderr
     assert not marker.exists()
+
+
+def test_the_sudo_branch_runs_the_callers_python_not_the_one_on_sudos_secure_path(tmp_path):
+    """Where `unshare -rn` is blocked, the script falls back to `sudo -n -E unshare -n ...`, and
+    sudo resets PATH to its secure_path even with -E. A bare command name would then resolve to
+    the system interpreter. Shims stand in for unshare/setpriv/sudo; the logic under test is
+    the script's."""
+    mine, secure, shims = tmp_path / "mine", tmp_path / "secure", tmp_path / "shims"
+    for d in (mine, secure, shims):
+        d.mkdir()
+    (mine / "python").write_text("#!/bin/sh\necho caller-python\n")
+    (secure / "python").write_text("#!/bin/sh\necho system-python\n")
+    (shims / "setpriv").write_text("#!/bin/sh\nexit 0\n")
+    (shims / "unshare").write_text(
+        "#!/bin/sh\n"
+        'case "$1" in -rn) exit 1;; esac\n'                    # no unprivileged namespaces
+        'shift; [ "$1" = true ] && exit 0\n'                    # the probe: `unshare -n true`
+        'shift; while case "$1" in --*) true;; *) false;; esac; do shift; done\n'  # setpriv args
+        'exec "$@"\n')
+    (shims / "sudo").write_text(
+        "#!/bin/sh\n"
+        "while case \"$1\" in -*) true;; *) false;; esac; do shift; done\n"
+        f'PATH="{secure}:{shims}:/usr/bin:/bin" exec "$@"\n')           # secure_path
+    for f in (*mine.iterdir(), *secure.iterdir(), *shims.iterdir()):
+        f.chmod(0o755)
+    for tool in ("bash", "env", "id", "true", "dirname"):
+        found = shutil.which(tool)
+        if found and not (shims / tool).exists():
+            (shims / tool).symlink_to(found)
+    r = subprocess.run(  # noqa: S603
+        [str(shims / "bash"), str(NETNS_RUN), "python"],
+        capture_output=True, text=True, check=False,
+        env={"PATH": f"{mine}:{shims}"})
+    assert r.returncode == 0 and r.stdout.strip() == "caller-python", r.stdout + r.stderr
 
 
 # ---------------------------------------------------------------------------
