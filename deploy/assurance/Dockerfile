@@ -47,9 +47,15 @@ EXPOSE 8080
 # prevent. Scale by making the machine bigger, or move the stores to Postgres
 # first.
 #
-# Deliberately NOT `--proxy-headers --forwarded-allow-ips='*'`: that would make
-# uvicorn trust X-Forwarded-For from any peer that can reach the port, and
-# the free-tier quota is keyed on the caller's address. Behind Fly's proxy the
-# application reads the proxy-set `Fly-Client-IP` header itself, and only when
-# ASSURANCE_TRUST_FLY_PROXY=1 (see deploy/assurance/README.md).
+# Proxy headers: uvicorn's `--proxy-headers` is ON by default, but it trusts
+# `X-Forwarded-For` / `X-Forwarded-Proto` only from the addresses in
+# `--forwarded-allow-ips`, which defaults to loopback (`127.0.0.1,::1`, or whatever `FORWARDED_ALLOW_IPS` says). This image does not
+# widen that: it deliberately does NOT pass `--forwarded-allow-ips='*'`, which would make
+# uvicorn trust the header from any peer that can reach the port, and the free-tier quota
+# is keyed on the caller's address. Behind Fly's proxy the socket peer is Fly's proxy
+# (not loopback), so forwarded headers are ignored and the application reads the
+# proxy-set `Fly-Client-IP` itself, only when ASSURANCE_TRUST_FLY_PROXY=1 and only if it
+# parses as an IP address (see deploy/assurance/README.md). Run on a host where a reverse
+# proxy on the SAME machine forwards to this port, and uvicorn will trust that proxy's
+# X-Forwarded-For.
 CMD ["uvicorn", "assurance.api.service:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

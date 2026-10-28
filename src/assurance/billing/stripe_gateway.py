@@ -388,6 +388,7 @@ def create_checkout_session(
     cancel_url: str,
     tier: str,
     metered: bool = False,
+    customer_id: str = "",
 ) -> CheckoutSession:
     """A subscription checkout for one manufacturer.
 
@@ -397,12 +398,21 @@ def create_checkout_session(
 
     ``metered`` is a usage-based price (pay-as-you-go): Stripe takes no quantity
     for those - the amount is whatever the meter reports - and rejects one.
+
+    ``customer_id`` is the Stripe customer an authenticated, lapsed account already has:
+    the new subscription is created on it, so the webhook lands on the same account and
+    ledger instead of making a second customer. Stripe takes ``customer`` or
+    ``customer_email``, never both, so the email is sent only when there is no customer.
+    The address and name the customer already gave Stripe are kept and refreshed
+    (``customer_update``), which automatic tax and tax-id collection need on an existing
+    customer.
     """
     form: list[tuple[str, str]] = [
         ("mode", "subscription"),
         ("line_items[0][price]", price_id),
         *([] if metered else [("line_items[0][quantity]", "1")]),
-        ("customer_email", email),
+        *([("customer", customer_id), ("customer_update[address]", "auto"),
+           ("customer_update[name]", "auto")] if customer_id else [("customer_email", email)]),
         ("success_url", success_url),
         ("cancel_url", cancel_url),
         ("client_reference_id", company[:200] or email),

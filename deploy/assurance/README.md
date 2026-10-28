@@ -477,7 +477,8 @@ proxy, so the per-address quota would be one bucket for the whole internet. Set
 `ASSURANCE_TRUST_FLY_PROXY=1` (in `fly.toml`'s `[env]`) and the quota is keyed
 on `Fly-Client-IP`, which Fly's proxy sets. Set it **only** where every request
 arrives through that proxy: on any other host the header is client-controlled
-and would let a caller mint themselves a fresh quota per request. Without the
+and would let a caller mint themselves a fresh quota per request (a value that is not an IP
+address is ignored either way). Without the
 variable the socket peer is used, which is correct for a directly exposed host.
 
 **Request bodies** on `/v1` writes are capped at `ASSURANCE_MAX_BODY_BYTES`
@@ -488,6 +489,64 @@ Stripe webhook is exempt.
 **Keys.** `GET /v1/keys`, `POST /v1/keys` and `POST /v1/keys/revoke` let an
 account list, add and revoke its own keys (at most 10 live). Operator keys are
 rotated in `ASSURANCE_API_KEYS`.
+
+**Request limits that are in code.** A JSON body nested deeper than
+`ASSURANCE_MAX_JSON_DEPTH` (default 100) on a capped write is refused with 422
+`json_too_deeply_nested` before the application sees it (an unauthenticated 1,200-deep body used
+to be a 500 and a `RecursionError` traceback in the log). `Fly-Client-IP` is honoured only when it
+parses as an IP address; any other string is ignored and the socket peer is used. An unknown API
+key is answered from a read and does not queue for the accounts write lock. Responses that carry a
+plaintext key (`POST /v1/keys`, `POST /v1/operators`, `GET /v1/checkout/complete`) and every export
+(`.../export`, `GET /v1/fleet/report`) are `Cache-Control: no-store` with `Pragma: no-cache`.
+`session_id=` (the one-time key-claim token), `api_key=`, `key=`, `token=` and `secret=` query
+values are replaced by `[redacted]` in uvicorn's access log; a proxy in front of the service keeps
+its own log, so redact there too. The claim token stays valid 24 hours or until claimed.
+
+**What is not in code (be honest with yourself about these).**
+
+* *No authentication-failure rate limit.* A flood of invalid keys still costs a hash and a lookup
+  each. Rate-limit in front of the service (Fly, a WAF).
+* *Proxy headers.* uvicorn's `--proxy-headers` is on by default and trusts `X-Forwarded-For` from
+  loopback (and `$FORWARDED_ALLOW_IPS`). The Dockerfile does not widen that; on Fly the peer is
+  Fly's proxy, so it is ignored. If you front the container with a reverse proxy on the same
+  machine, uvicorn will trust that proxy's header.
+* *Past-due expiry and reconciliation run only when you run them.* There is no scheduler in this
+  repository. A `past_due` account has no automatic expiry unless you schedule
+  `python -m assurance.billing.reconcile --apply` (after reading a dry run, below). Stripe's own
+  dunning ends the subscription and tells us by webhook; reconciliation is the net for a lost
+  webhook.
+
+### Attestation signing key: rotation and loss
+
+The service counter-signs heads (`POST /v1/ledger/attest`) with the key in
+`ASSURANCE_ATTEST_KEY_PEM`. The key lives outside the data volume on purpose.
+
+*Rotating it.* After the key changes, **every tenant's `POST /v1/ledger/attest` answers 409**
+(`attestation_refused`: the service key is not the one that signed this log) until you have acknowledged the change for that account:
+
+```bash
+assurance attest sign --ledger "$ASSURANCE_TENANT_LEDGERS/$ACCOUNT_ID.db" \
+    --key /secrets/new-attest.pem --log "$ASSURANCE_ATTEST_LOGS/$ACCOUNT_ID.jsonl" \
+    --rotating --note "key rotation"
+```
+
+once per account log (the tenant API has no `rotating` flag, by design). Before you rotate:
+**save the old public key** (`GET /v1/ledger/attest/key` or `assurance attest keygen` output) and
+keep a dated key history somewhere other than this volume. `GET /v1/ledger/attest/key` serves only
+the *current* key, and `POST /v1/ledger/attest/verify` without an explicit `public_key_pem` checks
+against it, so attestations signed under the old key read as "signed by different key or edited"
+(forged) unless the verifier is given the old public key. Tell customers verifying old exports to
+use the old public key for records before the rotation date.
+
+*Losing it.* If the private key is lost or leaked, nothing in this service can recover or revoke
+it. Runbook: (1) stop signing; (2) generate a new key; (3) for each account run `attest sign
+--rotating` with the new key so the log records the change; (4) record the date, the old
+fingerprint and the reason in your key history, and tell customers that attestations dated before
+it were made under a key that is no longer trusted (a leaked key means a past attestation could
+have been forged by someone else: say so); (5) a lost key with no leak simply ends the old key's
+ability to sign: the old records still verify against the saved old public key. If you never saved
+the old public key, old attestations can be checked only for internal consistency
+(`attest verify` without a key), not for authorship.
 
 **`/healthz`** is unauthenticated and cheap: it confirms both stores open and
 reports the shared ledger's entry count, and nothing about the host. Chain
@@ -510,12 +569,54 @@ fly ssh sftp get -r /data/backups/$(date +%F) ./backup-$(date +%F)   # off the v
 python -m assurance.evidence.restore_check verify ./backup-$(date +%F)
 ```
 
+The backup directory must not exist or must be empty (`backup` exits 2 rather than write
+over an earlier one, whose files the new manifest would otherwise vouch for), and `verify`
+fails on any symbolic link in the tree.
+
 `backup` takes a transactionally consistent snapshot of every database (a plain
-file copy of a WAL database can miss its newest records). `verify` checks each
-database's integrity and each ledger's hash chain, and that every tenant ledger
-belongs to a known account. **Rehearse a restore before relying on it**: restore
-the files to a scratch volume, point a throwaway service at them, and call
-`GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
+file copy of a WAL database can miss its newest records; each file is consistent, the set is
+not one instant: ledgers are snapshotted before the account list, so a customer who signs up
+mid-backup is harmless, but an attestation signed mid-backup can be newer than the ledger copy
+and make `verify` report a finding. Re-take the backup if it does) and writes
+`backup-manifest.json` beside them: every file with its size and SHA-256, each ledger's
+length and head hash, and the list of accounts. The backup directory is `0700` and its files
+`0600` whatever the umask — it holds every customer's evidence and account emails — so keep
+it that way when you copy it off the volume. Two things it deliberately does **not** do:
+
+* **It does not copy `pending_keys`.** A key minted by a checkout and not yet collected is
+  held in plaintext in `accounts.db` for up to 24 hours; a backup that left the volume
+  would carry a working credential. After a restore, a customer whose checkout key was
+  still unclaimed at backup time must be issued a new one (the output of `backup` says how
+  many were left out; the manifest records the count in `pending_keys_not_copied`). The
+  checkout's session marker *is* restored, so that customer's `/v1/checkout/complete`
+  answers 202 for ever and Stripe's redelivery is a duplicate; only the operator command
+  below helps: `python -m assurance.billing.issue_key --customer cus_...` (or `--account
+  acc_...`). It issues to a paying account only (`active` or `past_due`, on a paid tier, with
+  a Stripe customer), prints the key once to stdout and logs nothing; pass it to the customer
+  over a channel you trust. You cannot tell from the backup *which* customers were affected,
+  so ask: anyone who paid shortly before the backup and has not yet used their key.
+* **It does not sign the manifest.** Checksums, not signatures: whoever can rewrite the
+  backup can rewrite the manifest. `backup` prints `manifest_sha256`; store that somewhere
+  the volume is not.
+
+`verify` checks each database's integrity and each ledger's hash chain, that every tenant
+ledger belongs to a known account, **that every file the manifest lists is present with the
+recorded hash and nothing else appeared**, and that each attestation log still fits the
+ledger it was signed over (a ledger shorter than its own attestation log has lost evidence;
+it compares what the records state, since the signing key is not in a backup — use
+`attest verify` with the public key for authenticity). Its exit code: **0** verified,
+**1** a finding, **2** could not run, **3 unchecked** — there is no manifest (a backup taken
+by an older build), so the files are consistent as far as they can be read and nothing says
+no ledger or file is missing. Never treat 3 as a pass; re-take the backup from the live
+volume with the current build.
+
+The true restore procedure: stop the service; restore the backup directory onto the volume
+**including `backup-manifest.json`**; run `verify /data` (exact: it must equal the backup);
+start the service; re-issue any key that was unclaimed (`assurance.billing.issue_key`, above). On a volume that has been running
+since the backup, `verify --live /data` accepts ledgers and logs that only grew past the
+recorded head (and says nothing about `accounts.db`, which moves). **Rehearse a restore
+before relying on it**: restore the files to a scratch volume, point a throwaway service at
+them, and call `GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
 done against a deployed service — there is none.
 
 `python scripts/staging_rehearsal.py restore-drill --data-dir DIR` does the local half
@@ -529,7 +630,7 @@ finally proves the source's listing and every file hash are unchanged. It refuse
 a directory with `-wal`/`-shm`/`-journal` files (a service may be writing) unless you pass
 `--i-know-the-service-is-stopped`. `--backup-dir DIR` restores a backup you fetched from the volume
 instead (the counts against the hosted volume are then `UNCHECKED`: compare them with
-`python -m assurance.evidence.restore_check verify /data` run on the machine). It has
+`python -m assurance.evidence.restore_check verify --live /data` run on the machine). It has
 been proven on real SQLite fixtures only, never on a hosted volume. A caveat on the
 commands above: `$(date +%F)` is expanded by your local shell (use the exact remote path
 the backup command printed if the machine's date may differ), the local directory you fetch

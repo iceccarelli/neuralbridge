@@ -141,6 +141,36 @@ USAGE_RESEND_WINDOW = timedelta(hours=20)
 USAGE_MAX_AGE = timedelta(days=34)
 
 
+#: How restrictive a subscription phase is. At the same second Stripe stamps two events
+#: with, the more restrictive wins: of the two mistakes, leaving access on is the worse one.
+_PHASE_RANK = {"entitled": 0, "past_due": 1, "suspended": 2, "terminal": 3}
+#: How much a subscription in this phase counts when choosing the one the account follows.
+_CLASS_OF_PHASE = {"entitled": 2, "past_due": 2, "suspended": 1, "terminal": 0}
+_STATUS_OF_PHASE = {
+    "entitled": "active", "past_due": "past_due", "suspended": "cancelled", "terminal": "cancelled",
+}
+
+
+def _phase_for(status: str, tier: str | None) -> str:
+    """The subscription phase an (account status, tier) pair describes."""
+    if status == "active":
+        return "entitled"
+    if status == "past_due":
+        return "past_due"
+    return "terminal" if tier == "free" else "suspended"
+
+
+def _effective_phase(sub: sqlite3.Row, failed_at: int) -> str:
+    """A payment failure at or after the last state report makes an entitled sub past due.
+
+    Kept as its own timestamp (not a state) so that a late failure can never reinstate
+    a subscription that ended, and a failure delivered early is not lost.
+    """
+    if sub["phase"] == "entitled" and failed_at and failed_at >= sub["state_at"]:
+        return "past_due"
+    return str(sub["phase"])
+
+
 def _parse_stamp(text: str) -> datetime:
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
@@ -212,6 +242,31 @@ CREATE TABLE IF NOT EXISTS orphan_states (
     tier               TEXT,
     event_created      INTEGER NOT NULL,
     recorded_at        TEXT NOT NULL
+);
+-- What each of a customer's subscriptions last said, kept apart so that an event about
+-- one subscription can never rewrite the state of another, and so that delivery order
+-- does not matter: every column is a join (newest wins, ties go to the more restrictive).
+-- ``accounts`` stays the row everything reads; it is derived from these on each event.
+CREATE TABLE IF NOT EXISTS subscription_states (
+    stripe_customer_id     TEXT NOT NULL,
+    stripe_subscription_id TEXT NOT NULL,
+    born        INTEGER NOT NULL DEFAULT 0,
+    state_at    INTEGER NOT NULL DEFAULT 0,
+    phase       TEXT NOT NULL CHECK (phase IN ('entitled','past_due','suspended','terminal')),
+    tier        TEXT NOT NULL DEFAULT '',
+    tier_at     INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (stripe_customer_id, stripe_subscription_id)
+);
+-- The newest failed invoice per subscription. Apart from the state above because an
+-- invoice can be reported before the subscription it belongs to is known, and because it
+-- must never be able to create or reinstate one.
+CREATE TABLE IF NOT EXISTS subscription_failures (
+    stripe_customer_id     TEXT NOT NULL,
+    stripe_subscription_id TEXT NOT NULL,
+    failed_at   INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (stripe_customer_id, stripe_subscription_id)
 );
 CREATE TABLE IF NOT EXISTS entitlement_reconciliations (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -807,8 +862,211 @@ class AccountStore:
         return [a for a in self.list_accounts()
                 if a.is_manual_grant and normal_email(a.email) == wanted]
 
+    # -- per-subscription state ------------------------------------------
     @staticmethod
+    def _sub_row(db: sqlite3.Connection, customer: str, sub: str) -> sqlite3.Row | None:
+        return db.execute(
+            "SELECT * FROM subscription_states "
+            "WHERE stripe_customer_id=? AND stripe_subscription_id=?", (customer, sub),
+        ).fetchone()
+
+    @classmethod
+    def _sync_from_account(cls, db: sqlite3.Connection, row: sqlite3.Row) -> None:
+        """Make the account's own subscription agree with the account row.
+
+        The row is what every request reads, and other writers touch it without an
+        event: the reconciler, an operator, an older build. Entering an event, a
+        subscription whose record is missing (an account that predates this table) or
+        disagrees with the row is re-read from the row, so the row stays the truth.
+        """
+        customer = row["stripe_customer_id"]
+        sub = row["stripe_subscription_id"]
+        existing = cls._sub_row(db, customer, sub)
+        phase = _phase_for(row["status"], row["tier"])
+        at = row["last_event_at"]
+        now = format_utc(utc_now())
+        if existing is None:
+            db.execute(
+                "INSERT INTO subscription_states (stripe_customer_id, stripe_subscription_id, "
+                "born, state_at, phase, tier, tier_at, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (customer, sub, 0 if phase == "terminal" else at, at, phase, row["tier"], at, now),
+            )
+            return
+        if existing["phase"] == "terminal" and existing["state_at"] > at:
+            # The record holds an end newer than anything that wrote the row: the row is
+            # the older word here and must not bring the subscription back.
+            return
+        eff = _effective_phase(existing, cls._failed_at(db, customer, sub))
+        tier = "free" if eff == "terminal" else (existing["tier"] or row["tier"])
+        if (_STATUS_OF_PHASE[eff], tier) != (row["status"], row["tier"]):
+            db.execute(
+                "UPDATE subscription_states SET phase=?, tier=?, state_at=?, tier_at=?, "
+                "recorded_at=? WHERE stripe_customer_id=? AND stripe_subscription_id=?",
+                (phase, row["tier"], at, at, now, customer, sub),
+            )
+            db.execute(
+                "DELETE FROM subscription_failures "
+                "WHERE stripe_customer_id=? AND stripe_subscription_id=?", (customer, sub))
+
+    @classmethod
+    def _join_state(
+        cls, db: sqlite3.Connection, customer: str, sub: str, *,
+        status: str, tier: str | None, created: int,
+    ) -> str:
+        """Join one subscription state report into the record.
+
+        Returns ``new`` (first report of this subscription), ``state`` (its phase or tier
+        changed), ``born`` (only the purchase time moved earlier) or ``same``.
+
+        Newest report wins; at the same second the more restrictive phase wins; a
+        report with no time (``created == 0``) is taken as the newest. The tier is
+        joined on its own clock, so a report that carries none (a payment failure, a
+        pause) never erases the tier an older report did.
+        """
+        phase = _phase_for(status, tier)
+        now = format_utc(utc_now())
+        cur = cls._sub_row(db, customer, sub)
+        if cur is None:
+            db.execute(
+                "INSERT INTO subscription_states (stripe_customer_id, stripe_subscription_id, "
+                "born, state_at, phase, tier, tier_at, recorded_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (customer, sub, 0 if phase == "terminal" else max(created, 0), max(created, 0),
+                 phase, tier or "",
+                 max(created, 0) if tier is not None else 0, now),
+            )
+            return "new"
+        newer = (
+            created == 0 or created > cur["state_at"]
+            or (created == cur["state_at"] and _PHASE_RANK[phase] > _PHASE_RANK[cur["phase"]])
+        )
+        new_phase = phase if newer else cur["phase"]
+        new_state_at = max(cur["state_at"], created) if newer else cur["state_at"]
+        new_tier, new_tier_at = cur["tier"], cur["tier_at"]
+        if tier is not None and (created == 0 or created > cur["tier_at"]
+                                 or (created == cur["tier_at"] and newer)):
+            new_tier, new_tier_at = tier, max(cur["tier_at"], created)
+        # When the subscription was bought: the earliest report that was not its end. A
+        # cancellation alone says nothing about when something began.
+        born = min((b for b in (cur["born"], created if phase != "terminal" else 0) if b),
+                   default=0)
+        state_changed = (new_phase, new_state_at, new_tier, new_tier_at) != (
+            cur["phase"], cur["state_at"], cur["tier"], cur["tier_at"])
+        changed = state_changed or born != cur["born"]
+        if changed:
+            db.execute(
+                "UPDATE subscription_states SET phase=?, state_at=?, tier=?, tier_at=?, born=?, "
+                "recorded_at=? WHERE stripe_customer_id=? AND stripe_subscription_id=?",
+                (new_phase, new_state_at, new_tier, new_tier_at, born, now, customer, sub),
+            )
+        return "state" if state_changed else ("born" if changed else "same")
+
+    @staticmethod
+    def _failed_at(db: sqlite3.Connection, customer: str, sub: str) -> int:
+        found = db.execute(
+            "SELECT failed_at FROM subscription_failures "
+            "WHERE stripe_customer_id=? AND stripe_subscription_id=?", (customer, sub),
+        ).fetchone()
+        return int(found["failed_at"]) if found else 0
+
+    @classmethod
+    def _join_failure(cls, db: sqlite3.Connection, customer: str, sub: str, created: int) -> bool:
+        """Remember the newest failed invoice of a subscription. True if it is newer."""
+        if created <= cls._failed_at(db, customer, sub):
+            return False
+        db.execute(
+            "INSERT OR REPLACE INTO subscription_failures "
+            "(stripe_customer_id, stripe_subscription_id, failed_at, recorded_at) "
+            "VALUES (?,?,?,?)",
+            (customer, sub, created, format_utc(utc_now())),
+        )
+        return True
+
+    @classmethod
+    def _adopt_placeholder(cls, db: sqlite3.Connection, customer: str, sub: str) -> None:
+        """A state recorded before any subscription id was known belongs to the first id seen."""
+        if sub and cls._sub_row(db, customer, sub) is None \
+                and cls._sub_row(db, customer, "") is not None:
+            db.execute(
+                "UPDATE subscription_states SET stripe_subscription_id=? "
+                "WHERE stripe_customer_id=? AND stripe_subscription_id=''",
+                (sub, customer),
+            )
+            db.execute(
+                "UPDATE OR IGNORE subscription_failures SET stripe_subscription_id=? "
+                "WHERE stripe_customer_id=? AND stripe_subscription_id=''",
+                (sub, customer),
+            )
+
+    @staticmethod
+    def _current_state(
+        db: sqlite3.Connection, customer: str, fallback_tier: str
+    ) -> dict[str, Any] | None:
+        """What the customer's subscriptions add up to, or None if none is recorded.
+
+        The current subscription is the newest-bought one that is paying (``active`` or
+        ``past_due``); if none is, the newest-bought one that is paused; if none is, the
+        newest-bought one that has ended. A purchase supersedes the subscriptions before it
+        only among equals: cancelling or pausing the newest plan must not lock out a customer
+        who still pays for an older one, which is what Stripe's own state (and the
+        reconciler) says. The account is a function of the recorded states alone, so the
+        order events arrived in cannot matter.
+        """
+        subs = db.execute(
+            "SELECT * FROM subscription_states WHERE stripe_customer_id=?", (customer,)
+        ).fetchall()
+        if not subs:
+            return None
+        failed = {
+            r["stripe_subscription_id"]: int(r["failed_at"])
+            for r in db.execute(
+                "SELECT stripe_subscription_id, failed_at FROM subscription_failures "
+                "WHERE stripe_customer_id=?", (customer,))
+        }
+
+        def phase_of(r: sqlite3.Row) -> str:
+            return _effective_phase(r, failed.get(r["stripe_subscription_id"], 0))
+
+        # Paying (active, past_due) beats paused beats ended; within each, the newest-bought
+        # (then the latest report). The same view the reconciler takes of Stripe.
+        cur = max(subs, key=lambda r: (
+            _CLASS_OF_PHASE[phase_of(r)], r["born"], r["state_at"], r["stripe_subscription_id"]))
+        phase = phase_of(cur)
+        failure = failed.get(cur["stripe_subscription_id"], 0)
+        return {
+            "sub": cur["stripe_subscription_id"],
+            "status": _STATUS_OF_PHASE[phase],
+            "tier": "free" if phase == "terminal" else (cur["tier"] or fallback_tier),
+            "since": failure if cur["phase"] == "entitled" and phase == "past_due"
+            else cur["state_at"],
+            "at": max(cur["state_at"], failure),
+        }
+
+    @classmethod
+    def _write_current(
+        cls, db: sqlite3.Connection, row: sqlite3.Row, event_created: int
+    ) -> str:
+        """Re-derive the account from its subscriptions. Returns the current subscription id."""
+        state = cls._current_state(db, row["stripe_customer_id"], row["tier"])
+        assert state is not None
+        if state["status"] != "past_due":
+            since = 0
+        elif row["status"] == "past_due" and row["past_due_since"]:
+            since = row["past_due_since"]
+        else:
+            since = state["since"] or event_created or int(utc_now().timestamp())
+        db.execute(
+            "UPDATE accounts SET status=?, tier=?, stripe_subscription_id=?, updated_at=?, "
+            "last_event_at=?, past_due_since=? WHERE id=?",
+            (state["status"], state["tier"], state["sub"] or row["stripe_subscription_id"],
+             format_utc(utc_now()), max(row["last_event_at"], event_created), since, row["id"]),
+        )
+        return str(state["sub"])
+
+    @classmethod
     def _apply_state_db(
+        cls,
         db: sqlite3.Connection,
         customer: str,
         status: str,
@@ -816,53 +1074,70 @@ class AccountStore:
         event_created: int,
         only_from: frozenset[str] | None = None,
         subscription_id: str = "",
+        *,
+        ours: bool = True,
+        payment_failure: bool = False,
     ) -> str:
+        """Apply one report about one subscription to the account that owns the customer.
+
+        Returns ``unknown_customer``, ``not_ours`` (a subscription that is neither one of
+        our plans nor one this customer is known to hold), ``not_applicable``,
+        ``stale`` (the report is older than what is recorded for that subscription),
+        ``other_subscription`` (recorded, but the account's current subscription is a
+        different one, so the account did not change) or ``applied``.
+        """
         row = db.execute(
-            "SELECT id, status, last_event_at, past_due_since, stripe_subscription_id "
-            "FROM accounts "
-            "WHERE stripe_customer_id = ?",
-            (customer,),
+            "SELECT * FROM accounts WHERE stripe_customer_id = ?", (customer,)
         ).fetchone() if customer else None
         if row is None:
+            if payment_failure and customer and subscription_id:
+                # The invoice can overtake the checkout that creates the account.
+                cls._join_failure(db, customer, subscription_id, event_created)
             return "unknown_customer"
-        if (status == "cancelled" and subscription_id and row["stripe_subscription_id"]
-                and subscription_id != row["stripe_subscription_id"]):
-            # The customer holds a different, current subscription (an upgrade bought
-            # as a new checkout). Ending the old one must not end this account's access.
-            return "other_subscription"
-        if event_created and row["last_event_at"] > event_created:
-            return "stale"
-        if (event_created and row["last_event_at"] == event_created
-                and row["status"] == "cancelled" and status != "cancelled"):
-            # Stripe stamps events to the second. When a cancellation and a
-            # "still active" event share one, arrival order is not causal order;
-            # of the two mistakes, leaving access on is the worse one.
-            return "stale"
-        if only_from is not None and row["status"] not in only_from:
+        cls._sync_from_account(db, row)
+        sub = subscription_id or row["stripe_subscription_id"]
+        known = cls._sub_row(db, customer, sub) is not None
+        if subscription_id and not known and not ours and not payment_failure:
+            # Another product's subscription on the same Stripe customer:
+            # nothing about our plans.
+            return "not_ours"
+        if (only_from is not None and sub == row["stripe_subscription_id"]
+                and row["status"] not in only_from):
+            if payment_failure:
+                # The account does not move, but the failure is a fact about the subscription:
+                # if it later turns out to have been entitled at that moment (a revival that
+                # overtook this invoice), the account must read past_due whatever the order.
+                cls._join_failure(db, customer, sub, event_created)
             return "not_applicable"
-        now = format_utc(utc_now())
-        last = max(row["last_event_at"], event_created)
-        # When the account entered past_due, so reconciliation can end a
-        # past_due that Stripe never resolves. Kept across repeat past_due events.
-        if status != "past_due":
-            since = 0
-        elif row["status"] == "past_due" and row["past_due_since"]:
-            since = row["past_due_since"]
+        if payment_failure:
+            if not cls._join_failure(db, customer, sub, event_created):
+                return "stale"
+            if not known:
+                # An invoice for a subscription not seen yet (or for another product's):
+                # kept, and it counts only if that subscription turns out to be ours.
+                return "other_subscription"
+            joined = "state"
         else:
-            since = event_created or int(utc_now().timestamp())
-        if tier is None:
-            db.execute(
-                "UPDATE accounts SET status=?, updated_at=?, last_event_at=?, "
-                "past_due_since=? WHERE id=?",
-                (status, now, last, since, row["id"]),
-            )
-        else:
-            db.execute(
-                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=?, "
-                "past_due_since=? WHERE id=?",
-                (status, tier, now, last, since, row["id"]),
-            )
-        return "applied"
+            cls._adopt_placeholder(db, customer, sub)
+            joined = cls._join_state(
+                db, customer, sub, status=status, tier=tier, created=event_created)
+            if joined == "same":
+                return "stale"
+        current = cls._write_current(
+            db, db.execute("SELECT * FROM accounts WHERE id=?", (row["id"],)).fetchone(),
+            event_created if joined != "born" else 0)
+        after = db.execute("SELECT * FROM accounts WHERE id=?", (row["id"],)).fetchone()
+        if joined == "born" and (after["status"], after["tier"], after["stripe_subscription_id"]) \
+                == (row["status"], row["tier"], row["stripe_subscription_id"]):
+            # Only the purchase time moved: the report itself is older than what is on record.
+            return "stale"
+        if sub == current:
+            return "applied"
+        # About a subscription the account does not follow; but if this report is what moved
+        # the account (the paying subscription ended and a paused one now stands), it applied.
+        moved = (after["status"], after["tier"], after["stripe_subscription_id"]) != (
+            row["status"], row["tier"], row["stripe_subscription_id"])
+        return "applied" if moved else "other_subscription"
 
     def set_status(
         self,
@@ -908,6 +1183,16 @@ class AccountStore:
             (format_utc(now - _ORPHAN_RETENTION),),
         )
         db.execute(
+            "DELETE FROM subscription_states WHERE recorded_at < ? AND stripe_customer_id "
+            "NOT IN (SELECT stripe_customer_id FROM accounts WHERE stripe_customer_id <> '')",
+            (format_utc(now - _ORPHAN_RETENTION),),
+        )
+        db.execute(
+            "DELETE FROM subscription_failures WHERE recorded_at < ? AND stripe_customer_id "
+            "NOT IN (SELECT stripe_customer_id FROM accounts WHERE stripe_customer_id <> '')",
+            (format_utc(now - _ORPHAN_RETENTION),),
+        )
+        db.execute(
             "DELETE FROM pending_keys WHERE created_at < ?",
             (format_utc(now - PENDING_KEY_TTL),),
         )
@@ -924,12 +1209,22 @@ class AccountStore:
         hold_if_unknown: bool,
         only_from: frozenset[str] | None = None,
         stripe_subscription_id: str = "",
+        ours: bool = True,
+        payment_failure: bool = False,
     ) -> str:
         """Apply one subscription state change, at most once per event id.
 
-        Returns ``duplicate``, ``applied``, ``stale``, ``other_subscription`` (a
-        cancellation of a subscription that is not the account's current one),
-        ``not_applicable``
+        Each report is recorded against the subscription it is about; the account is
+        derived from the customer's subscriptions, so the order in which Stripe delivers
+        events does not change the outcome. An event with no ``stripe_subscription_id``
+        is about the account's current subscription. ``ours`` is false for a
+        subscription whose price is none of our plans: unless this customer is already
+        known to hold it, it is ignored entirely. ``payment_failure`` records an invoice
+        failure against the subscription (``status`` and ``tier`` are not used then).
+
+        Returns ``duplicate``, ``applied``, ``stale``, ``other_subscription`` (about a
+        subscription that is not the account's current one: recorded, account unchanged),
+        ``not_ours``, ``not_applicable``
         (``only_from`` names the statuses this change may start from, and the
         account is in another), ``held`` or ``unknown_customer``. ``held`` means the customer has no account yet
         (``customer.subscription.updated`` can overtake
@@ -944,9 +1239,13 @@ class AccountStore:
             self._purge_db(db)
             result = self._apply_state_db(
                 db, stripe_customer_id, status, tier, event_created, only_from,
-                stripe_subscription_id,
+                stripe_subscription_id, ours=ours, payment_failure=payment_failure,
             )
             if result == "unknown_customer" and hold_if_unknown and stripe_customer_id:
+                self._adopt_placeholder(db, stripe_customer_id, stripe_subscription_id)
+                self._join_state(
+                    db, stripe_customer_id, stripe_subscription_id,
+                    status=status, tier=tier, created=event_created)
                 held = db.execute(
                     "SELECT event_created FROM orphan_states WHERE stripe_customer_id = ?",
                     (stripe_customer_id,),
@@ -982,6 +1281,10 @@ class AccountStore:
         event for the same session) can neither mint a second key nor re-arm a
         handover that was already collected. Returns ``{"result": "duplicate"}``
         for a repeat, otherwise ``{"result": "granted", "account_id": ...}``.
+
+        The purchased subscription is recorded alongside the customer's others and the
+        account derived from all of them, so a checkout that arrives after the
+        cancellation of an older subscription still grants what was bought.
         """
         marker = f"session:{session_id}"
         with self._txn() as db:
@@ -995,29 +1298,19 @@ class AccountStore:
                 return {"result": "duplicate"}
             self._purge_db(db)
 
-            row = self._upsert_db(
-                db, email=email, tier=tier, company=company,
-                stripe_customer_id=stripe_customer_id,
-                stripe_subscription_id=stripe_subscription_id,
-                status="active", account_id="", event_created=event_created,
-            )
+            if not stripe_customer_id:
+                row = self._upsert_db(
+                    db, email=email, tier=tier, company=company,
+                    stripe_customer_id="", stripe_subscription_id=stripe_subscription_id,
+                    status="active", account_id="", event_created=event_created,
+                )
+            else:
+                row = self._grant_subscription(
+                    db, email=email, company=company, tier=tier,
+                    customer=stripe_customer_id, sub=stripe_subscription_id,
+                    created=event_created,
+                )
             account_id = row["id"]
-
-            # A subscription change that arrived before this event, and is
-            # newer than it, wins. Anything older is already superseded.
-            orphan = db.execute(
-                "SELECT * FROM orphan_states WHERE stripe_customer_id = ?",
-                (stripe_customer_id,),
-            ).fetchone() if stripe_customer_id else None
-            if orphan is not None:
-                self._apply_state_db(
-                    db, stripe_customer_id, orphan["status"], orphan["tier"],
-                    orphan["event_created"],
-                )
-                db.execute(
-                    "DELETE FROM orphan_states WHERE stripe_customer_id = ?",
-                    (stripe_customer_id,),
-                )
 
             key = self._issue_key_db(db, account_id, "issued at checkout")
             db.execute(
@@ -1028,6 +1321,52 @@ class AccountStore:
             self._mark_event(db, event_id, "checkout.session.completed")
             self._mark_event(db, marker, "session")
         return {"result": "granted", "account_id": account_id}
+
+    @classmethod
+    def _grant_subscription(
+        cls, db: sqlite3.Connection, *, email: str, company: str, tier: str, customer: str,
+        sub: str, created: int,
+    ) -> sqlite3.Row:
+        existing = db.execute(
+            "SELECT * FROM accounts WHERE stripe_customer_id = ?", (customer,)
+        ).fetchone()
+        if existing is not None:
+            cls._sync_from_account(db, existing)
+        elif cls._sub_row(db, customer, sub) is None:
+            # A state held by an older build before this table existed.
+            orphan = db.execute(
+                "SELECT * FROM orphan_states WHERE stripe_customer_id = ?", (customer,)
+            ).fetchone()
+            if orphan is not None and not db.execute(
+                "SELECT 1 FROM subscription_states WHERE stripe_customer_id=?", (customer,)
+            ).fetchone():
+                cls._join_state(db, customer, "", status=orphan["status"], tier=orphan["tier"],
+                                created=orphan["event_created"])
+        cls._adopt_placeholder(db, customer, sub)
+        cls._join_state(db, customer, sub, status="active", tier=tier, created=created)
+        db.execute("DELETE FROM orphan_states WHERE stripe_customer_id = ?", (customer,))
+        if existing is None:
+            now = format_utc(utc_now())
+            state = cls._current_state(db, customer, tier)
+            assert state is not None
+            new_id = _new_id("acc")
+            db.execute(
+                "INSERT INTO accounts (id, email, company, tier, stripe_customer_id, "
+                "stripe_subscription_id, status, created_at, updated_at, last_event_at, "
+                "past_due_since) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (new_id, email, company, state["tier"], customer, state["sub"],
+                 state["status"], now, now, max(created, state["at"], 0),
+                 (state["since"] or created) if state["status"] == "past_due" else 0),
+            )
+            return db.execute("SELECT * FROM accounts WHERE id = ?", (new_id,)).fetchone()
+        db.execute(
+            "UPDATE accounts SET email=?, company=? WHERE id=?",
+            (email or existing["email"], company or existing["company"], existing["id"]),
+        )
+        cls._write_current(
+            db, db.execute("SELECT * FROM accounts WHERE id=?", (existing["id"],)).fetchone(),
+            created)
+        return db.execute("SELECT * FROM accounts WHERE id = ?", (existing["id"],)).fetchone()
 
     @staticmethod
     def _row_to_account(row: sqlite3.Row) -> Account:
@@ -1091,7 +1430,8 @@ class AccountStore:
 
         The change and its row in ``entitlement_reconciliations`` are one
         transaction: both happen or neither does. Nothing else on the account
-        is touched. Refuses (changing nothing) for the operator, an account
+        is touched except the subscription it follows, which becomes the one the finding
+        names. Refuses (changing nothing) for the operator, an account
         with no Stripe customer, a tier that is not ``free`` or purchasable,
         and:
 
@@ -1133,11 +1473,13 @@ class AccountStore:
             else:
                 since = snapshot_at
             now = format_utc(utc_now())
+            # The account follows the subscription Stripe says it is paying for: left on
+            # another one, that one's own end would be ignored as "not the current one".
             db.execute(
-                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=?, "
-                "past_due_since=? WHERE id=?",
-                (new_status, new_tier, now, max(row["last_event_at"], horizon), since,
-                 row["id"]),
+                "UPDATE accounts SET status=?, tier=?, stripe_subscription_id=?, updated_at=?, "
+                "last_event_at=?, past_due_since=? WHERE id=?",
+                (new_status, new_tier, stripe_subscription_id or row["stripe_subscription_id"],
+                 now, max(row["last_event_at"], horizon), since, row["id"]),
             )
             db.execute(
                 "INSERT INTO entitlement_reconciliations (run_id, account_id, category, "
@@ -1271,6 +1613,11 @@ class AccountStore:
 
     def resolve_key(self, key: str) -> Principal | None:
         """Look up a presented key. Returns None for unknown or revoked keys."""
+        # An unknown or revoked key (a guess, a flood) is answered from a read: the write
+        # lock, which every billing event and every metered call queues for, is taken only
+        # for a key that exists, to record its use.
+        if self.peek_key(key) is None:
+            return None
         digest = hash_key(key)
         with self._txn() as db:
             row = db.execute(
