@@ -735,3 +735,79 @@ class TestClockIntegrity:
                 "c1", AWARE - timedelta(days=1), "affected users", "notice", ACTOR
             )
         assert reg.case("c1").users_informed_at is None
+
+
+class TestClockIntegrityFollowUps:
+    """Defects found reviewing the earliest-wins / refusal changes above."""
+
+    @staticmethod
+    def _register(tmp_path):
+        return Art14Register(EvidenceLedger(tmp_path / "ledger.db"))
+
+    def test_an_unsubmittable_filing_does_not_shadow_a_later_complete_one(self, tmp_path):
+        """The empty-payload filing is evidence, but the stage is filed when the complete
+        one is, so a late valid filing cannot hide behind an early invalid one."""
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        TestClockIntegrity._opened(reg)
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=5), {}, ACTOR)
+        valid = AWARE + timedelta(hours=30)
+        _, result = reg.record_filing(
+            "c1", Stage.EARLY_WARNING, valid, _early_warning_payload(), ACTOR)
+        assert result.submittable
+        assert reg.case("c1").filings[Stage.EARLY_WARNING.value] == valid
+        assert reg.case("c1").deadlines.early_warning.status == "filed_late"
+
+    def test_an_unsubmittable_filing_still_counts_when_nothing_valid_exists(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        TestClockIntegrity._opened(reg)
+        at = AWARE + timedelta(hours=5)
+        reg.record_filing("c1", Stage.EARLY_WARNING, at, {}, ACTOR)
+        assert reg.case("c1").filings[Stage.EARLY_WARNING.value] == at
+
+    def test_a_user_notice_recorded_before_awareness_is_refused_when_awareness_follows(
+            self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        reg.record_signal(
+            "c1", Signal(AWARE, SignalChannel.CVD_INBOX, "m.braun", "report received"), ACTOR)
+        reg.record_user_notification("c1", AWARE - timedelta(days=3), "all", "early", ACTOR)
+        with pytest.raises(CaseError, match="before the manufacturer became aware"):
+            reg.record_awareness(
+                "c1", Awareness(AWARE, AWARE, AWARE, "m.braun", "reasonable certainty"),
+                Track.VULNERABILITY, ACTOR)
+        assert reg.case("c1").awareness is None
+
+    def test_a_user_notice_after_awareness_still_lets_awareness_through(self, tmp_path):
+        from datetime import timedelta
+
+        reg = self._register(tmp_path)
+        reg.record_signal(
+            "c1", Signal(AWARE, SignalChannel.CVD_INBOX, "m.braun", "report received"), ACTOR)
+        reg.record_user_notification("c1", AWARE + timedelta(hours=1), "all", "ok", ACTOR)
+        reg.record_awareness(
+            "c1", Awareness(AWARE, AWARE, AWARE, "m.braun", "reasonable certainty"),
+            Track.VULNERABILITY, ACTOR)
+        assert reg.case("c1").awareness is not None
+
+    def test_triage_is_guarded_against_a_concurrent_write(self, tmp_path):
+        """record_triage reads the case then appends; a write between the two must make it
+        refuse rather than record a decision on a case that has moved."""
+        reg = self._register(tmp_path)
+        TestClockIntegrity._opened(reg)
+        original = reg._load_at_head
+        other = Art14Register(reg.ledger)  # a second writer on the same ledger
+
+        def moved(case_id):
+            case, head = original(case_id)
+            # a concurrent write lands after the read
+            other.record_user_notification("c1", AWARE, "all", "concurrent", ACTOR)
+            return case, head
+
+        reg._load_at_head = moved
+        with pytest.raises(CaseError, match="changed while"):
+            reg.record_triage("c1", {}, ACTOR, reasoning="r")

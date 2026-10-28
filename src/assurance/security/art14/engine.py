@@ -245,6 +245,13 @@ class Art14Register:
                 f"{format_utc(case.awareness.established_at)}. Moving it would move a legal "
                 "deadline; supersede it explicitly if it was wrong."
             )
+        if case.users_informed_at is not None and case.users_informed_at < awareness.established_at:
+            raise CaseError(
+                "users were recorded as informed at "
+                f"{format_utc(case.users_informed_at)}, before this awareness "
+                f"({format_utc(awareness.established_at)}). Users cannot be informed before "
+                "the manufacturer became aware; correct one of the two records."
+            )
         if awareness.established_at < case.signal.received_at:
             raise CaseError(
                 "awareness cannot precede the signal that produced it "
@@ -283,7 +290,7 @@ class Art14Register:
         reopen_trigger: str = "",
     ) -> tuple[Evidence, TriageResult]:
         """Work the decision path and record the outcome, whichever way it goes."""
-        case = self._load(case_id)
+        case, head = self._load_at_head(case_id)
         if case.track is None:
             raise CaseError(
                 f"case {case_id} has no track. Record awareness with a track first; the tests "
@@ -323,6 +330,7 @@ class Art14Register:
                 else ValidationState.VERIFIED
             ),
             checks_skipped=tuple(skipped),
+            expect_head=head,
         )
         return evidence, result
 
@@ -468,6 +476,8 @@ class Art14Register:
         """The case and the seq of its newest entry (0 for none), read together."""
         case = Case(case_id=case_id)
         head = 0
+        filings_valid: dict[str, datetime] = {}
+        filings_any: dict[str, datetime] = {}
         for entry in self.ledger.entries(subject=case_id):
             head = entry.seq
             body = entry.payload.get("body", {})
@@ -502,13 +512,20 @@ class Art14Register:
                     case.measure_available_at = at
             elif kind == CASE_KIND["filing"]:
                 at = parse_utc(body["submitted_at"])
-                prior = case.filings.get(body["stage"])
-                if prior is None or at < prior:
-                    case.filings[body["stage"]] = at
+                stage = body["stage"]
+                # Earliest wins, but a payload that failed validation must not shadow a
+                # later complete filing of the same stage. It still counts when nothing
+                # valid exists: it was recorded as submitted, and dropping it could hide
+                # a deadline that runs from it (the incident final report).
+                valid = (body.get("validation") or {}).get("submittable", True)
+                bucket = filings_valid if valid else filings_any
+                if stage not in bucket or at < bucket[stage]:
+                    bucket[stage] = at
             elif kind == CASE_KIND["user_notice"]:
                 at = parse_utc(body["at"])
                 if case.users_informed_at is None or at < case.users_informed_at:
                     case.users_informed_at = at
+        case.filings = {**filings_any, **filings_valid}
         return case, head
 
     def case(self, case_id: str) -> Case:
