@@ -248,7 +248,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
     try:
         config = KitConfig.from_json(args.config)
     except KitError:
-        if not placeholders:
+        # Only when the refusal IS kit.json's own template values; any other fault in
+        # kit.json is reported as itself.
+        if not any(p["file"] == args.config.name for p in placeholders):
             raise
         # Not a crash and not one refusal at a time: everything still to fill in,
         # named once. `check` only reads, and says so.

@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import Any
 
 from assurance.core.identity import format_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.declaration import (
     DeclarationOfConformity,
@@ -454,11 +455,11 @@ def render_report(data: ReportInput) -> str:
     # The count is of functions with a verification recorded and no recorded change
     # since. How much that verification is worth is its tier, so the tile shows the
     # weakest tier among them and is coloured good only when that tier is validated.
-    tier_order = ("profile", "community", "validated", "certified")
-    floors = [r.coverage.evidence_tier_floor for r in fleet.records
-              if r.coverage.evidence_tier_floor in tier_order]
-    floor = min(floors, key=tier_order.index) if floors else ""
-    strong = floor in ("validated", "certified")
+    floors = [AssuranceTier(r.coverage.evidence_tier_floor) for r in fleet.records
+              if r.coverage.evidence_tier_floor in {t.value for t in AssuranceTier}]
+    weakest = min(floors, key=lambda t: t.rank) if floors else None
+    floor = weakest.value if weakest else ""
+    strong = weakest is not None and weakest.may_claim_physical_behaviour
     parts.append(_tile(
         functions - uncovered,
         "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),

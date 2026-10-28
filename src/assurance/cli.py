@@ -1,4 +1,9 @@
-"""Top-level command line: ``python -m assurance <domain> ...``."""
+"""Top-level command line: ``python -m assurance <domain> ...``.
+
+If the reader of the output goes away (``... | head``), the command ends quietly with exit
+141 (128 + SIGPIPE, as a shell reports it) and no traceback. Whatever it seals is sealed
+before it prints, so nothing is lost; the exit code is not the command's verdict.
+"""
 
 from __future__ import annotations
 

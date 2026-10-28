@@ -51,7 +51,7 @@ from assurance.core.evidence import Actor  # noqa: E402
 from assurance.fleet.registry import Fleet  # noqa: E402
 from assurance.evidence.ledger import EvidenceLedger  # noqa: E402
 from assurance.machinery.intervention import Intervention, InterventionKind  # noqa: E402
-from assurance.machinery.manifest import ManifestSource  # noqa: E402
+from assurance.machinery.manifest import HashSource, ManifestSource  # noqa: E402
 from assurance.machinery.record import record_manifest  # noqa: E402
 from assurance.watch.config import WatchConfig  # noqa: E402
 from assurance.watch.runner import run_watch  # noqa: E402
@@ -73,8 +73,10 @@ def build_plant(work: Path, ledger_path: Path, name: str, firmware: dict[str, by
         write_export(plant / serial, stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181", fw=fw)
     (plant / "watch.json").write_text(json.dumps({
         "watch_id": f"WATCH-{name.upper()}", "max_age_hours": 168,
-        "targets": [{"serial": s, "plan": "plan.json", "root": s, "site": f"Plant {name}", "country": "DE"}
-                    for s in firmware],
+        # read_from_machine: the seed plays a watch running ON the machine. An export folder is
+        # not labelled that implicitly any more; the operator asserts it.
+        "targets": [{"serial": s, "plan": "plan.json", "root": s, "site": f"Plant {name}",
+                     "country": "DE", "read_from_machine": True} for s in firmware],
     }))
     ledger = EvidenceLedger(ledger_path)
     run_watch(WatchConfig.from_json(plant / "watch.json"), ledger, now=T0)
@@ -150,8 +152,10 @@ def main(out: str, workdir: str) -> int:
     (work / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-E2E", "max_age_hours": 168,
         "targets": [
-            {"serial": "0412", "plan": "plan.json", "root": "0412", "site": "Plant 2", "country": "DE"},
-            {"serial": "0501", "plan": "plan.json", "root": "0501", "site": "Plant 7", "country": "IT"},
+            {"serial": "0412", "plan": "plan.json", "root": "0412", "site": "Plant 2",
+             "country": "DE", "read_from_machine": True},
+            {"serial": "0501", "plan": "plan.json", "root": "0501", "site": "Plant 7",
+             "country": "IT", "read_from_machine": True},
         ],
     }))
     config = WatchConfig.from_json(work / "watch.json")
@@ -175,7 +179,8 @@ def main(out: str, workdir: str) -> int:
     write_export(work / "0900", stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181")
     hand = collect(CollectionPlan.from_dict(plan_dict()), work / "0900", serial="0900",
                    taken_by=Actor("m.tech", "service technician"), site="Plant 9", country="DE",
-                   source=ManifestSource.AS_FOUND, taken_at=T0)
+                   source=ManifestSource.AS_FOUND, taken_at=T0,
+                   hash_source=HashSource.READ_FROM_MACHINE)   # the seed plays an on-machine collector
     record_manifest(EvidenceLedger(tenant_ledger_path(id_d)), hand.manifest)
 
     # G: two healthy, verified machines with different firmware. The advisories are built from
@@ -332,8 +337,8 @@ def report(out: str, workdir: str, api_url: str) -> int:
         write_export(plant / serial, stamp="2026-10-01T06:00:00Z", operator="m.tech", seq="4181")
     (plant / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-E2E-PLANT", "max_age_hours": 168,
-        "targets": [{"serial": s, "plan": "plan.json", "root": s, "site": "Plant E", "country": "DE"}
-                    for s in E_SERIALS],
+        "targets": [{"serial": s, "plan": "plan.json", "root": s, "site": "Plant E",
+                     "country": "DE", "read_from_machine": True} for s in E_SERIALS],
     }))
     config = WatchConfig.from_json(plant / "watch.json")
     local = EvidenceLedger(plant / "register.db")
