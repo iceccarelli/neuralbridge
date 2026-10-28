@@ -47,6 +47,7 @@ from assurance.machinery.manifest import (
 )
 
 __all__ = [
+    "OPERATOR_ASSERTION",
     "DEFAULT_MAX_SECONDS",
     "MAX_FILES_PER_ITEM",
     "MAX_ITEM_BYTES",
@@ -64,6 +65,13 @@ MAX_FILES_PER_ITEM = 10_000
 MAX_ITEM_BYTES = 4 * 1024**3
 MAX_VERSION_SCAN_BYTES = 8 * 1024**2
 DEFAULT_MAX_SECONDS = 1800.0
+
+#: Recorded wherever a collection is labelled ``read_from_machine``. The label is
+#: the operator's claim, made with an explicit flag; nothing in a folder of files can
+#: show which machine, if any, they came off.
+OPERATOR_ASSERTION = (
+    "OPERATOR ASSERTION (--read-from-machine): the operator states the collector "
+    "ran on the machine itself; this software cannot check that")
 
 #: Indirection so a test can drive the clock.
 _now = time.monotonic
@@ -313,6 +321,7 @@ def collect(
     taken_at: datetime | None = None,
     notes: str = "",
     max_seconds: float = DEFAULT_MAX_SECONDS,
+    hash_source: HashSource = HashSource.SUPPLIED_BY_VENDOR,
 ) -> CollectionResult:
     """Run a plan against a folder of exports.
 
@@ -321,10 +330,23 @@ def collect(
     run against a build output to establish a baseline should say ``as_declared``
     explicitly, so that the manifest does not later claim somebody looked at a
     machine when they looked at a release.
+
+    ``hash_source`` defaults to ``SUPPLIED_BY_VENDOR``: a folder of exported files
+    was produced by a tool and handed over, and hashing it says what the export
+    holds, not that the unit in front of you holds the same. Only the operator can
+    know that the collector ran ON the machine, so ``READ_FROM_MACHINE`` is an
+    explicit assertion (``collect run --read-from-machine``, ``kit run
+    --read-from-machine``); it is recorded in the manifest's ``method`` and in each
+    item's notes as the operator's claim, which the software cannot check.
     """
     base = Path(root)
     if not base.is_dir():
         raise CollectionError(f"{base} is not a directory.")
+    if hash_source is HashSource.DECLARED:
+        raise CollectionError(
+            "a collection hashes files, so its source is read_from_machine or "
+            "supplied_by_vendor; 'declared' means nothing was hashed.")
+    asserted = hash_source is HashSource.READ_FROM_MACHINE
 
     deadline = _now() + max_seconds
     outcomes = [_collect_item(base, spec, deadline) for spec in plan.items]
@@ -344,13 +366,14 @@ def collect(
         items.append(SafetyItem(
             item_id=spec.item_id, kind=spec.kind, name=spec.name,
             version=outcome.version, content_hash=outcome.digest,
-            hash_source=HashSource.READ_FROM_MACHINE,
+            hash_source=hash_source,
             supplier=spec.supplier, implements=spec.implements,
             modifiable_in_field=spec.modifiable_in_field,
             notes=(f"{spec.notes} " if spec.notes else "")
                   + f"[collected by plan {plan.plan_id} "
                     f"{plan.content_hash()[:12]}, rule {outcome.rule_fingerprint}"
-                  + (f", {spec.rule.note}" if spec.rule.note else "") + "]",
+                  + (f", {spec.rule.note}" if spec.rule.note else "") + "]"
+                  + (f" {OPERATOR_ASSERTION}" if asserted else ""),
         ))
 
     if not items:
@@ -390,7 +413,10 @@ def collect(
         functions=plan.functions,
         method=f"collected by plan {plan.plan_id} ({plan.content_hash()[:12]}) "
                f"from {base.name}"
-               + (f"; {plan.procedure}" if plan.procedure else ""),
+               + (f"; {plan.procedure}" if plan.procedure else "")
+               + (f"; {OPERATOR_ASSERTION}" if asserted
+                  else "; read from an exported folder, not asserted to have run on "
+                       "the machine (supplied_by_vendor, community ceiling)"),
         notes=notes,
     )
 

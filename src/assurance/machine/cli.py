@@ -45,7 +45,12 @@ from assurance.attest.keys import SigningKey, VerifyingKey
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle, check_bundle
+from assurance.machine.bundle import (
+    MachineSubjectError,
+    build_bundle,
+    check_bundle,
+    resolve_machine_serial,
+)
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import ReviewTrust
@@ -178,6 +183,58 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _unit_key_problem(subject: str) -> str:
+    """Why *subject* is not a unit key (``manufacturer/model#serial``); "" if it is.
+
+    Only the spelling is judged, never whether the unit exists. The ``#serial`` grammar is
+    the one every reader of a ledger subject uses (``resolve_machine_serial``, shared with
+    ``machinery.staleness``), not a copy of it; what this adds is the shape of the key a
+    manifest writes (``MachineIdentity.key``): a maker and a model, neither empty nor padded.
+    Coverage, the passport and re-verification look a verification up under that key exactly,
+    so any other spelling is filed and never found.
+    """
+    if "#" not in subject:
+        return "it has no '#serial'"
+    try:
+        resolve_machine_serial(subject)
+    except MachineSubjectError as exc:
+        return str(exc).split(": ", 1)[-1].split(". ")[0]
+    head = subject.split("#", 1)[0]
+    parts = head.split("/")
+    if len(parts) < 2 or any(not p for p in parts):
+        return "it does not name a manufacturer/model before the '#' (an empty part)"
+    if any(p != p.strip() for p in parts):
+        return "its manufacturer or model starts or ends with a space"
+    return ""
+
+
+def _subject_warning(subject: str, ledger: EvidenceLedger | None) -> str:
+    """What to tell the person when this subject will not be found by coverage. "" if fine.
+
+    A warning, never a refusal: a product-line subject (``product@version``) is accepted,
+    and what is accepted does not change. Printed to stderr so ``--json`` stays a document.
+    """
+    if not subject:
+        return ""
+    problem = _unit_key_problem(subject)
+    if problem:
+        return (
+            f"warning: --subject {subject!r} is not a unit key ({problem}), so coverage "
+            "will not see this verification: it is looked up under the machine's key "
+            "written exactly manufacturer/model#serial, as the manifest records it.")
+    if ledger is not None:
+        from assurance.machinery.record import MANIFEST_KIND
+
+        known = {e.subject for e in ledger.entries(kind=MANIFEST_KIND)}
+        if subject not in known:
+            return (
+                f"warning: this ledger holds no manifest recorded for {subject!r}, so "
+                "coverage will not see this verification unless that is exactly the "
+                "machine's key as its manifest writes it"
+                + (f" (manifests here: {', '.join(sorted(known))})." if known else "."))
+    return ""
+
+
 def _read_trust(path: Path | None) -> RecorderTrust | None:
     return RecorderTrust.from_json(path) if path else None
 
@@ -221,6 +278,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
     attestations = [load_attestation_file(p) for p in args.recorder_attestation]
     recorder_trust = _read_trust(args.recorder_trust)
+    warning = _subject_warning(args.subject, ledger)
+    if warning:
+        print(warning, file=sys.stderr)
 
     bundle = build_bundle(
         envelope, trace,

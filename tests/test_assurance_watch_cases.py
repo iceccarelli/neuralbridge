@@ -80,10 +80,12 @@ def work(tmp_path) -> Path:
     (tmp_path / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
         "targets": [
+            # read_from_machine: the harness plays a watch running ON the machine. An
+            # export folder is no longer labelled that implicitly (B6).
             {"serial": "0412", "plan": "plan.json", "root": "0412",
-             "site": "Plant 2", "country": "DE"},
+             "site": "Plant 2", "country": "DE", "read_from_machine": True},
             {"serial": "0501", "plan": "plan.json", "root": "0501",
-             "site": "Plant 7", "country": "IT"},
+             "site": "Plant 7", "country": "IT", "read_from_machine": True},
         ],
     }))
     return tmp_path
@@ -504,7 +506,8 @@ def plant(tmp_path):
     (tmp_path / "watch.json").write_text(json.dumps({
         "watch_id": "plant-1", "organisation": "Grimaldi Engineering S.r.l.",
         "targets": [{"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
-                     "site": "Plant 1", "country": "IT"}
+                     "site": "Plant 1", "country": "IT",
+                     "read_from_machine": True}      # the harness plays an on-machine watch (B6)
                     for s in ("CELL-0412", "CELL-0501")],
         "feeds": [{"supplier_id": "controlco", "feed": "feed.jsonl",
                    "public_key": "controlco.pub"}],

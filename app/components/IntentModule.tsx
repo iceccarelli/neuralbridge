@@ -74,7 +74,7 @@ CTRL-2026-11 (ControlCo, safety_relevant) — NEEDS REVIEW — matches found, no
            t=1.000s measured 1800.0 > 500.0 mm/s (by 1300.0)
 …
   This result may NOT be used to claim how the hardware behaves.
-  The trace's provenance ('field') is the filer's own declaration; no recorder attestation was accepted under a trust list this verifier holds, so it does not lift the tier above community.
+  The trace's provenance ('field') is the filer's own declaration; no recorder attestation was accepted under a trust list this verifier holds, so the trace itself cannot lift this result above community.
   not checked:
     - 130 samples ran at a speed above the one the stopping distance was measured at (500 mm/s). Ss for those samples is a constant-deceleration model, not a measurement.
   … 6 more not shown`,

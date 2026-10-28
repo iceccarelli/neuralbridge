@@ -6,7 +6,7 @@ Everything else in this package assumes somebody has already decided to adopt
 it. This is what runs *before* that decision.
 
 A plant engineer copies a folder onto a machine that is already inside their
-network, edits two files, and runs one command. They get back a sealed evidence
+network, edits two files (`kit.json` and `plans/cell.json`), drops their exports in a folder, and runs one command. They get back a sealed evidence
 ledger, an HTML report and an attestation request — **their** ledger, **their**
 data, on **their** disk. No account. No API key. No upload. Nothing to procure
 and nothing for security to review, because nothing left the building.
@@ -28,6 +28,18 @@ python -m assurance kit run  plant/kit.json --out plant/out
 the configuration and the collection plan, lists every file the run would open,
 names every plan item that matches no file, and touches nothing. Give them that
 output before you ask for anything.
+
+While template values remain, `check` still only reads: it names **every** one at
+once, by file and field (`plans/cell.json still has CHANGE ME placeholders:
+manufacturer, model, supplier of ITM-ZONES, ...`; `kit.json still has template
+values: organisation=..., prepared_by=...`), and with `--json` returns them as
+`placeholders` (`file`, `field`, `value`) beside `ready: false`. It exits `2` while
+`kit.json` itself cannot be loaded (a template value there), and `1` once only the
+plan or the exports are not ready.
+
+`kit init` and the README it writes list the same four steps (they are one list in
+the code): edit `kit.json`, edit `plans/cell.json`, drop the exports in, run
+`check`.
 
 Exit codes are the interface:
 
@@ -123,7 +135,9 @@ by nobody.
 ```
 
 POST that to `/v1/ledger/attest` with a Cell-plan key and the head is
-counter-signed by a key the plant does not hold. The ledger never moves. See
+counter-signed by a key the plant does not hold. The ledger never moves (the hosted
+counter-signature needs a service key that is not configured on any deployment today;
+until it is, this call answers 503). See
 `ATTEST.md` for what that buys and what it does not.
 
 Then, back inside the plant and still offline:
@@ -139,6 +153,56 @@ That command is what makes the whole thing worth having: the customer's own
 administrator can no longer quietly shorten the ledger, because the removed
 records were counted in a statement signed by a key nobody there holds.
 
+## What the hash label on each item means
+
+A folder of exported files cannot show which machine, if any, it came off. So the
+kit labels every item `supplied_by_vendor` by default: the digest says what the
+export holds, the manifest's tier ceiling is `community`, and the report prints
+`tier ceiling community`, not `validated`. The change workflow
+(`assurance.machinery.manifest.not_a_look`) and hosted watch ingest treat a
+manifest like that as *not a look at the machine*: it cannot be the as-found
+manifest that a re-verification stands on.
+
+If the kit really ran **on the machine** (its exports were taken by this process
+from the unit itself, not handed over), say so:
+
+```bash
+python -m assurance kit run plant/kit.json --out plant/out --read-from-machine
+python -m assurance collect run PLAN --root DIR --serial S --actor A --read-from-machine
+```
+
+The items are then labelled `read_from_machine`. That flag is **the operator's
+assertion**. Nothing in a folder of files proves it and this software cannot
+check it, so the assertion is written into each manifest (`method` and every
+item's `notes`: `OPERATOR ASSERTION ...`), into `run.json`
+(`read_from_machine_asserted`), and into the report's limits. An `--as-declared`
+baseline cannot carry it: a baseline built from a release is not a machine. A
+`watch` target takes the same assertion as `"read_from_machine": true` in its
+entry in the watch configuration; absent, it is false.
+
+## Keeping going after the first run
+
+`out/evidence.db` is an ordinary evidence ledger; later steps append to it, and
+`coverage` reads from it. `coverage` takes the manifest as a file, so write one with
+`collect run` (`--out manifest.json`, with the same plan, root and serial the kit
+used):
+
+```bash
+python -m assurance machine verify --envelope env.json --trace trace.json \
+    --actor a.rossi --ledger plant/out/evidence.db --subject "Maker/Model#SERIAL"
+python -m assurance machinery record-change intervention.json \
+    --ledger plant/out/evidence.db --actor a.rossi
+python -m assurance machinery coverage manifest.json --ledger plant/out/evidence.db
+```
+
+The subject must be written **exactly** `manufacturer/model#serial`, as in the
+manifest's machine identity: the plan's `manufacturer` and `model`, then the
+machine's serial, e.g. `Acme/Scan-9#CELL-0412`. Coverage looks a verification up
+under that key and ignores one filed under any other spelling, so a verification
+filed as `AR-7 0412` is never seen. `machine verify --subject` prints a warning (to
+stderr, nothing refused) when the subject is not a well-formed unit key, or when
+the ledger holds no manifest under it.
+
 ## What one offline run does not establish
 
 Printed at the end of every run and numbered in the report:
@@ -152,8 +216,10 @@ Printed at the end of every run and numbered in the report:
    (`ATTEST.md`)
 4. No physical behaviour was verified. Nothing here says a machine stops in the
    distance its datasheet claims. (`assurance machine verify`)
-5. Manifests were read from exported files, not from machines. They are as good
-   as the export.
+5. Manifests were read from exported files, not from machines. They are
+   labelled `supplied_by_vendor` (tier ceiling `community`), and the change
+   workflow and hosted ingest do not accept such a manifest as a look at the
+   machine. See the next section.
 
 That list is the honest statement of the gap, and it is a better argument for
 the paid product than any claim about it — every line names the thing that
