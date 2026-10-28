@@ -267,6 +267,13 @@ class Coverage(StrEnum):
     STALE = "stale"
     #: A run exercised this function's checks and at least one VIOLATED its limit.
     FAILING = "failing"
+    #: The newest run left this function's checks UNCHECKED: it could not be judged (the trace
+    #: gave it nothing to evaluate), none of its checks is verified, and none was violated.
+    #: Nothing has been shown for the function, for or against; that is not a failure.
+    UNCHECKED = "unchecked"
+    #: Some of this function's checks are verified by their newest run and at least one other
+    #: was left unchecked (and none was violated). Partly shown; cover needs every check.
+    INCOMPLETE = "incomplete"
     #: No verification has ever exercised this function.
     NEVER_VERIFIED = "never_verified"
     #: The function declares no checks, so no verification could cover it.
@@ -279,8 +286,8 @@ class Coverage(StrEnum):
     @property
     def rank(self) -> int:
         """Worst first, for sorting a report a human reads top-down."""
-        return {"failing": 0, "stale": 1, "never_verified": 2,
-                "not_demonstrable": 3, "current": 4}[self.value]
+        return {"failing": 0, "stale": 1, "unchecked": 2, "incomplete": 3,
+                "never_verified": 4, "not_demonstrable": 5, "current": 6}[self.value]
 
 
 @dataclass(frozen=True)
@@ -308,6 +315,10 @@ class VerificationRecord:
     #: function. A record that does not say which are which — every manually
     #: built one — has every non-verified check treated as failed.
     checks_not_applicable: tuple[str, ...] = ()
+    #: The subset of ``checks_not_verified`` whose outcome was ``unchecked`` (the run could
+    #: not judge that check). They are not violations. A record that does not say which are
+    #: which, every manually built one, has every non-verified check treated as violated.
+    checks_unchecked: tuple[str, ...] = ()
     #: Why ``tier`` is below what the sealed body stored, when the UNIT BINDING is what
     #: capped it (sealed for another unit key or none, or the same recording claimed by an
     #: earlier unit). Empty otherwise.
@@ -342,6 +353,7 @@ class VerificationRecord:
             "checks_verified": list(self.checks_verified),
             "checks_not_verified": list(self.checks_not_verified),
             "checks_not_applicable": list(self.checks_not_applicable),
+            "checks_unchecked": list(self.checks_unchecked),
             "tier_note": self.tier_note,
             "date_suspect": self.date_suspect,
         }
@@ -375,6 +387,7 @@ class VerificationRecord:
                            if c.get("outcome") != "verified")
             not_applicable = tuple(c["name"] for c in checks
                                    if c.get("outcome") == "not_applicable")
+            unchecked = tuple(c["name"] for c in checks if c.get("outcome") == "unchecked")
             filed = parse_utc(entry.at)
             suspect = False
             try:
@@ -395,6 +408,7 @@ class VerificationRecord:
                 checks_verified=verified,
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
+                checks_unchecked=unchecked,
                 date_suspect=suspect,
             ))
         return _apply_unit_binding(ledger, subject, recorder_trust, out)
@@ -518,6 +532,7 @@ class CoverageReport:
 
     def summary(self) -> str:
         mark = {"current": "ok    ", "stale": "STALE ", "failing": "FAIL  ",
+                "unchecked": "UNCHK ", "incomplete": "INCOMP",
                 "never_verified": "never ", "not_demonstrable": "n/a   "}
         lines = [
             f"{self.machine_key} — {self.verdict.upper()}",
@@ -605,16 +620,43 @@ def assess_coverage(
         if failing:
             last = max((e[0] for e in failing.values()),
                        key=lambda v: (v.effective_at, v.ledger_seq))
-            coverages.append(FunctionCoverage(
-                function_id=fn.function_id, description=fn.description,
-                required_performance=fn.required_performance,
-                coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
-                last_verified_hash=last.content_hash,
-                last_verified_at=format_utc(last.effective_at),
-                detail=f"the most recent run of {', '.join(sorted(failing))} "
-                       f"({last.content_hash[:12]}, {last.verdict}) did not pass "
-                       "it. Coverage has never been established, or has ended.",
-            ))
+            ran_unchecked = sorted(c for c, e in failing.items()
+                                   if c in e[0].checks_unchecked)
+            violated = sorted(set(failing) - set(ran_unchecked))
+            if violated:
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
+                    last_verified_hash=last.content_hash,
+                    last_verified_at=format_utc(last.effective_at),
+                    detail=f"the most recent run of {', '.join(violated)} "
+                           f"({last.content_hash[:12]}, {last.verdict}) did not pass "
+                           "it. Coverage has never been established, or has ended.",
+                ))
+                continue
+            # No check was violated; the newest run left some UNCHECKED. That is a check
+            # that was not run, not one that failed.
+            shown = sorted(c for c, e in state.items() if e is not None and e[1])
+            what = (f"{', '.join(ran_unchecked)} was left unchecked by its most recent "
+                    f"run ({last.content_hash[:12]}, {last.verdict}): the check was not "
+                    "run on that trace, so nothing was shown for or against it.")
+            if shown:
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.INCOMPLETE, checks=tuple(sorted(checks)),
+                    detail=f"{', '.join(shown)} verified, but {what} Cover needs every "
+                           "check the function declares: run the rest on a trace that "
+                           "exercises it.",
+                ))
+            else:
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.UNCHECKED, checks=tuple(sorted(checks)),
+                    detail=f"{what} Run it on a trace that exercises it.",
+                ))
             continue
 
         if missing:
