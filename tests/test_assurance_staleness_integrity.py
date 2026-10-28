@@ -284,6 +284,43 @@ class TestAnAttestedBundleIsBoundByTheSameDates:
         assert report.functions[0].coverage is not Coverage.CURRENT
 
 
+class TestTheToleranceIsExactlyOneDay:
+    """The edge of the tolerance, with the ledger's clock held still."""
+
+    NOW = datetime(2026, 10, 20, 12, 0, 0, tzinfo=UTC)
+
+    def _record(self, ledger, monkeypatch, start: datetime) -> VerificationRecord:
+        monkeypatch.setattr("assurance.evidence.ledger.utc_now", lambda: self.NOW)
+        seal_raw_body(ledger, raw_body(start.strftime("%Y-%m-%dT%H:%M:%SZ"), verified=CHECKS))
+        (rec,) = VerificationRecord.from_ledger(ledger, subject=KEY)
+        return rec
+
+    def test_a_start_exactly_a_day_ahead_is_clock_skew_not_a_suspect_date(
+            self, ledger, monkeypatch):
+        rec = self._record(ledger, monkeypatch, self.NOW + timedelta(days=1))
+        assert rec.date_suspect is False
+        assert rec.effective_at == self.NOW
+
+    def test_a_start_a_second_beyond_a_day_ahead_is_suspect(self, ledger, monkeypatch):
+        rec = self._record(ledger, monkeypatch, self.NOW + timedelta(days=1, seconds=1))
+        assert rec.date_suspect is True
+        assert rec.effective_at == self.NOW
+
+    def test_a_start_in_the_past_is_taken_as_it_is(self, ledger, monkeypatch):
+        rec = self._record(ledger, monkeypatch, self.NOW - timedelta(days=3))
+        assert (rec.date_suspect, rec.effective_at) == (False, self.NOW - timedelta(days=3))
+
+    def test_a_start_equal_to_the_filing_time_is_taken_as_it_is(self, ledger, monkeypatch):
+        rec = self._record(ledger, monkeypatch, self.NOW)
+        assert (rec.date_suspect, rec.effective_at) == (False, self.NOW)
+
+    def test_an_unreadable_start_is_dated_when_it_was_filed(self, ledger, monkeypatch):
+        monkeypatch.setattr("assurance.evidence.ledger.utc_now", lambda: self.NOW)
+        seal_raw_body(ledger, raw_body("yesterday-ish", verified=CHECKS))
+        (rec,) = VerificationRecord.from_ledger(ledger, subject=KEY)
+        assert (rec.date_suspect, rec.effective_at) == (True, self.NOW)
+
+
 class TestTheReverifyGuardOnAnUndatableRecord:
     """M29 killer: a verification that cannot be dated cannot be shown to postdate the change."""
 
@@ -595,6 +632,151 @@ class TestATieAtTheClocksResolutionIsSettledByLedgerOrder:
         iv = update(when=self.T)
         report = assess_coverage(manifest(), [self._verification(9)], [iv])
         assert report.functions[0].coverage is Coverage.STALE
+
+
+class TestWhichManifestDifferencesAreChanges:
+    """The rule is narrow on purpose; each edge is pinned."""
+
+    def _verified(self, ledger, first: SafetyManifest) -> None:
+        record_manifest(ledger, first)
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+
+    def _unhashed(self, version: str) -> SafetyItem:
+        return SafetyItem("cfg", ItemKind.PARAMETER_SET, "zone config", version, "",
+                          HashSource.DECLARED, implements=("SF-1",))
+
+    def test_a_version_moving_on_a_safety_item_with_no_hash_is_a_change(self, ledger):
+        self._verified(ledger, manifest(mid="M-A", implements=(),
+                                        extra_items=(self._unhashed("1"),)))
+        newer = manifest(mid="M-B", implements=(), extra_items=(self._unhashed("2"),))
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.STALE
+        assert report.functions[0].invalidating_item == "cfg"
+
+    def test_an_unhashed_safety_item_whose_version_did_not_move_is_not_a_change(self, ledger):
+        self._verified(ledger, manifest(mid="M-A", implements=(),
+                                        extra_items=(self._unhashed("1"),)))
+        same = manifest(mid="M-B", implements=(), extra_items=(self._unhashed("1"),))
+        record_manifest(ledger, same)
+        report, _ = coverage_of(ledger, m=same)
+        assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_a_safety_item_that_vanished_is_a_change(self, ledger):
+        extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        self._verified(ledger, manifest(mid="M-A", extra_items=(extra,)))
+        newer = manifest(mid="M-B")
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.STALE
+        assert report.functions[0].invalidating_item == "plc"
+
+    def test_a_removal_that_was_recorded_is_explained(self, ledger):
+        extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        self._verified(ledger, manifest(mid="M-A", extra_items=(extra,)))
+        removal = Intervention(
+            intervention_id="INT-R", machine_key=KEY, item_id="plc",
+            kind=InterventionKind.REMOVAL, occurred_at=utc_now() - timedelta(hours=1),
+            performed_by=TECH, reason="module removed", affects_functions=("SF-1",))
+        record_intervention(ledger, removal)
+        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        newer = manifest(mid="M-B")
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_an_install_does_not_explain_a_removal(self, ledger):
+        extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        self._verified(ledger, manifest(mid="M-A", extra_items=(extra,)))
+        install = Intervention(
+            intervention_id="INT-I", machine_key=KEY, item_id="plc",
+            kind=InterventionKind.INSTALL, occurred_at=utc_now() - timedelta(hours=1),
+            performed_by=TECH, reason="module installed", affects_functions=("SF-1",))
+        record_intervention(ledger, install)
+        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        newer = manifest(mid="M-B")
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.STALE
+
+    def test_an_install_explains_an_item_that_appeared(self, ledger):
+        self._verified(ledger, manifest(mid="M-A"))
+        install = Intervention(
+            intervention_id="INT-I", machine_key=KEY, item_id="plc",
+            kind=InterventionKind.INSTALL, occurred_at=utc_now() - timedelta(hours=1),
+            performed_by=TECH, reason="module installed", affects_functions=("SF-1",))
+        record_intervention(ledger, install)
+        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        added = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        newer = manifest(mid="M-B", extra_items=(added,))
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_an_intervention_dated_before_the_earlier_look_does_not_explain_a_later_change(
+            self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A",
+                                         taken=datetime(2026, 9, 13, tzinfo=UTC)))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        # the update to B was recorded, but BEFORE the look that still found A
+        record_intervention(ledger, update(when=datetime(2026, 9, 1, tzinfo=UTC)))
+        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        newer = manifest(fw=HASH_B, mid="M-B")
+        record_manifest(ledger, newer)
+        report, _ = coverage_of(ledger, m=newer)
+        assert report.functions[0].coverage is Coverage.STALE
+        assert report.functions[0].invalidated_by.startswith("implied:")
+
+    def test_an_intervention_dated_after_the_manifest_was_filed_does_not_explain_it(
+            self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
+        record_intervention(ledger, update(when=utc_now() + timedelta(days=30)))
+        seal(ledger, utc_now(), tid="AFTER", expect="pass")
+        ivs = interventions_from_ledger(ledger, KEY)
+        assert any(i.intervention_id.startswith("implied:") for i in ivs)
+
+    def test_a_record_whose_from_hash_is_not_the_one_before_does_not_explain_it(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_intervention(ledger, update(when=utc_now() - timedelta(hours=1),
+                                           from_hash="c" * 64, to_hash=HASH_B))
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
+        ivs = interventions_from_ledger(ledger, KEY)
+        assert any(i.intervention_id.startswith("implied:") for i in ivs)
+
+    def test_a_digest_written_with_a_prefix_or_in_capitals_is_the_same_hash(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_intervention(ledger, update(when=utc_now() - timedelta(hours=1),
+                                           to_hash="SHA256:" + HASH_B.upper()))
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
+        assert not [i for i in interventions_from_ledger(ledger, KEY)
+                    if i.intervention_id.startswith("implied:")]
+
+    def test_the_first_look_has_nothing_to_differ_from(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-A"))
+        assert interventions_from_ledger(ledger, KEY) == []
+
+    def test_only_recorded_changes_are_returned_when_asked(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
+        assert interventions_from_ledger(ledger, KEY, include_implied=False) == []
+        assert len(interventions_from_ledger(ledger, KEY)) == 1
+
+    def test_a_declaration_does_not_stand_in_for_a_look(self, ledger):
+        """as_declared is a claim about the configuration, not an observation: it is never
+        itself the later side of a comparison, though it can be the earlier side."""
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-D", source=ManifestSource.AS_DECLARED))
+        assert interventions_from_ledger(ledger, KEY) == []
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-C"))
+        assert len(interventions_from_ledger(ledger, KEY)) == 1
 
 
 # =====================================================================
