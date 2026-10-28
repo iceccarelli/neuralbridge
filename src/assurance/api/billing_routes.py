@@ -238,6 +238,23 @@ async def post_webhook(
     return {"handled": None, "ignored": kind}
 
 
+def _invoice_subscription(invoice: dict[str, Any]) -> str:
+    """The subscription an invoice belongs to, or the empty string if it names none.
+
+    Stripe puts it at ``subscription`` on older API versions and under
+    ``parent.subscription_details.subscription`` on newer ones.
+    """
+    direct = invoice.get("subscription")
+    if isinstance(direct, dict):
+        direct = direct.get("id")
+    if isinstance(direct, str) and direct:
+        return direct
+    parent = invoice.get("parent")
+    details = parent.get("subscription_details") if isinstance(parent, dict) else None
+    nested = details.get("subscription") if isinstance(details, dict) else None
+    return nested if isinstance(nested, str) else ""
+
+
 def _handle_payment_failed(
     accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
 ) -> dict[str, Any]:
@@ -251,6 +268,7 @@ def _handle_payment_failed(
         event_id=event_id, kind=kind, stripe_customer_id=customer,
         status="past_due", tier=None, event_created=created,
         hold_if_unknown=False, only_from=frozenset({"active"}),
+        stripe_subscription_id=_invoice_subscription(obj), payment_failure=True,
     )
     return _subscription_response(kind, outcome, "marked_past_due")
 
@@ -331,6 +349,7 @@ def _handle_subscription(
         status=state.status, tier=state.tier, event_created=created,
         hold_if_unknown=state.ours,
         stripe_subscription_id=obj.get("id", "") or "",
+        ours=state.ours,
     )
     return _subscription_response(kind, outcome, state.label)
 

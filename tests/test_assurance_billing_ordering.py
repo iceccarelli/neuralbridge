@@ -258,6 +258,17 @@ def _scenario(name: str):
                 T + 40, event_id="e5")],
             ("cancelled", "cell", "sub_A"),
         ),
+        # events about the new subscription overtake the checkouts that create the account
+        "held_before_checkout": (
+            [su("customer.subscription.updated", "cus_1", "sub_B", PRICES["B"], "active", T + 12,
+                event_id="e1"),
+             ck("cs_A", "cus_1", "sub_A", "register", T, event_id="e2"),
+             ck("cs_B", "cus_1", "sub_B", "cell", T + 10, event_id="e3"),
+             su("customer.subscription.deleted", "cus_1", "sub_A", PRICES["A"], "canceled", T + 20,
+                event_id="e4"),
+             payment_failed_event("cus_1", T + 25, sub="sub_B", event_id="e5")],
+            ("past_due", "cell", "sub_B"),
+        ),
         # an in-place downgrade on one subscription, then a cancellation of an unrelated
         # earlier purchase
         "downgrade_in_place": (
@@ -277,7 +288,7 @@ def _scenario(name: str):
 
 @pytest.mark.parametrize("name", [
     "upgrade_cancel_old_heal", "upgrade_cancel_old_past_due", "all_cancelled",
-    "pause_resume_pause", "downgrade_in_place",
+    "pause_resume_pause", "downgrade_in_place", "held_before_checkout",
 ])
 def test_every_delivery_order_ends_in_the_same_entitlement(name, tmp_path, billing_env):
     events, expected = _scenario(name)
@@ -300,3 +311,60 @@ def test_every_delivery_order_ends_in_the_same_entitlement(name, tmp_path, billi
         outcomes.setdefault(_final(store), []).append(tuple(events[i]["id"] for i in order))
     assert set(outcomes) == {expected}, {
         state: orders_[:3] for state, orders_ in outcomes.items()}
+
+
+# ---------------------------------------------------------------------------
+# the account row stays the truth when something other than an event writes it
+# ---------------------------------------------------------------------------
+def _sql(path, sql, *args):
+    import sqlite3
+
+    db = sqlite3.connect(path)
+    try:
+        db.execute(sql, args)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_a_correction_written_outside_the_webhook_is_not_undone_by_a_late_event(
+    tmp_path, billing_env
+):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    billing_routes._handle_checkout(
+        store, "checkout.session.completed",
+        checkout_event("cs_A", "cus_1", "sub_A", "cell", T)["data"]["object"], "e1", T)
+    # the reconciler (or an operator) ends the account, as apply_reconciliation does
+    _sql(store.path, "UPDATE accounts SET status='cancelled', tier='free', last_event_at=? "
+                     "WHERE stripe_customer_id='cus_1'", T + 100)
+    late = subscription_event("customer.subscription.updated", "cus_1", "sub_A",
+                              "price_cell_test", "active", T + 50)["data"]["object"]
+    out = billing_routes._handle_subscription(
+        store, "customer.subscription.updated", late, "e2", T + 50)
+    assert out["result"] == "ignored_stale"
+    assert _final(store)[:2] == ("cancelled", "free")
+    newer = billing_routes._handle_subscription(
+        store, "customer.subscription.updated", late, "e3", T + 200)
+    assert newer["result"] == "reactivated"
+    assert _final(store)[:2] == ("active", "cell")
+
+
+def test_an_account_that_predates_the_subscription_record_is_read_from_its_row(
+    tmp_path, billing_env
+):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    store.upsert_account(email="old@example.invalid", tier="cell", stripe_customer_id="cus_1",
+                         stripe_subscription_id="sub_A", event_created=T)
+    _sql(store.path, "DELETE FROM subscription_states")
+    gone = subscription_event("customer.subscription.deleted", "cus_1", "sub_Z",
+                              "price_reg_test", "canceled", T + 5)["data"]["object"]
+    assert billing_routes._handle_subscription(
+        store, "customer.subscription.deleted", gone, "e1", T + 5
+    )["result"] == "ignored_other_subscription"
+    assert _final(store)[:2] == ("active", "cell")
+    own = subscription_event("customer.subscription.deleted", "cus_1", "sub_A",
+                             "price_cell_test", "canceled", T + 6)["data"]["object"]
+    assert billing_routes._handle_subscription(
+        store, "customer.subscription.deleted", own, "e2", T + 6
+    )["result"] == "downgraded_to_free"
+    assert _final(store)[:2] == ("cancelled", "free")
