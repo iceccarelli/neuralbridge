@@ -14,6 +14,9 @@ export type FleetRow = {
   stale: number;
   uncovered: number;
   interventions: number;
+  // changes the ledger derived rather than read: an unexplained difference between two
+  // manifests, or a record it could not use. They disturb evidence; nobody sealed them.
+  unrecorded_changes: number;
   verifications: number;
   tier_ceiling: string;
   // `verdict` is `covered` only when every declared function is current on evidence at
@@ -260,6 +263,26 @@ export type Exposure = {
   newly_in_question: string[];
 };
 
+/**
+ * The translation record an importer (`assurance fleet import-csaf`) writes into the advisory
+ * (fleet/advisory.py ImportRecord). Present only for an import. An import is never signed:
+ * `trust` is the only value the server accepts, and `partial` means affected products were
+ * dropped, so a report with no match is not "clear".
+ */
+export type AdvisoryImportRecord = {
+  origin: string;
+  trust: 'unsigned_inspect_only' | string;
+  partial: boolean;
+  dropped: { product_id: string; reason: string }[];
+  partial_reasons?: string[];
+  severity_source: 'defaulted_by_importer' | 'operator_flag' | string;
+  tlp: string;
+  tracking_status: string;
+  document_category: string;
+  document_date: string;
+  notes: string[];
+};
+
 export type ImpactReport = {
   advisory_id: string;
   advisory_hash: string;
@@ -284,6 +307,11 @@ export type ImpactReport = {
   prior_evidence_in_question?: Record<string, unknown>[];
   clear_is_complete?: boolean;
   provenance?: Record<string, unknown>;
+  // Optional: an older server omits them. An advisory that is an unsigned import carries its
+  // record; `incomplete` means the translation dropped affected products (never read as clear).
+  advisory_import?: AdvisoryImportRecord | null;
+  incomplete?: boolean;
+  incomplete_reasons?: string[];
 };
 
 export type MachineClassification = {
@@ -306,8 +334,11 @@ export type MachineClassification = {
 // POST /v1/change/assess/advisory
 export type AssessAdvisoryResult = {
   opened: boolean;
-  case: { case_id: string; status: string; history?: HistoryItem[] } | null;
+  case: { case_id: string; status: string; history?: HistoryItem[]; provenance?: Record<string, string> } | null;
   verdict: string;
+  incomplete?: boolean;
+  advisory_trust?: Record<string, unknown>;
+  advisory_import?: AdvisoryImportRecord | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -695,6 +726,11 @@ export type TrustedAdvisoryRow = {
   implications_reviewed: boolean;
   case_opened: string;
   evaluated_at: string;
+  // Set by the server for an advisory that is an unsigned import found inside a signed feed: the
+  // signature is over the supplier's file, the file says it is a translation nobody has
+  // authenticated, so no consequence is permitted whatever the pinned key says.
+  inspect_only?: boolean;
+  advisory_import?: AdvisoryImportRecord | null;
 };
 
 export type FeedTrust = {

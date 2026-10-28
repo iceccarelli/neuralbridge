@@ -293,13 +293,48 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
     return "".join(out)
 
 
+def _import_banner(impact: ImpactReport) -> str:
+    """The marker an unsigned import carries onto the page, as text and as attributes."""
+    record = impact.advisory_import
+    if not record:
+        return ""
+    partial = "true" if impact.incomplete else "false"
+    text = [
+        "<b>Unsigned import, inspect only.</b> This advisory was translated from a CSAF "
+        "document. Nobody has authenticated it, and the severity "
+        f"({e(impact.severity.value.replace('_', ' '))}) was "
+        + ("defaulted by the importer"
+           if record.get("severity_source") == "defaulted_by_importer"
+           else "chosen by the operator")
+        + ", not stated by the publisher."]
+    if record.get("tlp"):
+        text.append(f" Marked <b>TLP:{e(record['tlp'])}</b>: do not forward this page "
+                    "beyond the people the publisher named.")
+    if impact.incomplete:
+        gone = ", ".join(e(i) for i in impact.dropped_products)
+        text.append(" <b>Partial translation</b>"
+                    + (f": not imported: {gone}" if gone else "")
+                    + ". A machine running what was left out is not in this report, so "
+                    "'no match' below is never 'clear'.")
+    return ('<div class="banner bad" '
+            f'data-advisory-trust="{e(record.get("trust"))}" '
+            f'data-advisory-tlp="{e(record.get("tlp") or "")}" '
+            f'data-advisory-partial="{partial}">{"".join(text)}</div>')
+
+
 def _impact_block(impact: ImpactReport) -> str:
     head = {
         "clear": ("", "No machine in this fleet matches this advisory."),
         "exposed": ("bad", "Standing safety evidence is now in question."),
         "needs_review": ("warn", "Matches found; none had standing evidence."),
     }[impact.verdict]
+    if impact.verdict == "needs_review" and not impact.exposures:
+        head = ("warn", "No match was found, but the advisory is an incomplete translation "
+                        "of its source. That is not a statement that nothing is affected."
+                if impact.incomplete else
+                "No match was found, but the ledger chain does not verify.")
     out = [
+        _import_banner(impact),
         f"<div class='banner {head[0]}'><b>{e(impact.advisory_id)}</b> "
         f"({e(impact.issued_by)}, {e(impact.severity.value.replace('_', ' '))}) — "
         f"{e(head[1])}<br>{e(impact.title)}<br>"
@@ -458,7 +493,8 @@ def render_report(data: ReportInput) -> str:
     below_validated = sum(1 for r in fleet.records
                           if r.coverage.verdict == "covered_at_community")
     parts.append(_tile(functions - uncovered, "functions with current evidence",
-                       "good" if uncovered == 0 and not below_validated else ""))
+                       "good" if (uncovered == 0 and not below_validated
+                                  and fleet.chain_verified) else ""))
     if below_validated:
         # Current is not demonstrated: say so beside the tile that says "current".
         parts.append(_tile(below_validated, "machine(s) current only on evidence below "
@@ -468,7 +504,8 @@ def render_report(data: ReportInput) -> str:
                        "warn" if uncovered - stale else ""))
     if impact is not None:
         parts.append(_tile(len(impact.machines_affected), "advisory matches",
-                           "bad" if impact.machines_affected else "good"))
+                           "bad" if impact.machines_affected else
+                           "warn" if impact.incomplete else "good"))
     if statuses:
         parts.append(_tile(unsound, "declarations in doubt",
                            "bad" if unsound else "good"))
@@ -476,8 +513,11 @@ def render_report(data: ReportInput) -> str:
 
     if impact is not None:
         parts.append("<section><h2>1 · Component advisory</h2>")
-        parts.append("<p class='lede'>A supplier has published an advisory. This is "
-                     "every machine in the ledger it touches, and the safety "
+        parts.append("<p class='lede'>"
+                     + ("An advisory that nobody has authenticated (see the marker below) "
+                        "names these components. " if impact.advisory_import else
+                        "A supplier has published an advisory. ")
+                     + "This is every machine in the ledger it touches, and the safety "
                      "functions whose evidence it unsettles.</p>")
         parts.append(_impact_block(impact))
         parts.append("</section>")

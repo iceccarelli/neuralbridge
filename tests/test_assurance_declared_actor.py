@@ -68,8 +68,13 @@ def _machinery_manifest(client, h, tmp_path):
 
 
 def _machinery_intervention(client, h, tmp_path):
-    from tests.test_assurance_machinery import intervention
+    from tests.test_assurance_machinery import intervention, manifest
 
+    # A change can only be filed for a unit whose manifest is sealed (else 409
+    # unknown_machine): seal that unit's manifest first, as a caller would.
+    sealed = client.post("/v1/machinery/manifest", headers=h, json={
+        "manifest": manifest().to_dict(), "actor": NAME, "role": FORGED})
+    assert sealed.status_code == 200, sealed.text[:300]
     return client.post("/v1/machinery/intervention", headers=h, json={
         "intervention": intervention().to_dict(), "actor": NAME, "role": FORGED})
 

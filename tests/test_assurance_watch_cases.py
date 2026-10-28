@@ -123,9 +123,9 @@ def verify_machine(ledger: EvidenceLedger, key: str, *, when: datetime):
         intrusion_distance_mm=850.0)
     # One recording per unit: the same trace is the validated evidence of ONE unit key only
     # (a second claim is refused at sealing and capped at community by every reader), so each
-    # machine's run carries its own id.
-    trace = Trace(trace_id=f"R-{when:%Y%m%d%H}-{key.rpartition('#')[2]}",
-                  provenance=Provenance.FIELD,
+    # machine's run carries its own id (the serial) and each refile its own second.
+    serial = key.rpartition("#")[2]
+    trace = Trace(trace_id=f"R-{serial}-{when:%Y%m%d%H%M%S}", provenance=Provenance.FIELD,
                   source_system="fw", started_at=when, sample_rate_hz=50.0,
                   samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                        tcp_speed=400.0, mode=OperatingMode.SSM,
@@ -137,12 +137,24 @@ def case_kind_entries(ledger: EvidenceLedger):
     return [e for e in ledger.entries() if e.kind in CASE_KINDS]
 
 
+def after_the_ledger(when: datetime) -> datetime:
+    """A run the simulated timeline places after a change, started after the ledger
+    recorded that change.
+
+    The watch's timeline here is simulated (``T0`` is in the past) but the ledger stamps
+    every record with the real clock, and a verification is only evidence about a state
+    the ledger had already recorded when the run began. So a re-verification that follows
+    a drift is dated no earlier than the present.
+    """
+    return max(when, datetime.now(UTC))
+
+
 def work_to_closure(ledger, store, case_id, key, *, when):
     """Claim, advance, re-verify against a fresh real bundle, and have a person close."""
     case = claim(store, case_id, owner="v.grimaldi", actor=PERSON)
     while case.status is not CaseStatus.AWAITING_REVERIFICATION:
         case = advance(store, case.case_id, actor=PERSON)
-    bundle = verify_machine(ledger, key, when=when)
+    bundle = verify_machine(ledger, key, when=after_the_ledger(when))
     observed = manifests_from_ledger(ledger, key)[-1]
     case = reverify(store, case.case_id, observed,
                     VerificationRecord.from_ledger(ledger, subject=key),
@@ -286,6 +298,12 @@ class TestTheCrashWindow:
         sealed_hash = manifests_from_ledger(ledger, KEY_0501)[-1].content_hash()
         assert sealed_hash in {link["content_hash"]
                                for link in store.list()[0].linked_evidence}
+        # ...and only that one: the reading that was never sealed is not left behind as a
+        # second "observed manifest" pointer (a repeat look at the same drift is the same
+        # fact read again, so the freshest reading replaces its evidence pointers).
+        observed = [link["content_hash"] for link in store.list()[0].linked_evidence
+                    if link.get("note") == "observed manifest"]
+        assert observed == [sealed_hash]
         assert reconstruct_case(ledger, drifted.case_id).ok
         ok, problems = ledger.verify_chain()
         assert ok, problems
@@ -637,7 +655,7 @@ class TestEndToEnd:
             with pytest.raises(CaseTransitionError):
                 decide(store, c.case_id, disposition="closed", reason="r", actor=bot)
 
-        bundle = verify_machine(ledger, KEY_0412, when=T0 + timedelta(days=9))
+        bundle = verify_machine(ledger, KEY_0412, when=after_the_ledger(T0 + timedelta(days=9)))
         observed = manifests_from_ledger(ledger, KEY_0412)[-1]
         c = reverify(store, c.case_id, observed,
                      VerificationRecord.from_ledger(ledger, subject=KEY_0412),

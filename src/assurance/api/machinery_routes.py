@@ -35,17 +35,28 @@ from assurance.machinery.divergence import compare
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
+    UnknownFunctionError,
+    UnknownMachineError,
     build_passport,
+    check_intervention,
     interventions_from_ledger,
     record_intervention,
     record_manifest,
     verify_passport,
 )
-from assurance.machinery.staleness import VerificationRecord, assess_coverage
+from assurance.machinery.staleness import (
+    VerificationRecord,
+    affected_functions,
+    assess_coverage,
+)
 
 __all__ = ["machinery_router"]
 
 machinery_router = APIRouter(prefix="/v1/machinery", tags=["machinery"])
+
+# Every handler here is a plain ``def``: FastAPI runs it in a worker thread. They read and
+# verify a ledger, hash manifests and compare up to MAX_ITEMS items, which is CPU and disk
+# work that must not stop the event loop (see ``machine_routes.verify_run``).
 
 #: A manifest larger than this is a fleet export, not one machine.
 MAX_ITEMS = 5_000
@@ -137,7 +148,7 @@ def _manifest(raw: dict[str, Any], what: str = "manifest") -> SafetyManifest:
     "/diff",
     summary="Is the machine still the configuration you signed off?",
 )
-async def diff(
+def diff(
     body: DiffIn,
     response: Response,
     meter: Annotated[MeterTicket, Metered("machinery_diff")],
@@ -161,7 +172,7 @@ async def diff(
 
 
 @machinery_router.post("/manifest", summary="Seal a safety software manifest")
-async def post_manifest(
+def post_manifest(
     body: ManifestIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -183,8 +194,19 @@ async def post_manifest(
     }
 
 
-@machinery_router.post("/intervention", summary="Seal an intervention record")
-async def post_intervention(
+@machinery_router.post(
+    "/intervention",
+    summary="Seal an intervention record",
+    responses={
+        409: {"description": "`unknown_machine`: no manifest is sealed under exactly this "
+                             "unit key (another case, another serial, another unit, a "
+                             "product line). Nothing was written."},
+        422: {"description": "`invalid_intervention`, or `unknown_function`: the record names "
+                             "a safety function the sealed manifest does not declare "
+                             "(`unknown_functions` lists them). Nothing was written."},
+    },
+)
+def post_intervention(
     body: InterventionIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -194,12 +216,36 @@ async def post_intervention(
     A change with no authorisation and no re-validation is recorded, not
     refused — and its findings travel with it. Refusing would push the change
     back to where it lives now, which is nowhere.
+
+    What is refused is a change that could not be about anything the ledger holds:
+    ``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key
+    with another case or serial is a different unit), ``422 unknown_function`` naming any
+    safety function the sealed manifest does not declare. Function ids are written back
+    as the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the
+    functions the manifest says the changed item implements are disturbed regardless
+    (``effective_affects_functions``).
     """
     try:
         intervention = Intervention.from_dict(body.intervention)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "intervention") from exc
     actor = _declared_actor(body)
+    try:
+        intervention, sealed_manifest = check_intervention(register.ledger, intervention)
+    except UnknownMachineError as exc:
+        # 409: the request conflicts with what the ledger holds. A key that differs by
+        # case or by a digit is a different unit; it is refused, never attributed.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "unknown_machine", "detail": str(exc),
+                    "machine": intervention.machine_key},
+        ) from exc
+    except UnknownFunctionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "unknown_function", "detail": str(exc),
+                    "unknown_functions": list(exc.unknown)},
+        ) from exc
     evidence = record_intervention(register.ledger, intervention, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -207,7 +253,12 @@ async def post_intervention(
         "intervention_id": intervention.intervention_id,
         "authorised": intervention.is_authorised,
         "revalidated": intervention.is_revalidated,
+        # as the manifest spells them
         "affects_functions": list(intervention.affects_functions),
+        # what coverage will treat this change as disturbing: the functions it names plus
+        # those the manifest says the changed item implements
+        "effective_affects_functions": sorted(
+            affected_functions(sealed_manifest, intervention)),
         "findings": list(intervention.findings),
     }
 
@@ -215,8 +266,14 @@ async def post_intervention(
 @machinery_router.post(
     "/coverage",
     summary="Which safety functions a recorded verification still stands for, at what tier",
+    responses={
+        409: {"description": "`ledger_chain_unverified`: this account's ledger chain does not "
+                             "verify, so no function is assessed. A coverage read from a "
+                             "store whose records can be deleted or edited could be made to "
+                             "pass. Nothing is assessed."},
+    },
 )
-async def coverage(
+def coverage(
     body: CoverageIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -229,6 +286,15 @@ async def coverage(
     """
     manifest = _manifest(body.manifest)
     key = manifest.machine.key
+    chain_ok, chain_problems = register.ledger.verify_chain()
+    if not chain_ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ledger_chain_unverified",
+                    "detail": "the ledger chain does not verify, so coverage was not "
+                              "assessed: " + "; ".join(chain_problems[:3]),
+                    "problems": chain_problems[:5]},
+        )
     report = assess_coverage(
         manifest,
         VerificationRecord.from_ledger(
@@ -239,7 +305,7 @@ async def coverage(
 
 
 @machinery_router.post("/passport", summary="Seal the machine's evidence position")
-async def passport(
+def passport(
     body: PassportIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -262,7 +328,7 @@ async def passport(
     "/passport/check",
     summary="Re-verify a machine passport. Free, permanently, for anyone.",
 )
-async def check_passport(
+def check_passport(
     body: PassportCheckIn,
     principal: Annotated[Principal, Anyone],
 ) -> dict[str, Any]:

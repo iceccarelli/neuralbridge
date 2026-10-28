@@ -21,10 +21,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import RecorderTrust
-from assurance.machinery.intervention import Intervention
+from assurance.machinery.intervention import DERIVED_INTERVENTIONS, Intervention
 from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import MANIFEST_KIND
 from assurance.machinery.staleness import (
@@ -47,6 +48,23 @@ class MachineRecord:
     coverage: CoverageReport
     interventions: tuple[Intervention, ...]
     verifications: tuple[VerificationRecord, ...]
+    #: Whether the ledger's chain verified when this was read. A machine is never
+    #: ``covered`` on rows drawn from a store whose integrity is in question: deleting or
+    #: editing the one record that invalidated a function would otherwise be enough.
+    chain_verified: bool = True
+
+    @property
+    def verdict(self) -> str:
+        """The coverage verdict, except that cover needs a chain that verified.
+
+        Neither ``covered`` nor ``covered_at_community`` survives a chain that does not
+        verify: the rows were read from a store whose records can have been deleted or
+        edited, so the weaker verdict is not a safe harbour either.
+        """
+        if self.coverage.verdict in ("covered", "covered_at_community") \
+                and not self.chain_verified:
+            return "gaps"
+        return self.coverage.verdict
 
     @property
     def worst(self) -> Coverage | None:
@@ -73,12 +91,18 @@ class MachineRecord:
             "manifest_id": self.manifest.manifest_id,
             "configuration_hash": self.manifest.configuration_hash(),
             "taken_at": self.manifest.taken_at.isoformat().replace("+00:00", "Z"),
-            "verdict": self.coverage.verdict,
+            "verdict": self.verdict,
             "worst": self.worst.value if self.worst else None,
             "functions": len(self.coverage.functions),
             "stale": self.stale_count,
             "uncovered": self.uncovered_count,
-            "interventions": len(self.interventions),
+            # Recorded changes only. A change the reader derived (an unexplained difference
+            # between two manifests, or a record it could not read) is not a record anyone
+            # sealed; it is counted apart, and it does disturb the functions' evidence.
+            "interventions": sum(1 for i in self.interventions
+                                 if not isinstance(i, DERIVED_INTERVENTIONS)),
+            "unrecorded_changes": sum(1 for i in self.interventions
+                                      if isinstance(i, DERIVED_INTERVENTIONS)),
             "verifications": len(self.verifications),
             "tier_ceiling": self.manifest.tier_ceiling.value,
             # The weakest tier among the verifications the current functions rest on
@@ -152,11 +176,19 @@ class Fleet:
         #   filed (plus a day for clocks) is not believed: it is dated by its
         #   filing, so a future date cannot pin a manifest as current for ever.
         best: dict[str, tuple[tuple[int, Any, int], SafetyManifest]] = {}
-        for entry in ledger.entries(kind=MANIFEST_KIND):
-            evidence = entry.evidence()
-            if not evidence.verify():
+        # A manifest that cannot be read (seal, shape, not JSON) cannot be "the machine"; it
+        # is not trusted, and it is not ignored either: ``interventions_from_ledger`` turns
+        # it into a change assumed to touch everything, so the machine it belongs to cannot
+        # read as covered on the manifest before it.
+        readable, _, _ = ledger.read_subject(None, MANIFEST_KIND)
+        for entry in readable:
+            try:
+                evidence = entry.evidence()
+                if not evidence.verify():
+                    continue
+                manifest = SafetyManifest.from_dict(evidence.body["manifest"])
+            except (AssuranceError, KeyError, ValueError, TypeError, AttributeError):
                 continue
-            manifest = SafetyManifest.from_dict(evidence.body["manifest"])
             if manifest.source is ManifestSource.AS_INTENDED:
                 continue
             filed = parse_utc(entry.at)
@@ -185,6 +217,7 @@ class Fleet:
                 machine_key=key, manifest=manifest,
                 coverage=assess_coverage(manifest, vfs, ivs),
                 interventions=tuple(ivs), verifications=tuple(vfs),
+                chain_verified=chain_ok,
             ))
 
         return cls(records=tuple(records), chain_verified=chain_ok,
@@ -199,17 +232,16 @@ class Fleet:
     def with_gaps(self) -> tuple[MachineRecord, ...]:
         """Machines where at least one declared function is not currently covered."""
         return tuple(r for r in self.records
-                     if r.coverage.verdict not in ("covered", "covered_at_community"))
+                     if r.verdict not in ("covered", "covered_at_community"))
 
     def covered_at_community(self) -> tuple[MachineRecord, ...]:
         """Machines fully current, but only on evidence below ``validated``."""
-        return tuple(r for r in self.records
-                     if r.coverage.verdict == "covered_at_community")
+        return tuple(r for r in self.records if r.verdict == "covered_at_community")
 
     def summary(self) -> FleetSummary:
         worst = Counter(r.worst.value for r in self.records if r.worst)
         sites = Counter(r.site or "(no site recorded)" for r in self.records)
-        covered = sum(1 for r in self.records if r.coverage.verdict == "covered")
+        covered = sum(1 for r in self.records if r.verdict == "covered")
         at_community = len(self.covered_at_community())
         return FleetSummary(
             machines=len(self.records),

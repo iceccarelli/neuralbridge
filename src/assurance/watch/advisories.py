@@ -382,12 +382,18 @@ def check_feeds(
                           else {"source": "supplier_feed", "trust_basis": "config_key",
                                 "trust_state": "config_key_verified"})
             report = assess_impact(advisory, fleet, provenance=provenance)
-            if trust is not None and not trust.permitted(advisory_id):
+            if advisory.import_record is not None or (
+                    trust is not None and not trust.permitted(advisory_id)):
                 # Inspectable, consequence-free: no machines (so no stop-use and
                 # no intake), no report (so no case), not counted as new.
+                # An unsigned import is untrusted wherever it was found, even in a feed
+                # whose signature verifies: the signature is over the supplier's file,
+                # and the file says it is not the supplier's own statement.
                 findings.append(_finding(
                     advisory, sub.supplier_id, "untrusted", report,
-                    trust_basis="none", trust_state=trust.trust_state,
+                    trust_basis="none",
+                    trust_state=(trust.trust_state if trust is not None
+                                 and advisory.import_record is None else "unsigned_import"),
                     inspect_only=True))
                 continue
             if report.verdict == "clear":
