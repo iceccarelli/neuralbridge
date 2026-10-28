@@ -45,6 +45,23 @@ __all__ = [
 ]
 
 
+_HEX64 = frozenset("0123456789abcdef")
+
+
+def normalised_digest(text: str) -> str:
+    """The SHA-256 digest in ``text`` in comparison form, or ``""`` if it is not one.
+
+    Trimmed, lower-cased, a leading ``sha256:`` dropped. Anything that is not exactly 64
+    hex digits afterwards (``n/a``, ``unknown``, ``0``, whitespace, a truncated digest)
+    is not a hash and returns ``""``: two manifests that both say ``n/a`` must never
+    compare as an unchanged artefact.
+    """
+    h = text.strip().lower()
+    if h.startswith("sha256:"):
+        h = h[len("sha256:"):].strip()
+    return h if len(h) == 64 and set(h) <= _HEX64 else ""
+
+
 class ManifestError(AssuranceError):
     """A manifest is incomplete, inconsistent, or claims more than it evidences."""
 
@@ -245,8 +262,20 @@ class SafetyItem:
 
     @property
     def is_comparable(self) -> bool:
-        """Whether a change to this item would be detectable at all."""
-        return bool(self.content_hash)
+        """Whether a change to this item would be detectable at all.
+
+        Only a real SHA-256 digest counts. A placeholder is not evidence that nothing
+        changed, so it makes the item invisible to comparison, which the report says.
+        """
+        return bool(normalised_digest(self.content_hash))
+
+    @property
+    def effective_hash_source(self) -> HashSource:
+        """What the item's identity is actually worth: ``declared`` without a real digest.
+
+        An item that says ``read_from_machine`` beside ``n/a`` was not read from anything.
+        """
+        return self.hash_source if self.is_comparable else HashSource.DECLARED
 
     @property
     def is_safety_bearing(self) -> bool:
@@ -370,7 +399,7 @@ class SafetyManifest:
         manifest down, and that is correct: the manifest is a statement about
         the machine's configuration as a whole.
         """
-        return min((i.hash_source.tier_ceiling for i in self.items),
+        return min((i.effective_hash_source.tier_ceiling for i in self.items),
                    default=AssuranceTier.PROFILE)
 
     @property
