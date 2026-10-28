@@ -118,3 +118,24 @@ def trace_in_modes(modes: tuple[OperatingMode, ...], *, speed: float = 300.0,
             Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=speed,
                    mode=modes[i % len(modes)], separation=3000.0)
             for i in range(n)))
+
+
+def seal_fleet(led: EvidenceLedger, n: int, rec: Recorder | None = None, *, maker: str = "Acme",
+               model: str = "AR-7") -> Recorder:
+    """``n`` enrolled units, each with its own recording attested by one trusted recorder and a
+    bundle sealed for its own unit key (the shape of a real fleet ledger)."""
+    from dataclasses import replace as _replace
+
+    from assurance.machinery.record import record_manifest
+
+    rec = rec or Recorder()
+    env, base = envelope(), laptop_trace()
+    for i in range(n):
+        serial = f"{i:05d}"
+        key = f"{maker}/{model}#{serial}"
+        trace = _replace(base, trace_id=f"RUN-{serial}")
+        att = rec.attest_for(env, trace, machine_serial=serial).to_dict()
+        record_manifest(led, manifest(maker, model, serial), actor=Actor("t", "tech"))
+        build_bundle(env, trace, actor=ACTOR, recorder_attestations=[att],
+                     recorder_trust=rec.trust(), subject=key, ledger=led)
+    return rec
