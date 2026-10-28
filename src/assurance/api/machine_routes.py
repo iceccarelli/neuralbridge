@@ -20,6 +20,7 @@ is what makes the sealed bundle worth buying.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Annotated, Any
 
@@ -72,6 +73,28 @@ machine_router = APIRouter(prefix="/v1/machine", tags=["machine safety"])
 #: A trace bigger than this is a file upload problem, not an API problem, and
 #: the CLI handles it without a round trip. Refusing early beats timing out.
 MAX_SAMPLES = 200_000
+
+#: How many /verify engine runs one process executes at once. A maximum-size trace is
+#: hundreds of megabytes of Python objects; the rest wait their turn on the event loop
+#: (holding no worker thread), so other routes keep being served.
+MAX_CONCURRENT_VERIFICATIONS = 4
+
+
+class _Gate:
+    """A counting semaphore per running event loop (a semaphore belongs to one loop)."""
+
+    def __init__(self, size: int) -> None:
+        self._size = size
+        self._by_loop: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+    def for_running_loop(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        for stale in [lp for lp in self._by_loop if lp.is_closed()]:
+            del self._by_loop[stale]
+        return self._by_loop.setdefault(loop, asyncio.Semaphore(self._size))
+
+
+_VERIFY_GATE = _Gate(MAX_CONCURRENT_VERIFICATIONS)
 
 
 class SeparationIn(BaseModel):
@@ -330,6 +353,20 @@ async def verify_run(
             },
         )
 
+    # The engine is CPU work on a trace of up to MAX_SAMPLES samples (seconds, for a large
+    # one). Run inline it would stop the event loop for that long: nothing else on the
+    # process would be served, health checks and every other tenant included. It runs in a
+    # worker thread, like the bundle checker, and at most MAX_CONCURRENT_VERIFICATIONS at a
+    # time per process, because the thread pool alone would let dozens of maximum-size
+    # traces sit in memory at once (the event loop used to serialise them by accident).
+    async with _VERIFY_GATE.for_running_loop():
+        return await run_in_threadpool(_verify_sync, body, envelope, actor, register)
+
+
+def _verify_sync(
+    body: VerifyIn, envelope: SafetyEnvelope, actor: Any, register: Any,
+) -> dict[str, Any]:
+    """Parse the trace and run the engine (and seal, when asked). Runs in a worker thread."""
     try:
         trace = Trace.from_dict(body.trace)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
