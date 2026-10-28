@@ -173,3 +173,22 @@ def test_a_feed_that_only_grew_stays_trusted_and_advances_the_head(feed, tmp_pat
     records, _, _, trust = _read_feed_pinned("controlco", str(f.path), store)
     assert trust.policy_satisfied
     assert store.feed_head("controlco") == (4, records[-1].content_hash())
+
+
+def test_evaluate_feed_uses_the_remembered_head_when_the_caller_names_none(feed, tmp_path):
+    """Every path that judges a feed (API, CLI, fleet) is held to the same baseline, not
+    only the watch pass."""
+    from assurance.supplier.trust import evaluate_feed
+
+    f, key = feed
+    store = _pinned(tmp_path, key)
+    assert evaluate_feed(f.read(), store).policy_satisfied
+    store.record_feed_head("controlco", 3, f.read()[-1].content_hash())
+
+    truncate(f, 2)
+    cut = evaluate_feed(f.read(), store)  # no min_sequence given: the store supplies it
+    assert cut.policy_satisfied is False
+    assert any("removed" in p for p in cut.chain_problems)
+
+    # An explicit 0 judges the feed with no baseline (what accepting a re-issued feed needs).
+    assert evaluate_feed(f.read(), store, min_sequence=0).policy_satisfied
