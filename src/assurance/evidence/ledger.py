@@ -367,10 +367,32 @@ class EvidenceLedger:
                 "— the record was edited in place"
             )
         try:
-            if not entry.evidence().verify():
+            ev = entry.evidence()
+            if not ev.verify():
                 problems.append(
                     f"seq {entry.seq}: payload does not match content_hash "
                     f"{entry.content_hash[:12]} — the evidence body was edited"
+                )
+            elif ev.content_hash != entry.content_hash or ev.kind != entry.kind:
+                # Each payload can be internally consistent and still not be the evidence
+                # this link was made for: the link hash covers the columns, not the payload.
+                problems.append(
+                    f"seq {entry.seq}: the entry names different evidence than it "
+                    "contains — the payload was replaced"
+                )
+            elif entry.actor != ev.actor.identifier:
+                # The actor column sits outside the link hash, so it can be rewritten
+                # without breaking the chain; it must agree with the sealed evidence.
+                problems.append(
+                    f"seq {entry.seq}: the recorded actor {entry.actor!r} is not the "
+                    f"evidence's actor {ev.actor.identifier!r}"
+                )
+            elif ev.to_dict() != entry.payload:
+                # The seal covers the fields the evidence model reads. Anything else in
+                # the object (an added key, a non-canonical form) rides along unsealed.
+                problems.append(
+                    f"seq {entry.seq}: the evidence object carries content the seal "
+                    "does not cover (an extra or non-canonical field)"
                 )
         except Exception as exc:
             problems.append(f"seq {entry.seq}: payload is unreadable ({exc})")
