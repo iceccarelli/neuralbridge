@@ -121,7 +121,11 @@ def verify_machine(ledger: EvidenceLedger, key: str, *, when: datetime):
                              FigureBasis("measured", "S1", "2026-01-01")),
         uncertainty=SensingUncertainty(100.0, 50.0, FigureBasis("measured", "C1")),
         intrusion_distance_mm=850.0)
-    trace = Trace(trace_id=f"R-{when:%Y%m%d%H}", provenance=Provenance.FIELD,
+    # One recording per unit: the same trace is the validated evidence of ONE unit key only
+    # (a second claim is refused at sealing and capped at community by every reader), so each
+    # machine's run carries its own id.
+    trace = Trace(trace_id=f"R-{when:%Y%m%d%H}-{key.rpartition('#')[2]}",
+                  provenance=Provenance.FIELD,
                   source_system="fw", started_at=when, sample_rate_hz=50.0,
                   samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                        tcp_speed=400.0, mode=OperatingMode.SSM,
