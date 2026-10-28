@@ -683,6 +683,10 @@ class AccountStore:
                 (customer, sub, 0 if phase == "terminal" else at, at, phase, row["tier"], at, now),
             )
             return
+        if existing["phase"] == "terminal" and existing["state_at"] > at:
+            # The record holds an end newer than anything that wrote the row: the row is
+            # the older word here and must not bring the subscription back.
+            return
         eff = _effective_phase(existing, cls._failed_at(db, customer, sub))
         tier = "free" if eff == "terminal" else (existing["tier"] or row["tier"])
         if (_STATUS_OF_PHASE[eff], tier) != (row["status"], row["tier"]):
@@ -791,11 +795,12 @@ class AccountStore:
     ) -> dict[str, Any] | None:
         """What the customer's subscriptions add up to, or None if none is recorded.
 
-        The current subscription is the newest-bought one (a purchase supersedes the
-        subscriptions before it), whether or not it has ended: cancelling the plan you
-        are on ends access even if an older subscription was never cancelled. The account
-        is a function of the recorded states alone, so the order events arrived in cannot
-        matter.
+        The current subscription is the newest-bought one that has not ended (a purchase
+        supersedes the subscriptions before it). A subscription that has ended is
+        current only when none has not: cancelling the newest plan must not lock out a
+        customer who still pays for an older one, which is what Stripe's own state (and
+        the reconciler) says. The account is a function of the recorded states alone, so
+        the order events arrived in cannot matter.
         """
         subs = db.execute(
             "SELECT * FROM subscription_states WHERE stripe_customer_id=?", (customer,)
@@ -812,7 +817,9 @@ class AccountStore:
         def phase_of(r: sqlite3.Row) -> str:
             return _effective_phase(r, failed.get(r["stripe_subscription_id"], 0))
 
-        cur = max(subs, key=lambda r: (r["born"], r["state_at"], r["stripe_subscription_id"]))
+        # Not ended beats ended; among either, the newest-bought (then the latest report).
+        cur = max(subs, key=lambda r: (
+            phase_of(r) != "terminal", r["born"], r["state_at"], r["stripe_subscription_id"]))
         phase = phase_of(cur)
         failure = failed.get(cur["stripe_subscription_id"], 0)
         return {
@@ -1194,7 +1201,8 @@ class AccountStore:
 
         The change and its row in ``entitlement_reconciliations`` are one
         transaction: both happen or neither does. Nothing else on the account
-        is touched. Refuses (changing nothing) for the operator, an account
+        is touched except the subscription it follows, which becomes the one the finding
+        names. Refuses (changing nothing) for the operator, an account
         with no Stripe customer, a tier that is not ``free`` or purchasable,
         and:
 
@@ -1236,11 +1244,13 @@ class AccountStore:
             else:
                 since = snapshot_at
             now = format_utc(utc_now())
+            # The account follows the subscription Stripe says it is paying for: left on
+            # another one, that one's own end would be ignored as "not the current one".
             db.execute(
-                "UPDATE accounts SET status=?, tier=?, updated_at=?, last_event_at=?, "
-                "past_due_since=? WHERE id=?",
-                (new_status, new_tier, now, max(row["last_event_at"], horizon), since,
-                 row["id"]),
+                "UPDATE accounts SET status=?, tier=?, stripe_subscription_id=?, updated_at=?, "
+                "last_event_at=?, past_due_since=? WHERE id=?",
+                (new_status, new_tier, stripe_subscription_id or row["stripe_subscription_id"],
+                 now, max(row["last_event_at"], horizon), since, row["id"]),
             )
             db.execute(
                 "INSERT INTO entitlement_reconciliations (run_id, account_id, category, "
