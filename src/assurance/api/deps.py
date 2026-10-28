@@ -58,6 +58,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import uuid
@@ -601,7 +602,9 @@ async def request_fingerprint(request: Request, scope: str) -> str:
     try:
         canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
                                ensure_ascii=True).encode() if raw else b""
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON (or nested too deep to be data): the bytes it is. The depth guard in
+        # BodySizeLimitMiddleware is what answers such a body; this must never be the 500.
         canonical = raw
     digest = hashlib.sha256()
     for part in (scope, request.method, request.url.path,
@@ -895,6 +898,9 @@ _DEPTH_SCAN_MAX_BYTES = 4 * 1024 * 1024
 _JSON_TOKEN = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
 
 
+_log = logging.getLogger("assurance.api.deps")
+
+
 def max_json_depth() -> int:
     return _env_bytes(_DEPTH_ENV, _DEFAULT_JSON_DEPTH)
 
@@ -911,6 +917,17 @@ def json_nesting_exceeds(data: bytes, cap: int) -> bool:
         elif char in b"]}":
             depth = max(depth - 1, 0)
     return False
+
+
+def json_is_utf8(data: bytes) -> bool:
+    """Whether a JSON body is UTF-8 (RFC 8259), as opposed to the UTF-16/32 the stdlib sniffs.
+
+    ``json.loads(bytes)`` detects UTF-16 and UTF-32 from the first bytes, so a body in one of
+    them parses; but the nesting scan reads bytes, and in two-byte text an escaped quote
+    shifts its tokenizer so the brackets after it are read as string content. One encoding
+    is accepted, so what is scanned is what is parsed. A UTF-8 byte-order mark is fine.
+    """
+    return json.detect_encoding(data) in ("utf-8", "utf-8-sig")
 
 
 def _env_bytes(name: str, default: int) -> int:
@@ -958,6 +975,26 @@ def _key_resolves(presented: str) -> bool:
         return False
 
 
+async def _send_json_refusal(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]], status_code: int,
+    error: str, detail: str, **extra: Any,
+) -> None:
+    body = json.dumps({"detail": {"error": error, **extra, "detail": detail}}).encode()
+    await send({"type": "http.response.start", "status": status_code, "headers": [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _send_too_deep(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]]
+) -> None:
+    cap = max_json_depth()
+    await _send_json_refusal(
+        send, 422, "json_too_deeply_nested",
+        f"JSON bodies may nest arrays and objects at most {cap} deep.", limit_depth=cap)
+
+
 async def _send_413(
     send: Callable[[MutableMapping[str, Any]], Awaitable[None]], detail: dict[str, Any]
 ) -> None:
@@ -983,6 +1020,37 @@ class BodySizeLimitMiddleware:
 
     def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
         self.app = app
+
+    async def _guarded(
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Run the app; a body nested past the interpreter's recursion limit is a 422, not a 500.
+
+        The pre-scan covers bodies up to ``_DEPTH_SCAN_MAX_BYTES``. The recorded-trace
+        allowance is larger (scanning 32 MiB token by token would hold the event loop), so
+        for it, and as the net under every other way a deep body can reach a recursive
+        step (validation, error rendering, encoding), the failure is answered here with
+        the same 422. Nothing from the body or the stack is logged.
+        """
+        started = False
+
+        async def tracking_send(message: MutableMapping[str, Any]) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except RecursionError:
+            if started:
+                raise
+            _log.warning("recursion limit reached handling a request body: %s %s",
+                         scope.get("method"), scope.get("path"))
+            await _send_too_deep(send)
 
     async def __call__(
         self,
@@ -1036,16 +1104,13 @@ class BodySizeLimitMiddleware:
                 if not message.get("more_body", False):
                     break
             data = b"".join(m.get("body", b"") for m in messages)
-            cap = max_json_depth()
-            if json_nesting_exceeds(data, cap):
-                body = json.dumps({"detail": {
-                    "error": "json_too_deeply_nested", "limit_depth": cap,
-                    "detail": f"JSON bodies may nest arrays and objects at most {cap} deep.",
-                }}).encode()
-                await send({"type": "http.response.start", "status": 422, "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(body)).encode())]})
-                await send({"type": "http.response.body", "body": body})
+            if not json_is_utf8(data):
+                await _send_json_refusal(
+                    send, 415, "json_not_utf8",
+                    "JSON bodies must be UTF-8 (RFC 8259); UTF-16 and UTF-32 are not accepted.")
+                return
+            if json_nesting_exceeds(data, max_json_depth()):
+                await _send_too_deep(send)
                 return
             replayed = False
 
@@ -1056,7 +1121,7 @@ class BodySizeLimitMiddleware:
                     return {"type": "http.request", "body": data, "more_body": False}
                 return await receive()
 
-            await self.app(scope, replay, send)
+            await self._guarded(scope, replay, send)
             return
 
         seen = 0
@@ -1072,4 +1137,4 @@ class BodySizeLimitMiddleware:
                     raise HTTPException(status_code=413, detail=detail)
             return message
 
-        await self.app(scope, limited_receive, send)
+        await self._guarded(scope, limited_receive, send)
