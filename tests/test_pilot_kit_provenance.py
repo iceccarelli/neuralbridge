@@ -11,6 +11,7 @@ machine, so that label is now an explicit, recorded operator assertion.
 from __future__ import annotations
 
 import json
+import re
 
 from assurance.collect.cli import main as collect_main
 from assurance.collect.collector import collect
@@ -53,7 +54,8 @@ class TestTheKitDoesNotClaimItLookedAtTheMachine:
     def test_the_report_does_not_print_tier_validated_for_export_folder_evidence(self, tmp_path):
         _, _, html = _kit_manifest(tmp_path)
         assert "tier validated" not in html
-        assert "tier ceiling community" in html
+        # the machine block's own header, not just any mention elsewhere on the page
+        assert re.search(r"item\(s\) · tier ceiling community</span>", html)
 
     def test_the_run_record_says_the_files_were_not_asserted_to_come_off_the_machine(
             self, tmp_path):

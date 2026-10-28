@@ -243,6 +243,18 @@ class TestBrokenPipe:
         assert any(e.subject == "Grimaldi/AR-7#0412" for e in led.entries())
         assert proc.returncode == 141        # 128 + SIGPIPE, as `yes | head` reports
 
+    def test_a_short_output_that_only_fails_when_flushed_is_quiet_too(self):
+        """Block-buffered: the error surfaces at the flush, not in the print."""
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        for argv in ([], ["machine", "separation", "--envelope", str(ENV), "--speed", "400"]):
+            proc = subprocess.Popen(  # noqa: S603
+                [sys.executable, "-m", "assurance", *argv],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=ROOT)
+            proc.stdout.close()
+            _, err = proc.communicate(timeout=60)
+            assert err.decode().strip() == "", (argv, err.decode())
+            assert proc.returncode == 141, argv
+
     def test_the_handler_does_not_swallow_other_errors(self):
         from assurance.cli import main
 

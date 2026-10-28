@@ -32,8 +32,7 @@ _DOMAINS = {
 }
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
+def _run(argv: list[str]) -> int:
     if not argv or argv[0] in {"-h", "--help"}:
         print(__doc__)
         print("domains:")
@@ -48,8 +47,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     from importlib import import_module
 
+    return int(import_module(_DOMAINS[domain]).main(rest))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
     try:
-        return int(import_module(_DOMAINS[domain]).main(rest))
+        code = _run(args)
+        # Output is block-buffered on a pipe: a reader that left early fails here, not in
+        # the print that produced the text. Flush inside the guard so both cases end alike.
+        sys.stdout.flush()
+        return code
     except BrokenPipeError:
         # `assurance ... | head`: the reader left while we were printing. Whatever the
         # command seals (a ledger entry, a case) is sealed before it prints, so there
