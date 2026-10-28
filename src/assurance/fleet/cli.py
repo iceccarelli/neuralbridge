@@ -2,6 +2,7 @@
 
     list        every machine in the ledger, worst coverage first
     advisory    fan a component advisory out across the fleet
+    import-csaf translate a CSAF 2.0 advisory into this product's advisory format
     declare     bind a Declaration of Conformity to the configuration in front of you
     declaration check a declaration against what the machine runs today
 
@@ -19,7 +20,8 @@ from pathlib import Path
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.fleet.advisory import ComponentAdvisory
+from assurance.fleet.advisory import AdvisorySeverity, ComponentAdvisory
+from assurance.fleet.csaf import advisory_from_csaf
 from assurance.fleet.declaration import (
     DeclarationOfConformity,
     check_declaration,
@@ -66,6 +68,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why (recorded in the ledger)")
     ad.add_argument("--ledger", required=True, type=Path)
     ad.add_argument("--json", action="store_true")
+
+    ic = verbs.add_parser(
+        "import-csaf",
+        help="translate a CSAF 2.0 advisory (unsigned, inspect-only) into our advisory JSON")
+    ic.add_argument("csaf", type=Path, help="a CSAF 2.0 document as JSON")
+    ic.add_argument("--out", type=Path, default=None,
+                    help="write the advisory here instead of standard output")
+    ic.add_argument("--severity", default="safety_relevant",
+                    choices=[s.value for s in AdvisorySeverity],
+                    help="CSAF does not say; the default over-reports rather than clears")
 
     dc = verbs.add_parser("declare",
                           help="bind a declaration to a manifest's configuration")
@@ -270,6 +282,22 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
     return 0 if all(r.verdict == "clear" for r in reports) else 1
 
 
+def _cmd_import_csaf(args: argparse.Namespace) -> int:
+    document = json.loads(args.csaf.read_text(encoding="utf-8"))
+    result = advisory_from_csaf(document, severity=AdvisorySeverity(args.severity))
+    text = json.dumps(result.advisory.to_dict(), indent=2, sort_keys=True) + "\n"
+    if args.out:
+        args.out.write_text(text, encoding="utf-8")
+    else:
+        print(text, end="")
+    for note in result.notes:
+        print(f"note: {note}", file=sys.stderr)
+    print(f"imported {result.advisory.advisory_id} ({len(result.advisory.affected)} affected "
+          f"component(s)); run `assurance fleet advisory <file> --ledger ...` to see which "
+          "machines it touches.", file=sys.stderr)
+    return 0
+
+
 def _cmd_declare(args: argparse.Namespace) -> int:
     manifest = SafetyManifest.from_json(args.manifest)
     issued = parse_utc(args.issued_at) if args.issued_at else utc_now()
@@ -328,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "list": _cmd_list,
         "advisory": _cmd_advisory,
+        "import-csaf": _cmd_import_csaf,
         "declare": _cmd_declare,
         "declaration": _cmd_declaration,
     }
