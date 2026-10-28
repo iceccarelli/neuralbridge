@@ -84,6 +84,10 @@ jobs:
       # database, so two jobs or processes running them against the same server at once can
       # corrupt each other; each matrix job here has its own service container.
       NEURALBRIDGE_REQUIRE_POSTGRES: "1"
+      # Likewise for the offline kit's network-namespace test: a runner that cannot create
+      # a namespace with no interface (.github/scripts/netns-run.sh) fails the job rather
+      # than skipping the one test that enforces "the kit opens no sockets".
+      NEURALBRIDGE_REQUIRE_NETNS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -1382,9 +1382,16 @@ def _restore_steps(run: Run, data: Path | None, supplied: Path | None, scratch: 
 
     result = restore_check.verify(volume)
     problems = [str(p) for p in result.get("problems", [])]  # type: ignore[attr-defined]
-    run.add("restore.verify", PASS if result.get("ok") else FAIL,
-            "integrity_check ok, every hash chain verifies, every tenant ledger has an account"
-            if result.get("ok") else "; ".join(problems) or "the restored volume does not verify")
+    if result.get("status") == "unchecked":
+        run.add("restore.verify", UNCHECKED,
+                "the backup has no manifest (taken by an older build): consistent as far as it "
+                "can be read, but nothing says no ledger or file is missing")
+    else:
+        run.add("restore.verify", PASS if result.get("ok") else FAIL,
+                "integrity_check ok, every hash chain verifies, every tenant ledger has an "
+                "account, every manifest file present with its recorded hash"
+                if result.get("ok") else "; ".join(problems)
+                or "the restored volume does not verify")
     checked: dict[str, int] = dict(result.get("checked", {}))  # type: ignore[call-overload]
 
     if source_counts is None:

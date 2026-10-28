@@ -58,32 +58,55 @@ Every vendor selling software that runs inside a plant says "it works offline,
 nothing leaves your network". Plant IT has heard it before, cannot check it, and
 correctly treats it as worth nothing.
 
-This run arms a guard over the process's socket layer, refuses every outbound
-connection, records any attempt **with the line of code that made it**, and
-seals that record into the customer's own ledger. Afterwards, "did this tool
-send anything anywhere" has an answer with a hash on it, in a file the customer
-holds. That is a different kind of object from a bullet point on a datasheet.
+This run arms a guard over the process's socket layer and process creation,
+refuses every outbound connection, records any attempt **with the line of code
+that made it**, and seals that record into the customer's own ledger.
+Afterwards, "did this tool send anything anywhere" has an answer with a hash on
+it, in a file the customer holds. That is a different kind of object from a
+bullet point on a datasheet.
+
+The guard has three layers, because one is not enough: the functions of the
+`socket` module are replaced for the run (`connect`, `connect_ex`,
+`create_connection`, `sendto`, `sendmsg`, `getaddrinfo`, `gethostbyname`,
+`gethostbyaddr`, `getnameinfo`), and a Python audit hook (`sys.addaudithook`)
+refuses the same operations as the interpreter announces them — including calls
+made on the `_socket` module directly, the creation of an IP socket, `bind`, and
+creating a process (`subprocess`, `os.system`, `os.exec*`, `os.spawn*`,
+`os.posix_spawn`, `os.fork`). The third layer exists because CPython announces
+nothing when `multiprocessing` (spawn, forkserver, `ProcessPoolExecutor`) starts a
+child through `_posixsubprocess.fork_exec`: that function is wrapped for the run
+and refuses and records. Things the guard saw and *allowed* (a local
+`socketpair`, loopback when you asked for it) are listed in the record under
+`observed`, so "held" never hides what the process did.
 
 What the guard covers, stated precisely because a security reviewer will ask and
 a vague answer is worse than a narrow one:
 
-* It covers outbound connections made by this Python process through the
-  `socket` module — `connect`, `connect_ex`, `create_connection`, `sendto`, and
-  name resolution via `getaddrinfo`. Every Python HTTP and TLS client goes
+* It covers outbound connections, datagrams, name resolution and the creation of
+  IP sockets made by this Python process. Every Python HTTP and TLS client goes
   through that layer. Resolution alone is refused too: a tool that resolves a
   name has already told a DNS server something, which is exactly what a network
   team is asking about.
-* It does **not** cover a subprocess, which has its own socket layer. The kit
-  spawns none.
-* It does **not** cover a C extension that opens a socket file descriptor
-  without going through the `socket` module.
-* It records **intent**, it does not enforce containment. Code determined to
-  evade it could. Containment is a firewall's job, and the plant already has
-  one. This answers whether the tool tried.
+* It refuses and records creating a process from this one. A subprocess started
+  some other way, or one that already existed, has its own socket layer which
+  this guard cannot see.
+* It does **not** cover native code that reaches the kernel without going through
+  CPython — a C extension calling `socket(2)` itself, `ctypes`/FFI (a
+  `ctypes.dlopen` is recorded; a call through the loaded function is not), a loaded
+  library. It does not see data sent on a socket that was already connected before
+  the block began.
+* It records **intent**, it does not enforce containment. The guard lives in the
+  process it watches, so code in that process determined to evade it could (the
+  audit hook cannot defend against a hostile process). Containment is the
+  operating system's job: **for an enforced boundary run the kit in a network
+  namespace with no interface, e.g. `unshare -rn python -m assurance kit run
+  ...`**, or behind the plant's firewall. The repository's CI workflow is written to
+  do exactly that and to fail if the namespace is unavailable, but that wiring has
+  not yet been observed on a hosted runner (only on a development machine). This
+  answers whether the tool tried.
 
-Those four sentences are in the evidence record and printed in the report. A
-claim next to its limits is worth more to a reviewer than a broader claim with
-none.
+Those sentences are in the evidence record and printed in the report. A claim
+next to its limits is worth more to a reviewer than a broader claim with none.
 
 One implementation detail that is a decision, not an accident: the refusal is
 **not** an `OSError`. Every HTTP client catches `OSError` and treats it as a

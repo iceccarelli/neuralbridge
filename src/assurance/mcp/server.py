@@ -35,6 +35,8 @@ from typing import Any
 import httpx
 from mcp.server.mcpserver import MCPServer
 
+from assurance.core.api_url import api_url_problem
+
 mcp: MCPServer = MCPServer(
     name="assurance",
     version="0.1.0",
@@ -108,9 +110,21 @@ async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = No
     base = _api_url()
     if base is None:
         return dict(_NOT_CONFIGURED)
+    # The same rule `assurance watch push` applies: https, except plain http to loopback;
+    # no credentials in the URL. The key is never sent anywhere else.
+    problem = api_url_problem(base)
+    if problem:
+        return {
+            "error": "assurance_api_url_not_allowed",
+            "detail": problem.replace("--api-url", "ASSURANCE_API_URL"),
+            "remedy": "Set ASSURANCE_API_URL to an https URL (plain http is accepted only "
+                      "for localhost, 127.0.0.1 and ::1). Nothing was sent.",
+        }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # trust_env=False: the key goes to the host named in ASSURANCE_API_URL and to no proxy
+        # an environment variable names (`assurance watch push` does the same).
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             response = await client.request(method, f"{base}{path}", headers=_headers(),
                                             json=json_body, params=params)
     except httpx.RequestError as exc:
