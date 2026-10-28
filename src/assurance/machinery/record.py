@@ -222,6 +222,12 @@ def manifests_from_ledger(
     return out
 
 
+#: What the watch writes into a manifest's notes when it could not read every item its plan
+#: names (``change.service.INCOMPLETE_COLLECTION_MARK``; a test pins the two together,
+#: because this module cannot import the change package). Such a look is not a
+#: configuration the machine was in.
+_PARTIAL_LOOK_MARK = "[collection incomplete"
+
 _READER = Actor(identifier="assurance.ledger-reader", role="derived, not recorded",
                 kind="automation")
 
@@ -319,7 +325,9 @@ def implied_interventions(
 
     Walk the readable manifests in the order they were filed. Each ``as_found`` manifest
     is compared with the latest earlier one that was a look or a declaration (a plan,
-    ``as_intended``, says nothing about the machine). A safety-bearing item whose hash
+    ``as_intended``, says nothing about the machine; a look the watch marked incomplete is
+    not a configuration, so it is never the earlier side and items it did not collect are
+    not read as removed). A safety-bearing item whose hash
     differs, or that appeared or vanished, is a change; so is a version moving on a
     safety-bearing item that carries no hash to compare (the only sign there is).
 
@@ -345,10 +353,13 @@ def implied_interventions(
             continue
         if manifest.source is ManifestSource.AS_INTENDED:
             continue
+        partial = _PARTIAL_LOOK_MARK in manifest.notes
         if prior is not None and manifest.source is ManifestSource.AS_FOUND:
             prior_filed, before = prior
             divergence = compare(before, manifest)
             for change in divergence.changes:
+                if partial and change.kind is ChangeKind.REMOVED:
+                    continue    # not collected is not gone
                 moved = change.severity is Severity.SAFETY_RELEVANT or (
                     change.kind is ChangeKind.VERSION_RELABELLED
                     and change.severity is Severity.NOTABLE and bool(change.functions))
@@ -372,7 +383,8 @@ def implied_interventions(
                     notes="derived by comparing sealed manifests; nobody recorded this "
                           f"change. {change.detail}",
                 ))
-        prior = (filed, manifest)
+        if not partial:
+            prior = (filed, manifest)
     return out
 
 

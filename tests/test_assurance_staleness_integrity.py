@@ -255,6 +255,39 @@ class TestADateTheFilerControlsNeverMakesEvidenceLookFresher:
         assert report.functions[0].coverage is Coverage.FAILING
 
 
+class TestWhichRunACheckRestsOn:
+    def test_a_pass_that_cannot_be_dated_does_not_displace_an_older_honest_one(self, ledger):
+        seal(ledger, utc_now() - timedelta(days=5), tid="HONEST", expect="pass")
+        seal(ledger, utc_now() + timedelta(days=3), tid="UNDATABLE", expect="incomplete")
+        report, recs = coverage_of(ledger, [])
+        assert [r.date_suspect for r in recs] == [False, True]
+        fn = report.functions[0]
+        assert fn.coverage is Coverage.CURRENT
+        assert fn.last_verified_hash == recs[0].content_hash
+
+    def test_a_function_is_only_as_current_as_the_oldest_run_it_rests_on(self):
+        """Each check is judged by its newest run; the function by the OLDEST of those."""
+        def rec(seq: int, day: int, check: str) -> VerificationRecord:
+            return VerificationRecord(
+                content_hash=f"{seq:064x}", effective_at=datetime(2026, 9, day, tzinfo=UTC),
+                ledger_seq=seq, product="p", product_version="1", verdict="pass",
+                tier="validated", checks_verified=(check,), checks_not_verified=())
+
+        old, new = rec(1, 1, "workspace_containment"), rec(2, 20, "speed_limit")
+        between = update(when=datetime(2026, 9, 10, tzinfo=UTC))
+        report = assess_coverage(manifest(), [old, new], [between])
+        assert report.functions[0].coverage is Coverage.STALE
+        assert report.functions[0].last_verified_hash == old.content_hash
+
+    def test_a_record_that_says_a_check_both_passed_and_failed_does_not_cover_it(self):
+        both = VerificationRecord(
+            content_hash="a" * 64, effective_at=datetime(2026, 9, 1, tzinfo=UTC),
+            ledger_seq=1, product="p", product_version="1", verdict="pass", tier="validated",
+            checks_verified=CHECKS, checks_not_verified=("speed_limit",))
+        report = assess_coverage(manifest(), [both], [])
+        assert report.functions[0].coverage is Coverage.FAILING
+
+
 class TestAnAttestedBundleIsBoundByTheSameDates:
     def _attested(self, ledger: EvidenceLedger, start: datetime):
         rec = Recorder()
@@ -429,6 +462,42 @@ class TestTheJoinDoesNotDependOnAHandTypedList:
         assert any("SF-9" in c for c in report.checks_skipped)
 
 
+class TestReadingHandTypedFunctionIds:
+    @pytest.mark.parametrize("typed,resolved", [
+        ("SF-1", ("SF-1",)), ("sf-1", ("SF-1",)), (" SF-1 ", ("SF-1",)),
+        ("\tsf-1\n", ("SF-1",)),
+    ])
+    def test_an_id_is_read_as_the_manifests_own_spelling(self, typed, resolved):
+        assert manifest().resolve_function_ids([typed]) == (resolved, ())
+
+    def test_an_id_that_matches_nothing_is_unknown_and_kept_as_typed(self):
+        assert manifest().resolve_function_ids(["SF-1", "SF-9", "SF-9"]) == (
+            ("SF-1",), ("SF-9",))
+
+    def test_ids_that_differ_only_by_case_are_both_kept_rather_than_guessed_between(self):
+        m = manifest()
+        both = SafetyManifest(
+            manifest_id="M", machine=m.machine, source=m.source, taken_at=m.taken_at,
+            taken_by=m.taken_by, items=m.items,
+            functions=(*m.functions, SafetyFunction("sf-1", "lower", verified_by=CHECKS)))
+        assert both.resolve_function_ids(["Sf-1"]) == (("SF-1", "sf-1"), ())
+        assert both.resolve_function_ids(["sf-1"]) == (("sf-1",), ())     # exact wins
+
+    def test_a_blank_list_on_a_safety_item_is_not_called_unattributed(self, ledger):
+        verified_machine(ledger)
+        report, _ = coverage_of(ledger, [update(when=datetime(2026, 10, 1, tzinfo=UTC),
+                                                affects=())])
+        assert not any("name no safety function" in c for c in report.checks_skipped)
+        assert report.unrevalidated_interventions == ("INT-1",)
+
+    def test_a_change_to_an_item_nothing_implements_with_no_list_is_unattributed(self, ledger):
+        verified_machine(ledger)
+        report, _ = coverage_of(ledger, [update(when=datetime(2026, 10, 1, tzinfo=UTC),
+                                                affects=(), item="ghost")])
+        assert any("INT-1" in c and "name no safety function" in c
+                   for c in report.checks_skipped)
+
+
 class TestTheInterventionRouteChecksWhatItIsTold:
     def _ready(self, client, store):
         headers = keyed(store, "cell")
@@ -593,6 +662,13 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
                                          mid="PLAN"))
         report, _ = coverage_of(ledger)
         assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_a_plan_between_two_looks_is_not_a_machine_state_to_differ_from(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        record_manifest(ledger, manifest(fw=HASH_B, source=ManifestSource.AS_INTENDED,
+                                         mid="PLAN"))
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A2"))
+        assert interventions_from_ledger(ledger, KEY) == []
 
     def test_the_check_pipeline_does_not_verify_a_changed_machine(self, ledger):
         from assurance.check.pipeline import run_enrolled_check
@@ -759,6 +835,46 @@ class TestWhichManifestDifferencesAreChanges:
         assert not [i for i in interventions_from_ledger(ledger, KEY)
                     if i.intervention_id.startswith("implied:")]
 
+    def test_the_partial_look_mark_is_the_one_the_watch_writes(self):
+        from assurance.change.service import INCOMPLETE_COLLECTION_MARK
+        from assurance.machinery import record
+
+        assert record._PARTIAL_LOOK_MARK == INCOMPLETE_COLLECTION_MARK
+
+    def _partial(self, **kw) -> SafetyManifest:
+        from dataclasses import replace
+
+        from assurance.change.service import INCOMPLETE_COLLECTION_MARK
+
+        return replace(manifest(**kw), notes=f"{INCOMPLETE_COLLECTION_MARK}: plc not collected]")
+
+    def test_an_item_a_partial_look_did_not_collect_is_not_read_as_removed(self, ledger):
+        extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        self._verified(ledger, manifest(mid="M-A", extra_items=(extra,)))
+        partial = self._partial(mid="M-P")
+        record_manifest(ledger, partial)
+        report, _ = coverage_of(ledger, m=partial)
+        assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_the_whole_look_after_a_partial_one_is_compared_with_the_last_whole_look(
+            self, ledger):
+        extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
+                           HashSource.READ_FROM_MACHINE, implements=("SF-1",))
+        whole = manifest(mid="M-A", extra_items=(extra,))
+        self._verified(ledger, whole)
+        record_manifest(ledger, self._partial(mid="M-P"))
+        record_manifest(ledger, manifest(mid="M-W", extra_items=(extra,)))
+        assert interventions_from_ledger(ledger, KEY) == []
+
+    def test_a_partial_look_that_did_collect_a_changed_hash_still_shows_the_change(
+            self, ledger):
+        self._verified(ledger, manifest(fw=HASH_A, mid="M-A"))
+        partial = self._partial(fw=HASH_B, mid="M-P")
+        record_manifest(ledger, partial)
+        report, _ = coverage_of(ledger, m=partial)
+        assert report.functions[0].coverage is Coverage.STALE
+
     def test_the_first_look_has_nothing_to_differ_from(self, ledger):
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-A"))
         assert interventions_from_ledger(ledger, KEY) == []
@@ -838,6 +954,14 @@ class TestAnUnreadableChangeRecordFailsClosed:
         db.execute("update chain set payload=? where seq=?", ("[1, 2]", seq))
         db.commit()
         db.close()
+        self._assert_fails_closed(ledger)
+
+    def test_a_record_filed_under_one_unit_that_names_another_is_not_dropped(self, ledger):
+        verified_machine(ledger)
+        other = update(when=datetime(2026, 10, 1, tzinfo=UTC), key="Acme/AR-7#0413")
+        ledger.append(Evidence(kind=INTERVENTION_KIND,
+                               body={"intervention": other.to_dict(), "findings": []},
+                               actor=TECH, origin=Origin(system="test")).seal(), subject=KEY)
         self._assert_fails_closed(ledger)
 
     def test_it_stays_stale_over_http_too(self, client, store):
