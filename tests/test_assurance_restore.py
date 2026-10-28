@@ -13,6 +13,7 @@ import sqlite3
 import pytest
 
 from assurance.api.deps import tenant_ledger_path
+from assurance.attest import AttestationLog, SigningKey, attest, head_of
 from assurance.billing.accounts import AccountStore
 from assurance.core import Actor, Evidence, Origin
 from assurance.evidence import EvidenceLedger, restore_check
@@ -40,7 +41,10 @@ def data(tmp_path, monkeypatch):
             led.append(_ev(i), subject="CASE-1")
         ids.append(acct.id)
     (root / "attestations").mkdir()
-    (root / "attestations" / f"{ids[0]}.jsonl").write_text('{"x":1}\n')
+    # A genuine attestation log (the restore check now reads it against its ledger); a
+    # placeholder line is rightly reported as an unreadable log.
+    attest(head_of(EvidenceLedger(tenant_ledger_path(ids[0]))), SigningKey.generate(),
+           AttestationLog(root / "attestations" / f"{ids[0]}.jsonl"))
     (root / "supplier-feeds").mkdir()
     (root / "supplier-feeds" / f"{ids[0]}.jsonl").write_text('{"y":1}\n')
     shared = EvidenceLedger(root / "art14-register.db")
@@ -53,7 +57,8 @@ def test_backup_then_verify_covers_every_tenant(data, tmp_path):
     names = restore_check.backup(root, tmp_path / "bk")
     assert set(names) == {"accounts.db", "art14-register.db", "attestations/",
                           "supplier-feeds/", *(f"tenants/{i}.db" for i in ids)}
-    assert (tmp_path / "bk" / "attestations" / f"{ids[0]}.jsonl").read_text() == '{"x":1}\n'
+    assert (tmp_path / "bk" / "attestations" / f"{ids[0]}.jsonl").read_bytes() == (
+        root / "attestations" / f"{ids[0]}.jsonl").read_bytes()
     result = restore_check.verify(tmp_path / "bk")
     assert result["ok"], result
     assert all(result["checked"][f"tenants/{i}.db"] == 4 for i in ids)

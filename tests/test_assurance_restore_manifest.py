@@ -185,7 +185,7 @@ def test_an_intact_ledger_passes_the_attestation_cross_check(data, tmp_path):
     root, first, _ = data
     bk = _backup(root, tmp_path)
     result = restore_check.verify(bk)
-    assert result["ok"] and result["checked"][f"attestations/{first}.jsonl"] == 1
+    assert result["ok"] and result["attestation_records"][f"attestations/{first}.jsonl"] == 1
 
 
 # ---------------------------------------------------------------------------

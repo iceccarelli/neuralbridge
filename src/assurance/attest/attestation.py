@@ -782,6 +782,75 @@ class LogVerdict:
         return f"{len(self.problems)} problem(s) across {self.checked} attestation(s)"
 
 
+def check_log_against_ledger(
+    records: Sequence[HeadAttestation],
+    ledger: EvidenceLedger,
+    *,
+    basis: AttestationBasis | None = None,
+    chain: bool = True,
+) -> tuple[list[str], list[str]]:
+    """Whether *ledger* still holds every head the log attests. ``(problems, skipped)``.
+
+    The ledger half of :func:`verify_log`, usable where no verifying key is at hand (a
+    restore check holds the files, not the service's key). It compares only what each
+    record states (length, head sequence, head link hash), so on its own it finds a
+    rewind or a loss but does not authenticate the log: that is ``verify_log``'s
+    signature check. ``chain=False`` skips re-verifying the ledger's own hash chain
+    for a caller that has just done it.
+    """
+    problems: list[str] = []
+    skipped: list[str] = []
+    if chain:
+        chain_ok, chain_problems = ledger.verify_chain()
+        if not chain_ok:
+            problems.extend(f"ledger: {p}" for p in chain_problems)
+    entries = ledger.entries()
+    by_seq = {e.seq: e.link_hash for e in entries}
+    length = len(entries)
+    bases = {r.basis for r in records}
+    target = basis if basis is not None else (
+        next(iter(bases)) if len(bases) == 1 else AttestationBasis.READ_FROM_LEDGER)
+    joined = [r for r in records if r.basis is target]
+    left_out = [r.sequence for r in records if r.basis is not target]
+    if left_out:
+        skipped.append(
+            "Attestation(s) " + ", ".join(str(n) for n in left_out)
+            + f" were not checked against this ledger: their basis is not "
+            f"{target.value}, so they describe a different ledger (the one the "
+            "holder declared). Pass the other basis to check those instead."
+        )
+    for record in joined:
+        where = f"attestation {record.sequence}"
+        if length < record.ledger_length:
+            problems.append(
+                f"{where}: signed for {record.ledger_length} records at "
+                f"{record.attested_at}; the ledger now holds {length}. "
+                f"{record.ledger_length - length} record(s) were removed after "
+                "being attested."
+            )
+        if record.head_seq == 0:
+            continue
+        current = by_seq.get(record.head_seq)
+        if current is None:
+            problems.append(
+                f"{where}: seq {record.head_seq} was attested at "
+                f"{record.attested_at} and is absent from the ledger"
+            )
+        elif current != record.head_link_hash:
+            problems.append(
+                f"{where}: seq {record.head_seq} links as {current[:12]} but was "
+                f"attested as {record.head_link_hash[:12]} — the history at that "
+                "position was rewritten"
+            )
+    skipped.append(
+        "Records appended after the latest attestation are covered by no "
+        "signature. Everything from seq "
+        f"{(joined[-1].head_seq + 1) if joined else 1} onward rests on the "
+        "chain alone."
+    )
+    return problems, skipped
+
+
 def verify_log(
     attestations: Iterable[HeadAttestation],
     key: VerifyingKey,
@@ -899,53 +968,10 @@ def verify_log(
             "still holds the records they were made over."
         )
     else:
-        chain_ok, chain_problems = ledger.verify_chain()
-        if not chain_ok:
-            problems.extend(f"ledger: {p}" for p in chain_problems)
-        entries = ledger.entries()
-        by_seq = {e.seq: e.link_hash for e in entries}
-        length = len(entries)
-        bases = {r.basis for r in records}
-        target = basis if basis is not None else (
-            next(iter(bases)) if len(bases) == 1 else AttestationBasis.READ_FROM_LEDGER)
-        joined = [r for r in records if r.basis is target]
-        left_out = [r.sequence for r in records if r.basis is not target]
-        if left_out:
-            skipped.append(
-                "Attestation(s) " + ", ".join(str(n) for n in left_out)
-                + f" were not checked against this ledger: their basis is not "
-                f"{target.value}, so they describe a different ledger (the one the "
-                "holder declared). Pass the other basis to check those instead."
-            )
-        for record in joined:
-            where = f"attestation {record.sequence}"
-            if length < record.ledger_length:
-                problems.append(
-                    f"{where}: signed for {record.ledger_length} records at "
-                    f"{record.attested_at}; the ledger now holds {length}. "
-                    f"{record.ledger_length - length} record(s) were removed after "
-                    "being attested."
-                )
-            if record.head_seq == 0:
-                continue
-            current = by_seq.get(record.head_seq)
-            if current is None:
-                problems.append(
-                    f"{where}: seq {record.head_seq} was attested at "
-                    f"{record.attested_at} and is absent from the ledger"
-                )
-            elif current != record.head_link_hash:
-                problems.append(
-                    f"{where}: seq {record.head_seq} links as {current[:12]} but was "
-                    f"attested as {record.head_link_hash[:12]} — the history at that "
-                    "position was rewritten"
-                )
-        skipped.append(
-            "Records appended after the latest attestation are covered by no "
-            "signature. Everything from seq "
-            f"{(joined[-1].head_seq + 1) if joined else 1} onward rests on the "
-            "chain alone."
-        )
+        ledger_problems, ledger_skipped = check_log_against_ledger(
+            records, ledger, basis=basis)
+        problems.extend(ledger_problems)
+        skipped.extend(ledger_skipped)
 
     skipped.append(
         "Whether this public key belongs to whom you think it does was not "

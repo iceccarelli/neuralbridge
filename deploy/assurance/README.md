@@ -431,11 +431,39 @@ python -m assurance.evidence.restore_check verify ./backup-$(date +%F)
 ```
 
 `backup` takes a transactionally consistent snapshot of every database (a plain
-file copy of a WAL database can miss its newest records). `verify` checks each
-database's integrity and each ledger's hash chain, and that every tenant ledger
-belongs to a known account. **Rehearse a restore before relying on it**: restore
-the files to a scratch volume, point a throwaway service at them, and call
-`GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
+file copy of a WAL database can miss its newest records) and writes
+`backup-manifest.json` beside them: every file with its size and SHA-256, each ledger's
+length and head hash, and the list of accounts. The backup directory is `0700` and its files
+`0600` whatever the umask — it holds every customer's evidence and account emails — so keep
+it that way when you copy it off the volume. Two things it deliberately does **not** do:
+
+* **It does not copy `pending_keys`.** A key minted by a checkout and not yet collected is
+  held in plaintext in `accounts.db` for up to 24 hours; a backup that left the volume
+  would carry a working credential. After a restore, a customer whose checkout key was
+  still unclaimed at backup time must be issued a new one (the output of `backup` says how
+  many were left out; the manifest records the count in `pending_keys_not_copied`).
+* **It does not sign the manifest.** Checksums, not signatures: whoever can rewrite the
+  backup can rewrite the manifest. `backup` prints `manifest_sha256`; store that somewhere
+  the volume is not.
+
+`verify` checks each database's integrity and each ledger's hash chain, that every tenant
+ledger belongs to a known account, **that every file the manifest lists is present with the
+recorded hash and nothing else appeared**, and that each attestation log still fits the
+ledger it was signed over (a ledger shorter than its own attestation log has lost evidence;
+it compares what the records state, since the signing key is not in a backup — use
+`attest verify` with the public key for authenticity). Its exit code: **0** verified,
+**1** a finding, **2** could not run, **3 unchecked** — there is no manifest (a backup taken
+by an older build), so the files are consistent as far as they can be read and nothing says
+no ledger or file is missing. Never treat 3 as a pass; re-take the backup from the live
+volume with the current build.
+
+The true restore procedure: stop the service; restore the backup directory onto the volume
+**including `backup-manifest.json`**; run `verify /data` (exact: it must equal the backup);
+start the service; re-issue any key that was unclaimed. On a volume that has been running
+since the backup, `verify --live /data` accepts ledgers and logs that only grew past the
+recorded head (and says nothing about `accounts.db`, which moves). **Rehearse a restore
+before relying on it**: restore the files to a scratch volume, point a throwaway service at
+them, and call `GET /v1/ledger/verify` with a customer key. That rehearsal has not yet been
 done against a deployed service — there is none.
 
 `python scripts/staging_rehearsal.py restore-drill --data-dir DIR` does the local half
@@ -449,7 +477,7 @@ finally proves the source's listing and every file hash are unchanged. It refuse
 a directory with `-wal`/`-shm`/`-journal` files (a service may be writing) unless you pass
 `--i-know-the-service-is-stopped`. `--backup-dir DIR` restores a backup you fetched from the volume
 instead (the counts against the hosted volume are then `UNCHECKED`: compare them with
-`python -m assurance.evidence.restore_check verify /data` run on the machine). It has
+`python -m assurance.evidence.restore_check verify --live /data` run on the machine). It has
 been proven on real SQLite fixtures only, never on a hosted volume. A caveat on the
 commands above: `$(date +%F)` is expanded by your local shell (use the exact remote path
 the backup command printed if the machine's date may differ), the local directory you fetch

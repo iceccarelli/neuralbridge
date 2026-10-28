@@ -50,6 +50,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from assurance.attest import AttestationLog, SigningKey, attest, head_of
 from assurance.billing.accounts import AccountStore
 from assurance.billing.plans import public_catalogue
 from assurance.core import Actor, Evidence, Origin
@@ -971,7 +972,9 @@ def make_data_dir(root: Path, *, tenants: int = 2, entries: int = 4,
         EvidenceLedger(root / "art14-register.db").append(_ev(0))
     (root / "attestations").mkdir(exist_ok=True)
     if ids:
-        (root / "attestations" / f"{ids[0]}.jsonl").write_text('{"x":1}\n')
+        # a genuine attestation log: the restore check reads it against its ledger
+        attest(head_of(EvidenceLedger(tenant_path(root, ids[0]))), SigningKey.generate(),
+               AttestationLog(root / "attestations" / f"{ids[0]}.jsonl"))
     return ids
 
 
@@ -1036,7 +1039,9 @@ def test_restore_drill_fails_on_a_truncated_backup_whose_chain_still_verifies(
     db.close()
     ran, found = drill(sr, capsys, tmp_path, "--backup-dir", str(backup),
                        "--data-dir", str(data))
-    assert found["restore.verify"] == "PASS"             # a shorter chain is still a chain
+    # A hand-made backup has no manifest, so the verifier calls it unchecked (it used to say
+    # PASS); a shorter chain is still a chain, and the count comparison is what catches it.
+    assert found["restore.verify"] == "UNCHECKED"
     assert found["restore.counts_match"] == "FAIL" and ran.code == 1
 
 
@@ -1063,7 +1068,8 @@ def test_restore_drill_without_a_source_to_compare_leaves_counts_unchecked(
     data = tmp_path / "data"
     make_data_dir(data)
     ran, found = drill(sr, capsys, tmp_path, "--backup-dir", str(data))
-    assert found["restore.verify"] == "PASS" and found["restore.counts_match"] == "UNCHECKED"
+    # a directory with no backup manifest verifies as unchecked, never as PASS
+    assert found["restore.verify"] == "UNCHECKED" and found["restore.counts_match"] == "UNCHECKED"
     assert ran.code == 3
 
 
