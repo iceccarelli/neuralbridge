@@ -10,7 +10,8 @@
 ``coverage`` and ``passport`` exit non-zero unless every declared safety function is
 currently covered on evidence at ``validated`` or better, which makes them a gate rather
 than a report. Exit codes: 0 covered; 1 gaps (a function stale, failing, unchecked,
-incomplete, never verified or not demonstrable); 2 error; 3 covered only at community
+incomplete, never verified or not demonstrable); 2 error, or the ledger chain does not verify
+(could not vouch); 3 covered only at community
 (every function reads current, but on evidence whose provenance the filer only declared:
 the recorded evidence stands, it was not a demonstration on the machine).
 """
@@ -156,20 +157,31 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
         VerificationRecord.from_ledger(ledger, subject=key),
         interventions_from_ledger(ledger, key),
     )
+    chain_ok, chain_problems = ledger.verify_chain()
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
+        print(json.dumps({**report.to_dict(), "ledger_chain_verified": chain_ok,
+                          "ledger_chain_problems": chain_problems[:3]}, indent=2))
     else:
+        if not chain_ok:
+            print(_CHAIN_WARNING + "\n")
         print(report.summary())
         if report.checks_skipped:
             print("\n  not checked:")
             for c in report.checks_skipped:
                 print(f"    - {c}")
+    if not chain_ok:
+        return 2        # could not vouch: nothing read from a broken chain is covered
     return _exit_for(report.verdict)
 
 
+_CHAIN_WARNING = ("THE LEDGER CHAIN DOES NOT VERIFY — every statement below is drawn from a "
+                  "store whose integrity is in question.")
+
+
 def _exit_for(verdict: str) -> int:
-    """0 covered, 3 covered at community, 1 anything else (gaps, none declared)."""
-    return {"covered": 0, "covered_at_community": 3}.get(verdict, 1)
+    """0 covered, 3 covered at community, 2 ledger chain not verified, 1 anything else."""
+    return {"covered": 0, "covered_at_community": 3,
+            "ledger_chain_not_verified": 2}.get(verdict, 1)
 
 
 def _cmd_passport(args: argparse.Namespace) -> int:
