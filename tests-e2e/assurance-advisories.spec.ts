@@ -133,6 +133,72 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(panel(page).getByRole('button', { name: 'Open assurance case' })).toHaveCount(0);
   });
 
+  // What `assurance fleet import-csaf` writes into an advisory (fleet/advisory.py ImportRecord).
+  const importRecord = (over: Record<string, unknown> = {}) => ({
+    origin: 'csaf_import',
+    trust: 'unsigned_inspect_only',
+    partial: false,
+    dropped: [],
+    partial_reasons: [],
+    severity_source: 'defaulted_by_importer',
+    tlp: 'AMBER',
+    tracking_status: 'final',
+    document_category: 'csaf_security_advisory',
+    document_date: '2026-10-02T08:30:00Z',
+    notes: [],
+    ...over,
+  });
+
+  test('a partial unsigned CSAF import is never "no enrolled machine matches"', async ({ page }) => {
+    await enter(page, seed.key_g);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    const partial = importRecord({
+      partial: true,
+      dropped: [{ product_id: 'B', reason: 'it is defined only in product_tree.full_product_names' }],
+      partial_reasons: ["1 affected product(s) could not be imported: 'B'"],
+    });
+    await paste(page, JSON.stringify({ ...seed.advisories.clear, import_record: partial }));
+    await panel(page).getByRole('button', { name: /Check fleet impact/ }).click();
+
+    const verdict = panel(page).getByTestId('impact-verdict');
+    await expect(verdict).toContainText(/INCOMPLETE TRANSLATION/i, { timeout: 10_000 });
+    await expect(verdict).not.toContainText(/no enrolled machine matches/i);
+    const marker = panel(page).getByTestId('impact-import-marker');
+    await expect(marker).toHaveAttribute('data-advisory-trust', 'unsigned_inspect_only');
+    await expect(marker).toHaveAttribute('data-advisory-partial', 'true');
+    await expect(marker).toContainText('TLP:AMBER');
+    await expect(marker).toContainText('not imported: B');
+    await expect(marker).toContainText(/defaulted by the importer/i);
+    await expect(panel(page)).not.toContainText(CLAIMS_VERIFIED);
+  });
+
+  test('a case on an unsigned import needs an explicit acceptance, and the server refuses without it', async ({
+    page,
+    request,
+  }) => {
+    await enter(page, seed.key_g);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    const imported = { ...seed.advisories.hash, import_record: importRecord() };
+    await paste(page, JSON.stringify(imported));
+    await panel(page).getByRole('button', { name: /Check fleet impact/ }).click();
+    await expect(panel(page).getByTestId('impact-verdict')).toContainText('EXPOSED', { timeout: 10_000 });
+    await expect(panel(page).getByTestId('impact-import-marker')).toHaveAttribute('data-advisory-partial', 'false');
+
+    const open = panel(page).getByRole('button', { name: 'Open assurance case' });
+    await panel(page).getByLabel(/Your name/).fill('e2e.reviewer');
+    await expect(open).toBeDisabled();
+    await panel(page).getByTestId('accept-unsigned').getByRole('checkbox').check();
+    await expect(open).toBeEnabled();
+
+    // The same refusal from the API itself, with a named person but no explicit override. Nothing
+    // is opened: this does not touch the queue the other specs count.
+    const r = await request.post(`${apiBase}/v1/change/assess/advisory`, {
+      headers: { 'X-API-Key': seed.key_g },
+      data: { advisory: imported, actor: 'e2e.reviewer' },
+    });
+    expect(r.status()).toBe(409);
+  });
+
   test('a case opens only on an explicit click, under a named person, and links to the real case', async ({
     page,
     request,

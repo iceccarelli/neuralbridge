@@ -102,11 +102,16 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
   const needs = report.exposures.filter((e) => e.needs_a_human).length;
   // needs_review with nothing matched is the server saying the ledger chain did not
   // verify (fleet/impact.py): the check could not be made, which is not a match.
-  const unverifiedLedger = report.verdict === 'needs_review' && report.exposures.length === 0;
+  const imported = report.advisory_import ?? null;
+  const incomplete = report.incomplete === true;
+  const dropped = imported?.dropped ?? [];
+  const unverifiedLedger = report.verdict === 'needs_review' && report.exposures.length === 0 && !incomplete;
   const verdictText =
     report.verdict === 'exposed'
       ? 'EXPOSED — standing safety evidence is now in question'
-      : unverifiedLedger
+      : incomplete && report.exposures.length === 0
+        ? 'NEEDS REVIEW — INCOMPLETE TRANSLATION: no match was found in what was imported, and that is not evidence that no machine is affected'
+        : unverifiedLedger
         ? 'NEEDS REVIEW — the ledger chain does not verify, so no match check was possible. No match was found, and that is not evidence that no machine is affected'
         : report.verdict === 'needs_review'
           ? 'NEEDS REVIEW — matches found, none with standing evidence'
@@ -116,6 +121,23 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
       <p className="aw-note" data-testid="impact-provenance">
         {provenanceLine(parsed, rec)}
       </p>
+      {imported && (
+        <p className="aw-note" data-testid="impact-import-marker" data-advisory-trust={imported.trust} data-advisory-partial={String(incomplete)}>
+          <strong>Unsigned import, inspect only.</strong> This advisory was translated from a CSAF document; no signature was
+          checked, so who wrote it is unverified. Its severity ({report.severity}) was{' '}
+          {imported.severity_source === 'defaulted_by_importer' ? 'defaulted by the importer' : 'chosen by the operator'}, not
+          stated by the publisher.
+          {imported.tlp ? <> Marked <strong>TLP:{imported.tlp}</strong>: do not forward it beyond the people the publisher named.</> : null}
+          {incomplete ? (
+            <>
+              {' '}
+              <strong className="aw-bad">Partial translation</strong>
+              {dropped.length > 0 ? <>: not imported: {dropped.map((d) => d.product_id).join(', ')}</> : null}. A machine running
+              what was left out is not in this report.
+            </>
+          ) : null}
+        </p>
+      )}
       {rec.withdrawnLater && (
         <Notice>
           This advisory is <strong>withdrawn later in this file</strong> (as the file says; that record is not verified
@@ -217,6 +239,7 @@ export default function AdvisoriesPanel({
   const [caseOut, setCaseOut] = useState<ApiOutcome<AssessAdvisoryResult> | null>(null);
   const [opening, setOpening] = useState(false);
   const [confirmWithdrawn, setConfirmWithdrawn] = useState(false);
+  const [acceptUnsigned, setAcceptUnsigned] = useState(false);
   const [existing, setExisting] = useState<Set<string> | null>(null);
   const [expectSupplier, setExpectSupplier] = useState('');
   const [candidateKey, setCandidateKey] = useState('');
@@ -231,6 +254,7 @@ export default function AdvisoriesPanel({
     setNotice('');
     setHostedOut(null);
     setConfirmWithdrawn(false);
+    setAcceptUnsigned(false);
     setSigned(null);
   };
 
@@ -271,10 +295,15 @@ export default function AdvisoriesPanel({
     setImpact(null);
     setCaseOut(null);
     setConfirmWithdrawn(false);
+    setAcceptUnsigned(false);
     setChecking(true);
     setImpact(await call<ImpactReport>(API_BASE, apiKey, '/v1/fleet/advisory', { method: 'POST', body: { advisory: rec.advisory } }));
     setChecking(false);
   };
+
+  // An advisory that carries an import record is an unsigned CSAF translation: the server refuses a
+  // case on it unless a named person says so explicitly.
+  const isUnsignedImport = !!selected && selected.advisory['import_record'] !== undefined && selected.advisory['import_record'] !== null;
 
   const openCase = async () => {
     if (!selected) return;
@@ -289,7 +318,7 @@ export default function AdvisoriesPanel({
     setExisting(before);
     const out = await call<AssessAdvisoryResult>(API_BASE, apiKey, '/v1/change/assess/advisory', {
       method: 'POST',
-      body: { advisory: selected.advisory, actor: actor.trim() },
+      body: { advisory: selected.advisory, actor: actor.trim(), ...(isUnsignedImport ? { accept_unsigned: acceptUnsigned } : {}) },
     });
     setOpening(false);
     setCaseOut(out);
@@ -499,6 +528,13 @@ export default function AdvisoriesPanel({
             Your name (recorded on the case)
             <input type="text" value={actor} onChange={(e) => setActor(e.target.value)} />
           </label>
+          {isUnsignedImport && (
+            <label className="aw-field" data-testid="accept-unsigned">
+              <input type="checkbox" checked={acceptUnsigned} onChange={(e) => setAcceptUnsigned(e.target.checked)} /> This advisory is an
+              unsigned import whose origin nobody has checked. I have read it against the publisher&apos;s own page and take
+              responsibility for opening a case on it
+            </label>
+          )}
           {selected.withdrawnLater && (
             <label className="aw-field">
               <input type="checkbox" checked={confirmWithdrawn} onChange={(e) => setConfirmWithdrawn(e.target.checked)} /> The
@@ -507,7 +543,7 @@ export default function AdvisoriesPanel({
           )}
           <button
             className="btn btn-primary"
-            disabled={opening || (selected.withdrawnLater && !confirmWithdrawn)}
+            disabled={opening || (selected.withdrawnLater && !confirmWithdrawn) || (isUnsignedImport && !acceptUnsigned)}
             onClick={() => void openCase()}
           >
             Open assurance case
