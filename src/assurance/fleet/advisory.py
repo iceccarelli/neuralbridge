@@ -453,8 +453,8 @@ def _match_artefact(
                 "not say who made it, so this can be neither confirmed nor cleared. "
                 "Somebody has to look."
             )
-        if advisory.import_record is not None and (
-                fold_text(artefact.name) == fold_text(item.name)):
+        if advisory.import_record is not None:
+            # (match_item only offers entries whose component name equals the item's.)
             # An import takes its supplier from a document somebody else wrote, and the
             # integrator typed the machine's by hand. The same component under a supplier
             # string that differs ("Example Controls" for "Example Controls GmbH") is more

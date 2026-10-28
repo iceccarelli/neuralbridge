@@ -620,3 +620,56 @@ class TestRoundOnesSurvivors:
             "manifest": cmanifest(fw(version="3.8.0"), manifest_id="M1").to_dict()})
         assert r.status_code == 200, r.text
         assert any("unsigned CSAF import" in c for c in r.json()["checks_skipped"])
+
+
+# ===================================================================== extra pins from round 2's mutation run
+
+class TestNamedOnlyElsewhereAndRecommended:
+    def _doc(self, **second):
+        return doc([name_branch("EX-100", [leaf("A", "V1.0")]),
+                    name_branch("EX-200", [leaf("B", "V1.0")])],
+                   [{"cve": "CVE-1", "product_status": {"known_affected": ["A"]}},
+                    {"cve": "CVE-2", "product_status": {"known_affected": ["A"]}, **second}])
+
+    @pytest.mark.parametrize("section, entry", [
+        ("remediations", {"category": "vendor_fix", "details": "x", "product_ids": ["B"]}),
+        ("threats", {"category": "impact", "details": "x", "product_ids": ["B"]}),
+        ("flags", {"label": "vulnerable_code_not_present", "product_ids": ["B"]}),
+        ("scores", {"products": ["B"], "cvss_v3": {}}),
+    ])
+    def test_a_product_named_only_in_that_section_is_dropped_and_named(
+            self, tmp_path, section, entry):
+        _, adv, _ = run_import(tmp_path, self._doc(**{section: [entry]}))
+        record = adv["import_record"]
+        assert [d["product_id"] for d in record["dropped"]] == ["B"]
+        assert section in record["dropped"][0]["reason"] and record["partial"] is True
+
+    def test_a_recommended_product_is_stated_and_not_dropped(self, tmp_path):
+        d = self._doc(product_status={"known_affected": ["A"], "recommended": ["B"]},
+                      remediations=[{"category": "vendor_fix", "details": "x",
+                                     "product_ids": ["B"]}])
+        _, adv, _ = run_import(tmp_path, d)
+        assert adv["import_record"]["dropped"] == []
+        assert adv["import_record"]["partial"] is False
+
+
+class TestTheWatchTextPath:
+    def test_a_hostile_title_does_not_reach_the_terminal(self, request, capsys):
+        from assurance.supplier import publish
+        from assurance.watch.cli import main
+
+        from .test_assurance_watch_advisories import IDENTITY, _advisory, _run
+
+        env = request.getfixturevalue("plant")
+        _run(env)
+        publish(_advisory(title="Update now\x1b[2J\u202e", remedy="r\x1b[1;1H"), IDENTITY,
+                env["key"], env["feed"])
+        capsys.readouterr()
+        main(["run", str(env["dir"] / "watch.json"), "--ledger", str(env["dir"] / "evidence.db")])
+        out = capsys.readouterr().out
+        assert "STOP USE" in out
+        for ch in ("\x1b", "\u202e"):
+            assert ch not in out
+
+
+from .test_assurance_watch_advisories import plant  # noqa: E402,F401  (fixture)
