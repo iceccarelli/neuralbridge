@@ -301,8 +301,7 @@ class VerificationRecord:
         has most reason to damage. It becomes a stand-in assumed to have failed every
         check, dated when the ledger says it was filed.
         """
-        clock = ledger.filing_clock(subject)
-        readable, damaged = ledger.entries_tolerant(kind=BUNDLE_KIND, subject=subject)
+        readable, damaged, clock = ledger.read_subject(subject, BUNDLE_KIND)
 
         def stand_in(seq: int, content_hash: str, filed: datetime, why: str) -> VerificationRecord:
             return cls(
@@ -714,8 +713,13 @@ def assess_coverage(
         elif isinstance(breaker, ImpliedIntervention):
             why = (f"the ledger's own manifests show {breaker.item_id} changed "
                    f"({breaker.from_hash[:12]} to {breaker.to_hash[:12]}, seen in the "
-                   f"manifest filed {format_utc(breaker.occurred_at)[:10]}) and no "
-                   "intervention record explains it")
+                   f"manifest filed {format_utc(breaker.occurred_at)[:10]})"
+                   + (f"; it is recorded as {breaker.explained_by}, filed "
+                      f"{format_utc(breaker.occurred_at)[:10]}, which does not re-run anything"
+                      if breaker.explained_by
+                      else " and no intervention record explains it")
+                   + ". The verification began before the ledger recorded this change: "
+                   "run the verification again after sealing the manifest")
         else:
             why = (f"invalidated by {breaker.intervention_id} on "
                    f"{format_utc(breaker.occurred_at)[:10]}, which changed "

@@ -267,8 +267,7 @@ def _read_interventions(
 ) -> tuple[list[_Filed], list[UnreadableIntervention]]:
     """Every intervention filed under the key: the ones that read, and a stand-in for each
     one that does not. A record is dropped only by being a different kind."""
-    clock = ledger.filing_clock(machine_key)
-    entries, damaged = ledger.entries_tolerant(kind=INTERVENTION_KIND, subject=machine_key)
+    entries, damaged, clock = ledger.read_subject(machine_key, INTERVENTION_KIND)
     good: list[_Filed] = []
     lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
                         why=row.why) for row in damaged]
@@ -295,8 +294,7 @@ def _sealed_manifests(
     """Readable manifests for a machine with the ledger's filing time and position, oldest
     first; and a stand-in for each one that cannot be read (assumed to have changed
     everything, dated when it was filed)."""
-    clock = ledger.filing_clock(machine_key)
-    entries, damaged = ledger.entries_tolerant(kind=MANIFEST_KIND, subject=machine_key)
+    entries, damaged, clock = ledger.read_subject(machine_key, MANIFEST_KIND)
     good: list[tuple[datetime, int, SafetyManifest]] = []
     lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
                         why=row.why, what="manifest") for row in damaged]

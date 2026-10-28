@@ -362,33 +362,24 @@ class EvidenceLedger:
         finally:
             db.close()
 
-    def entries_tolerant(
-        self, *, subject: str | None = None, kind: str | None = None,
-    ) -> tuple[list[LedgerEntry], list[DamagedRow]]:
-        """Like :meth:`entries`, but a row whose payload is not JSON is reported, not raised.
+    def read_subject(
+        self, subject: str | None, kind: str,
+    ) -> tuple[list[LedgerEntry], list[DamagedRow], dict[int, datetime]]:
+        """One subject's (or every subject's) records of one kind, in one read: ``(readable, damaged, clock)``.
 
-        Returns ``(readable, damaged)``. A reader whose job is to notice that something
-        recorded here is no longer usable (a coverage assessment, say) must not be taken
-        out by the very row it needs to count: ``entries`` raises on the first such row and
-        names none. The damaged row's position and filing time still come from the columns
-        the link hash covers.
+        ``readable`` are the entries as :meth:`entries` returns them. A row whose payload
+        is not JSON is reported in ``damaged`` instead of raising: a reader whose job is to
+        notice that something recorded here is no longer usable (a coverage assessment,
+        say) must not be taken out by the very row it needs to count. ``clock`` is
+        :meth:`filing_clock` for the subject.
         """
-        sql = "SELECT * FROM chain"
-        clauses, args = [], []
-        if subject is not None:
-            clauses.append("subject = ?")
-            args.append(subject)
-        if kind is not None:
-            clauses.append("kind = ?")
-            args.append(kind)
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY seq"
         readable: list[LedgerEntry] = []
         damaged: list[DamagedRow] = []
         db = self._connect()
         try:
-            for row in db.execute(sql, args):
+            where, args = (("kind = ?", [kind]) if subject is None
+                           else ("subject = ? AND kind = ?", [subject, kind]))
+            for row in db.execute(f"SELECT * FROM chain WHERE {where} ORDER BY seq", args):
                 try:
                     readable.append(self._row_to_entry(row))
                 except ValueError as exc:
@@ -396,9 +387,10 @@ class EvidenceLedger:
                         seq=row["seq"], at=row["at"], kind=row["kind"],
                         subject=row["subject"], content_hash=row["content_hash"],
                         why=f"the stored payload is not JSON ({exc})"))
+            clock = self._filing_clock(db, subject)
         finally:
             db.close()
-        return readable, damaged
+        return readable, damaged, clock
 
     def filing_clock(self, subject: str | None = None) -> dict[int, datetime]:
         """When each record was filed, as the ledger can vouch for it: ``seq -> time``.
@@ -411,6 +403,14 @@ class EvidenceLedger:
         none): time as the chain saw it never runs backwards. Reads no payload, so a
         damaged row has a time too. An unparseable ``at`` takes the time before it.
         """
+        db = self._connect()
+        try:
+            return self._filing_clock(db, subject)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _filing_clock(db: sqlite3.Connection, subject: str | None) -> dict[int, datetime]:
         sql = "SELECT seq, at FROM chain"
         args: list[Any] = []
         if subject is not None:
@@ -419,19 +419,15 @@ class EvidenceLedger:
         sql += " ORDER BY seq"
         out: dict[int, datetime] = {}
         latest: datetime | None = None
-        db = self._connect()
-        try:
-            for row in db.execute(sql, args):
-                try:
-                    stamped = parse_utc(row["at"])
-                except (ValueError, TypeError):
-                    stamped = None
-                if stamped is not None and (latest is None or stamped > latest):
-                    latest = stamped
-                if latest is not None:
-                    out[row["seq"]] = latest
-        finally:
-            db.close()
+        for row in db.execute(sql, args):
+            try:
+                stamped = parse_utc(row["at"])
+            except (ValueError, TypeError):
+                stamped = None
+            if stamped is not None and (latest is None or stamped > latest):
+                latest = stamped
+            if latest is not None:
+                out[row["seq"]] = latest
         return out
 
     # -- integrity --------------------------------------------------------
