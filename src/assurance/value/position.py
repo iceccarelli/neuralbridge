@@ -33,7 +33,12 @@ from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
 )
-from assurance.machinery.staleness import Coverage, VerificationRecord, assess_coverage
+from assurance.machinery.staleness import (
+    Coverage,
+    UnitClaims,
+    VerificationRecord,
+    assess_coverage,
+)
 from assurance.watch.observations import fleet_observations
 
 __all__ = ["POSITION_SCHEMA", "assess_position", "render_text"]
@@ -117,6 +122,7 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
                          "kind": "recommendation", "action": action,
                          "because": statement, "refs": refs or []})
 
+    claims = UnitClaims.build(ledger, recorder_trust)      # once for every machine
     for key in keys:
         history = manifests_from_ledger(ledger, key)
         obs = observations.get(key, {})
@@ -163,7 +169,7 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
 
         cov = assess_coverage(
             m, VerificationRecord.from_ledger(ledger, subject=key,
-                                              recorder_trust=recorder_trust),
+                                              recorder_trust=recorder_trust, claims=claims),
             interventions_from_ledger(ledger, key))
         counts: dict[str, int] = {c.value: 0 for c in Coverage}
         for f in cov.functions:

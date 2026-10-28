@@ -30,6 +30,7 @@ from assurance.machinery.record import MANIFEST_KIND
 from assurance.machinery.staleness import (
     Coverage,
     CoverageReport,
+    UnitClaims,
     VerificationRecord,
     assess_coverage,
 )
@@ -164,13 +165,17 @@ class Fleet:
                 best[key] = (rank, manifest)
         latest = {k: v[1] for k, v in best.items()}
 
+        # One claim map for the whole fleet: every machine's read asks it which unit holds a
+        # recording instead of re-walking and re-verifying the ledger (linear, not quadratic).
+        claims = UnitClaims.build(ledger, recorder_trust)
+
         records: list[MachineRecord] = []
         for key, manifest in sorted(latest.items()):
             from assurance.machinery.record import interventions_from_ledger
 
             ivs = interventions_from_ledger(ledger, key)
             vfs = VerificationRecord.from_ledger(
-                ledger, subject=key, recorder_trust=recorder_trust)
+                ledger, subject=key, recorder_trust=recorder_trust, claims=claims)
             records.append(MachineRecord(
                 machine_key=key, manifest=manifest,
                 coverage=assess_coverage(manifest, vfs, ivs),

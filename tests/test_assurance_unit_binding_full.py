@@ -360,10 +360,20 @@ class TestTheHostedRoute:
             "actor": "a.integrator", "subject": subject}, env, tr, machine_serial=serial)
         return client.post("/v1/machine/verify", json=body, headers=headers)
 
+    @staticmethod
+    def _enrol(client, headers, *units):
+        """Only a claim under an ENROLLED unit key holds a recording (a manifest was sealed)."""
+        for maker, model, serial in units:
+            r = client.post("/v1/machinery/manifest",
+                            json={"manifest": manifest(maker, model, serial).to_dict()},
+                            headers=headers)
+            assert r.status_code == 200, r.text
+
     def test_the_same_attestation_for_another_makers_unit_is_refused(
             self, client, store, monkeypatch, tmp_path):
         server_trust(monkeypatch, tmp_path)
         h = keyed(store, "cell")
+        self._enrol(client, h, ("Acme", "AR-7", "0001"), ("Beta", "XY-9", "0001"))
         a = self._verify(client, h, "Acme/AR-7#0001")
         assert a.status_code == 200 and a.json()["tier"] == "validated"
         b = self._verify(client, h, "Beta/XY-9#0001")
@@ -375,6 +385,7 @@ class TestTheHostedRoute:
             self, client, store, monkeypatch, tmp_path):
         server_trust(monkeypatch, tmp_path)
         h = keyed(store, "cell")
+        self._enrol(client, h, ("Acme", "AR-7", "0001"), ("Acme", "AR-7", "0002"))
         assert self._verify(client, h, "Acme/AR-7#0001", "0001").json()["tier"] == "validated"
         b = self._verify(client, h, "Acme/AR-7#0002", "0002")
         assert b.status_code == 422
@@ -383,6 +394,7 @@ class TestTheHostedRoute:
             self, client, store, monkeypatch, tmp_path):
         server_trust(monkeypatch, tmp_path)
         h = keyed(store, "cell")
+        self._enrol(client, h, ("Acme", "AR-7", "0001"), ("Beta", "XY-9", "0001"))
         self._verify(client, h, "Acme/AR-7#0001")
         before = client.get("/v1/ledger/verify", headers=h)
         assert before.status_code == 200 and before.json()["verified"] is True

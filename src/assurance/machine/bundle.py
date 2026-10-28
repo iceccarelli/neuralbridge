@@ -309,28 +309,31 @@ def unit_key_problems(body: dict[str, Any]) -> list[str]:
 
 def _refuse_a_second_validated_claim(
     ledger: EvidenceLedger, trace_hash: str, unit_key: str,
+    recorder_trust: RecorderTrust | None,
 ) -> None:
-    """One recording is the validated evidence of one unit key only.
+    """One recording is the validated evidence of one ENROLLED unit key only.
 
     The readers (``VerificationRecord.from_ledger``) cap the later claimant at community;
     this refuses to seal it in the first place, so the answer a caller gets back never says
-    ``validated`` for a bundle every reader will read as ``community``.
+    ``validated`` for a bundle every reader will read as ``community``. It asks the very same
+    question the readers do (:class:`~assurance.machinery.staleness.UnitClaims`): only a
+    filing that still reads ``validated`` under ``recorder_trust`` (a revoked key holds
+    nothing) and sits under a unit key a manifest was sealed for in this ledger holds the
+    recording. A mistyped or hostile key nobody enrolled therefore blocks nothing.
+
+    This is a check followed by the caller's append, not one atomic step: two processes
+    sealing the same recording at once can both pass; the readers still cap the later one.
     """
-    for entry in ledger.entries(kind=BUNDLE_KIND):
-        other = entry.subject
-        if other == unit_key or "#" not in other:
-            continue
-        body = entry.payload.get("body")      # cheap filters first: only a match is verified
-        if (isinstance(body, dict) and body.get("trace_hash") == trace_hash
-                and body.get("unit_key") == other
-                and _TIERS.get(str(body.get("tier")), AssuranceTier.PROFILE).rank
-                >= AssuranceTier.VALIDATED.rank
-                and entry.evidence().verify()):
-            raise MachineSubjectError(
-                f"this recording ({trace_hash[:12]}) is already filed as validated "
-                f"evidence for {other}. One recording is not evidence about two units, so "
-                f"it cannot also be sealed for {unit_key}: verify the run recorded on "
-                "that unit, or file this one at its own tier without an attestation.")
+    from assurance.machinery.staleness import UnitClaims
+
+    held = UnitClaims.build(ledger, recorder_trust, only={trace_hash}).holder(trace_hash)
+    if held is not None and held[1] != unit_key:
+        raise MachineSubjectError(
+            f"this recording ({trace_hash[:12]}) is already the validated evidence of "
+            f"{held[1]!r}, a unit enrolled in this ledger, and one recording is evidence about "
+            f"one unit, so it cannot also be sealed for {unit_key}. The ledger is append-only "
+            f"and has no withdrawal: if {held[1]!r} is the mistaken key, the way forward is a "
+            f"new recording on {unit_key} with its own attestation.")
 
 
 def build_bundle(
@@ -385,7 +388,7 @@ def build_bundle(
                                recorder_trust, serial)
 
     if ledger is not None and unit_key and res.tier.rank >= AssuranceTier.VALIDATED.rank:
-        _refuse_a_second_validated_claim(ledger, res.trace_hash, unit_key)
+        _refuse_a_second_validated_claim(ledger, res.trace_hash, unit_key, recorder_trust)
 
     state, confidence = _judgement(res)
 
