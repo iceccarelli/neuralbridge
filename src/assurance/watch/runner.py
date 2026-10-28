@@ -70,6 +70,7 @@ from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
 from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
@@ -552,13 +553,19 @@ def run_watch(
         )
         uncovered_now = {f.function_id for f in coverage.functions
                          if f.coverage is not Coverage.CURRENT}
+        # Current on evidence below 'validated' (a declared provenance) is recorded, not
+        # recovered: a function that was uncovered stays outstanding, and one that was not
+        # is not newly uncovered either.
+        weak_now = {f.function_id for f in coverage.functions
+                    if f.coverage is Coverage.CURRENT
+                    and not tier_reaches_validated(f.evidence_tier)}
         before = prior.get(target.serial, {})
         uncovered_before = set(before.get("still_uncovered", [])) | set(
             before.get("newly_uncovered", []))
 
         newly = tuple(sorted(uncovered_now - uncovered_before))
-        still = tuple(sorted(uncovered_now & uncovered_before))
-        recovered = tuple(sorted(uncovered_before - uncovered_now))
+        still = tuple(sorted((uncovered_now | weak_now) & uncovered_before))
+        recovered = tuple(sorted(uncovered_before - uncovered_now - weak_now))
 
         warnings: list[str] = []
         if not result.complete:

@@ -180,12 +180,14 @@ class TestTheReaders:
         assert "did not pass" not in stop.detail
         assert "not run" in stop.detail or "unchecked" in stop.detail
 
-    def test_the_pipeline_counts_them_as_insufficient_not_failing(self, tmp_path):
+    def test_the_pipeline_keeps_their_severity_but_not_the_word_failing(self, tmp_path):
         d = run_enrolled_check(self._unchecked_ledger(tmp_path), KEY, None).to_dict()
         by_id = {f["function_id"]: f["coverage"] for f in d["functions"]}
-        assert by_id["F-STOP"] == "unchecked"
-        assert d["verdict"] == "insufficient_evidence"
-        assert d["required_actions"] == []        # nothing failed; the work is to run it
+        assert by_id["F-STOP"] == "unchecked" and by_id["F-BOTH"] == "incomplete"
+        # an unchecked function is work to do, as it was when it read "failing" (a135c0e);
+        # the evidence bucket is still "insufficient", not a failure count
+        assert set(d["required_actions"]) == {"F-STOP", "F-BOTH"}
+        assert d["verdict"] == "requires_reverification"
         assert d["evidence"]["insufficient"] >= 2
 
     def test_a_failing_function_is_still_required_work(self, tmp_path):
