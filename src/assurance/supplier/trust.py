@@ -604,7 +604,7 @@ def evaluate_feed(
     expect_supplier: str = "",
     candidate_key: VerifyingKey | None = None,
     now: datetime | None = None,
-    min_sequence: int = 0,
+    min_sequence: int | None = None,
     expect_head: str = "",
 ) -> FeedTrust:
     """Judge a feed under the account's pinned keys. Never raises on a bad feed.
@@ -675,6 +675,15 @@ def evaluate_feed(
     # A valid chain cannot show that the newest records were cut off or an older copy
     # was served. A reader that remembers the highest sequence (and that record's
     # hash) can: a shorter or rewritten feed is not an intact chain.
+    if min_sequence is None:
+        # Not stated by the caller: use what this account remembers for the supplier, so
+        # every path that judges a feed (API, CLI, watch) holds it to the same baseline.
+        # Pass 0 to judge a feed with no baseline (accepting a re-issued feed).
+        min_sequence, expect_head = 0, ""
+        if store is not None and len(suppliers) == 1:
+            seen = store.feed_head(suppliers[0])
+            if seen:
+                min_sequence, expect_head = seen
     if min_sequence:
         tip = items[-1].sequence if items else 0
         if tip < min_sequence:

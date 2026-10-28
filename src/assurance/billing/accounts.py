@@ -562,7 +562,10 @@ class AccountStore:
             (email or existing["email"], company or existing["company"],
              existing["tier"] if stale else tier,
              stripe_customer_id or existing["stripe_customer_id"],
-             stripe_subscription_id or existing["stripe_subscription_id"],
+             # A stale event describes an older state: it must not replace the
+             # subscription the account currently holds (see other_subscription).
+             existing["stripe_subscription_id"] if stale
+             else (stripe_subscription_id or existing["stripe_subscription_id"]),
              existing["status"] if stale else status, now,
              max(existing["last_event_at"], event_created), existing["id"]),
         )

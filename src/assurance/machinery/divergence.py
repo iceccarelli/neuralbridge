@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import Any
 
 from assurance.core.tiers import AssuranceTier
-from assurance.machinery.manifest import SafetyItem, SafetyManifest
+from assurance.machinery.manifest import SafetyItem, SafetyManifest, normalised_digest
 
 __all__ = ["Change", "ChangeKind", "Divergence", "Severity", "compare"]
 
@@ -107,6 +107,11 @@ class Divergence:
     uncompared: tuple[str, ...] = ()
     #: Whether the observed manifest is a record of looking at a machine.
     observed_as_found: bool = True
+    #: Same configuration once digests are compared in normal form (case, ``sha256:``
+    #: prefix). ``identical`` stays the exact sealed-hash match, which a sealed record
+    #: re-verifies, so it cannot be loosened; this is what keeps a relabelled digest from
+    #: reading as drift.
+    equivalent: bool = False
 
     @property
     def identical(self) -> bool:
@@ -142,7 +147,7 @@ class Divergence:
         ``unverifiable``: nothing was seen, which is not the same as nothing
         changed.
         """
-        if self.identical and not self.changes:
+        if (self.identical or self.equivalent) and not self.changes:
             if self.uncompared or not self.observed_as_found:
                 return "unverifiable"
             return "matches"
@@ -266,7 +271,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
                 "machine holds. It is NOT reported as unchanged."
             )
 
-        if b.content_hash != o.content_hash:
+        if normalised_digest(b.content_hash) != normalised_digest(o.content_hash):
             changes.append(Change(
                 item_id=item_id, kind=ChangeKind.CONTENT_CHANGED,
                 severity=Severity.SAFETY_RELEVANT if safety else Severity.NOTABLE,
@@ -325,6 +330,11 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
 
     tier = min(baseline.tier_ceiling, observed.tier_ceiling)
 
+    def _shape(m: SafetyManifest) -> list[tuple[Any, ...]]:
+        return [(i.item_id, i.kind.value, i.name, i.version,
+                 normalised_digest(i.content_hash) or i.content_hash, tuple(sorted(i.implements)))
+                for i in sorted(m.items, key=lambda i: i.item_id)]
+
     return Divergence(
         machine_key=observed.machine.key,
         baseline_id=baseline.manifest_id,
@@ -338,4 +348,5 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         tier=tier,
         uncompared=tuple(dict.fromkeys(uncompared)),
         observed_as_found=observed.source.value == "as_found",
+        equivalent=_shape(baseline) == _shape(observed),
     )

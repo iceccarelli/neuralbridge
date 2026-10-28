@@ -56,3 +56,16 @@ def test_cancelling_the_current_subscription_still_ends_access(store):
 def test_a_cancellation_with_no_subscription_id_behaves_as_before(store):
     _checkout(store, "sub_A", event="evt_c1", session="cs_1", created=1000)
     assert _cancel(store, "", event="evt_d1", created=3000) == "applied"
+
+
+def test_an_out_of_order_older_checkout_cannot_overwrite_the_current_subscription_id(store):
+    """Regression for the guard above: a stale checkout used to replace the stored id with
+    the OLD subscription's, after which the real cancellation was ignored as
+    ``other_subscription`` and a cancelled customer kept access (and the event was spent).
+    """
+    _checkout(store, "sub_B", event="evt_c2", session="cs_2", created=2000)
+    _checkout(store, "sub_A", event="evt_c1", session="cs_1", created=1000)  # arrives late
+    assert _state(store).stripe_subscription_id == "sub_B"
+    assert _cancel(store, "sub_B", event="evt_d", created=3000) == "applied"
+    row = _state(store)
+    assert row.status == "cancelled" and row.tier == "free"
