@@ -92,7 +92,10 @@ one product line.
 
 - Scope: offline kit run on N machines' exports → baseline, noise probe
   (`collect probe`), staleness join against their declared safety functions,
-  one report in their hands. Optionally one real change replayed as a case.
+  one report in their hands. Optionally one real change replayed as a case. From exports alone that needs the
+  operator's explicit assertion that the collection ran on the machine
+  (`--read-from-machine`, recorded as such): a folder of exports is labelled
+  `supplied_by_vendor` and cannot be the as-found look a case is re-verified against.
 - Customer data never leaves their disk unless they explicitly choose the hosted
   path. The kit's network guard record is part of the deliverable.
 - Success is agreed in writing **before** work starts, e.g.: "finds at least

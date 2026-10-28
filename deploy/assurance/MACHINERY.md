@@ -93,7 +93,7 @@ Grimaldi/AR-7#0412 — GAPS
   [STALE ] SF-01 [PL d]  Protective stop on zone intrusion
            last verified by c0f9dcda3cd6 on 2026-02-09; invalidated by INT-0007
            on 2026-03-14, which changed ITM-FW and re-ran nothing with sealed evidence.
-           running 183 day(s) without valid evidence for this function.
+           running 183 day(s) without a recorded verification that still stands for this function.
   [n/a   ] SF-03 [PL d]  Emergency stop
            this function declares no verification check, so no verification can cover it.
 ```

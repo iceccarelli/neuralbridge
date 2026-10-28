@@ -343,6 +343,10 @@ class CliDriver(Driver):
     def _out(self, r: subprocess.CompletedProcess[str], cid: str = "") -> Out:
         if r.returncode == 0:
             return Out("ok", self.get(cid) if cid else None, r.stdout)
+        if r.returncode == 3:
+            # `reverify` recorded the submission and cleared nothing (exit 3, B7): the API
+            # answers 200 with the case still awaiting re-verification, which is "ok".
+            return Out("ok", self.get(cid) if cid else None, r.stdout)
         if r.returncode == 1 and r.stderr.startswith("finding:"):
             return Out("refused", text=r.stderr)
         if r.returncode == 2 and "no case" in r.stderr:

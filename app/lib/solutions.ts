@@ -50,7 +50,7 @@ export const SOLUTIONS: SolutionPage[] = [
       'Machinery Reg. Annex III 1.1.9 requires the machine to identify its safety-relevant software and record evidence of intervention — applying 20 Jan 2027. If your integrator or OEM can’t produce that evidence, you may be the one asked to explain it.',
     painPoints: [
       { title: 'You inherit somebody else’s change', body: 'Interventions on safety-bearing items happen without your sign-off, and nothing re-runs the verification that used to cover them.' },
-      { title: '"It still works" is not evidence', body: 'A machine running fine today says nothing about whether its safety functions still have valid evidence behind them.' },
+      { title: '"It still works" is not evidence', body: 'A machine running fine today says nothing about whether a recorded verification still stands for its safety functions.' },
       { title: 'You need your own record, independent of the OEM', body: 'The offline enrolment kit runs on your machine, into your own ledger — you do not have to trust anyone else’s bookkeeping.' },
     ],
     proof: [

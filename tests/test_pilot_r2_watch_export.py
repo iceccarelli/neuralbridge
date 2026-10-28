@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from assurance.billing.plans import PLANS
 from assurance.change.cli import main as change_main
 from assurance.change.service import assess_drift
 from assurance.change.store import CaseStore
@@ -160,7 +161,8 @@ class TestPublicCopyIsConsistent:
         "docs/pricing.md", "public/llms.txt", "app/components/SizingCalculator.tsx",
         "app/lib/plans.ts", "src/assurance/billing/plans.py", "README.md"])
     def test_every_place_that_sells_the_counter_signature_says_no_key_is_configured(self, rel):
-        text = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
+        text = (" ".join(PLANS["cell"].included) if rel.endswith("plans.py")
+                else " ".join((ROOT / rel).read_text(encoding="utf-8").split()))
         assert self.MARKER in text, rel
 
     @pytest.mark.parametrize("rel", ["README.md", "docs/getting-started.md",

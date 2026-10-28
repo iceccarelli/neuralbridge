@@ -45,7 +45,12 @@ from assurance.attest.keys import SigningKey, VerifyingKey
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle, check_bundle
+from assurance.machine.bundle import (
+    MachineSubjectError,
+    build_bundle,
+    check_bundle,
+    resolve_machine_serial,
+)
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import ReviewTrust
@@ -181,22 +186,25 @@ def build_parser() -> argparse.ArgumentParser:
 def _unit_key_problem(subject: str) -> str:
     """Why *subject* is not a unit key (``manufacturer/model#serial``); "" if it is.
 
-    Only the spelling is judged, never whether the unit exists. Coverage, the passport
-    and re-verification look a verification up under the machine's key exactly as the
-    manifest writes it, so any other spelling is filed and never found.
+    Only the spelling is judged, never whether the unit exists. The ``#serial`` grammar is
+    the one every reader of a ledger subject uses (``resolve_machine_serial``, shared with
+    ``machinery.staleness``), not a copy of it; what this adds is the shape of the key a
+    manifest writes (``MachineIdentity.key``): a maker and a model, neither empty nor padded.
+    Coverage, the passport and re-verification look a verification up under that key exactly,
+    so any other spelling is filed and never found.
     """
-    head, hash_, serial = subject.partition("#")
-    maker, slash, model = head.partition("/")
-    if not hash_:
+    if "#" not in subject:
         return "it has no '#serial'"
-    if not slash or not maker.strip() or not model.strip():
-        return "it does not name a manufacturer/model before the '#'"
-    if not serial:
-        return "it has no serial after the '#'"
-    if "#" in serial:
-        return "its serial contains another '#'"
-    if serial != serial.strip() or not subject.isprintable():
-        return "it holds a leading or trailing space or a control character"
+    try:
+        resolve_machine_serial(subject)
+    except MachineSubjectError as exc:
+        return str(exc).split(": ", 1)[-1].split(". ")[0]
+    head = subject.split("#", 1)[0]
+    parts = head.split("/")
+    if len(parts) < 2 or any(not p for p in parts):
+        return "it does not name a manufacturer/model before the '#' (an empty part)"
+    if any(p != p.strip() for p in parts):
+        return "its manufacturer or model starts or ends with a space"
     return ""
 
 

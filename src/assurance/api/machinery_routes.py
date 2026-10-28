@@ -214,7 +214,7 @@ async def post_intervention(
 
 @machinery_router.post(
     "/coverage",
-    summary="Which safety functions still have valid evidence",
+    summary="Which safety functions a recorded verification still stands for (evidence tier shown)",
 )
 async def coverage(
     body: CoverageIn,

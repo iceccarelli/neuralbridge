@@ -31,7 +31,8 @@ either.
   or charge) and a hash-chained ledger with verifiable export.
 - **Cell** — €1,290/month. Everything in Register, plus machine safety
   verification, Annex III manifests/passports, fleet advisory fan-out, change-assurance
-  cases, and counter-signed head attestation.
+  cases, and counter-signed head attestation (which needs a service signing key that is
+  not configured on any deployment today).
 - Prices are launch hypotheses, not validated with paying customers.
 - A fourth, unlisted **Supplier** tier exists for component suppliers
   publishing signed advisories to a hosted feed — sales-assigned pricing
