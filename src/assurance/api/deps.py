@@ -290,7 +290,13 @@ def _client_address(request: Request, fly_client_ip: str | None) -> str:
     if os.environ.get(_FLY_ENV) == "1" and fly_client_ip:
         candidate = fly_client_ip.strip()
         if 0 < len(candidate) <= 64 and re.fullmatch(r"[0-9A-Fa-f:.]+", candidate):
-            return _bucket(candidate)
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                # Not an address: anything else would be a quota bucket of its own naming.
+                pass
+            else:
+                return _bucket(candidate)
     return _bucket(request.client.host) if request.client else "unknown"
 
 
@@ -875,6 +881,35 @@ _WEBHOOK_PATH = "/v1/billing/webhook"
 _WEBHOOK_BODY = 1024 * 1024
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
+# A JSON body nested a thousand levels deep is not data: it is a way to exhaust the
+# interpreter's recursion limit inside validation, error rendering or encoding, and answer
+# the caller with a 500 and a traceback in the log. Refused before the app sees it. Counted
+# on the structure (strings are skipped), so brackets inside text do not count. Applied to
+# bodies the middleware caps at no more than the evidence-verify allowance; the larger
+# recorded-trace allowance is for an authenticated caller and has its own handling.
+_DEPTH_ENV = "ASSURANCE_MAX_JSON_DEPTH"
+_DEFAULT_JSON_DEPTH = 100
+_DEPTH_SCAN_MAX_BYTES = 4 * 1024 * 1024
+_JSON_TOKEN = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
+
+
+def max_json_depth() -> int:
+    return _env_bytes(_DEPTH_ENV, _DEFAULT_JSON_DEPTH)
+
+
+def json_nesting_exceeds(data: bytes, cap: int) -> bool:
+    """Whether ``data`` nests arrays/objects deeper than ``cap``. Linear; never recurses."""
+    depth = 0
+    for match in _JSON_TOKEN.finditer(data):
+        char = match.group()[0]
+        if char in b"[{":
+            depth += 1
+            if depth > cap:
+                return True
+        elif char in b"]}":
+            depth = max(depth - 1, 0)
+    return False
+
 
 def _env_bytes(name: str, default: int) -> int:
     try:
@@ -979,6 +1014,47 @@ class BodySizeLimitMiddleware:
             if too_big:
                 await _send_413(send, detail)
                 return
+
+        content_type = headers.get(b"content-type", b"").lower()
+        if limit <= _DEPTH_SCAN_MAX_BYTES and b"json" in content_type:
+            # Small JSON bodies are read here, in full, to check their nesting; the app
+            # then gets them back unchanged. The size cap still applies as they arrive.
+            messages: list[MutableMapping[str, Any]] = []
+            received = 0
+            while True:
+                message = await receive()
+                if message["type"] != "http.request":
+                    return          # the client went away
+                received += len(message.get("body", b""))
+                if received > limit:
+                    await _send_413(send, detail)
+                    return
+                messages.append(message)
+                if not message.get("more_body", False):
+                    break
+            data = b"".join(m.get("body", b"") for m in messages)
+            cap = max_json_depth()
+            if json_nesting_exceeds(data, cap):
+                body = json.dumps({"detail": {
+                    "error": "json_too_deeply_nested", "limit_depth": cap,
+                    "detail": f"JSON bodies may nest arrays and objects at most {cap} deep.",
+                }}).encode()
+                await send({"type": "http.response.start", "status": 422, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
+            replayed = False
+
+            async def replay() -> MutableMapping[str, Any]:
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": data, "more_body": False}
+                return await receive()
+
+            await self.app(scope, replay, send)
+            return
 
         seen = 0
 

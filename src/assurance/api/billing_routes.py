@@ -142,6 +142,10 @@ def post_checkout(
             cancel_url=f"{market}/#pricing",
             tier=plan.tier,
             metered=plan.metered_overage,
+            # A lapsed customer who comes back authenticated stays on their own Stripe
+            # customer (and so their own account and ledger). An anonymous buyer is new.
+            customer_id=(account.stripe_customer_id
+                         if account is not None and account.id != "operator" else ""),
         )
     except stripe.StripeError as exc:
         raise HTTPException(

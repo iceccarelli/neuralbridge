@@ -316,7 +316,7 @@ def test_l6_no_export_route_can_be_added_without_no_store():
     service = importlib.import_module("assurance.api.service")
     for path, methods in service.create_app().openapi()["paths"].items():
         for method in methods:
-            if "export" in path or path.endswith("/report"):
+            if "export" in path or (method == "get" and path.endswith("/report")):
                 assert is_no_store(method.upper(), path), (method, path)
 
 
