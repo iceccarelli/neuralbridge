@@ -885,8 +885,10 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 # interpreter's recursion limit inside validation, error rendering or encoding, and answer
 # the caller with a 500 and a traceback in the log. Refused before the app sees it. Counted
 # on the structure (strings are skipped), so brackets inside text do not count. Applied to
-# bodies the middleware caps at no more than the evidence-verify allowance; the larger
-# recorded-trace allowance is for an authenticated caller and has its own handling.
+# bodies the middleware caps at no more than the evidence-verify allowance, except the
+# anonymous evidence verifier itself (_EVIDENCE_PATHS): it spends the caller's allowance
+# before it reads the body and analyses hostile nesting on purpose (tests pin both), and the
+# larger recorded-trace allowance is for an authenticated caller and has its own handling.
 _DEPTH_ENV = "ASSURANCE_MAX_JSON_DEPTH"
 _DEFAULT_JSON_DEPTH = 100
 _DEPTH_SCAN_MAX_BYTES = 4 * 1024 * 1024
@@ -1016,7 +1018,8 @@ class BodySizeLimitMiddleware:
                 return
 
         content_type = headers.get(b"content-type", b"").lower()
-        if limit <= _DEPTH_SCAN_MAX_BYTES and b"json" in content_type:
+        if (limit <= _DEPTH_SCAN_MAX_BYTES and b"json" in content_type
+                and scope.get("path", "") not in _EVIDENCE_PATHS):
             # Small JSON bodies are read here, in full, to check their nesting; the app
             # then gets them back unchanged. The size cap still applies as they arrive.
             messages: list[MutableMapping[str, Any]] = []
