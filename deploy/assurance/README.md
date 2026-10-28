@@ -500,7 +500,14 @@ it that way when you copy it off the volume. Two things it deliberately does **n
   held in plaintext in `accounts.db` for up to 24 hours; a backup that left the volume
   would carry a working credential. After a restore, a customer whose checkout key was
   still unclaimed at backup time must be issued a new one (the output of `backup` says how
-  many were left out; the manifest records the count in `pending_keys_not_copied`).
+  many were left out; the manifest records the count in `pending_keys_not_copied`). The
+  checkout's session marker *is* restored, so that customer's `/v1/checkout/complete`
+  answers 202 for ever and Stripe's redelivery is a duplicate; only the operator command
+  below helps: `python -m assurance.billing.issue_key --customer cus_...` (or `--account
+  acc_...`). It issues to a paying account only (`active` or `past_due`, on a paid tier, with
+  a Stripe customer), prints the key once to stdout and logs nothing; pass it to the customer
+  over a channel you trust. You cannot tell from the backup *which* customers were affected,
+  so ask: anyone who paid shortly before the backup and has not yet used their key.
 * **It does not sign the manifest.** Checksums, not signatures: whoever can rewrite the
   backup can rewrite the manifest. `backup` prints `manifest_sha256`; store that somewhere
   the volume is not.
@@ -518,7 +525,7 @@ volume with the current build.
 
 The true restore procedure: stop the service; restore the backup directory onto the volume
 **including `backup-manifest.json`**; run `verify /data` (exact: it must equal the backup);
-start the service; re-issue any key that was unclaimed. On a volume that has been running
+start the service; re-issue any key that was unclaimed (`assurance.billing.issue_key`, above). On a volume that has been running
 since the backup, `verify --live /data` accepts ledgers and logs that only grew past the
 recorded head (and says nothing about `accounts.db`, which moves). **Rehearse a restore
 before relying on it**: restore the files to a scratch volume, point a throwaway service at
