@@ -892,6 +892,13 @@ def assess_advisory(
         confidence=("high" if impact.confirmed and not marker else "medium"),
         provenance={"changed_items": "assurance.fleet.impact.assess_impact", **marker},
     )
+    if marker and not imported:
+        # A bare file or body shares its case id with a case opened from a signed or
+        # pinned feed (ids of existing cases must not move). It must not alter that case:
+        # an unauthenticated reading never rewrites one that carries no such marker.
+        current = store.get(case.case_id)
+        if current is not None and not current.provenance.get("advisory_trust"):
+            return current
     return _open_or_update(
         store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"advisory {impact.advisory_id}: {len(impact.machines_affected)} "
