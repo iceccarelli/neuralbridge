@@ -320,13 +320,12 @@ def _refuse_a_second_validated_claim(
         other = entry.subject
         if other == unit_key or "#" not in other:
             continue
-        evidence = entry.evidence()
-        body = evidence.body
+        body = entry.payload.get("body")      # cheap filters first: only a match is verified
         if (isinstance(body, dict) and body.get("trace_hash") == trace_hash
                 and body.get("unit_key") == other
                 and _TIERS.get(str(body.get("tier")), AssuranceTier.PROFILE).rank
                 >= AssuranceTier.VALIDATED.rank
-                and evidence.verify()):
+                and entry.evidence().verify()):
             raise MachineSubjectError(
                 f"this recording ({trace_hash[:12]}) is already filed as validated "
                 f"evidence for {other}. One recording is not evidence about two units, so "
