@@ -121,8 +121,7 @@ def _verify(tmp_path, capsys, subject, *extra):
 
 
 class TestSubjectSpellingWarning:
-    @pytest.mark.parametrize("subject", ["AR-7 0412", "AR-7#0412", "Grimaldi/AR-7#",
-                                         "Grimaldi/AR-7", "#0412"])
+    @pytest.mark.parametrize("subject", ["AR-7 0412", "AR-7#0412", "Grimaldi/AR-7"])
     def test_a_subject_that_is_not_a_unit_key_warns_that_coverage_will_not_see_it(
             self, tmp_path, capsys, subject):
         rc, cap, ledger = _verify(tmp_path, capsys, subject)
@@ -135,6 +134,14 @@ class TestSubjectSpellingWarning:
         subjects = {e.subject for e in EvidenceLedger(ledger).entries()}
         assert subject in subjects
         assert rc in (0, 1)
+
+    @pytest.mark.parametrize("subject", ["Grimaldi/AR-7#", "#0412"])
+    def test_a_subject_the_engine_already_refuses_is_still_refused(
+            self, tmp_path, capsys, subject):
+        """What is accepted does not change: these were exit 2 before and still are."""
+        rc, cap, _ = _verify(tmp_path, capsys, subject)
+        assert rc == 2
+        assert "not a unit key" in cap.err
 
     def test_a_well_formed_key_with_a_manifest_in_the_ledger_does_not_warn(
             self, tmp_path, capsys):

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import sys
+
+#: What a shell reports for a process whose reader went away: 128 + SIGPIPE.
+EXIT_BROKEN_PIPE = 141
 
 _DOMAINS = {
     "report": "assurance.report.cli",
@@ -38,7 +42,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     from importlib import import_module
 
-    return int(import_module(_DOMAINS[domain]).main(rest))
+    try:
+        return int(import_module(_DOMAINS[domain]).main(rest))
+    except BrokenPipeError:
+        # `assurance ... | head`: the reader left while we were printing. Whatever the
+        # command seals (a ledger entry, a case) is sealed before it prints, so there
+        # is nothing to repair and nothing to say. Point stdout at /dev/null so the
+        # interpreter's own flush at exit does not raise the same error again.
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        return EXIT_BROKEN_PIPE
 
 
 if __name__ == "__main__":
