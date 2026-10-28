@@ -239,7 +239,7 @@ class TestTheMachineryRoutesAreOffTheLoopToo:
             return inner
 
         for name in ("record_manifest", "check_intervention", "assess_coverage",
-                     "build_passport"):
+                     "build_passport", "compare"):
             monkeypatch.setattr(routes, name, watched(name, getattr(routes, name)))
         headers = keyed(store, "cell")
         m = manifest().to_dict()
@@ -252,5 +252,31 @@ class TestTheMachineryRoutesAreOffTheLoopToo:
                            json={"manifest": m}).status_code == 200
         assert client.post("/v1/machinery/passport", headers=headers, json={
             "manifest": m, "actor": "t", "seal": False}).status_code == 200
+        assert client.post("/v1/machinery/diff", headers=headers, json={
+            "baseline": m, "observed": m}).status_code == 200
         assert seen == {"record_manifest": False, "check_intervention": False,
-                        "assess_coverage": False, "build_passport": False}
+                        "assess_coverage": False, "build_passport": False,
+                        "compare": False}
+
+
+class TestTheGateDoesNotLeakLoops:
+    def test_a_closed_loops_semaphore_is_forgotten(self):
+        from assurance.api.machine_routes import _Gate
+
+        gate = _Gate(2)
+
+        async def take() -> None:
+            gate.for_running_loop()
+
+        for _ in range(3):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(take())
+            finally:
+                loop.close()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(take())
+            assert len(gate._by_loop) == 1
+        finally:
+            loop.close()
