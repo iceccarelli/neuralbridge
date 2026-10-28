@@ -168,6 +168,8 @@ the document is refused. Wrong-typed fields, a tree deeper than 64 levels, more 
 products or a file over 32 MiB are a message and exit 2, never a traceback. `--out` may not
 be the input file.
 
+**Signing one.** `assurance supplier publish` refuses an advisory that carries an `import_record`: a vendor signs what it wrote and checked itself, not a translation nobody here authenticated. And a signed feed cannot upgrade one: the watch and `fleet advisory` treat an import inside a verified feed as inspect-only.
+
 **Opening a case on one.** `change assess-advisory` (and `POST /v1/change/assess/advisory`)
 refuse an unsigned import unless a **named person** passes `--accept-unsigned` (API:
 `accept_unsigned: true` with `actor`); software or an unnamed caller cannot. The case then
