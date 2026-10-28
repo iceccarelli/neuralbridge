@@ -80,8 +80,34 @@ class TestAStoreThatIsNotAnAccountStoreIsNeverWrittenTo:
         capsys.readouterr()
         rc = _cli(*verb, "--store", ledger)
         err = capsys.readouterr().err
-        assert rc == 2 and "ledger" in err.lower()
+        assert rc == 2 and "hash chain" in err
         assert _tables(ledger) == before_tables and _digest(ledger) == before
+
+    def test_a_ledger_that_already_carries_account_tables_is_still_a_ledger(
+            self, tmp_path, capsys):
+        """The damage this guards against has been done once: the schema is in the file."""
+        damaged = tmp_path / "damaged.db"
+        EvidenceLedger(damaged)
+        AccountStore(damaged)                       # what the first pass's tool would have done
+        before = _digest(damaged)
+        assert _cli("list", "--store", damaged) == 2
+        assert _cli("grant", "--store", damaged, "--email", "a@b.example", "--tier", "cell") == 2
+        assert "hash chain" in capsys.readouterr().err
+        assert _digest(damaged) == before
+
+    def test_list_does_not_migrate_an_older_store(self, tmp_path, capsys):
+        path = tmp_path / "old.db"
+        AccountStore(path).upsert_account(email="l@x.example", tier="cell",
+                                          stripe_customer_id="cus_old")
+        db = sqlite3.connect(path)
+        db.execute("alter table accounts drop column source")
+        db.commit()
+        db.close()
+        before = _digest(path)
+        assert _cli("list", "--store", path, "--json") == 0
+        assert "source" not in [r[1] for r in sqlite3.connect(path).execute(
+            "pragma table_info(accounts)")]
+        assert _digest(path) == before
 
     def test_any_other_sqlite_file_is_refused_too(self, tmp_path, capsys):
         other = tmp_path / "other.db"

@@ -79,6 +79,15 @@ class TestWatchDoesNotCallAnExportFolderQuiet:
         assert "every machine was looked at" not in out
         assert "export folder, not a look at the machine" in out
 
+    def test_a_changed_hash_over_an_export_folder_is_still_a_finding_not_degraded(
+            self, tmp_path, capsys):
+        cfg, ledger = _watch_dir(tmp_path, flag=None)
+        _run(capsys, cfg, ledger)
+        (tmp_path / "0412" / "controller-fw.bin").write_bytes(b"\x7fELF" + b"firmware 3.9.0" * 20)
+        rc, body = _run(capsys, cfg, ledger)
+        assert body["outcomes"][0]["status"] == "changed"
+        assert body["verdict"] == "findings" and rc == 1
+
     def test_with_the_operators_assertion_it_is_quiet_as_before(self, tmp_path, capsys):
         cfg, ledger = _watch_dir(tmp_path, flag=True)
         _run(capsys, cfg, ledger)
@@ -207,7 +216,8 @@ class TestTheLeftovers:
         done = subprocess.CompletedProcess([], 3, stdout="", stderr="")
         assert driver._out(done, "").kind == "ok"
 
-    @pytest.mark.parametrize("subject", [" Acme/M#1", "Acme//M#1", "Acme/ M#1", "/M#1", "Acme/#1"])
+    @pytest.mark.parametrize("subject", [" Acme/M#1", "Acme//M#1", "Acme/ M#1", "/M#1", "Acme/#1",
+                                         "Acme/M#", "Acme/M#a#b", "Acme/M#1 ", "Acme/M# 1"])
     def test_the_unit_key_warning_uses_the_canonical_grammar_and_the_key_shape(self, subject):
         from assurance.machine.cli import _unit_key_problem
 
