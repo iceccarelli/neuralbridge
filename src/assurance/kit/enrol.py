@@ -263,6 +263,12 @@ class KitConfig:
             data = json.loads(p.read_text("utf-8"))
         except json.JSONDecodeError as exc:
             raise KitError(f"{p} is not valid JSON: {exc}") from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            # A directory, a permissions problem or a binary file is "the kit could not
+            # run" (exit 2), not an uncaught crash that shares exit 1 with a finding.
+            raise KitError(f"{p} could not be read as a kit config: {exc}") from exc
+        if not isinstance(data, dict):
+            raise KitError(f"{p} must contain a JSON object, not {type(data).__name__}.")
         return cls(
             kit_id=str(data.get("kit_id", "")),
             organisation=str(data.get("organisation", "")),
