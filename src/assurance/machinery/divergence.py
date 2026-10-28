@@ -79,10 +79,21 @@ class Change:
         }
 
 
+#: What stands behind each ``hash_source``. This software never sees where a hash was read:
+#: ``read_from_machine`` is a statement by whoever filed the manifest (``collect`` and ``kit``
+#: record it as the operator's assertion), so an exported case says so beside the label.
+_BASIS = {
+    "read_from_machine": "operator_assertion",
+    "supplied_by_vendor": "supplied_by_vendor",
+    "declared": "declared",
+}
+
+
 def _summary(item: SafetyItem) -> dict[str, Any]:
     return {
         "kind": item.kind.value, "name": item.name, "version": item.version,
         "content_hash": item.content_hash, "hash_source": item.hash_source.value,
+        "hash_source_basis": _BASIS[item.hash_source.value],
         "implements": list(item.implements),
     }
 
@@ -303,6 +314,14 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
                 before=_summary(b), after=_summary(o), functions=functions,
             ))
 
+    asserted = [i for i in observed.items if i.hash_source.describes_this_unit]
+    if asserted:
+        caveats.append(
+            f"{len(asserted)} of {len(observed.items)} observed items are labelled "
+            "read_from_machine. That label is the operator's assertion (collect/kit "
+            "--read-from-machine, or a watch target's read_from_machine): this software "
+            "cannot check that the files came off the machine, and a sealed record carrying "
+            "the label shows what was claimed, not that it was true.")
     if observed.uncomparable_items:
         caveats.append(
             f"{len(observed.uncomparable_items)} of {len(observed.items)} observed "

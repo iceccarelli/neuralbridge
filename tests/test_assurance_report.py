@@ -144,7 +144,7 @@ class TestReport:
         assert "Stale" in page
 
     def test_it_says_how_many_days_a_function_has_been_uncovered(self, page):
-        assert re.search(r"Running \d+ day\(s\) without valid evidence", page)
+        assert re.search(r"Running \d+ day\(s\) without a recorded verification that still stands", page)
 
     def test_a_not_demonstrable_function_is_never_shown_as_covered(self, page):
         assert "Not demonstrable" in page

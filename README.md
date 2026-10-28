@@ -51,7 +51,8 @@ which needs an account and a key.)
 `pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
 this project declares 22 core dependencies unconditionally (fastapi, sqlalchemy,
 asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
-platform, and the extra adds only `cryptography` to them. The offline kit imports
+platform, and the extra adds nothing to them: `cryptography` is already one of the 22 core
+dependencies, so the extra is a label, not a smaller install. The offline kit imports
 `cryptography` and nothing else outside the standard library.
 
 The run arms a guard over the process's socket layer, refuses every outbound
@@ -69,8 +70,8 @@ See [`deploy/assurance/KIT.md`](deploy/assurance/KIT.md).
 
 Every row below maps to code that runs, offline, on your own files. The hosted
 counter-signature (`POST /v1/ledger/attest`) is a separate thing: it answers 503
-`no_attestation_key_configured` until the service has a signing key, and no
-deployment has one configured today. Nothing is listed here that the software does
+`no_attestation_key_configured` until the service has a signing key, and none is
+configured on any deployment today. Nothing is listed here that the software does
 not do; what it does not do is listed in each command's output.
 
 | | Command | What it establishes |

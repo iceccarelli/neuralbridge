@@ -170,7 +170,7 @@ class TestTheReadme:
 
     def test_the_every_row_claim_is_followed_by_the_counter_signature_caveat(self):
         text = self._readme()
-        assert "no deployment has one configured today" in text
+        assert "configured on any deployment today" in text
         assert "no_attestation_key_configured" in text
 
     def test_no_account_no_key_is_stated_as_true_of_the_kit_only(self):

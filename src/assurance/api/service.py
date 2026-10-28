@@ -82,8 +82,8 @@ def create_app(**kwargs: Any) -> FastAPI:
             {"name": "machinery", "description": "Machinery Regulation Annex III "
                                                  "1.1.9: safety software identity, "
                                                  "evidence of intervention, and which "
-                                                 "safety functions still have valid "
-                                                 "evidence."},
+                                                 "safety functions a recorded "
+                                                 "verification still stands for."},
             {"name": "fleet", "description": "Every enrolled machine at once: "
                                              "component advisories fanned out to "
                                              "serial numbers, and Declarations of "

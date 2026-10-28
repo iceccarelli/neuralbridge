@@ -586,7 +586,7 @@ def assess_drift(
             invalidation_reason = invalidation_reason or fc.detail
             action = (
                 f"Re-run {', '.join(fc.checks) or 'the declared checks'} "
-                f"for {fid} ({fc.description}); last valid evidence "
+                f"for {fid} ({fc.description}); last recorded verification "
                 f"{fc.last_verified_hash[:12] or 'none'} was invalidated by "
                 f"{fc.invalidated_by or 'this change'}.")
         elif fc.coverage in (Coverage.CURRENT,):

@@ -3,7 +3,7 @@
     record-manifest   seal what is on the machine today
     record-change     seal an intervention in safety-relevant software
     diff              compare a baseline manifest against what was found
-    coverage          which safety functions still have valid evidence
+    coverage          which safety functions a recorded verification still stands for
     passport          seal and export the machine's whole evidence position
     check             re-verify a passport somebody else produced
 

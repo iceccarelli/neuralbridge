@@ -16,7 +16,8 @@ export PYTHONPATH=src           # run from this checkout; nothing else is instal
 
 `pip install -e '.[assurance-attest]'` also works, but it installs all 22 core
 dependencies of the NeuralBridge middleware project (fastapi, sqlalchemy, asyncpg,
-redis, tiktoken, ...) as well; the extra adds only `cryptography`. The hosted API
+redis, tiktoken, ...) as well; the extra adds nothing, because `cryptography` is already
+one of the 22 core dependencies. The hosted API
 below needs its own extra, `.[assurance-api]`, and that one is a real install.
 
 ## The free path: the offline enrolment kit
