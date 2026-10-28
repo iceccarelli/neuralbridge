@@ -94,6 +94,20 @@ def post_checkout(
     body: CheckoutIn, request: Request, principal: Principal = Depends(current_principal)
 ) -> CheckoutOut:
     account = principal.account
+    if account is not None and account.is_manual_grant:
+        # A pilot is not converted here: a checkout would create a second Stripe customer,
+        # account and ledger beside it, and the billing portal has no customer to open.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pilot_account",
+                "tier": account.tier,
+                "remedy": "This account is a pilot provisioned by an operator and invoiced "
+                          "outside Stripe. Ask the operator who issued it to change or extend "
+                          "it: a checkout would open a second account with a second, empty "
+                          "ledger, splitting your evidence.",
+            },
+        )
     if account is not None and account.id != "operator" and account.status in {"active", "past_due"} \
             and account.tier in _PURCHASABLE_TIERS:
         # A second checkout would create a second Stripe customer, a second

@@ -3,7 +3,8 @@
     grant       create an account for a pilot and print its API key, once
     issue-key   print another key for an existing manual grant, once
     revoke-key  stop one key of a manual grant, at once
-    extend      move (or remove) a manual grant's last day
+    extend      move a manual grant's last day (--no-expiry removes it, on purpose)
+    end         end a manual grant now: revoke every key, customer-minted included
     list        every account in the store: where it came from, until when, no secrets
 
 This is for **operator-run manual pilots invoiced OUTSIDE Stripe**. It exists because the
@@ -61,7 +62,9 @@ from assurance.billing.accounts import (
     Account,
     AccountStore,
     ManualGrantError,
+    hash_key,
 )
+from assurance.cli import silence_stdout
 from assurance.core.identity import utc_now
 
 __all__ = ["build_parser", "live_stripe_variables", "main"]
@@ -106,7 +109,30 @@ def _expiry(text: str) -> str:
     return text
 
 
-def _open(path: Path, *, create: bool) -> AccountStore:
+def _inspect(path: Path) -> set[str]:
+    """The table names in an existing file, read without writing a byte; refuse what is not SQLite."""
+    try:
+        db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        raise _RefusedError(f"{path} cannot be opened as a SQLite file: {exc}") from None
+    try:
+        return {r[0] for r in db.execute("select name from sqlite_master where type='table'")}
+    except sqlite3.Error:
+        raise _RefusedError(
+            f"{path} is not a SQLite database, so it is not an account store.") from None
+    finally:
+        db.close()
+
+
+def _open(path: Path, *, create: bool, readonly: bool = False) -> AccountStore:
+    """Open the account store at *path*, or refuse. Never writes into a file that is not one.
+
+    A mistyped path is likeliest to land on another file the service owns: an evidence ledger
+    (``/data/art14-register.db``, a tenant ledger, ``out/evidence.db``). Opening that as an
+    account store would write the account tables into the ledger's file. So an existing file
+    is inspected read-only first, and used only if it is empty (and ``--create`` was given)
+    or already holds the account tables and no ledger chain.
+    """
     if not path.exists() and not create:
         raise _RefusedError(
             f"{path} does not exist. This is the account store the service reads as "
@@ -115,6 +141,26 @@ def _open(path: Path, *, create: bool) -> AccountStore:
             "you really are starting a new store, pass --create.")
     if path.exists() and not path.is_file():
         raise _RefusedError(f"{path} is not a file.")
+    if path.exists():
+        tables = _inspect(path)
+        if "chain" in tables:
+            raise _RefusedError(
+                f"{path} is an evidence ledger (it holds a hash chain), not the account store. "
+                "Nothing was written to it: a ledger file has one writer. The account store is "
+                "the service's ASSURANCE_ACCOUNTS (on the hosted volume, /data/accounts.db).")
+        if not tables:
+            if not create:
+                raise _RefusedError(
+                    f"{path} is an empty file. If you really are starting a new account "
+                    "store here, pass --create.")
+        elif not {"accounts", "api_keys"} <= tables:
+            raise _RefusedError(
+                f"{path} is a SQLite file but not an account store (no accounts and api_keys "
+                "tables). Nothing was written to it.")
+        elif readonly:
+            return AccountStore.open_readonly(path)
+    elif readonly:
+        raise _RefusedError(f"{path} does not exist.")
     return AccountStore(path)
 
 
@@ -145,6 +191,9 @@ def _describe(account: Account, store: AccountStore) -> dict[str, Any]:
         "lapsed": account.grant_lapsed,
         "entitled_now": account.tier != "free" and account.plan.tier == account.tier,
         "active_keys": store.active_key_count(account.id),
+        # Prefixes are not secrets (the hash is all that is stored). They are what lets an
+        # operator name a key to revoke, including one the customer minted themselves.
+        "keys": store.keys_for(account.id),
         "stripe_bound": bool(account.stripe_customer_id),
     }
 
@@ -154,6 +203,33 @@ def _emit(args: argparse.Namespace, payload: dict[str, Any], lines: list[str]) -
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print("\n".join(lines))
+
+
+def _deliver(args: argparse.Namespace, store: AccountStore, account: Account, key: str,
+             payload: dict[str, Any], lines: list[str], verb: str) -> int:
+    """Print a freshly minted key and make sure it arrived, or take it back.
+
+    The key exists only in this process: the store keeps a hash. If the reader of stdout is
+    gone (a dropped ``fly ssh`` session, ``| head``) the key was minted and nobody has it, and a
+    live key nobody holds is worse than none. So the text is written and flushed here, inside
+    the guard, and on failure the key is revoked and stderr says what happened and what to run.
+    """
+    text = json.dumps(payload, indent=2, sort_keys=True) if args.json else "\n".join(lines)
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        store.revoke_key(hash_key(key))
+        silence_stdout()
+        print(
+            f"error: the key for account {account.id} was minted and NOT delivered (the "
+            "output was closed before it could be written), so it has been revoked: the "
+            f"account exists with no live key. Run `assurance billing issue-key --store "
+            f"{args.store} --account {account.id}` to mint one, somewhere you can read it"
+            + (" (and `billing end` if the grant should not exist)." if verb == "grant"
+               else "."), file=sys.stderr)
+        return 2
+    return 0
 
 
 def _cmd_grant(args: argparse.Namespace) -> int:
@@ -176,7 +252,7 @@ def _cmd_grant(args: argparse.Namespace) -> int:
             "No Stripe customer, subscription, price, invoice or charge exists for this "
             "account. Invoice it outside Stripe."),
     }
-    _emit(args, payload, [
+    return _deliver(args, store, account, key, payload, [
         f"granted {account.tier} to {account.email}  (account {account.id})",
         "  source     manual_grant  (not a Stripe customer; invoice it outside Stripe)",
         f"  note       {account.grant_note or '—'}",
@@ -187,8 +263,7 @@ def _cmd_grant(args: argparse.Namespace) -> int:
         f"  API KEY    {key}",
         f"  {_KEY_NOTE}",
         "  Use:  curl -H 'X-API-Key: <key>' <service>/v1/me",
-    ])
-    return 0
+    ], "grant")
 
 
 def _cmd_issue_key(args: argparse.Namespace) -> int:
@@ -197,9 +272,9 @@ def _cmd_issue_key(args: argparse.Namespace) -> int:
     key = store.issue_key(account.id, label=args.label)
     payload = {"account_id": account.id, "api_key": key,
                "key_prefix": key[: len(KEY_PREFIX) + 6], "key_note": _KEY_NOTE}
-    _emit(args, payload, [f"another key for {account.email}  (account {account.id})",
-                          f"  API KEY    {key}", f"  {_KEY_NOTE}"])
-    return 0
+    return _deliver(args, store, account, key, payload,
+                    [f"another key for {account.email}  (account {account.id})",
+                     f"  API KEY    {key}", f"  {_KEY_NOTE}"], "issue-key")
 
 
 def _cmd_revoke_key(args: argparse.Namespace) -> int:
@@ -222,7 +297,12 @@ def _cmd_revoke_key(args: argparse.Namespace) -> int:
 
 
 def _cmd_extend(args: argparse.Namespace) -> int:
-    expires = _expiry(args.expires_on)
+    # Removing the expiry is its own flag: an empty --expires-on (an unset shell variable)
+    # must not make a grant permanent.
+    expires = "" if args.no_expiry else _expiry(args.expires_on)
+    if not args.no_expiry and not args.expires_on:
+        raise _RefusedError(
+            "--expires-on is empty. To remove the expiry on purpose pass --no-expiry.")
     store = _open(args.store, create=False)
     _manual(store, args.account)
     account = store.extend_grant(args.account, expires)
@@ -233,8 +313,34 @@ def _cmd_extend(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_list(args: argparse.Namespace) -> int:
+def _cmd_end(args: argparse.Namespace) -> int:
     store = _open(args.store, create=False)
+    if args.account:
+        account = _manual(store, args.account)
+    else:
+        found = store.manual_grants_for_email(args.email)
+        if not found:
+            raise _RefusedError(f"no manual grant for {args.email!r} in this store.")
+        live = [a for a in found if a.status != "cancelled"]
+        if len(live) > 1:
+            raise _RefusedError(
+                f"{len(live)} live manual grants match {args.email!r}; name one with --account: "
+                + ", ".join(a.id for a in live))
+        account = (live or found)[-1]
+    done = store.end_grant(account.id, args.reason)
+    payload = {"account_id": account.id, "email": account.email,
+               "status": done["account"].status, "keys_revoked": done["keys_revoked"],
+               "already_ended": done["already_ended"]}
+    _emit(args, payload, [
+        f"{account.id} ({account.email}): already ended; nothing changed."
+        if done["already_ended"] else
+        f"ended {account.id} ({account.email}): {done['keys_revoked']} key(s) revoked, "
+        "including any the customer minted; the account reads as free from now."])
+    return 0
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    store = _open(args.store, create=False, readonly=True)
     rows = [_describe(a, store) for a in store.list_accounts()]
     if args.json:
         print(json.dumps({"accounts": rows}, indent=2, sort_keys=True))
@@ -249,6 +355,10 @@ def _cmd_list(args: argparse.Namespace) -> int:
               f"{r['expires_on'] or '—':<11} {'yes' if r['entitled_now'] else 'no':<5} "
               f"{r['active_keys']:<4} {r['email']}"
               + (f"   [{r['note']}]" if r["note"] else ""))
+        for k in r["keys"]:
+            if not k["revoked"]:
+                print(f"    key {k['prefix']}  {k['label'] or '—'}  made {k['created_at']}"
+                      + (f"  last used {k['last_used']}" if k["last_used"] else ""))
     return 0
 
 
@@ -300,7 +410,23 @@ def build_parser() -> argparse.ArgumentParser:
     ex = verbs.add_parser("extend", help="move a manual grant's last day")
     common(ex)
     ex.add_argument("--account", required=True)
-    ex.add_argument("--expires-on", required=True, metavar="YYYY-MM-DD")
+    when = ex.add_mutually_exclusive_group()
+    when.add_argument("--expires-on", default="", metavar="YYYY-MM-DD")
+    when.add_argument("--no-expiry", action="store_true",
+                      help="remove the expiry: the grant then never lapses by itself")
+
+    en = verbs.add_parser(
+        "end", help="end a manual grant now: revoke every key, customer-minted included",
+        description=(
+            "End a manual grant at once. Revokes every key of the account (a customer can "
+            "mint their own, which `revoke-key` by prefix does not reach unless you know it) "
+            "and cancels the account, which reads as the free plan on the next request. "
+            "Idempotent. Refuses an account that is not a manual grant."))
+    common(en)
+    who = en.add_mutually_exclusive_group(required=True)
+    who.add_argument("--account")
+    who.add_argument("--email")
+    en.add_argument("--reason", default="", help="recorded in the grant's note")
 
     ls = verbs.add_parser("list", help="every account: source, tier, last day, key count")
     common(ls)
@@ -310,7 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {"grant": _cmd_grant, "issue-key": _cmd_issue_key,
-                "revoke-key": _cmd_revoke_key, "extend": _cmd_extend, "list": _cmd_list}
+                "revoke-key": _cmd_revoke_key, "extend": _cmd_extend, "end": _cmd_end,
+                "list": _cmd_list}
     try:
         if args.command != "list":
             live = live_stripe_variables(os.environ)

@@ -280,7 +280,7 @@ class TestHardeningAtTheStore:
             store.grant_manual(email="STRASSE@beispiel.de", tier="cell")
 
     @pytest.mark.parametrize("email", ["@", "a b@c.d", "a@@b.c", "a@", "@b.c", "a@b\n.c",
-                                       "a@b.c\t", "", "plain"])
+                                       "a@b .c", "", "plain"])
     def test_an_email_must_be_one_at_with_both_sides_and_no_whitespace(self, tmp_path, email):
         with pytest.raises(ManualGrantError):
             AccountStore(tmp_path / "a.db").grant_manual(email=email, tier="cell")

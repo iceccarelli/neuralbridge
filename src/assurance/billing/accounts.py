@@ -25,13 +25,15 @@ The rules this store exists to enforce:
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import sqlite3
 import threading
+import unicodedata
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +84,30 @@ ENTITLED_STATUSES = frozenset({"active", "past_due"})
 
 #: ``Account.source`` of an account provisioned by an operator, outside Stripe.
 MANUAL_GRANT = "manual_grant"
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_EMAIL = re.compile(r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+")
+
+
+def valid_day(text: str) -> bool:
+    """Whether *text* is exactly a calendar date, ``YYYY-MM-DD``. Nothing looser is a date here."""
+    if not _DAY.fullmatch(text):
+        return False
+    try:
+        date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
+def normal_email(email: str) -> str:
+    """The form two spellings of one address share: NFKC, then Unicode case-folded.
+
+    SQLite's ``lower()`` is ASCII-only, so ``MÜLLER@x.de`` and ``müller@x.de`` are different
+    strings to it and the same person to everybody else.
+    """
+    return unicodedata.normalize("NFKC", email.strip()).casefold()
+
 
 #: The tiers an operator may grant by hand. Never ``free`` (nothing to grant) and never
 #: ``payg`` (that is a billing arrangement with Stripe, which a manual grant has none of).
@@ -366,9 +392,13 @@ class Account:
         and moving the date (:meth:`AccountStore.extend_grant`) takes effect on the next
         request.
         """
-        return bool(
-            self.is_manual_grant and self.grant_expires_on
-            and utc_now().date().isoformat() > self.grant_expires_on)
+        if not (self.is_manual_grant and self.grant_expires_on):
+            return False
+        # A stored date this build cannot read is not "no expiry": it ends the grant.
+        # Fail closed; the store refuses to write such a value, so it can only have
+        # arrived by hand.
+        return (not valid_day(self.grant_expires_on)
+                or utc_now().date().isoformat() > self.grant_expires_on)
 
     @property
     def plan(self) -> Plan:
@@ -689,13 +719,19 @@ class AccountStore:
             raise ManualGrantError(
                 f"tier {tier!r} cannot be granted by hand; one of {', '.join(GRANTABLE_TIERS)}.")
         normalised = email.strip()
-        if not normalised or "@" not in normalised:
-            raise ManualGrantError(f"{email!r} is not an email address.")
+        if not _EMAIL.fullmatch(normalised):
+            raise ManualGrantError(
+                f"{email!r} is not an email address: one '@', something on both sides, and "
+                "no whitespace or control characters.")
+        if expires_on and not valid_day(expires_on):
+            raise ManualGrantError(
+                f"expires_on {expires_on!r} is not a date; write it YYYY-MM-DD. A value that "
+                "cannot be read would never lapse, so it is refused here, not only in the CLI.")
         with self._txn() as db:
-            existing = db.execute(
-                "SELECT id FROM accounts WHERE source = ? AND lower(email) = lower(?)",
-                (MANUAL_GRANT, normalised),
-            ).fetchone()
+            wanted = normal_email(normalised)
+            existing = next((r for r in db.execute(
+                "SELECT id, email FROM accounts WHERE source = ? AND status != 'cancelled'",
+                (MANUAL_GRANT,)) if normal_email(r["email"]) == wanted), None)
             if existing is not None:
                 raise ManualGrantError(
                     f"{normalised} already has a manual grant (account {existing['id']}). "
@@ -718,6 +754,8 @@ class AccountStore:
 
     def extend_grant(self, account_id: str, expires_on: str) -> Account:
         """Move a manual grant's last day ('' = remove the expiry). Read on the next request."""
+        if expires_on and not valid_day(expires_on):
+            raise ManualGrantError(f"expires_on {expires_on!r} is not a date; write it YYYY-MM-DD.")
         with self._txn() as db:
             row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
             if row is None:
@@ -731,6 +769,43 @@ class AccountStore:
                 (expires_on, format_utc(utc_now()), account_id))
             row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
         return self._row_to_account(row)
+
+    def end_grant(self, account_id: str, reason: str = "") -> dict[str, Any]:
+        """End a manual grant now: revoke every key it has, whoever minted it, and cancel it.
+
+        A customer can mint keys of their own (``POST /v1/keys``), so ending a grant by
+        revoking the keys the operator knows about does not end it. This revokes all of them in
+        one transaction and sets the account ``cancelled``, which reads as the free plan on the
+        next request. Idempotent: ending an ended grant changes nothing.
+        """
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no account {account_id!r}")
+            if row["source"] != MANUAL_GRANT:
+                raise ManualGrantError(
+                    f"{account_id} is not a manual grant; its access follows Stripe, and this "
+                    "command does not touch it.", account_id=account_id)
+            now = format_utc(utc_now())
+            revoked = db.execute(
+                "UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL",
+                (now, account_id)).rowcount
+            already = row["status"] == "cancelled"
+            if not already:
+                note = (row["grant_note"] + " " if row["grant_note"] else "") \
+                    + f"[ended {now}" + (f": {reason}" if reason else "") + "]"
+                db.execute(
+                    "UPDATE accounts SET status='cancelled', grant_note=?, updated_at=? "
+                    "WHERE id=?", (note, now, account_id))
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        return {"account": self._row_to_account(row), "keys_revoked": revoked,
+                "already_ended": already}
+
+    def manual_grants_for_email(self, email: str) -> list[Account]:
+        """Manual grants for an address, ended ones included, compared as ``grant_manual`` does."""
+        wanted = normal_email(email)
+        return [a for a in self.list_accounts()
+                if a.is_manual_grant and normal_email(a.email) == wanted]
 
     @staticmethod
     def _apply_state_db(
