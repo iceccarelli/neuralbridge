@@ -170,3 +170,54 @@ def test_a_row_older_than_the_recorded_end_does_not_resurrect_the_subscription(
         store, "invoice.payment_failed",
         {"customer": "cus_1", "subscription": "sub_unknown"}, "e3", T + 450)
     assert _phase(store, "sub_A") == "terminal"
+
+
+# ---------------------------------------------------------------------------
+# a paying older subscription is not locked out by a newer one that is merely paused
+# ---------------------------------------------------------------------------
+def test_a_newer_paused_sub_does_not_lock_out_an_older_active_one(tmp_path, billing_env):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    _checkout(store, "e1", "cs_A", "sub_A", "register", T)
+    _checkout(store, "e2", "cs_B", "sub_B", "cell", T + 10)
+    assert _row(store) == ("active", "cell", "sub_B")          # both live: the newer leads
+    _update(store, "e3", "sub_B", CELL, "paused", T + 20)
+    assert _row(store) == ("active", "register", "sub_A")      # A still pays
+
+
+def test_a_newer_paused_sub_with_an_older_past_due_one_stays_entitled(tmp_path, billing_env):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    _checkout(store, "e1", "cs_A", "sub_A", "register", T)
+    _checkout(store, "e2", "cs_B", "sub_B", "cell", T + 10)
+    _update(store, "e3", "sub_A", REG, "past_due", T + 15)
+    _update(store, "e4", "sub_B", CELL, "paused", T + 20)
+    assert _row(store) == ("past_due", "register", "sub_A")
+
+
+def test_when_the_older_active_sub_then_ends_the_paused_newer_one_denies(tmp_path, billing_env):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    _checkout(store, "e1", "cs_A", "sub_A", "register", T)
+    _checkout(store, "e2", "cs_B", "sub_B", "cell", T + 10)
+    _update(store, "e3", "sub_B", CELL, "paused", T + 20)
+    out = _update(store, "e4", "sub_A", REG, "canceled", T + 30)
+    assert out["result"] == "downgraded_to_free"
+    assert _row(store) == ("cancelled", "cell", "sub_B")       # paused: no entitlement, tier kept
+    assert store.account_by_customer("cus_1").plan.tier == "free"
+    # and a cancelled paused sub is the end of it
+    _update(store, "e5", "sub_B", CELL, "canceled", T + 40)
+    assert _row(store) == ("cancelled", "free", "sub_B")
+
+
+def test_reconcile_agrees_with_the_webhook_when_a_newer_sub_is_paused(tmp_path, billing_env):
+    now = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
+    base = int(now.timestamp()) - 30 * 86400
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    _checkout(store, "e1", "cs_A", "sub_A", "register", base)
+    _checkout(store, "e2", "cs_B", "sub_B", "cell", base + 100)
+    _update(store, "e3", "sub_B", CELL, "paused", base + 200)
+    stripe = FakeStripe([
+        stripe_sub("sub_A", "cus_1", status="active", price=REG, created=base),
+        stripe_sub("sub_B", "cus_1", status="paused", price=CELL, created=base + 100),
+    ])
+    report = rec.reconcile(store, stripe, apply=False, now=now)
+    assert [f.category for f in report.findings] == []
+    assert _row(store)[:2] == ("active", "register")

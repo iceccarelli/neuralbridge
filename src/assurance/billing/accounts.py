@@ -108,6 +108,8 @@ USAGE_MAX_AGE = timedelta(days=34)
 #: How restrictive a subscription phase is. At the same second Stripe stamps two events
 #: with, the more restrictive wins: of the two mistakes, leaving access on is the worse one.
 _PHASE_RANK = {"entitled": 0, "past_due": 1, "suspended": 2, "terminal": 3}
+#: How much a subscription in this phase counts when choosing the one the account follows.
+_CLASS_OF_PHASE = {"entitled": 2, "past_due": 2, "suspended": 1, "terminal": 0}
 _STATUS_OF_PHASE = {
     "entitled": "active", "past_due": "past_due", "suspended": "cancelled", "terminal": "cancelled",
 }
@@ -795,12 +797,13 @@ class AccountStore:
     ) -> dict[str, Any] | None:
         """What the customer's subscriptions add up to, or None if none is recorded.
 
-        The current subscription is the newest-bought one that has not ended (a purchase
-        supersedes the subscriptions before it). A subscription that has ended is
-        current only when none has not: cancelling the newest plan must not lock out a
-        customer who still pays for an older one, which is what Stripe's own state (and
-        the reconciler) says. The account is a function of the recorded states alone, so
-        the order events arrived in cannot matter.
+        The current subscription is the newest-bought one that is paying (``active`` or
+        ``past_due``); if none is, the newest-bought one that is paused; if none is, the
+        newest-bought one that has ended. A purchase supersedes the subscriptions before it
+        only among equals: cancelling or pausing the newest plan must not lock out a customer
+        who still pays for an older one, which is what Stripe's own state (and the
+        reconciler) says. The account is a function of the recorded states alone, so the
+        order events arrived in cannot matter.
         """
         subs = db.execute(
             "SELECT * FROM subscription_states WHERE stripe_customer_id=?", (customer,)
@@ -817,9 +820,10 @@ class AccountStore:
         def phase_of(r: sqlite3.Row) -> str:
             return _effective_phase(r, failed.get(r["stripe_subscription_id"], 0))
 
-        # Not ended beats ended; among either, the newest-bought (then the latest report).
+        # Paying (active, past_due) beats paused beats ended; within each, the newest-bought
+        # (then the latest report). The same view the reconciler takes of Stripe.
         cur = max(subs, key=lambda r: (
-            phase_of(r) != "terminal", r["born"], r["state_at"], r["stripe_subscription_id"]))
+            _CLASS_OF_PHASE[phase_of(r)], r["born"], r["state_at"], r["stripe_subscription_id"]))
         phase = phase_of(cur)
         failure = failed.get(cur["stripe_subscription_id"], 0)
         return {
@@ -919,7 +923,13 @@ class AccountStore:
                 == (row["status"], row["tier"], row["stripe_subscription_id"]):
             # Only the purchase time moved: the report itself is older than what is on record.
             return "stale"
-        return "applied" if sub == current else "other_subscription"
+        if sub == current:
+            return "applied"
+        # About a subscription the account does not follow; but if this report is what moved
+        # the account (the paying subscription ended and a paused one now stands), it applied.
+        moved = (after["status"], after["tier"], after["stripe_subscription_id"]) != (
+            row["status"], row["tier"], row["stripe_subscription_id"])
+        return "applied" if moved else "other_subscription"
 
     def set_status(
         self,
