@@ -304,3 +304,59 @@ def test_a_key_claimed_before_the_backup_is_not_left_in_the_copy_either(data, tm
     assert store.claim_pending_key(PENDING_SESSION)["api_key"] == key
     bk = _backup(root, tmp_path)
     assert key.encode() not in (bk / "accounts.db").read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# a backup holds regular files, and a backup directory is empty before it is written
+# ---------------------------------------------------------------------------
+def _link_out(volume: Path, rel: str, outside: Path) -> None:
+    """Replace ``volume/rel`` (a file or a directory) by a symlink to an identical copy that
+    lives outside the volume, so every hash and every database check would still pass."""
+    target = volume / rel
+    outside.mkdir(exist_ok=True)
+    moved = outside / rel.replace("/", "_")
+    shutil.move(str(target), moved)
+    target.symlink_to(moved)
+
+
+@pytest.mark.parametrize("rel", ["accounts.db", "art14-register.db", "attestations",
+                                 "tenants", "tenants/FIRST.db"])
+@pytest.mark.parametrize("live", [False, True])
+def test_a_symlink_in_the_restored_tree_is_a_finding(data, tmp_path, rel, live):
+    root, first, _ = data
+    volume = tmp_path / "volume"
+    shutil.copytree(_backup(root, tmp_path), volume)
+    rel = rel.replace("FIRST", first)
+    _link_out(volume, rel, tmp_path / "elsewhere")
+    result = restore_check.verify(volume, allow_growth=live)
+    assert result["ok"] is False and result["status"] == "failed"
+    assert any("symbolic link" in p and rel.split("/")[-1] in p for p in result["problems"]), \
+        result["problems"]
+    assert restore_check.main(["verify", *(["--live"] if live else []), str(volume)]) == 1
+
+
+def test_a_clean_backup_still_verifies_with_no_symlink_finding(data, tmp_path):
+    root, _, _ = data
+    result = restore_check.verify(_backup(root, tmp_path))
+    assert result["ok"] and not any("symbolic" in p for p in result["problems"])
+
+
+def test_backup_refuses_a_directory_that_already_holds_files(data, tmp_path):
+    root, first, _ = data
+    out = tmp_path / "bk"
+    restore_check.backup(root, out)
+    stale = out / "tenants" / "acc_stale.db"
+    stale.write_bytes(b"left over from an earlier run")
+    before = sorted(p.relative_to(out).as_posix() for p in out.rglob("*"))
+    with pytest.raises(FileExistsError):
+        restore_check.backup(root, out)
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == before
+    assert restore_check.main(["backup", str(root), str(out)]) == 2
+
+
+def test_a_backup_into_an_empty_existing_directory_still_works(data, tmp_path):
+    root, _, _ = data
+    out = tmp_path / "empty"
+    out.mkdir()
+    restore_check.backup(root, out)
+    assert restore_check.verify(out)["ok"]

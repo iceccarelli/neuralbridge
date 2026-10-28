@@ -209,10 +209,15 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
     """Snapshot every database under ``data_dir`` into ``out_dir``. Returns names.
 
     Also writes the manifest (``MANIFEST_NAME``), which is not in the returned names. The
-    result is private to its owner and carries no unclaimed plaintext API keys.
+    result is private to its owner and carries no unclaimed plaintext API keys. ``out_dir``
+    must not exist or be empty (``FileExistsError``).
     """
     if not data_dir.is_dir():
         raise FileNotFoundError(f"{data_dir} is not a directory")
+    if out_dir.is_dir() and any(out_dir.iterdir()):
+        # A snapshot written over an earlier one would list, and vouch for, files it did not
+        # write. Take it into a directory of its own.
+        raise FileExistsError(f"{out_dir} already holds files; back up into an empty directory")
     previous = os.umask(0o077)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +259,17 @@ def _account_ids(accounts: Path) -> set[str]:
         return {r[0] for r in db.execute("SELECT id FROM accounts")}
     finally:
         db.close()
+
+
+def _symlinks(root: Path) -> list[str]:
+    """Every symbolic link under ``root`` (not followed), relative to it."""
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in (*dirnames, *filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():
+                found.append(path.relative_to(root).as_posix())
+    return sorted(found)
 
 
 def _safe_rel(rel: object) -> bool:
@@ -399,6 +415,12 @@ def verify(root: Path, *, allow_growth: bool = False) -> dict[str, object]:
                 problems.extend(f"{label}: {p}" for p in found)
         except Exception as exc:  # noqa: BLE001 - a corrupt file is a finding
             problems.append(f"{label}: unreadable ({type(exc).__name__})")
+
+    for link in _symlinks(root):
+        # `is_file()` and every open follow a link, so a file (or a whole directory) that lives
+        # elsewhere would pass its hash and its database checks. A backup is regular files.
+        problems.append(f"{link}: is a symbolic link; a backup holds regular files, and what "
+                        "this points at is not part of the backup")
 
     accounts = root / _ACCOUNTS
     known: set[str] = set()
