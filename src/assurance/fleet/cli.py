@@ -8,6 +8,11 @@
 
 ``advisory`` and ``declaration`` exit non-zero on a finding, so both belong in
 whatever runs when a supplier bulletin lands or before a machine ships.
+
+Exit codes: 0 nothing found (and, for ``declaration``, the evidence was assessed and
+stands); 1 a finding; 2 could not vouch (an unverifiable ledger, an error, or a
+``declaration`` check whose evidence was NOT assessed: only the configuration was
+compared, which is not a pass).
 """
 
 from __future__ import annotations
@@ -345,10 +350,15 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
             print("\n  not checked:")
             for c in status.checks_skipped:
                 print(f"    - {c}")
-        if coverage is None:
-            print("\n  Supply --ledger to check the evidence as well as the "
+        if not status.evidence_assessed:
+            print("\n  The evidence was NOT assessed. Supply --ledger (and a manifest that "
+                  "declares safety functions) to check the evidence as well as the "
                   "configuration.")
-    return 0 if status.is_sound else 1
+    if status.is_sound:
+        return 0
+    # 2: could not vouch (the evidence was never looked at), as for an unverifiable ledger.
+    # 1: a finding (changed configuration, wrong machine, lapsed evidence).
+    return 2 if status.verdict.is_unassessed else 1
 
 
 def main(argv: list[str] | None = None) -> int:

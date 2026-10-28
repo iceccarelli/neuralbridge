@@ -281,7 +281,8 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             "<th>Re-run</th></tr></thead><tbody>" + rows + "</tbody></table></div>")
 
     if status is not None:
-        tone = "" if status.is_sound else "bad"
+        tone = ("" if status.is_sound
+                else "warn" if status.verdict.is_unassessed else "bad")
         out.append(f"<div class='note {tone}'><b>{e(status.doc_id)}</b> — "
                    f"{e(status.verdict.value.replace('_', ' '))}. "
                    f"{e(status.statement)}</div>")
