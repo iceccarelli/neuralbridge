@@ -97,6 +97,59 @@ The signing secret Stripe shows you is `STRIPE_WEBHOOK_SECRET`. Without it the
 endpoint refuses every event, which is the correct behaviour: an unverified
 webhook is a way for anyone to grant themselves a subscription.
 
+## Manual pilot accounts (invoiced outside Stripe)
+
+For an operator-run pilot that is invoiced **outside Stripe**, `assurance billing grant`
+creates the account and prints its API key once. **The founder decides who gets one**; a
+grant is a commercial commitment, and nothing in this repository decides it. There is
+still no customer, no pilot and no revenue on record (`HANDOFF.md` §4.4); this is the
+mechanism for the first one, not evidence of one.
+
+```bash
+# on the hosted volume (Fly CLI behaviour is not verifiable from this repository)
+fly ssh console -a <app>
+python -m assurance billing grant --store /data/accounts.db \
+    --email pilot@customer.example --tier cell --company "Customer GmbH" \
+    --note "pilot, invoiced by bank transfer, ref ..." --expires-on 2026-12-31 \
+    --granted-by <your name>
+# locally, against a store file of your own: add --create the first time
+```
+
+- It works on the account store file only (the service's `ASSURANCE_ACCOUNTS`, on the
+  volume `/data/accounts.db`). No network, no Stripe code, no Stripe object, no email. A
+  path that does not exist is refused unless you pass `--create`, so a typo cannot mint a
+  key for a store nothing reads.
+- It also refuses to run while a live-looking Stripe credential is in the environment
+  (it names the variable, never the value). On a host that holds one, run the command
+  from a shell without it (`env -u STRIPE_SECRET_KEY python -m assurance billing ...`);
+  that is a decision a person takes on purpose.
+- The key is printed **once**; only its hash is stored. Hand it over directly. Lose it and
+  `billing issue-key --account ID` prints another, `billing revoke-key --account ID
+  --prefix asr_xxxxxx` stops one at once.
+- The account is marked `source: manual_grant`, with the note, `granted_at` and
+  `granted_by`, in `GET /v1/me` (`account.source`, `account.grant`) and in `billing list`.
+  It has no Stripe customer id and never gets one from this tool.
+- Entitlements are read on every request, as for any account: 401 with no or an unknown key,
+  402 when the plan lacks the route, 200 when it has it.
+- **Expiry.** `--expires-on YYYY-MM-DD` is the last UTC day in force, inclusive; the grant
+  ends at 00:00 UTC the next day with no job involved, because the date is compared on
+  every request. After that the account reads as `free`: 402 on every gated route. Without
+  `--expires-on` the grant never lapses by itself (the output says "no expiry").
+  `billing extend --account ID --expires-on DATE` takes effect on the next request.
+- **A lapsed grant gets no evidence read-out.** Stripe-paid customers whose subscription
+  ended keep reading and exporting their own evidence (`EVIDENCE_READOUT_AFTER_LAPSE`),
+  decided by whether Stripe ever bound a customer id to the account. A manual grant has
+  none, so after its last day it gets 402 on those routes too. Whether that is right for a
+  pilot is part of the open founder decision recorded in `docs/claims-registry.md`; this
+  tool does not change it, and `tests/test_pilot_manual_grant.py` pins today's behaviour so
+  that a change is deliberate. Tell a pilot customer to export their evidence before the last
+  day.
+- A second `grant` for the same email is refused, naming the existing account. The
+  reconciler skips these accounts (no Stripe customer id) and cannot change or cancel them.
+- The shared SQLite store is written by this process while the service runs; WAL mode and
+  the busy timeout make that safe. If your shell is root, check afterwards that the files
+  (`ls -l /data/accounts.db*`) are still writable by the service user.
+
 ## Reconciliation
 
 > **Verified against a fake transport only; run with a Stripe test-mode key

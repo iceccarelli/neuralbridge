@@ -23,6 +23,7 @@ _DOMAINS = {
     "change": "assurance.change.cli",
     "evidence": "assurance.evidence.cli",
     "value": "assurance.value.cli",
+    "billing": "assurance.billing.cli",
 }
 
 
