@@ -142,6 +142,9 @@ class TestThePassport:
         assert raw["evidence"]["body"]["evidence_tier_floor"] == "validated"
         raw["evidence"]["body"]["verdict"] = "covered_at_community"
         raw["coverage"]["verdict"] = "covered_at_community"
+        # state and confidence edited to match, so only the floor can give the edit away
+        raw["evidence"]["validation_state"] = "indeterminate"
+        raw["evidence"]["confidence"] = "low"
         raw["evidence"]["content_hash"] = Evidence.from_dict(raw["evidence"]).compute_hash()
         path = tmp_path / "edited.json"
         path.write_text(json.dumps(raw), encoding="utf-8")
