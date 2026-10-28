@@ -223,17 +223,20 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
         out_dir.mkdir(parents=True, exist_ok=True)
         taken: list[str] = []
         pending = 0
+        # Tenant ledgers first, the account list after them: a customer who signs up while the
+        # backup runs then has an account row without a ledger (harmless), never a ledger in
+        # the backup whose account is not (a spurious `belongs to no account`).
+        tenants = data_dir / "tenants"
+        if tenants.is_dir():
+            for path in sorted(tenants.glob("*.db")):
+                _snapshot(path, out_dir / "tenants" / path.name)
+                taken.append(f"tenants/{path.name}")
         for name in (_ACCOUNTS, _OPERATOR_LEDGER):
             if (data_dir / name).exists():
                 _snapshot(data_dir / name, out_dir / name)
                 taken.append(name)
         if (out_dir / _ACCOUNTS).exists():
             pending = _strip_pending_keys(out_dir / _ACCOUNTS)
-        tenants = data_dir / "tenants"
-        if tenants.is_dir():
-            for path in sorted(tenants.glob("*.db")):
-                _snapshot(path, out_dir / "tenants" / path.name)
-                taken.append(f"tenants/{path.name}")
         for name in _LOG_DIRS:
             if (data_dir / name).is_dir():
                 shutil.copytree(data_dir / name, out_dir / name, dirs_exist_ok=True)

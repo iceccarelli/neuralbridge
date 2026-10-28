@@ -891,6 +891,11 @@ class AccountStore:
             return "not_ours"
         if (only_from is not None and sub == row["stripe_subscription_id"]
                 and row["status"] not in only_from):
+            if payment_failure:
+                # The account does not move, but the failure is a fact about the subscription:
+                # if it later turns out to have been entitled at that moment (a revival that
+                # overtook this invoice), the account must read past_due whatever the order.
+                cls._join_failure(db, customer, sub, event_created)
             return "not_applicable"
         if payment_failure:
             if not cls._join_failure(db, customer, sub, event_created):

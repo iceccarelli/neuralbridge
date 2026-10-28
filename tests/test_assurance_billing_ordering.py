@@ -398,3 +398,35 @@ def test_a_cancellation_of_a_never_reported_subscription_does_not_end_the_curren
     sub(c, "customer.subscription.updated", "sub_Z", "price_reg_test", "canceled", T + 60)
     sub(c, "customer.subscription.deleted", "sub_Z", "price_reg_test", "canceled", T + 70)
     assert account_state(c, key) == ("active", "cell")
+
+
+# ---------------------------------------------------------------------------
+# a payment failure that arrives while the account cannot be moved is still remembered
+# ---------------------------------------------------------------------------
+def _revival_orders(failure_at: int):
+    ck, su = checkout_event, subscription_event
+    events = {
+        "buy": ck("cs_A", "cus_1", "sub_A", "cell", T, event_id="e1"),
+        "end": su("customer.subscription.deleted", "cus_1", "sub_A", PRICES["B"], "canceled",
+                  T + 10, event_id="e2"),
+        "revive": su("customer.subscription.updated", "cus_1", "sub_A", PRICES["B"], "active",
+                     T + 20, event_id="e3"),
+        "fail": payment_failed_event("cus_1", T + failure_at, sub="sub_A", event_id="e4"),
+    }
+    return events, itertools.permutations(events)
+
+
+@pytest.mark.parametrize("failure_at,expected", [
+    (30, ("past_due", "cell")),     # the sub was entitled when the invoice failed
+    (15, ("active", "cell")),       # it had ended: a retry failing after the end is no news
+])
+def test_a_failure_seen_while_the_sub_had_ended_still_counts_if_it_was_revived_before_it(
+        tmp_path, billing_env, failure_at, expected):
+    events, orders = _revival_orders(failure_at)
+    outcomes = set()
+    for n, order in enumerate(orders):
+        store = AccountStore(str(tmp_path / f"o{n}.db"))
+        for name in order:
+            _apply(store, events[name])
+        outcomes.add(_final(store)[:2])
+    assert outcomes == {expected}, outcomes

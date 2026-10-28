@@ -489,8 +489,15 @@ fly ssh sftp get -r /data/backups/$(date +%F) ./backup-$(date +%F)   # off the v
 python -m assurance.evidence.restore_check verify ./backup-$(date +%F)
 ```
 
+The backup directory must not exist or must be empty (`backup` exits 2 rather than write
+over an earlier one, whose files the new manifest would otherwise vouch for), and `verify`
+fails on any symbolic link in the tree.
+
 `backup` takes a transactionally consistent snapshot of every database (a plain
-file copy of a WAL database can miss its newest records) and writes
+file copy of a WAL database can miss its newest records; each file is consistent, the set is
+not one instant: ledgers are snapshotted before the account list, so a customer who signs up
+mid-backup is harmless, but an attestation signed mid-backup can be newer than the ledger copy
+and make `verify` report a finding. Re-take the backup if it does) and writes
 `backup-manifest.json` beside them: every file with its size and SHA-256, each ledger's
 length and head hash, and the list of accounts. The backup directory is `0700` and its files
 `0600` whatever the umask — it holds every customer's evidence and account emails — so keep

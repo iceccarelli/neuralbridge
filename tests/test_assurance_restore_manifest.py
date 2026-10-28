@@ -360,3 +360,26 @@ def test_a_backup_into_an_empty_existing_directory_still_works(data, tmp_path):
     out.mkdir()
     restore_check.backup(root, out)
     assert restore_check.verify(out)["ok"]
+
+
+def test_an_account_created_while_the_backup_runs_does_not_fail_the_backup(
+        data, tmp_path, monkeypatch):
+    """Ledgers are snapshotted before the account list, so a ledger in the backup always has
+    its account there (accounts are never deleted); the reverse order made a customer who signed
+    up mid-backup a `belongs to no account` finding."""
+    root, _, _ = data
+    real = restore_check._snapshot
+    state = {"done": False}
+
+    def racing(src, dest):
+        real(src, dest)
+        if not state["done"]:
+            state["done"] = True
+            acct = AccountStore(root / "accounts.db").upsert_account(
+                email="late@x.invalid", tier="cell", stripe_customer_id="cus_late")
+            EvidenceLedger(tenant_ledger_path(acct.id)).append(_ev(0), subject="CASE-9")
+
+    monkeypatch.setattr(restore_check, "_snapshot", racing)
+    bk = _backup(root, tmp_path)
+    result = restore_check.verify(bk)
+    assert result["ok"], result["problems"]
