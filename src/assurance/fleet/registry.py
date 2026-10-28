@@ -24,7 +24,7 @@ from typing import Any
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import RecorderTrust
-from assurance.machinery.intervention import Intervention
+from assurance.machinery.intervention import DERIVED_INTERVENTIONS, Intervention
 from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import MANIFEST_KIND
 from assurance.machinery.staleness import (
@@ -77,7 +77,13 @@ class MachineRecord:
             "functions": len(self.coverage.functions),
             "stale": self.stale_count,
             "uncovered": self.uncovered_count,
-            "interventions": len(self.interventions),
+            # Recorded changes only. A change the reader derived (an unexplained difference
+            # between two manifests, or a record it could not read) is not a record anyone
+            # sealed; it is counted apart, and it does disturb the functions' evidence.
+            "interventions": sum(1 for i in self.interventions
+                                 if not isinstance(i, DERIVED_INTERVENTIONS)),
+            "unrecorded_changes": sum(1 for i in self.interventions
+                                      if isinstance(i, DERIVED_INTERVENTIONS)),
             "verifications": len(self.verifications),
             "tier_ceiling": self.manifest.tier_ceiling.value,
         }

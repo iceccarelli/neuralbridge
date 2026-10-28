@@ -720,3 +720,117 @@ class TestWhichDateTheReaderUses:
         after, recs = coverage_of(ledger, [])
         assert after.functions[0].coverage is before.functions[0].coverage
         assert recs[0].effective_at <= utc_now()
+
+
+# =====================================================================
+# the same answers through the CLI, the fleet row and the passport
+# =====================================================================
+
+def _run_cli(argv: list[str], capsys) -> tuple[int, str, str]:
+    from assurance.machinery.cli import main
+
+    code = main(argv)
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+class TestTheOfflineCommandsAgree:
+    def _files(self, tmp_path: Path, ledger: EvidenceLedger):
+        mpath = tmp_path / "manifest.json"
+        mpath.write_text(json.dumps(manifest().to_dict()))
+        return mpath
+
+    def test_record_change_for_a_unit_with_no_sealed_manifest_is_refused(
+            self, tmp_path, ledger, capsys):
+        ipath = tmp_path / "iv.json"
+        ipath.write_text(json.dumps(update(when=datetime(2026, 10, 1, tzinfo=UTC)).to_dict()))
+        code, _, err = _run_cli(["record-change", str(ipath), "--ledger", str(ledger.path)],
+                                capsys)
+        assert code == 2
+        assert "no manifest is sealed" in err
+        assert ledger.entries(kind=INTERVENTION_KIND) == []
+
+    def test_record_change_names_a_function_the_manifest_does_not_declare(
+            self, tmp_path, ledger, capsys):
+        record_manifest(ledger, manifest())
+        ipath = tmp_path / "iv.json"
+        ipath.write_text(json.dumps(
+            update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("SF-9",)).to_dict()))
+        code, _, err = _run_cli(["record-change", str(ipath), "--ledger", str(ledger.path)],
+                                capsys)
+        assert code == 2
+        assert "SF-9" in err
+        assert ledger.entries(kind=INTERVENTION_KIND) == []
+
+    def test_record_change_writes_the_manifests_spelling(self, tmp_path, ledger, capsys):
+        record_manifest(ledger, manifest())
+        ipath = tmp_path / "iv.json"
+        ipath.write_text(json.dumps(
+            update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("sf-1",)).to_dict()))
+        code, _, _ = _run_cli(["record-change", str(ipath), "--ledger", str(ledger.path)],
+                              capsys)
+        assert code == 0
+        (iv,) = interventions_from_ledger(ledger, KEY)
+        assert iv.affects_functions == ("SF-1",)
+
+    def test_coverage_json_names_the_unreadable_record_and_exits_1(
+            self, tmp_path, ledger, capsys):
+        verified_machine(ledger)
+        record_intervention(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC)))
+        edit_payload(ledger, _intervention_seq(ledger),
+                     lambda p: p["body"]["intervention"].update(reason="cosmetic"))
+        code, out, _ = _run_cli(["coverage", str(self._files(tmp_path, ledger)),
+                                 "--ledger", str(ledger.path), "--json"], capsys)
+        body = json.loads(out)
+        assert code == 1
+        assert body["verdict"] == "gaps"
+        assert body["functions"][0]["coverage"] == "stale"
+        assert body["functions"][0]["invalidated_by"].startswith("unreadable:")
+        assert body["unrevalidated_interventions"] == [body["functions"][0]["invalidated_by"]]
+
+    def test_coverage_json_names_the_implied_change(self, tmp_path, ledger, capsys):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B",
+                                         taken=datetime(2026, 10, 20, tzinfo=UTC)))
+        mpath = tmp_path / "manifest.json"
+        mpath.write_text(json.dumps(manifest(fw=HASH_B).to_dict()))
+        code, out, _ = _run_cli(["coverage", str(mpath), "--ledger", str(ledger.path),
+                                 "--json"], capsys)
+        fn = json.loads(out)["functions"][0]
+        assert code == 1
+        assert fn["coverage"] == "stale"
+        assert fn["invalidated_by"].startswith("implied:")
+        assert fn["invalidating_item"] == "fw"
+
+
+class TestDerivedChangesAreNotCountedAsRecords:
+    def test_the_fleet_row_counts_recorded_changes_and_unrecorded_ones_apart(self, ledger):
+        record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
+        record_manifest(ledger, manifest(fw=HASH_B, mid="M-B",
+                                         taken=datetime(2026, 10, 20, tzinfo=UTC)))
+        row = Fleet.from_ledger(ledger).to_dict()["machines"][0]
+        assert (row["interventions"], row["unrecorded_changes"]) == (0, 1)
+        assert row["verdict"] == "gaps"
+
+    def test_a_passport_over_an_unreadable_record_is_not_verified_and_is_otherwise_coherent(
+            self, tmp_path, ledger):
+        from assurance.machinery.record import build_passport, verify_passport
+
+        verified_machine(ledger)
+        record_intervention(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC)))
+        edit_payload(ledger, _intervention_seq(ledger),
+                     lambda p: p["body"]["intervention"].update(reason="cosmetic"))
+        built = build_passport(ledger, manifest(), actor=TECH, seal=False)
+        assert built.verdict == "gaps"
+        assert built.evidence.validation_state.value != "verified"
+        out = built.write(tmp_path / "passport.json")
+        ok, problems = verify_passport(out)
+        # the only thing wrong with it is the thing that IS wrong: the chain did not verify
+        assert not ok
+        assert [p for p in problems if not p.startswith("NOT CHECKED")] == [
+            "the passport itself records that the ledger chain did not verify when it "
+            "was produced."]
+        fn = built.coverage.functions[0]
+        assert fn.coverage is Coverage.STALE and fn.invalidated_by.startswith("unreadable:")

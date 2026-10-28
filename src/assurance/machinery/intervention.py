@@ -35,6 +35,7 @@ __all__ = [
     "InterventionError",
     "InterventionKind",
     "Revalidation",
+    "DERIVED_INTERVENTIONS",
     "UnreadableIntervention",
     "ImpliedIntervention",
     "IMPLIED_PREFIX",
@@ -338,3 +339,7 @@ class UnreadableIntervention(Intervention):
 
     ledger_seq: int = 0
     why: str = ""
+
+
+#: The two kinds of change record the reader derives rather than reads.
+DERIVED_INTERVENTIONS = (ImpliedIntervention, UnreadableIntervention)
