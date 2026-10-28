@@ -989,13 +989,20 @@ async def _send_json_refusal(
     await send({"type": "http.response.body", "body": body})
 
 
+def too_deep_body() -> dict[str, Any]:
+    """The 422 answer for a JSON body nested past the cap (one shape, wherever it is produced)."""
+    cap = max_json_depth()
+    return {"detail": {
+        "error": "json_too_deeply_nested", "limit_depth": cap,
+        "detail": f"JSON bodies may nest arrays and objects at most {cap} deep."}}
+
+
 async def _send_too_deep(
     send: Callable[[MutableMapping[str, Any]], Awaitable[None]]
 ) -> None:
-    cap = max_json_depth()
+    detail = too_deep_body()["detail"]
     await _send_json_refusal(
-        send, 422, "json_too_deeply_nested",
-        f"JSON bodies may nest arrays and objects at most {cap} deep.", limit_depth=cap)
+        send, 422, detail["error"], detail["detail"], limit_depth=detail["limit_depth"])
 
 
 async def _send_413(
