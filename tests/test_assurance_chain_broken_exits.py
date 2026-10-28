@@ -124,3 +124,24 @@ def test_a_whole_chain_is_unchanged(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["verdict"] == "covered"
     assert fleet_cli(["declaration", str(d), "--manifest", str(m), "--ledger",
                       str(led.path), "--json"]) == 0
+
+
+def test_a_chain_verdict_on_a_whole_chain_is_refused_by_the_checker(tmp_path):
+    from assurance.core.evidence import Evidence
+    led = ledger(tmp_path)
+    record_manifest(led, manifest())
+    attested_bundle(KEY, file_under=led)
+    raw = json.loads(json.dumps(build_passport(led, manifest(), actor=ACTOR,
+                                               seal=False).to_dict()))
+    raw["schema"] = "assurance.machinery.passport/2"
+    raw["evidence"]["body"]["schema"] = "assurance.machinery.passport/2"
+    raw["evidence"]["body"]["coverage_verdict"] = raw["evidence"]["body"]["verdict"]
+    raw["evidence"]["body"]["verdict"] = "ledger_chain_not_verified"
+    raw["evidence"]["validation_state"] = "indeterminate"
+    raw["evidence"]["confidence"] = "low"
+    raw["evidence"]["content_hash"] = Evidence.from_dict(raw["evidence"]).compute_hash()
+    path = tmp_path / "forged.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    ok, problems = verify_passport(path)
+    assert ok is False
+    assert any("does not record that the chain failed" in p for p in problems)

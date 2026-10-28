@@ -81,6 +81,29 @@ def test_an_enrolled_first_claim_still_holds_the_recording(tmp_path):
     assert "without an attestation" not in message
 
 
+def test_a_manifest_that_fails_its_own_seal_enrols_nothing(tmp_path):
+    import json
+    import sqlite3
+
+    from assurance.machinery.record import MANIFEST_KIND
+    led = ledger(tmp_path)
+    rec, tr = Recorder(), laptop_trace()
+    record_manifest(led, manifest("Evil", "Co", "0001"))
+    db = sqlite3.connect(led.path)
+    seq, payload = db.execute("select seq,payload from chain where kind=?",
+                              (MANIFEST_KIND,)).fetchone()
+    p = json.loads(payload)
+    p["body"]["manifest"]["machine"]["site"] = "edited after sealing"
+    db.execute("update chain set payload=? where seq=?",
+               (json.dumps(p, sort_keys=True, separators=(",", ":")), seq))
+    db.commit()
+    db.close()
+    attested_bundle(EVIL, rec=rec, trace=tr, file_under=led)       # claims, but is not enrolled
+    record_manifest(led, manifest())
+    real, _ = attested_bundle(KEY, rec=rec, trace=tr, file_under=led)
+    assert real.tier.value == "validated"
+
+
 def test_two_enrolled_units_still_cannot_share_a_recording(tmp_path):
     led = ledger(tmp_path)
     rec, tr = Recorder(), laptop_trace()
