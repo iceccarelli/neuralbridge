@@ -566,6 +566,37 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
         assert run_enrolled_check(ledger, KEY, None).verdict.value != "verified"
 
 
+class TestATieAtTheClocksResolutionIsSettledByLedgerOrder:
+    T = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+
+    def _verification(self, seq: int) -> VerificationRecord:
+        return VerificationRecord(
+            content_hash=f"{seq:064x}", effective_at=self.T, ledger_seq=seq, product="p",
+            product_version="1", verdict="pass", tier="validated",
+            checks_verified=CHECKS, checks_not_verified=())
+
+    def _derived(self, seq: int):
+        from assurance.machinery.intervention import ImpliedIntervention
+        return ImpliedIntervention(
+            intervention_id="implied:x:fw", machine_key=KEY, item_id="fw",
+            kind=InterventionKind.RECONSTRUCTED, occurred_at=self.T,
+            performed_by=TECH, reason="derived", from_hash=HASH_A, to_hash=HASH_B,
+            affects_functions=("SF-1",), ledger_seq=seq)
+
+    def test_a_verification_filed_after_the_manifest_in_the_same_second_stands(self):
+        report = assess_coverage(manifest(), [self._verification(9)], [self._derived(5)])
+        assert report.functions[0].coverage is Coverage.CURRENT
+
+    def test_a_verification_filed_before_the_manifest_in_the_same_second_does_not(self):
+        report = assess_coverage(manifest(), [self._verification(3)], [self._derived(5)])
+        assert report.functions[0].coverage is Coverage.STALE
+
+    def test_a_recorded_intervention_at_the_same_instant_still_counts_as_after(self):
+        iv = update(when=self.T)
+        report = assess_coverage(manifest(), [self._verification(9)], [iv])
+        assert report.functions[0].coverage is Coverage.STALE
+
+
 # =====================================================================
 # M4. A change record that cannot be read is never read as "no change"
 # =====================================================================

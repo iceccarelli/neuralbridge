@@ -23,6 +23,29 @@ longer describes the machine.
 Every step of that chain is declared by the customer and visible in the output,
 so a reviewer who disagrees can point at the link they disagree with. A function
 that declares no checks is reported as ``not_demonstrable`` — never as covered.
+
+What this refuses to let a filer decide
+---------------------------------------
+Evidence that looks fresher than it is is the worst outcome, so three inputs the
+filer controls are bounded by the ledger's own clock and record:
+
+* **Dates.** A trace's start is the filer's word. A verification can never describe a
+  moment later than the ledger says it was filed, so a start ahead of the filing time is
+  clamped to it; one more than a day ahead, or unreadable, is ``date_suspect``. A
+  suspect *pass* is never ``current`` (it is read as the earliest instant there is, and
+  without a change to blame it is stale for want of a date); a suspect *failure* still
+  fails, dated no earlier than it was filed, because the safe direction for a failure is
+  the opposite of the safe direction for a pass. A later run that began after the failure
+  was filed supersedes it, as for any other failure.
+* **The join.** A change disturbs the functions it names *and* the functions the manifest
+  says the changed item implements. A function id is read against the manifest's own
+  (``sf-1`` is ``SF-1``); one that matches nothing is reported, not dropped.
+* **Silence.** A change the ledger's own manifests show (a safety-bearing item whose hash
+  differs between two ``as_found`` looks, or one that appeared or vanished) is a change
+  with or without an intervention record, and a change record the reader cannot read is
+  assumed to have touched everything. See ``machinery.record.interventions_from_ledger``
+  for how both are derived; the reader never assumes a change did not happen because the
+  record of it is missing or damaged.
 """
 
 from __future__ import annotations
@@ -44,7 +67,11 @@ from assurance.machine.bundle import (
 )
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machine.verify import parse_engine_version
-from assurance.machinery.intervention import Intervention
+from assurance.machinery.intervention import (
+    ImpliedIntervention,
+    Intervention,
+    UnreadableIntervention,
+)
 from assurance.machinery.manifest import SafetyManifest
 
 __all__ = [
@@ -53,13 +80,16 @@ __all__ = [
     "FunctionCoverage",
     "VerificationRecord",
     "VerificationRecordError",
+    "affected_functions",
     "assess_coverage",
 ]
 
-#: Stands in for "when the machine was in the state this verification describes"
-#: when that date cannot be used. It is the earliest instant there is, so every
-#: recorded change counts as having come after it: an unknowable date is never
-#: allowed to make a verification look newer than a change.
+#: Stands in for "when the machine was in the state this verification describes" when
+#: a PASS carries a date that cannot be used. It is the earliest instant there is, so
+#: every recorded change counts as having come after it and every other run outranks
+#: it: an unknowable date is never allowed to make a pass look newer than a change.
+#: It is used for a pass only. A failure with an unusable date is dated at its filing
+#: time (the latest it can have run), which keeps it in force.
 _EARLIEST = datetime(1, 1, 1, tzinfo=UTC)
 
 #: How far past its own filing time a trace may claim to have started before it
@@ -185,7 +215,9 @@ class VerificationRecord:
 
     ``effective_at`` is when the machine was in the state the verification
     describes — the start of the recorded run — not when the bundle was filed.
-    A run captured in February and filed in June is evidence about February.
+    A run captured in February and filed in June is evidence about February. It is
+    never later than the moment the ledger says the bundle was filed: a record cannot
+    describe a time that had not happened yet.
     """
 
     content_hash: str
@@ -205,8 +237,9 @@ class VerificationRecord:
     #: built one — has every non-verified check treated as failed.
     checks_not_applicable: tuple[str, ...] = ()
     #: True when ``effective_at`` could not be taken from the bundle: its trace
-    #: start was unreadable, or later than the moment it was filed. It is then the
-    #: earliest possible instant (see ``_EARLIEST``).
+    #: start was unreadable, or more than a day later than the moment it was filed.
+    #: ``effective_at`` is then the filing time. A pass in such a record is read as the
+    #: earliest possible instant and is never current; a failure in it still fails.
     date_suspect: bool = False
 
     def __post_init__(self) -> None:
@@ -271,10 +304,16 @@ class VerificationRecord:
             try:
                 effective = parse_utc(str(body.get("trace_started_at")))
             except (ValueError, TypeError):
-                effective, suspect = _EARLIEST, True
+                effective, suspect = filed, True
             else:
                 if effective > filed + _FUTURE_TOLERANCE:
-                    effective, suspect = _EARLIEST, True
+                    effective, suspect = filed, True
+                elif effective > filed:
+                    # Clock skew the tolerance absorbs. Absorbed is not believed: a run
+                    # cannot describe a time after the ledger recorded it, and a start
+                    # ahead of the filing would let this pass outrank a later failure and
+                    # hide a change recorded in between.
+                    effective = filed
             out.append(cls(
                 content_hash=evidence.content_hash,
                 effective_at=effective,
@@ -410,6 +449,48 @@ class CoverageReport:
         return "\n".join(lines)
 
 
+#: ``invalidated_by`` of a function that rests on a pass nobody can date.
+UNDATABLE_PREFIX = "undatable:"
+
+
+def _cover_time(v: VerificationRecord) -> datetime:
+    """When a PASS in ``v`` is believed to describe the machine, for ordering and for
+    deciding which changes came after it. An undatable pass describes no known moment."""
+    return _EARLIEST if v.date_suspect else v.effective_at
+
+
+def _came_after(i: Intervention, v: VerificationRecord) -> bool:
+    """Is change ``i`` at or after the moment ``v`` is believed to describe the machine?
+
+    A recorded intervention at the very same instant counts as after (the safe reading).
+    A change the reader derived from a ledger entry (implied, unreadable) carries that
+    entry's position, so at the clock's one-second resolution a verification filed after
+    it is read as having come after it: scripted flows that file a manifest and then run
+    the verification in the same second are not read as stale for it.
+    """
+    cover = _cover_time(v)
+    if i.occurred_at != cover:
+        return i.occurred_at > cover
+    seq = getattr(i, "ledger_seq", 0)
+    return not (seq and v.ledger_seq > seq)
+
+
+def affected_functions(manifest: SafetyManifest, i: Intervention) -> frozenset[str]:
+    """The declared safety functions a change disturbs, whatever its author typed.
+
+    The union of what the record names (read against the manifest's own spelling) and
+    what the manifest says the changed item implements. A hand-copied list is a claim
+    about the change; it is never allowed to be the only link, because a blank or
+    mistyped list would then make the change vanish. A record the reader could not read
+    is assumed to have touched every function.
+    """
+    if isinstance(i, UnreadableIntervention):
+        return frozenset(f.function_id for f in manifest.functions)
+    named, _ = manifest.resolve_function_ids(i.affects_functions)
+    item = manifest.item(i.item_id)
+    return frozenset(named) | frozenset(item.implements if item else ())
+
+
 def assess_coverage(
     manifest: SafetyManifest,
     verifications: list[VerificationRecord],
@@ -418,7 +499,14 @@ def assess_coverage(
     """Work out, function by function, whether the evidence still stands.
 
     ``verifications`` and ``interventions`` need not be sorted; both are ordered
-    here by the time they describe, not the time they were filed.
+    here by the time they describe, not the time they were filed. A run is ordered by
+    when it began, bounded by when the ledger says it was filed (see
+    :meth:`VerificationRecord.from_ledger`); on a tie the one filed later is newer.
+
+    Changes the ledger shows but nobody recorded, and change records it could not read,
+    arrive as :class:`ImpliedIntervention` / :class:`UnreadableIntervention` from
+    ``interventions_from_ledger``; callers that build the list by hand get only what they
+    put in it.
     """
     from assurance.core.identity import utc_now
 
@@ -439,15 +527,27 @@ def assess_coverage(
 
         A run in which the check was not applicable says nothing either way and
         is skipped; a newer failing run ends the cover an older passing one gave.
+
+        Each outcome is dated in the direction that is safe for it. A pass in a record
+        whose date cannot be used is the earliest instant there is, so anything dated
+        outranks it; a failure in such a record keeps its filing time, the latest it can
+        have run, so an older pass cannot outrank it. A run that began after that failure
+        was filed does.
         """
-        for v in reversed(verifs):
+        best: tuple[tuple[datetime, int, int], VerificationRecord, bool] | None = None
+        for index, v in enumerate(verifs):
             # Failure first: a record that carries the same check as both verified and
             # failed is contradictory, and contradictory evidence is not cover.
             if check in v.failed_checks:
-                return v, False
-            if check in v.checks_verified:
-                return v, True
-        return None
+                passed = False
+            elif check in v.checks_verified:
+                passed = True
+            else:
+                continue
+            key = (_cover_time(v) if passed else v.effective_at, v.ledger_seq, index)
+            if best is None or key >= best[0]:
+                best = (key, v, passed)
+        return None if best is None else (best[1], best[2])
 
     for fn in sorted(manifest.functions, key=lambda f: f.function_id):
         checks = set(fn.verified_by)
@@ -463,8 +563,10 @@ def assess_coverage(
             ))
             continue
 
-        # Interventions that disturb this function, by the functions they name.
-        disturbing = [i for i in mine if checks & manifest.checks_for(set(i.affects_functions))]
+        # Interventions that disturb this function: by the functions they name and by the
+        # functions the manifest says the changed item implements.
+        disturbing = [i for i in mine
+                      if checks & manifest.checks_for(set(affected_functions(manifest, i)))]
 
         # Cover needs EVERY check the function declares, each judged by the newest
         # run that exercised it. One verified check of two is not cover, and a
@@ -505,10 +607,29 @@ def assess_coverage(
         # Every check has been verified. The function is only as current as the
         # oldest of the runs its checks rest on.
         used = {e[0].content_hash: e[0] for e in state.values() if e is not None}
-        last_good = min(used.values(), key=lambda v: (v.effective_at, v.ledger_seq))
-        after = [i for i in disturbing if i.occurred_at >= last_good.effective_at]
+        last_good = min(used.values(), key=lambda v: (_cover_time(v), v.ledger_seq))
+        after = [i for i in disturbing if _came_after(i, last_good)]
+        undatable = [v for v in used.values() if v.date_suspect]
         tiers = {v.tier for v in used.values()}
         weakest = min(tiers, key=lambda t: _TIER_RANK.get(t, 0))
+        if undatable and not after:
+            # Verified, but only by a pass nobody can date: it cannot be shown to describe
+            # the machine as it is now, and no recorded change is needed to say so.
+            coverages.append(FunctionCoverage(
+                function_id=fn.function_id, description=fn.description,
+                required_performance=fn.required_performance,
+                coverage=Coverage.STALE, checks=tuple(sorted(checks)),
+                last_verified_hash=last_good.content_hash,
+                last_verified_at=format_utc(last_good.effective_at),
+                invalidated_by=f"{UNDATABLE_PREFIX}{undatable[0].content_hash[:12]}",
+                detail=(f"verified only by {', '.join(v.content_hash[:12] for v in undatable)}"
+                        f" (filed {format_utc(last_good.effective_at)[:10]}), whose trace "
+                        "start is unreadable or later than the moment it was filed. A "
+                        "passing result that cannot be dated is not counted as current: "
+                        "run the verification again."),
+            ))
+            continue
+
         if not after:
             current_tiers.append(weakest)
         if _TIER_RANK.get(weakest, 0) < _TIER_RANK["validated"] and not after:
@@ -530,6 +651,24 @@ def assess_coverage(
 
         breaker = after[0]
         revalidated = breaker.is_revalidated
+        if isinstance(breaker, UnreadableIntervention):
+            why = (f"{breaker.intervention_id} (ledger position {breaker.ledger_seq}, "
+                   f"filed {format_utc(breaker.occurred_at)[:10]}) is a change record the "
+                   f"ledger holds and this reader cannot use ({breaker.why}). What it "
+                   "recorded is unknown, so it is taken to have touched this function")
+        elif isinstance(breaker, ImpliedIntervention):
+            why = (f"the ledger's own manifests show {breaker.item_id} changed "
+                   f"({breaker.from_hash[:12]} to {breaker.to_hash[:12]}, seen in the "
+                   f"manifest filed {format_utc(breaker.occurred_at)[:10]}) and no "
+                   "intervention record explains it")
+        else:
+            why = (f"invalidated by {breaker.intervention_id} on "
+                   f"{format_utc(breaker.occurred_at)[:10]}, which changed "
+                   f"{breaker.item_id}"
+                   + (f" and re-ran {breaker.revalidation.description!r} — but that "
+                      f"revalidation is not in this ledger, so it was not counted."
+                      if revalidated and breaker.revalidation is not None
+                      else " and re-ran nothing with sealed evidence."))
         coverages.append(FunctionCoverage(
             function_id=fn.function_id, description=fn.description,
             required_performance=fn.required_performance,
@@ -542,13 +681,7 @@ def assess_coverage(
             intervention_revalidated=revalidated,
             detail=(
                 f"last verified by {last_good.content_hash[:12]} on "
-                f"{format_utc(last_good.effective_at)[:10]}; invalidated by "
-                f"{breaker.intervention_id} on {format_utc(breaker.occurred_at)[:10]}, "
-                f"which changed {breaker.item_id}"
-                + (f" and re-ran {breaker.revalidation.description!r} — but that "
-                   f"revalidation is not in this ledger, so it was not counted."
-                   if revalidated and breaker.revalidation is not None
-                   else " and re-ran nothing with sealed evidence.")
+                f"{format_utc(last_good.effective_at)[:10]}; {why}"
             ),
         ))
 
@@ -565,15 +698,21 @@ def assess_coverage(
         if v.date_suspect:
             caveats.append(
                 f"verification {v.content_hash[:12]} cannot be dated by its trace "
-                "start (the start is unreadable, or later than the moment the bundle "
-                "was filed). It is treated as the earliest possible time, so every "
-                "recorded change counts as having come after it."
+                "start (the start is unreadable, or more than a day later than the "
+                "moment the bundle was filed). A passing result in it is treated as the "
+                "earliest possible time, so every recorded change counts as having come "
+                "after it and it is never current; a failing result in it is dated when "
+                "it was filed and still counts."
             )
 
     # -- what this assessment could not see -------------------------------
+    def bearing(i: Intervention) -> bool:
+        """Safety-bearing: it names a function, or the manifest says its item implements one."""
+        return bool(i.affects_functions) or bool(affected_functions(manifest, i))
+
     unrevalidated = tuple(
         i.intervention_id for i in mine
-        if i.is_safety_bearing and not i.is_revalidated
+        if bearing(i) and not i.is_revalidated
     )
     if not mine:
         caveats.append(
@@ -581,7 +720,23 @@ def assess_coverage(
             "current is current only against the change records you have; an "
             "unrecorded change is invisible here by construction."
         )
-    unattributed = [i.intervention_id for i in mine if not i.is_safety_bearing]
+    unattributed = [i.intervention_id for i in mine if not bearing(i)]
+    for i in mine:
+        _, unknown = manifest.resolve_function_ids(i.affects_functions)
+        if unknown:
+            caveats.append(
+                f"intervention {i.intervention_id} names safety function(s) "
+                + ", ".join(unknown) + " that this manifest does not declare, so those "
+                "names disturb nothing here. Any function the changed item implements in "
+                "the manifest is still disturbed."
+            )
+    for i in mine:
+        if isinstance(i, UnreadableIntervention):
+            caveats.append(
+                f"{i.intervention_id}: a change record in the ledger could not be read "
+                f"({i.why}). It is assumed to have touched every safety function of this "
+                "machine; verifications that began before it was filed are stale."
+            )
     if unattributed:
         caveats.append(
             "intervention(s) " + ", ".join(unattributed) + " name no safety function, "
