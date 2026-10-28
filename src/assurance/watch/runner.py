@@ -59,7 +59,7 @@ from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
-from assurance.machinery.manifest import HashSource, ManifestSource
+from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -132,6 +132,11 @@ class MachineOutcome:
     #: Open cases already concerning this machine. Listed on an uncollectable
     #: machine so it is plain that they were left exactly where they were.
     open_case_ids: tuple[str, ...] = ()
+    #: Why the collected manifest is not a record of looking at the machine ("" when it is):
+    #: the rule hosted ingest applies (``machinery.manifest.not_a_look``), so the local
+    #: verdict and the hosted one cannot disagree about the same data. An export folder
+    #: whose target does not assert ``read_from_machine`` is exactly this.
+    not_a_look: str = ""
 
     @property
     def is_finding(self) -> bool:
@@ -158,6 +163,7 @@ class MachineOutcome:
             "case_status": self.case_status,
             "intervention_case_ids": list(self.intervention_case_ids),
             "open_case_ids": list(self.open_case_ids),
+            "not_a_look": self.not_a_look,
         }
 
 
@@ -193,6 +199,12 @@ class WatchRun:
         return tuple(o for o in self.outcomes if o.status == "uncollectable")
 
     @property
+    def unwitnessed(self) -> tuple[MachineOutcome, ...]:
+        """Machines whose hash did not move, but over an export folder nobody asserted came
+        off the machine. "Nothing moved" is not something the watch can say about those."""
+        return tuple(o for o in self.outcomes if o.status == "observed" and o.not_a_look)
+
+    @property
     def verdict(self) -> str:
         """``quiet`` | ``findings`` | ``degraded``.
 
@@ -202,7 +214,7 @@ class WatchRun:
         otherwise a sync that quietly stopped reads as a quiet month.
         """
         if self.uncollectable or self.stale_observations \
-                or self.advisories.degraded:
+                or self.advisories.degraded or self.unwitnessed:
             return "degraded"
         if self.findings or self.advisories.is_finding or self.filings.is_finding:
             return "findings"
@@ -237,9 +249,15 @@ class WatchRun:
                  f"{len(self.outcomes)} machine(s)"]
         mark = {"changed": "DRIFT", "uncollectable": "BLIND", "first_seen": "NEW  ",
                 "observed": "ok   "}
+        if self.unwitnessed:
+            lines.append(
+                "  Nobody asserted that these exports came off the machines "
+                "(`read_from_machine`), so an unchanged hash is not reported as quiet: "
+                + ", ".join(o.serial for o in self.unwitnessed))
         order = {"uncollectable": 0, "changed": 1, "first_seen": 2, "observed": 3}
         for o in sorted(self.outcomes, key=lambda o: (order[o.status], o.serial)):
-            lines.append(f"  [{mark[o.status]}] {o.serial}  {o.detail}")
+            tag = "EXP  " if (o.status == "observed" and o.not_a_look) else mark[o.status]
+            lines.append(f"  [{tag}] {o.serial}  {o.detail}")
             if o.newly_uncovered:
                 lines.append("           NEWLY UNCOVERED: "
                              + ", ".join(o.newly_uncovered))
@@ -488,6 +506,7 @@ def run_watch(
                 notes=(manifest.notes + " " if manifest.notes else "")
                 + f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]")
         observed = manifest.configuration_hash()
+        why_not_a_look = not_a_look(manifest)
         history = manifests_from_ledger(ledger, machine_key)
         baseline = last_complete_manifest(history)
 
@@ -507,6 +526,10 @@ def run_watch(
         elif status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
                       f"{len(manifest.items)} item(s)")
+        elif status == "observed" and why_not_a_look:
+            detail = (f"same configuration hash {observed[:12]}; this is an export folder, "
+                      "not a look at the machine, so it is not reported as unchanged "
+                      "(assert `read_from_machine` for a watch that runs on the machine)")
         elif status == "observed":
             detail = f"unchanged at {observed[:12]}"
         else:
@@ -589,6 +612,7 @@ def run_watch(
             case_id=case.case_id if case else "",
             case_status=case.status.value if case else "",
             intervention_case_ids=intervention_cases,
+            not_a_look=why_not_a_look,
         ))
 
         if seal:
