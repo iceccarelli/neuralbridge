@@ -83,6 +83,11 @@ def _listen():
     s.bind(("0.0.0.0", 0))
 
 
+def _raw_sendmsg():
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    s.sendmsg([b"x"], [], 0, UNREACHABLE)
+
+
 PROBES = {
     "gethostbyname": lambda: socket.gethostbyname("telemetry.example.invalid"),
     "gethostbyname_ex": lambda: socket.gethostbyname_ex("telemetry.example.invalid"),
@@ -92,6 +97,11 @@ PROBES = {
     "udp sendto": _udp_sendto,
     "_socket connect": _raw_socket_connect,
     "_socket sendto": _raw_socket_sendto,
+    "_socket sendmsg": _raw_sendmsg,
+    "_socket gethostbyname": lambda: _socket.gethostbyname("telemetry.example.invalid"),
+    "_socket getaddrinfo": lambda: _socket.getaddrinfo("telemetry.example.invalid", 443),
+    "_socket gethostbyaddr": lambda: _socket.gethostbyaddr("192.0.2.1"),
+    "_socket getnameinfo": lambda: _socket.getnameinfo(("192.0.2.1", 443), 0),
     "_socket base-class connect": _base_class_connect,
     "socket subclass connect": _socket_subclass_connect,
     "bind a listening port": _listen,

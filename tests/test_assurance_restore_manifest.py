@@ -236,6 +236,7 @@ def test_a_volume_that_shrank_fails_even_in_live_mode(data, tmp_path):
     _rewind(volume / "tenants" / f"{first}.db", 2)
     result = restore_check.verify(volume, allow_growth=True)
     assert not result["ok"] and any(first in p for p in result["problems"])
+    assert any("record(s) were removed since" in p for p in result["problems"])
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +292,15 @@ def test_a_backup_of_a_backup_dir_with_loose_permissions_is_tightened(data, tmp_
     os.chmod(out, 0o755)  # noqa: S103
     restore_check.backup(root, out)
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
+
+
+def test_a_key_claimed_before_the_backup_is_not_left_in_the_copy_either(data, tmp_path):
+    # On a SQLite build without secure_delete the live file still holds the claimed key's bytes
+    # in space the delete freed, and a page-level copy would carry them; the backup is rewritten
+    # (VACUUM) so it does not. (On a build that secure-deletes by default this cannot fail.)
+    root, _, _ = data
+    key = _plain_key(root)
+    store = AccountStore(root / "accounts.db")
+    assert store.claim_pending_key(PENDING_SESSION)["api_key"] == key
+    bk = _backup(root, tmp_path)
+    assert key.encode() not in (bk / "accounts.db").read_bytes()

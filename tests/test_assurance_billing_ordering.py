@@ -269,13 +269,13 @@ def _scenario(name: str):
              payment_failed_event("cus_1", T + 25, sub="sub_B", event_id="e5")],
             ("past_due", "cell", "sub_B"),
         ),
-        # an in-place downgrade on one subscription, then a cancellation of an unrelated
-        # earlier purchase
+        # an in-place downgrade on one subscription, then the cancellation of a subscription
+        # whose purchase was never reported (its cancellation is not when it was bought)
         "downgrade_in_place": (
             [ck("cs_A", "cus_1", "sub_A", "cell", T, event_id="e1"),
              su("customer.subscription.updated", "cus_1", "sub_A", PRICES["A"], "active", T + 10,
                 event_id="e2"),
-             su("customer.subscription.deleted", "cus_1", "sub_Z", PRICES["A"], "canceled", T - 5,
+             su("customer.subscription.deleted", "cus_1", "sub_Z", PRICES["A"], "canceled", T + 3,
                 event_id="e3"),
              payment_failed_event("cus_1", T + 5, event_id="e4"),
              su("customer.subscription.updated", "cus_1", "sub_A", PRICES["A"], "active", T + 20,
@@ -368,3 +368,33 @@ def test_an_account_that_predates_the_subscription_record_is_read_from_its_row(
         store, "customer.subscription.deleted", own, "e2", T + 6
     )["result"] == "downgraded_to_free"
     assert _final(store)[:2] == ("cancelled", "free")
+
+
+def test_a_subscription_id_first_seen_with_a_cancellation_is_adopted_by_an_account_with_none(
+    tmp_path, billing_env
+):
+    store = AccountStore(str(tmp_path / "accounts.db"))
+    store.upsert_account(email="old@example.invalid", tier="cell", stripe_customer_id="cus_1",
+                         event_created=T)                       # no subscription id recorded
+    gone = subscription_event("customer.subscription.deleted", "cus_1", "sub_X",
+                              "price_cell_test", "canceled", T + 10)["data"]["object"]
+    out = billing_routes._handle_subscription(
+        store, "customer.subscription.deleted", gone, "e1", T + 10)
+    assert out["result"] == "downgraded_to_free"
+    assert _final(store) == ("cancelled", "free", "sub_X")
+
+
+def test_a_cancellation_of_a_never_reported_subscription_does_not_end_the_current_one(
+    billing_client, billing_env
+):
+    c = billing_client
+    send(c, checkout_event("cs_A", "cus_1", "sub_A", "cell", T))
+    key = collect_key(c, "cs_A")
+    # its "purchase" is unknown, so the cancellation says nothing about when it began
+    r = sub(c, "customer.subscription.deleted", "sub_Z", "price_reg_test", "canceled", T + 50)
+    assert r.json()["result"] == "ignored_other_subscription"
+    assert account_state(c, key) == ("active", "cell")
+    # a second report of the same ending is no more a purchase than the first
+    sub(c, "customer.subscription.updated", "sub_Z", "price_reg_test", "canceled", T + 60)
+    sub(c, "customer.subscription.deleted", "sub_Z", "price_reg_test", "canceled", T + 70)
+    assert account_state(c, key) == ("active", "cell")
