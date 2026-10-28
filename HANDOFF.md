@@ -62,12 +62,17 @@ standing facts; none of this is customer-validated.
   §0.0 below were already false on `main` (see the inline corrections); `docs/claims-registry.md` now says what
   the signature binds (product, version, serial, the recording) and what the service binds (the unit key), and
   that the recorder trust list is server-wide and not scoped to a tenant, machine or serial.
-- **Not fixed here** (other branches or open): date-ordering of verifications against interventions, the
-  intervention-to-function join, event-loop blocking in `/v1/machine/verify`, the CSAF matcher. MCP
-  `machine_verify` still takes no `subject`, so an MCP-sealed verification is filed under `product@version`
-  and never counts for a unit. Route summaries still say "which safety functions still have valid evidence"
-  (`/v1/machinery/coverage`, the OpenAPI tag, `app/lib/routes.ts`, the `machinery` CLI help); only the plan bullet was
-  narrowed, because `tests/test_assurance_plans_parity.py` keeps `plans.py` and `plans.ts` identical.
+- **Merged with `main` after PR #58 (CSAF unsigned-import trust) and PR #61 (staleness integrity).** Date
+  ordering, the intervention-to-function join, event-loop blocking in `/v1/machine/verify` and the CSAF
+  matcher are no longer open: they landed on `main`. The two bodies of work compose as follows. A bundle row
+  the reader cannot use is a stand-in assumed to have failed (`FAILING`, never `unchecked`, never current), and
+  the one-recording-one-unit claim map reads through the same damage-tolerant reader, so a corrupt row
+  neither stops a fleet read nor enrols a unit or holds a recording. A chain that does not verify demotes
+  `covered` **and** `covered_at_community` to `gaps` in the fleet, and the passport is
+  `ledger_chain_not_verified`. The fleet read costs about three SQLite connections per machine
+  (`tests/test_assurance_staleness_integrity_round2.py` bounds it at `4N + 10`) and one shared walk over the
+  bundles. *Tests:* `tests/test_assurance_merge_interactions.py`. Still open: MCP `machine_verify` takes no
+  `subject`, so an MCP-sealed verification is filed under `product@version` and never counts for a unit.
 
 ## 0.0 Changes on 2026-10-23 (supersede §0.1 where they differ)
 

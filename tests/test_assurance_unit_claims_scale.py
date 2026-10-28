@@ -88,14 +88,22 @@ def test_a_fleet_read_scans_the_bundles_once_not_once_per_machine(tmp_path, monk
 
     led = ledger(tmp_path)
     rec = seal_fleet(led, 20)
-    real, seen = EvidenceLedger.entries, {"full": 0}
+    real_entries, real_read = EvidenceLedger.entries, EvidenceLedger.read_subject
+    seen = {"full": 0}
 
     def entries(self, *, subject=None, kind=None):
         if kind == BUNDLE_KIND and subject is None:
             seen["full"] += 1
-        return real(self, subject=subject, kind=kind)
+        return real_entries(self, subject=subject, kind=kind)
+
+    def read_subject(self, subject, kind):
+        # the damage-tolerant reader the claim map and every per-machine read use
+        if kind == BUNDLE_KIND and subject is None:
+            seen["full"] += 1
+        return real_read(self, subject, kind)
 
     monkeypatch.setattr(EvidenceLedger, "entries", entries)
+    monkeypatch.setattr(EvidenceLedger, "read_subject", read_subject)
     Fleet.from_ledger(led, recorder_trust=rec.trust())
     monkeypatch.undo()
-    assert seen["full"] <= 2, seen          # the one shared claim map (+ slack), not 20
+    assert 1 <= seen["full"] <= 2, seen     # the one shared claim map (+ slack), not 20

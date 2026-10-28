@@ -253,13 +253,23 @@ class UnitClaims:
         from assurance.machinery.record import MANIFEST_KIND
 
         enrolled: dict[str, bool] = {}
+        manifests: dict[str, list[Any]] = {}
+
+        def manifests_of(subject: str) -> list[Any]:
+            if only is not None:
+                # one machine's read: just that unit's rows, not the whole ledger's
+                return ledger.read_subject(subject, MANIFEST_KIND)[0]
+            if not manifests:       # a whole-ledger build: one read, shared by every unit
+                for e in ledger.read_subject(None, MANIFEST_KIND)[0]:
+                    manifests.setdefault(e.subject, []).append(e)
+                manifests.setdefault("", [])
+            return manifests.get(subject, [])
 
         def is_enrolled(subject: str) -> bool:
             if subject not in enrolled:
                 # A manifest row the reader cannot use (not JSON, shape, seal) enrols nothing:
                 # damage must not be able to enrol a unit, and must not stop the read either.
-                readable, _, _ = ledger.read_subject(subject, MANIFEST_KIND)
-                enrolled[subject] = any(_seal_holds(e) for e in readable)
+                enrolled[subject] = any(_seal_holds(e) for e in manifests_of(subject))
             return enrolled[subject]
 
         holders: dict[str, tuple[int, str]] = {}
