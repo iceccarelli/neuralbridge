@@ -551,6 +551,23 @@ class TestAChangeIsCheckedAgainstWhatWasFoundNotWhatWasPlanned:
         assert checked.affects_functions == ("SF-2",)
 
 
+class TestTheNewestLookAndDeclarationAreBothHeard:
+    def test_a_function_only_the_older_kind_declares_is_still_known(self, ledger):
+        from dataclasses import replace
+
+        from assurance.machinery.manifest import SafetyFunction
+        from assurance.machinery.record import check_intervention
+
+        found = manifest(mid="FOUND")
+        found = replace(found, functions=(*found.functions,
+                                          SafetyFunction("SF-2", "second", verified_by=CHECKS)))
+        record_manifest(ledger, found)
+        record_manifest(ledger, manifest(mid="DECLARED", source=ManifestSource.AS_DECLARED))
+        checked, _ = check_intervention(
+            ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("sf-2",)))
+        assert checked.affects_functions == ("SF-2",)
+
+
 class TestTheHeavyRoutesAreOffTheEventLoop:
     @pytest.mark.parametrize("router", ["fleet_routes.fleet_router", "change_routes.change_router",
                                         "check_routes.check_router",
