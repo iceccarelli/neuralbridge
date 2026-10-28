@@ -57,7 +57,10 @@ __all__ = [
     "Account",
     "AccountStore",
     "IdempotencyConflictError",
+    "GRANTABLE_TIERS",
     "KeyLimitError",
+    "MANUAL_GRANT",
+    "ManualGrantError",
     "Principal",
     "QuotaExceededError",
     "SpendLimitError",
@@ -76,6 +79,13 @@ KEY_PREFIX = "asr_"
 #: register with a 24-hour clock. Stripe's dunning decides when the subscription
 #: ends, and says so with ``customer.subscription.updated``/``deleted``.
 ENTITLED_STATUSES = frozenset({"active", "past_due"})
+
+#: ``Account.source`` of an account provisioned by an operator, outside Stripe.
+MANUAL_GRANT = "manual_grant"
+
+#: The tiers an operator may grant by hand. Never ``free`` (nothing to grant) and never
+#: ``payg`` (that is a billing arrangement with Stripe, which a manual grant has none of).
+GRANTABLE_TIERS = ("register", "cell")
 
 #: How long a freshly minted key may wait, in plaintext, for the browser
 #: returning from Stripe to collect it.
@@ -127,7 +137,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     last_event_at          INTEGER NOT NULL DEFAULT 0,
     past_due_since         INTEGER NOT NULL DEFAULT 0,
     spend_limit_units      INTEGER NOT NULL DEFAULT 0,
-    budget_alert_pct       INTEGER NOT NULL DEFAULT 80
+    budget_alert_pct       INTEGER NOT NULL DEFAULT 80,
+    source                 TEXT NOT NULL DEFAULT '',
+    grant_note             TEXT NOT NULL DEFAULT '',
+    granted_at             TEXT NOT NULL DEFAULT '',
+    grant_expires_on       TEXT NOT NULL DEFAULT '',
+    granted_by             TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS accounts_by_customer ON accounts (stripe_customer_id);
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -290,6 +305,14 @@ class KeyLimitError(RuntimeError):
         super().__init__(f"{limit} active keys is the maximum; revoke one first.")
 
 
+class ManualGrantError(RuntimeError):
+    """A manual grant was refused; the message says why and what to do instead."""
+
+    def __init__(self, message: str, *, account_id: str = "") -> None:
+        super().__init__(message)
+        self.account_id = account_id
+
+
 class OperatorsExistError(RuntimeError):
     """A bootstrap was attempted on an account that already has an enabled operator."""
 
@@ -319,12 +342,41 @@ class Account:
     #: Percent of the spend limit at which ``GET /v1/usage`` raises
     #: ``budget_alert``. A flag only: this service sends no email.
     budget_alert_pct: int = 80
+    #: ``manual_grant`` for an account an operator provisioned by hand
+    #: (:meth:`AccountStore.grant_manual`); '' for every other account. A manual grant
+    #: has no Stripe customer id, so it is invoiced, if at all, outside Stripe.
+    source: str = ""
+    grant_note: str = ""
+    #: When the operator made the grant (UTC, ISO), and who ('' = not recorded).
+    granted_at: str = ""
+    granted_by: str = ""
+    #: ``YYYY-MM-DD``, the last UTC day the grant is in force, inclusive; '' = no expiry.
+    grant_expires_on: str = ""
+
+    @property
+    def is_manual_grant(self) -> bool:
+        return self.source == MANUAL_GRANT
+
+    @property
+    def grant_lapsed(self) -> bool:
+        """Whether a manual grant's last day is behind us, read now, on every call.
+
+        There is no job that ends a grant: the entitlement is computed from the date each
+        time ``plan`` is read, so it cannot outlive its day by the length of a cron interval,
+        and moving the date (:meth:`AccountStore.extend_grant`) takes effect on the next
+        request.
+        """
+        return bool(
+            self.is_manual_grant and self.grant_expires_on
+            and utc_now().date().isoformat() > self.grant_expires_on)
 
     @property
     def plan(self) -> Plan:
         # A lapsed subscription drops to free rather than keeping paid access.
-        # ``past_due`` still counts as paying: see ENTITLED_STATUSES.
-        return plan_for(self.tier if self.status in ENTITLED_STATUSES else "free")
+        # ``past_due`` still counts as paying: see ENTITLED_STATUSES. A manual grant
+        # past its last day is lapsed the same way.
+        entitled = self.status in ENTITLED_STATUSES and not self.grant_lapsed
+        return plan_for(self.tier if entitled else "free")
 
     @property
     def ever_paid(self) -> bool:
@@ -428,6 +480,14 @@ class AccountStore:
             ("accounts", "past_due_since", "INTEGER NOT NULL DEFAULT 0"),
             ("accounts", "spend_limit_units", "INTEGER NOT NULL DEFAULT 0"),
             ("accounts", "budget_alert_pct", "INTEGER NOT NULL DEFAULT 80"),
+            # An account an operator provisioned by hand for a pilot invoiced outside
+            # Stripe (``source`` = ``manual_grant``; '' for every other account). See
+            # AccountStore.grant_manual.
+            ("accounts", "source", "TEXT NOT NULL DEFAULT ''"),
+            ("accounts", "grant_note", "TEXT NOT NULL DEFAULT ''"),
+            ("accounts", "granted_at", "TEXT NOT NULL DEFAULT ''"),
+            ("accounts", "grant_expires_on", "TEXT NOT NULL DEFAULT ''"),
+            ("accounts", "granted_by", "TEXT NOT NULL DEFAULT ''"),
             # What request an Idempotency-Key was first used for ('' = unknown,
             # a row an older build wrote: the key alone decides, as it did).
             ("usage_events", "fingerprint", "TEXT NOT NULL DEFAULT ''"),
@@ -597,6 +657,79 @@ class AccountStore:
                 stripe_subscription_id=stripe_subscription_id,
                 status=status, account_id=account_id, event_created=event_created,
             )
+        return self._row_to_account(row)
+
+    # -- manual grants ----------------------------------------------------
+    def grant_manual(
+        self,
+        *,
+        email: str,
+        tier: str,
+        company: str = "",
+        note: str = "",
+        expires_on: str = "",
+        granted_by: str = "",
+        label: str = "manual-grant",
+    ) -> tuple[Account, str]:
+        """Provision an account by hand and mint its first key, returned once.
+
+        For an operator-run pilot invoiced outside Stripe. The account has no Stripe customer
+        id and never gets one from here, so :attr:`Account.ever_paid` stays false: whether a
+        lapsed pilot keeps reading out its own evidence is the same open decision as for any
+        account that never paid (``plans.EVIDENCE_READOUT_AFTER_LAPSE``). Nothing here talks to
+        Stripe or any network.
+
+        A second grant for an email that already has a manual grant is refused
+        (:class:`ManualGrantError`, naming the account): an address proves nothing about who
+        holds it, but two grants for one address is nearly always a repeat of the same command,
+        and the way to a second key is explicit (:meth:`issue_key`, on that account).
+        ``expires_on`` is the last UTC day in force, ``YYYY-MM-DD``, inclusive; '' = none.
+        """
+        if tier not in GRANTABLE_TIERS:
+            raise ManualGrantError(
+                f"tier {tier!r} cannot be granted by hand; one of {', '.join(GRANTABLE_TIERS)}.")
+        normalised = email.strip()
+        if not normalised or "@" not in normalised:
+            raise ManualGrantError(f"{email!r} is not an email address.")
+        with self._txn() as db:
+            existing = db.execute(
+                "SELECT id FROM accounts WHERE source = ? AND lower(email) = lower(?)",
+                (MANUAL_GRANT, normalised),
+            ).fetchone()
+            if existing is not None:
+                raise ManualGrantError(
+                    f"{normalised} already has a manual grant (account {existing['id']}). "
+                    "Nothing was created. To give that account another key use "
+                    "`billing issue-key`; to move its last day use `billing extend`.",
+                    account_id=existing["id"])
+            new_id = _new_id("acc")
+            now = format_utc(utc_now())
+            db.execute(
+                "INSERT INTO accounts (id, email, company, tier, stripe_customer_id, "
+                "stripe_subscription_id, status, created_at, updated_at, last_event_at, "
+                "source, grant_note, granted_at, grant_expires_on, granted_by) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (new_id, normalised, company, tier, "", "", "active", now, now, 0,
+                 MANUAL_GRANT, note, now, expires_on, granted_by),
+            )
+            key = self._issue_key_db(db, new_id, label)
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (new_id,)).fetchone()
+        return self._row_to_account(row), key
+
+    def extend_grant(self, account_id: str, expires_on: str) -> Account:
+        """Move a manual grant's last day ('' = remove the expiry). Read on the next request."""
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"no account {account_id!r}")
+            if row["source"] != MANUAL_GRANT:
+                raise ManualGrantError(
+                    f"{account_id} is not a manual grant; its access follows Stripe, and this "
+                    "command does not touch it.", account_id=account_id)
+            db.execute(
+                "UPDATE accounts SET grant_expires_on=?, updated_at=? WHERE id=?",
+                (expires_on, format_utc(utc_now()), account_id))
+            row = db.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
         return self._row_to_account(row)
 
     @staticmethod
@@ -837,6 +970,12 @@ class AccountStore:
                 row["spend_limit_units"] if "spend_limit_units" in row.keys() else 0),
             budget_alert_pct=(
                 row["budget_alert_pct"] if "budget_alert_pct" in row.keys() else 80),
+            source=row["source"] if "source" in row.keys() else "",
+            grant_note=row["grant_note"] if "grant_note" in row.keys() else "",
+            granted_at=row["granted_at"] if "granted_at" in row.keys() else "",
+            granted_by=row["granted_by"] if "granted_by" in row.keys() else "",
+            grant_expires_on=(
+                row["grant_expires_on"] if "grant_expires_on" in row.keys() else ""),
         )
 
     def account(self, account_id: str) -> Account | None:

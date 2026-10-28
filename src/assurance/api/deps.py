@@ -661,6 +661,10 @@ def _payment_required(principal: Principal, error: str, remedy: str) -> HTTPExce
     account = principal.account
     assert account is not None
     note = _LAPSED_NOTE if account.ever_paid else ""
+    if account.grant_lapsed:
+        note += (
+            f" Your pilot access, provisioned by an operator, ended on "
+            f"{account.grant_expires_on} (UTC). Ask whoever issued it to extend it.")
     return HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail={

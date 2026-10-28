@@ -358,12 +358,27 @@ def get_me(
         "usage_today": accounts.usage_today(principal.subject),
     }
     if principal.account is not None:
+        account = principal.account
         body["account"] = {
-            "id": principal.account.id,
-            "company": principal.account.company,
-            "email": principal.account.email,
-            "status": principal.account.status,
+            "id": account.id,
+            "company": account.company,
+            "email": account.email,
+            "status": account.status,
+            # How this account came to exist. A manual grant is a pilot an operator
+            # provisioned by hand and invoices outside Stripe; it is never shown as, or
+            # mistaken for, a Stripe-paid account.
+            "source": ("manual_grant" if account.is_manual_grant
+                       else "stripe" if account.stripe_customer_id else "unbilled"),
         }
+        if account.is_manual_grant:
+            body["account"]["grant"] = {
+                "note": account.grant_note,
+                "granted_at": account.granted_at,
+                "granted_by": account.granted_by,
+                "expires_on": account.grant_expires_on,
+                "lapsed": account.grant_lapsed,
+                "invoiced_outside_stripe": True,
+            }
         body["keys"] = accounts.keys_for(principal.account.id)
         body["usage"] = usage_report(
             accounts, principal.account, period=parse_period(None, utc_now()), now=utc_now())
