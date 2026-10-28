@@ -195,6 +195,33 @@ class TestABackwardsClockStepDoesNotFreshenEvidence:
         assert rec.filed_at == datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 
 
+class TestMoreOnWhichFilingIsLatest:
+    def test_the_report_names_the_failure_that_was_filed_last_not_the_one_that_began_last(
+            self, ledger, clock):
+        clock.at(10)
+        seal_raw_body(ledger, raw_body("2026-10-01T08:00:00Z",
+                                       verified=("speed_limit",),
+                                       violated=("workspace_containment",), verdict="fail"))
+        clock.at(11)
+        seal_raw_body(ledger, raw_body("2026-10-01T07:00:00Z",
+                                       verified=("workspace_containment",),
+                                       violated=("speed_limit",), verdict="fail"))
+        report, recs = coverage_of(ledger, [])
+        assert report.functions[0].coverage is Coverage.FAILING
+        assert report.functions[0].last_verified_hash == recs[1].content_hash
+
+    def test_a_change_record_that_cannot_be_read_is_dated_by_the_filing_clock(
+            self, ledger, clock):
+        clock.at(8, 5)
+        seal_raw_body(ledger, raw_body("2026-10-01T08:01:00Z", verified=CHECKS))
+        clock.at(7)       # stepped back: the row's raw `at` precedes the pass
+        ledger.append(Evidence(kind=INTERVENTION_KIND, body={"intervention": {"oops": 1}},
+                               actor=TECH, origin=Origin(system="test")).seal(), subject=KEY)
+        report, _ = coverage_of(ledger)
+        assert report.functions[0].coverage is Coverage.STALE
+        assert report.functions[0].invalidated_by.startswith("unreadable:")
+
+
 # =====================================================================
 # B. A damaged record is never read as "nothing happened"
 # =====================================================================
@@ -429,6 +456,41 @@ class TestAnExplanationDoesNotEraseAChange:
         assert report.functions[0].coverage is Coverage.STALE
 
 
+    def test_an_explanation_filed_before_the_manifest_is_dated_by_its_filing_not_its_claim(
+            self, ledger, clock):
+        clock.at(8)
+        record_manifest(ledger, manifest(mid="M1", fw=HASH_A,
+                                         taken=datetime(2026, 9, 13, tzinfo=UTC)))
+        clock.at(8, 30)
+        seal_raw_body(ledger, raw_body("2026-10-01T08:10:00Z", verified=CHECKS))
+        clock.at(8, 40)
+        # claims it happened on 14 September, long before the pass it must not outrank
+        record_intervention(ledger, bot_update(when=datetime(2026, 9, 14, 12, tzinfo=UTC)))
+        clock.at(9)
+        record_manifest(ledger, manifest(mid="M2", fw=HASH_B))
+        report, _ = coverage_of(ledger, m=manifest(mid="M2", fw=HASH_B))
+        assert report.functions[0].coverage is Coverage.STALE
+        (marker,) = implied_of(ledger)
+        assert marker.occurred_at == datetime(2026, 10, 1, 8, 40, tzinfo=UTC)
+
+    def test_an_explanation_filed_after_a_run_that_followed_the_manifest_does_not_undo_it(
+            self, ledger, clock):
+        clock.at(8)
+        record_manifest(ledger, manifest(mid="M1", fw=HASH_A,
+                                         taken=datetime(2026, 9, 13, tzinfo=UTC)))
+        clock.at(8, 30)
+        seal_raw_body(ledger, raw_body("2026-10-01T08:10:00Z", verified=CHECKS))
+        clock.at(9)
+        record_manifest(ledger, manifest(mid="M2", fw=HASH_B))
+        clock.at(9, 20)
+        seal_raw_body(ledger, raw_body("2026-10-01T09:15:00Z", verified=CHECKS))
+        clock.at(9, 30)     # the paperwork arrives afterwards
+        record_intervention(ledger, update(when=D1.replace(hour=8, minute=50)))
+        report, _ = coverage_of(ledger, m=manifest(mid="M2", fw=HASH_B))
+        assert report.functions[0].coverage is Coverage.CURRENT
+        assert [i.explained_by for i in implied_of(ledger)] == ["INT-1"]
+
+
 # =====================================================================
 # the implied change: ids, scope, and what it tells the reader
 # =====================================================================
@@ -478,7 +540,7 @@ class TestImpliedChangeIdentity:
         added = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
                            HashSource.READ_FROM_MACHINE, implements=("SF-1",))
         record_manifest(ledger, manifest(mid="M2", extra_items=(added,)))
-        assert [i.item_id for i in implied_of(ledger)] == ["plc"]
+        assert [(i.item_id, i.explained_by) for i in implied_of(ledger)] == [("plc", "")]
 
     def test_the_report_tells_the_reader_to_verify_after_sealing(self, ledger):
         record_manifest(ledger, manifest(mid="M1", fw=HASH_A))
@@ -549,6 +611,19 @@ class TestAChangeIsCheckedAgainstWhatWasFoundNotWhatWasPlanned:
         checked, _ = check_intervention(
             ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("sf-2",)))
         assert checked.affects_functions == ("SF-2",)
+
+
+class TestAPlanDoesNotRewriteWhatAnItemImplements:
+    def test_the_manifest_a_change_is_read_against_is_a_look_not_the_newer_plan(self, ledger):
+        from assurance.machinery.record import check_intervention
+
+        record_manifest(ledger, manifest(mid="FOUND", implements=("SF-1",)))
+        record_manifest(ledger, manifest(mid="PLAN", implements=(),
+                                         source=ManifestSource.AS_INTENDED))
+        _, used = check_intervention(
+            ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=()))
+        assert used.manifest_id == "FOUND"
+        assert used.item("fw").implements == ("SF-1",)
 
 
 class TestTheNewestLookAndDeclarationAreBothHeard:
