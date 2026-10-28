@@ -12,7 +12,10 @@ leaving it to this handler.
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
+
+from assurance.core.errors import AssuranceError
 
 #: What a shell reports for a process whose reader went away: 128 + SIGPIPE.
 EXIT_BROKEN_PIPE = 141
@@ -34,6 +37,26 @@ _DOMAINS = {
     "value": "assurance.value.cli",
     "billing": "assurance.billing.cli",
 }
+
+
+#: "Could not do that": the same code every verb already uses for an unreadable input.
+EXIT_COULD_NOT_RUN = 2
+
+_OPERATOR_ERRORS = (
+    AssuranceError, OSError, sqlite3.Error, ValueError, LookupError, TypeError, AttributeError,
+    RecursionError,
+)
+
+
+def _operator_message(exc: BaseException) -> str:
+    if isinstance(exc, sqlite3.DatabaseError) and "not a database" in str(exc):
+        return ("error: that file is not a ledger (it is not a SQLite database). Check the path "
+                "you gave for --ledger, or ASSURANCE_LEDGER.")
+    if isinstance(exc, AssuranceError | OSError | ValueError):
+        return f"error: {exc}"
+    return (f"error: could not complete ({type(exc).__name__}: {exc}). The input may have the "
+            "wrong shape (for example a list where an object is expected). Set "
+            "ASSURANCE_DEBUG=1 to see the traceback.")
 
 
 def silence_stdout() -> None:
@@ -77,6 +100,15 @@ def main(argv: list[str] | None = None) -> int:
         # interpreter's own flush at exit does not raise the same error again.
         silence_stdout()
         return EXIT_BROKEN_PIPE
+    except _OPERATOR_ERRORS as exc:
+        # The person at the keyboard gave a verb a file it cannot use: a directory, a JSON
+        # array where it wants an object, a ledger path that is not a database. That is "could
+        # not do that" (2), not an uncaught exception, which a shell reports as 1: the code
+        # several verbs use for a finding. ASSURANCE_DEBUG=1 brings the traceback back.
+        if os.environ.get("ASSURANCE_DEBUG"):
+            raise
+        print(_operator_message(exc), file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
 
 
 if __name__ == "__main__":
