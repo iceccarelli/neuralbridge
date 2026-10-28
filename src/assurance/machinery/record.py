@@ -327,9 +327,9 @@ def implied_interventions(
     is compared with the latest earlier one that was a look or a declaration (a plan,
     ``as_intended``, says nothing about the machine; a look the watch marked incomplete is
     not a configuration, so it is never the earlier side and items it did not collect are
-    not read as removed). A safety-bearing item whose hash
-    differs, or that appeared or vanished, is a change; so is a version moving on a
-    safety-bearing item that carries no hash to compare (the only sign there is).
+    not read as removed). A safety-bearing item whose hash differs, or that appeared or
+    vanished, is a change; so is a version moving on a safety-bearing item that carries no
+    hash to compare (the only sign there is).
 
     A change is *explained* when an intervention for the same item, dated after the
     earlier look and no later than the filing of the manifest that showed it, accounts
