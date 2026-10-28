@@ -27,10 +27,10 @@ that declares no checks is reported as ``not_demonstrable`` — never as covered
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc
@@ -80,23 +80,72 @@ def tier_reaches_validated(tier: str) -> bool:
     return _TIER_RANK.get(tier, -1) >= _TIER_RANK["validated"]
 
 
-def _unit_binding(subject: str | None) -> tuple[str, bool] | None:
-    """The unit a ledger subject names, as ``(serial, well_formed)``; None for a product line.
+class _UnitBinding(NamedTuple):
+    """The unit a ledger subject names: the whole key, its serial, and whether it parses."""
+
+    key: str
+    serial: str
+    well_formed: bool
+
+
+def _unit_binding(subject: str | None) -> _UnitBinding | None:
+    """The unit a ledger subject names; None for a product line.
 
     A subject with no ``#`` names a product line and binds nothing. One with a ``#`` is a
-    unit key (``maker/model#serial``); a malformed one cannot be tied to any unit.
+    unit key (``maker/model#serial``); a malformed one cannot be tied to any unit. The WHOLE
+    key is kept: a recorder attestation signs a serial, never a maker or model, so what
+    binds a bundle to a unit is the key the bundle was sealed for (``unit_key`` in its body).
     """
     if not subject or "#" not in subject:
         return None
     try:
-        return resolve_machine_serial(subject), True
+        return _UnitBinding(subject, resolve_machine_serial(subject), True)
     except MachineSubjectError:
-        return "", False
+        return _UnitBinding(subject, "", False)
+
+
+def _tier_and_why(
+    body: dict[str, Any], recorder_trust: RecorderTrust | None = None,
+    unit: _UnitBinding | None = None,
+) -> tuple[str, str]:
+    """:func:`_believed_tier` and, when the unit binding capped it, the named reason."""
+    stored = str(body.get("tier", ""))
+    if not tier_reaches_validated(stored):
+        return stored, ""
+    if unit is not None:
+        # Filed under one unit's key: the evidence must have been sealed for THAT unit, whole.
+        # The serial alone is not enough (an attestation made for serial 0001 on one maker's
+        # machine says nothing about another maker's 0001), and a bundle sealed for a product
+        # line accepts a recorder attestation made on ANY unit, so under a unit key it would
+        # otherwise lend unit B the recorder of unit A.
+        sealed_for = body.get("unit_key")
+        if not unit.well_formed:
+            return "community", (f"it is filed under {unit.key!r}, which is not a unit key "
+                                 "(maker/model#serial), so it names no unit")
+        if not isinstance(sealed_for, str) or not sealed_for:
+            return "community", (
+                "it was sealed without a unit key (for a product line, or before bundles "
+                "recorded one), so nothing shows which maker and model its recorder was "
+                f"attached to; it is not believed validated for {unit.key!r}")
+        if sealed_for != unit.key:
+            return "community", (f"it was sealed for {sealed_for!r} and is filed under "
+                                 f"{unit.key!r}")
+        if str(body.get("machine_serial") or "") != unit.serial:
+            return "community", (f"it was matched against serial "
+                                 f"{str(body.get('machine_serial') or '')!r}, not "
+                                 f"{unit.serial!r}")
+    engine = parse_engine_version(body.get("engine_version")) or 0
+    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
+            and provenance_lifts_tier(body)
+            and (recorder_trust is None
+                 or _reproduces(body, recorder_trust, unit.serial if unit else None))):
+        return stored, ""
+    return "community", ""
 
 
 def _believed_tier(
     body: dict[str, Any], recorder_trust: RecorderTrust | None = None,
-    unit: tuple[str, bool] | None = None,
+    unit: _UnitBinding | None = None,
 ) -> str:
     """The tier a sealed verification body is worth *today*, whatever it says.
 
@@ -106,6 +155,11 @@ def _believed_tier(
     not ``recorder_attested`` with a coherent accepted attestation recorded beside it,
     is read at ``community`` at most; the public bundle checker refuses the same bodies.
     A lower stored tier is never raised.
+
+    Filed under a unit key (``unit``), the body must also have been sealed for that exact
+    key (``unit_key``, case- and whitespace-sensitive) and for its serial; a body that
+    records no unit key is ``community`` there (no grandfathering of bundles sealed before
+    the field existed).
 
     With ``recorder_trust`` (the reader's own list) the recorded attestations are also
     re-assessed under it, so a key the reader has since revoked or removed stops
@@ -120,24 +174,7 @@ def _believed_tier(
     (``api/recorder_trust.py:reader_recorder_trust``) -- so a missing or broken trust
     file can never make a reader more generous than a valid one.
     """
-    stored = str(body.get("tier", ""))
-    if not tier_reaches_validated(stored):
-        return stored
-    if unit is not None:
-        # Filed under one unit's key: the evidence must have been sealed for that unit.
-        # A bundle sealed for a product line (no serial) accepts a recorder attestation
-        # made on ANY unit, so under a unit key it would otherwise lend unit B the
-        # recorder of unit A.
-        serial, well_formed = unit
-        if not well_formed or str(body.get("machine_serial") or "") != serial:
-            return "community"
-    engine = parse_engine_version(body.get("engine_version")) or 0
-    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
-            and provenance_lifts_tier(body)
-            and (recorder_trust is None
-                 or _reproduces(body, recorder_trust, unit[0] if unit else None))):
-        return stored
-    return "community"
+    return _tier_and_why(body, recorder_trust, unit)[0]
 
 
 def _reproduces(
@@ -148,6 +185,73 @@ def _reproduces(
     pa = body.get("provenance_assessment")
     return bool(assessed is not None and assessed.attested and isinstance(pa, dict)
                 and assessed.attestation_hash == pa.get("attestation_hash"))
+
+
+def _apply_unit_binding(
+    ledger: EvidenceLedger, subject: str | None, recorder_trust: RecorderTrust | None,
+    records: list[VerificationRecord],
+) -> list[VerificationRecord]:
+    """Name why the unit binding capped a record, and cap a recording's second claimant.
+
+    One recording is the validated evidence of ONE unit key. When the same trace is the
+    basis of validated evidence filed under two different unit keys, the earlier filing
+    (lower ledger position) keeps it and the later is ``community`` with the reason named:
+    a recorder key signs a serial, not a maker, so nothing else tells two units' evidence
+    apart when the same bytes are offered for both. Only a bundle that would itself read
+    ``validated`` counts as a claim, so a community copy filed first claims nothing.
+    ``reverify`` refuses the same case outright (``_trace_filed_elsewhere``).
+    """
+    if not records:
+        return records
+    by_seq = {r.ledger_seq: r for r in records}
+
+    def note(r: VerificationRecord, why: str, tier: str | None = None) -> VerificationRecord:
+        return replace(r, tier=tier if tier is not None else r.tier, tier_note=why)
+
+    # 1. Name the binding reason on records the unit binding capped (cheap: the subject's own).
+    for entry in ledger.entries(kind=BUNDLE_KIND, subject=subject):
+        record = by_seq.get(entry.seq)
+        if record is None or tier_reaches_validated(record.tier):
+            continue
+        body = entry.payload.get("body")
+        if not isinstance(body, dict) or not tier_reaches_validated(str(body.get("tier", ""))):
+            continue
+        _, why = _tier_and_why(body, recorder_trust, _unit_binding(entry.subject))
+        if why:
+            by_seq[entry.seq] = note(record, why)
+
+    # 2. One recording, one unit: only when something here could be validated.
+    if any(tier_reaches_validated(r.tier) for r in by_seq.values()):
+        claimant: dict[str, tuple[int, str]] = {}
+        held: dict[int, tuple[str, str]] = {}
+        for entry in ledger.entries(kind=BUNDLE_KIND):
+            unit = _unit_binding(entry.subject)
+            if unit is None or not unit.well_formed:
+                continue
+            body = entry.payload.get("body")
+            if not isinstance(body, dict) or not tier_reaches_validated(
+                    str(body.get("tier", ""))):
+                continue        # cheap first: only a stored 'validated' can be a claim
+            trace_hash = str(body.get("trace_hash") or "")
+            if not trace_hash or not entry.evidence().verify():
+                continue
+            if not tier_reaches_validated(_tier_and_why(body, recorder_trust, unit)[0]):
+                continue
+            claimant.setdefault(trace_hash, (entry.seq, entry.subject))
+            held[entry.seq] = (entry.subject, trace_hash)
+        for seq, record in list(by_seq.items()):
+            mine = held.get(seq)
+            if mine is None or not tier_reaches_validated(record.tier):
+                continue
+            first = claimant[mine[1]]
+            if first[1] != mine[0]:
+                by_seq[seq] = note(
+                    record,
+                    f"the recording it rests on (trace {mine[1][:12]}) is already the "
+                    f"validated evidence of {first[1]!r} (filed first, ledger position "
+                    f"{first[0]}); one recording is evidence about one unit",
+                    tier="community")
+    return [by_seq[r.ledger_seq] for r in records]
 
 
 class VerificationRecordError(AssuranceError, ValueError):
@@ -161,7 +265,7 @@ class Coverage(StrEnum):
     CURRENT = "current"
     #: It was verified, and a later intervention invalidated that verification.
     STALE = "stale"
-    #: A verification exists but the checks for this function did not pass.
+    #: A run exercised this function's checks and at least one VIOLATED its limit.
     FAILING = "failing"
     #: No verification has ever exercised this function.
     NEVER_VERIFIED = "never_verified"
@@ -204,6 +308,10 @@ class VerificationRecord:
     #: function. A record that does not say which are which — every manually
     #: built one — has every non-verified check treated as failed.
     checks_not_applicable: tuple[str, ...] = ()
+    #: Why ``tier`` is below what the sealed body stored, when the UNIT BINDING is what
+    #: capped it (sealed for another unit key or none, or the same recording claimed by an
+    #: earlier unit). Empty otherwise.
+    tier_note: str = ""
     #: True when ``effective_at`` could not be taken from the bundle: its trace
     #: start was unreadable, or later than the moment it was filed. It is then the
     #: earliest possible instant (see ``_EARLIEST``).
@@ -234,6 +342,7 @@ class VerificationRecord:
             "checks_verified": list(self.checks_verified),
             "checks_not_verified": list(self.checks_not_verified),
             "checks_not_applicable": list(self.checks_not_applicable),
+            "tier_note": self.tier_note,
             "date_suspect": self.date_suspect,
         }
 
@@ -288,7 +397,7 @@ class VerificationRecord:
                 checks_not_applicable=not_applicable,
                 date_suspect=suspect,
             ))
-        return out
+        return _apply_unit_binding(ledger, subject, recorder_trust, out)
 
 
 @dataclass(frozen=True)
@@ -561,6 +670,11 @@ def assess_coverage(
             "current here means the recorded evidence still stands, not that the "
             "behaviour was demonstrated on the machine."
         )
+    for v in verifs:
+        if v.tier_note:
+            caveats.append(
+                f"verification {v.content_hash[:12]} is read at tier {v.tier!r}, not the "
+                f"tier it was sealed at: {v.tier_note}.")
     for v in verifs:
         if v.date_suspect:
             caveats.append(
