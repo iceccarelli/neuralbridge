@@ -692,6 +692,9 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
         report, _ = coverage_of(ledger, m=manifest(fw=HASH_B))
         assert report.functions[0].coverage is Coverage.STALE
+        (marker,) = [i for i in interventions_from_ledger(ledger, KEY)
+                     if i.intervention_id.startswith("implied:")]
+        assert marker.explained_by == ""
 
     def test_a_new_safety_item_with_no_record_is_a_change(self, ledger):
         record_manifest(ledger, manifest(mid="M-A"))
@@ -837,6 +840,9 @@ class TestWhichManifestDifferencesAreChanges:
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)
         assert report.functions[0].coverage is Coverage.STALE
+        (marker,) = [i for i in interventions_from_ledger(ledger, KEY)
+                     if i.intervention_id.startswith("implied:")]
+        assert marker.explained_by == ""
 
     def test_an_install_explains_an_item_that_appeared(self, ledger):
         self._verified(ledger, manifest(mid="M-A"))
@@ -866,6 +872,9 @@ class TestWhichManifestDifferencesAreChanges:
         report, _ = coverage_of(ledger, m=newer)
         assert report.functions[0].coverage is Coverage.STALE
         assert report.functions[0].invalidated_by.startswith("implied:")
+        (marker,) = [i for i in interventions_from_ledger(ledger, KEY)
+                     if i.intervention_id.startswith("implied:")]
+        assert marker.explained_by == ""
 
     def test_a_record_for_another_item_does_not_explain_the_change(self, ledger):
         doc = SafetyItem("doc", ItemKind.PARAMETER_SET, "readme", "1", "c" * 64,
