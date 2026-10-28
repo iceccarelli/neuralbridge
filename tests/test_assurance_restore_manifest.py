@@ -383,3 +383,85 @@ def test_an_account_created_while_the_backup_runs_does_not_fail_the_backup(
     bk = _backup(root, tmp_path)
     result = restore_check.verify(bk)
     assert result["ok"], result["problems"]
+
+
+# ---------------------------------------------------------------------------
+# rules that other tests only reached through a different message
+# ---------------------------------------------------------------------------
+def test_live_mode_still_rejects_a_ledger_whose_history_was_replaced_by_a_longer_one(
+        data, tmp_path):
+    """Not shorter, so the length rule is silent: only the head-hash comparison sees it."""
+    root, first, _ = data
+    volume = tmp_path / "volume"
+    shutil.copytree(_backup(root, tmp_path), volume)
+    ledger_path = volume / "tenants" / f"{first}.db"
+    ledger_path.unlink()
+    ledger = EvidenceLedger(ledger_path)
+    for i in range(100, 108):                       # 8 records >= the 6 the backup held
+        ledger.append(_ev(i), subject="CASE-1")
+    result = restore_check.verify(volume, allow_growth=True)
+    assert not result["ok"]
+    assert any(first in p and "history was rewritten" in p for p in result["problems"]), \
+        result["problems"]
+
+
+@pytest.mark.parametrize("rel", ["stray.txt", "tenants/stray.txt", "notes/stray.txt"])
+def test_a_file_the_manifest_does_not_list_is_named_as_such(data, tmp_path, rel):
+    root, _, _ = data
+    bk = _backup(root, tmp_path)
+    (bk / rel).parent.mkdir(exist_ok=True)
+    (bk / rel).write_text("x")
+    result = restore_check.verify(bk)
+    assert not result["ok"]
+    assert any(p == f"{rel}: not in the manifest — added since the backup was taken"
+               for p in result["problems"]), result["problems"]
+
+
+def test_an_account_removed_from_the_account_list_is_found_even_in_live_mode(data, tmp_path):
+    root, _, second = data
+    volume = tmp_path / "volume"
+    shutil.copytree(_backup(root, tmp_path), volume)
+    db = sqlite3.connect(volume / "accounts.db")
+    db.execute("DELETE FROM accounts WHERE id=?", (second,))
+    db.commit()
+    db.close()
+    # live mode does not compare accounts.db byte for byte (it moves on a running service):
+    # the recorded account list is what notices an account that has gone
+    result = restore_check.verify(volume, allow_growth=True)
+    assert any("accounts.db no longer lists account(s) the backup recorded" in p
+               and second in p for p in result["problems"]), result["problems"]
+
+
+def test_an_account_the_backup_did_not_record_is_found_in_an_exact_check(data, tmp_path):
+    root, _, _ = data
+    volume = tmp_path / "volume"
+    shutil.copytree(_backup(root, tmp_path), volume)
+    late = AccountStore(volume / "accounts.db").upsert_account(
+        email="late@x.invalid", tier="cell", stripe_customer_id="cus_late").id
+    result = restore_check.verify(volume)
+    assert any("accounts.db lists account(s) the backup did not record" in p and late in p
+               for p in result["problems"]), result["problems"]
+    live = restore_check.verify(volume, allow_growth=True)       # a running service gains some
+    assert not any("did not record" in p for p in live["problems"])
+
+
+def test_files_are_born_private_not_only_tightened_afterwards(data, tmp_path, monkeypatch):
+    """The umask is the first line of defence: the key-bearing databases are never, even for
+    a moment, readable by anyone else."""
+    root, first, _ = data
+    seen: dict[str, int] = {}
+    real = restore_check._tighten
+
+    def spy(path):
+        for rel in ("accounts.db", f"tenants/{first}.db", "art14-register.db", "tenants", "."):
+            seen[rel] = stat.S_IMODE((path / rel).stat().st_mode)
+        real(path)
+
+    monkeypatch.setattr(restore_check, "_tighten", spy)
+    old = os.umask(0o022)
+    try:
+        restore_check.backup(root, tmp_path / "bk")
+    finally:
+        os.umask(old)
+    assert seen and all(mode & 0o077 == 0 for mode in seen.values()), \
+        {k: oct(v) for k, v in seen.items()}
