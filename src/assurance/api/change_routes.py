@@ -330,8 +330,13 @@ async def assess_advisory_route(
     report = assess_impact(advisory, fleet, provenance=bare_provenance("body"))
     store = CaseStore(register.ledger)
     try:
-        case = assess_advisory(store, report, actor=_actor(body.actor, "fleet", principal),
-                               accept_unsigned=body.accept_unsigned, reason=body.reason)
+        # Overriding the refusal to act on an unsigned import is a human decision, like closing
+        # a case: an account-level key (which anyone or any agent can hold) cannot make it
+        # with a name it typed; it takes an operator key with the decider role.
+        case = assess_advisory(
+            store, report,
+            actor=_actor(body.actor, "fleet", principal, human=body.accept_unsigned),
+            accept_unsigned=body.accept_unsigned, reason=body.reason)
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,

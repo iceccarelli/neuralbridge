@@ -70,6 +70,7 @@ __all__ = [
     "case_id_for",
     "claim",
     "decide",
+    "named_person_problem",
     "note_advisory_withdrawn",
     "resolve_decision",
     "resume",
@@ -723,6 +724,22 @@ def assess_drift(
 # Trigger B — supplier advisory
 # ---------------------------------------------------------------------------
 
+def _attribution_basis(actor: Actor) -> str:
+    """How the actor's name was established, as the surface that built the actor recorded it.
+
+    ``authenticated_operator`` is a credential bound to a named operator; ``declared_*`` is a
+    name an account-level key or an open-mode caller typed; ``declared_locally`` is the
+    command line, where whoever owns the shell and the ledger file declares it.
+    """
+    found = re.search(r"attribution=([a-z_]+)", actor.role or "")
+    return found.group(1) if found else "declared_locally"
+
+
+def named_person_problem(identifier: str) -> str:
+    """Why ``identifier`` cannot be the name of a person, or ``""`` if it can."""
+    return _name_problem(identifier) if identifier.strip() else "no name was given"
+
+
 def _untrusted_marker(
     impact: ImpactReport, actor: Actor, accept_unsigned: bool, reason: str,
 ) -> dict[str, str]:
@@ -749,6 +766,11 @@ def _untrusted_marker(
             "against the publisher's own page and wants the case anyway, pass the "
             "override explicitly (`--accept-unsigned` with `--actor NAME`; the API's "
             "`accept_unsigned` with `actor`). Nothing was opened.")
+    if record is not None and not reason.strip():
+        raise UntrustedAdvisoryError(
+            f"advisory {shown} is an unsigned import and the override needs a reason in the "
+            "person's own words (`--reason`; the API's `reason`): what was checked, against "
+            "what. Nothing was opened.")
     marker: dict[str, str] = {
         "advisory_trust": str(record["trust"] if record else
                               given.get("trust_state") or "unauthenticated"),
@@ -756,6 +778,7 @@ def _untrusted_marker(
                                given.get("source") or "unknown"),
         "advisory_issuer": neutralise(impact.issued_by),
         "advisory_accepted_by": actor.identifier.strip(),
+        "advisory_accepted_basis": _attribution_basis(actor),
         "advisory_accept_reason": " ".join(neutralise(reason).split())[:500],
     }
     if record is not None:
@@ -898,7 +921,11 @@ def assess_advisory(
         # an unauthenticated reading never rewrites one that carries no such marker.
         current = store.get(case.case_id)
         if current is not None and not current.provenance.get("advisory_trust"):
-            return current
+            raise UntrustedAdvisoryError(
+                f"case {current.case_id} for advisory {neutralise(impact.advisory_id)} was "
+                "opened from a source that carries no unauthenticated marker (a signed feed "
+                "or the watch), and an unauthenticated file does not update it. The case is "
+                "not updated; this reading was not applied.")
     return _open_or_update(
         store, case, actor=actor, actions_by_fid=actions_by_fid,
         detail=f"advisory {impact.advisory_id}: {len(impact.machines_affected)} "

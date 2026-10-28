@@ -307,10 +307,19 @@ async def advisory_impact_signed(
             out.append({**row, "impact": None, "error": f"unreadable advisory: {exc}"})
             continue
         prov = trust.provenance_for(aid)
-        out.append({**row, "impact": assess_impact(
-            advisory, fleet, provenance=prov).to_dict()})
+        entry = {**row, "impact": assess_impact(
+            advisory, fleet, provenance=prov).to_dict()}
+        if advisory.import_record is not None:
+            # The signature is over the supplier's file; the file says it is a translation
+            # nobody has authenticated. A pinned key does not turn that into a statement
+            # the supplier made, so no consequence is permitted whatever the policy says.
+            entry.update(automated_consequences_permitted=False, inspect_only=True,
+                         advisory_import=advisory.import_record.to_dict())
+        out.append(entry)
+    inspect_only = (trust.inspect_only if not out else
+                    not any(r.get("automated_consequences_permitted") for r in out))
     return {"trust": trust.to_dict(), "advisories": out,
-            "inspect_only": trust.inspect_only, "trust_statement": TRUST_STATEMENT}
+            "inspect_only": inspect_only, "trust_statement": TRUST_STATEMENT}
 
 
 @fleet_router.get(
