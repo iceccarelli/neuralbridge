@@ -42,7 +42,25 @@ jobs:
               echo "::error::assurance $domain does not start"; exit 1; }
           done
 
-      - name: Write a kit, fill it, and run it offline
+      - name: A network namespace with no interface can be created (fail closed)
+        # The kit's in-process guard records whether it tried to reach a network. A namespace
+        # with no interface is what makes "opens no sockets" a fact of the runner rather than
+        # a statement by the program. If the runner cannot make one this job FAILS: it must
+        # not quietly go back to trusting the program's own verdict.
+        run: |
+          set -euo pipefail
+          .github/scripts/netns-run.sh python - <<'PY'
+          import socket, sys
+          try:
+              socket.create_connection(("192.0.2.1", 9), timeout=2)
+          except OSError as exc:
+              print("isolated:", exc)
+              sys.exit(0)
+          print("::error::the namespace has a route out; the offline claim is unenforced")
+          sys.exit(1)
+          PY
+
+      - name: Write a kit, fill it, and run it offline (in a network namespace with no interface)
         run: |
           set -euo pipefail
           python -m assurance kit init plant
@@ -72,8 +90,8 @@ jobs:
           ]
           (base / "kit.json").write_text(json.dumps(cfg))
           PY
-          python -m assurance kit check plant/kit.json
-          python -m assurance kit run plant/kit.json --out plant/out
+          .github/scripts/netns-run.sh python -m assurance kit check plant/kit.json
+          .github/scripts/netns-run.sh python -m assurance kit run plant/kit.json --out plant/out
 
       - name: The run produced evidence, and it says nothing left the machine
         run: |

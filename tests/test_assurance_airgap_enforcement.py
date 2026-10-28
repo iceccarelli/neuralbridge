@@ -311,10 +311,12 @@ def test_the_kit_import_closure_names_no_network_client_and_starts_no_process(ob
 # ---------------------------------------------------------------------------
 # the OS-level control: a network namespace with no interface
 # ---------------------------------------------------------------------------
+NETNS_RUN = REPO / ".github" / "scripts" / "netns-run.sh"
+
+
 def _netns_available() -> bool:
-    if not shutil.which("unshare"):
-        return False
-    probe = subprocess.run(["unshare", "-rn", "true"], capture_output=True,  # noqa: S603, S607
+    """Whether this machine can create a network namespace with no interface (CI's script)."""
+    probe = subprocess.run([str(NETNS_RUN), "true"], capture_output=True,  # noqa: S603
                            check=False)
     return probe.returncode == 0
 
@@ -322,21 +324,69 @@ def _netns_available() -> bool:
 def test_the_kit_runs_with_no_network_namespace_interface(tmp_path):
     if not _netns_available():
         if os.environ.get("NEURALBRIDGE_REQUIRE_NETNS") == "1":
-            pytest.fail("NEURALBRIDGE_REQUIRE_NETNS=1 but `unshare -rn` is not available here")
-        pytest.skip("`unshare -rn` is not available (set NEURALBRIDGE_REQUIRE_NETNS=1 to make "
-                    "this a failure; CI sets it)")
+            pytest.fail("NEURALBRIDGE_REQUIRE_NETNS=1 but no network namespace can be created "
+                        "here (.github/scripts/netns-run.sh exits non-zero)")
+        pytest.skip("no network namespace can be created here (set "
+                    "NEURALBRIDGE_REQUIRE_NETNS=1 to make this a failure; CI sets it)")
     base = make_kit(tmp_path)
     control = subprocess.run(  # noqa: S603
-        ["unshare", "-rn", sys.executable, "-c",  # noqa: S607
+        [str(NETNS_RUN), sys.executable, "-c",
          "import socket,sys\n"
          "try:\n socket.create_connection(('192.0.2.1', 9), timeout=1)\n"
          "except OSError as e:\n print('ISOLATED', e.errno)\n sys.exit(0)\n"
          "sys.exit(1)"], capture_output=True, text=True, check=False, env=_env())
     assert control.returncode == 0 and "ISOLATED" in control.stdout, control.stdout + control.stderr
     r = subprocess.run(  # noqa: S603
-        ["unshare", "-rn", sys.executable, "-m", "assurance", "kit", "run",  # noqa: S607
+        [str(NETNS_RUN), sys.executable, "-m", "assurance", "kit", "run",
          str(base / "kit.json"), "--out", str(base / "out")],
         capture_output=True, text=True, check=False, env=_env(), timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     run = json.loads((base / "out" / "run.json").read_text())
     assert run["verdict"] == "complete" and run["airgap"]["held"] is True
+
+
+def test_the_cold_start_job_runs_the_kit_in_a_namespace_and_does_not_skip_when_it_cannot():
+    workflow = (REPO / ".github" / "workflows" / "assurance.yml").read_text(encoding="utf-8")
+    assert "netns-run.sh python -m assurance kit run" in workflow
+    assert "netns-run.sh python -m assurance kit check" in workflow
+    assert "fail closed" in workflow
+    script = NETNS_RUN.read_text(encoding="utf-8")
+    assert "exit 97" in script and "exec unshare -rn" in script
+    assert os.access(NETNS_RUN, os.X_OK)
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert 'NEURALBRIDGE_REQUIRE_NETNS: "1"' in ci
+
+
+def test_the_script_fails_closed_when_it_cannot_make_a_namespace(tmp_path):
+    # With `unshare` and `sudo` hidden from PATH the script must refuse (97), not run the command.
+    marker = tmp_path / "ran"
+    bare = tmp_path / "bin"
+    bare.mkdir()
+    for tool in ("bash", "true", "touch", "env", "id", "command"):
+        found = shutil.which(tool)
+        if found:
+            (bare / tool).symlink_to(found)
+    r = subprocess.run(  # noqa: S603
+        [str(bare / "bash"), str(NETNS_RUN), "touch", str(marker)],
+        capture_output=True, text=True, check=False, env={"PATH": str(bare)})
+    assert r.returncode == 97, r.stdout + r.stderr
+    assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# the kit itself, with a spawn injected where the review put one
+# ---------------------------------------------------------------------------
+def test_a_process_started_inside_the_kit_run_stops_it_and_is_named(tmp_path, monkeypatch):
+    from assurance.kit import enrol
+    from assurance.kit.enrol import KitConfig
+
+    base = make_kit(tmp_path)
+    real = enrol._enrol_one
+
+    def spawning(*args, **kwargs):
+        subprocess.run(["true"], check=False)  # noqa: S603, S607
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(enrol, "_enrol_one", spawning)
+    with pytest.raises(AirgapError, match="subprocess.Popen"):
+        enrol.run_kit(KitConfig.from_json(base / "kit.json"), tmp_path / "out")
