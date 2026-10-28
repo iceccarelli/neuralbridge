@@ -31,8 +31,23 @@ if command -v unshare >/dev/null 2>&1 && command -v setpriv >/dev/null 2>&1 \
   # interpreter, not the caller's (setup-python's). Resolve the command here, before sudo.
   cmd="$(command -v -- "$1")" || { echo "netns-run: command not found: $1" >&2; exit 127; }
   shift
+  # `sudo -E` still strips PYTHONPATH and LD_LIBRARY_PATH, so a kit run started with the
+  # README's `PYTHONPATH=src` would find no `assurance` module in here. Carry them across
+  # explicitly, with each PYTHONPATH entry made absolute first: the cwd is unchanged, but a
+  # relative entry should not depend on that.
+  carry=()
+  if [ -n "${PYTHONPATH:-}" ]; then
+    abs_path=""
+    IFS=: read -ra parts <<<"$PYTHONPATH"
+    for entry in "${parts[@]}"; do
+      case "$entry" in /*) abs="$entry" ;; *) abs="$PWD/$entry" ;; esac
+      abs_path="${abs_path:+$abs_path:}$abs"
+    done
+    carry+=("PYTHONPATH=$abs_path")
+  fi
+  [ -n "${LD_LIBRARY_PATH:-}" ] && carry+=("LD_LIBRARY_PATH=$LD_LIBRARY_PATH")
   exec sudo -n -E unshare -n setpriv --reuid="$(id -u)" --regid="$(id -g)" \
-    --clear-groups "$cmd" "$@"
+    --clear-groups env ${carry[@]+"${carry[@]}"} "$cmd" "$@"
 fi
 
 echo "netns-run: cannot create a network namespace here (tried 'unshare -rn' and" >&2
