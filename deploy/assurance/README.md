@@ -397,7 +397,8 @@ proxy, so the per-address quota would be one bucket for the whole internet. Set
 `ASSURANCE_TRUST_FLY_PROXY=1` (in `fly.toml`'s `[env]`) and the quota is keyed
 on `Fly-Client-IP`, which Fly's proxy sets. Set it **only** where every request
 arrives through that proxy: on any other host the header is client-controlled
-and would let a caller mint themselves a fresh quota per request. Without the
+and would let a caller mint themselves a fresh quota per request (a value that is not an IP
+address is ignored either way). Without the
 variable the socket peer is used, which is correct for a directly exposed host.
 
 **Request bodies** on `/v1` writes are capped at `ASSURANCE_MAX_BODY_BYTES`
@@ -408,6 +409,64 @@ Stripe webhook is exempt.
 **Keys.** `GET /v1/keys`, `POST /v1/keys` and `POST /v1/keys/revoke` let an
 account list, add and revoke its own keys (at most 10 live). Operator keys are
 rotated in `ASSURANCE_API_KEYS`.
+
+**Request limits that are in code.** A JSON body nested deeper than
+`ASSURANCE_MAX_JSON_DEPTH` (default 100) on a capped write is refused with 422
+`json_too_deeply_nested` before the application sees it (an unauthenticated 1,200-deep body used
+to be a 500 and a `RecursionError` traceback in the log). `Fly-Client-IP` is honoured only when it
+parses as an IP address; any other string is ignored and the socket peer is used. An unknown API
+key is answered from a read and does not queue for the accounts write lock. Responses that carry a
+plaintext key (`POST /v1/keys`, `POST /v1/operators`, `GET /v1/checkout/complete`) and every export
+(`.../export`, `GET /v1/fleet/report`) are `Cache-Control: no-store` with `Pragma: no-cache`.
+`session_id=` (the one-time key-claim token), `api_key=`, `key=`, `token=` and `secret=` query
+values are replaced by `[redacted]` in uvicorn's access log; a proxy in front of the service keeps
+its own log, so redact there too. The claim token stays valid 24 hours or until claimed.
+
+**What is not in code (be honest with yourself about these).**
+
+* *No authentication-failure rate limit.* A flood of invalid keys still costs a hash and a lookup
+  each. Rate-limit in front of the service (Fly, a WAF).
+* *Proxy headers.* uvicorn's `--proxy-headers` is on by default and trusts `X-Forwarded-For` from
+  loopback (and `$FORWARDED_ALLOW_IPS`). The Dockerfile does not widen that; on Fly the peer is
+  Fly's proxy, so it is ignored. If you front the container with a reverse proxy on the same
+  machine, uvicorn will trust that proxy's header.
+* *Past-due expiry and reconciliation run only when you run them.* There is no scheduler in this
+  repository. A `past_due` account has no automatic expiry unless you schedule
+  `python -m assurance.billing.reconcile --apply` (after reading a dry run, below). Stripe's own
+  dunning ends the subscription and tells us by webhook; reconciliation is the net for a lost
+  webhook.
+
+### Attestation signing key: rotation and loss
+
+The service counter-signs heads (`POST /v1/ledger/attest`) with the key in
+`ASSURANCE_ATTEST_KEY_PEM`. The key lives outside the data volume on purpose.
+
+*Rotating it.* After the key changes, **every tenant's `POST /v1/ledger/attest` answers 409**
+(`attestation_refused`: the service key is not the one that signed this log) until you have acknowledged the change for that account:
+
+```bash
+assurance attest sign --ledger "$ASSURANCE_TENANT_LEDGERS/$ACCOUNT_ID.db" \
+    --key /secrets/new-attest.pem --log "$ASSURANCE_ATTEST_LOGS/$ACCOUNT_ID.jsonl" \
+    --rotating --note "key rotation"
+```
+
+once per account log (the tenant API has no `rotating` flag, by design). Before you rotate:
+**save the old public key** (`GET /v1/ledger/attest/key` or `assurance attest keygen` output) and
+keep a dated key history somewhere other than this volume. `GET /v1/ledger/attest/key` serves only
+the *current* key, and `POST /v1/ledger/attest/verify` without an explicit `public_key_pem` checks
+against it, so attestations signed under the old key read as "signed by different key or edited"
+(forged) unless the verifier is given the old public key. Tell customers verifying old exports to
+use the old public key for records before the rotation date.
+
+*Losing it.* If the private key is lost or leaked, nothing in this service can recover or revoke
+it. Runbook: (1) stop signing; (2) generate a new key; (3) for each account run `attest sign
+--rotating` with the new key so the log records the change; (4) record the date, the old
+fingerprint and the reason in your key history, and tell customers that attestations dated before
+it were made under a key that is no longer trusted (a leaked key means a past attestation could
+have been forged by someone else: say so); (5) a lost key with no leak simply ends the old key's
+ability to sign: the old records still verify against the saved old public key. If you never saved
+the old public key, old attestations can be checked only for internal consistency
+(`attest verify` without a key), not for authorship.
 
 **`/healthz`** is unauthenticated and cheap: it confirms both stores open and
 reports the shared ledger's entry count, and nothing about the host. Chain
