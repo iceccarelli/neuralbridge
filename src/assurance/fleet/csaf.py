@@ -85,11 +85,13 @@ MAX_PRODUCTS = 100_000
 #: How deeply ``product_tree.branches`` may nest. Real trees are four or five levels deep.
 MAX_DEPTH = 64
 #: The largest document read from disk.
-MAX_FILE_BYTES = 32 * 1024 * 1024
+MAX_FILE_BYTES = 8 * 1024 * 1024
 
 _AFFECTED = ("known_affected", "first_affected", "last_affected")
 _BOUNDARY = {"first_affected": "first affected", "last_affected": "last affected"}
 _FIXED = ("fixed", "first_fixed")
+_UNLISTED_NOTE = ("unsigned CSAF import: a version this advisory does not list is not "
+                  "known to be unaffected")
 _TLP_LABELS = frozenset({"WHITE", "GREEN", "AMBER", "RED", "CLEAR", "AMBER+STRICT"})
 
 #: Characters that make a version "label" something other than one plain token.
@@ -327,7 +329,6 @@ class _Slot:
     versions: dict[str, None]
     notes: dict[str, None]
     fixed: dict[str, None]
-    has_range: bool = False
 
 
 def advisory_from_csaf(
@@ -428,6 +429,8 @@ def advisory_from_csaf(
     classes: dict[str, dict[str, None]] = {}     # product_id -> how the publisher classed it
     fixed_ids: dict[str, None] = {}
     not_affected: dict[str, None] = {}
+    stated: dict[str, None] = {}                  # classed by the publisher, not as affected
+    elsewhere_ids: dict[str, str] = {}            # named only outside product_status
     cves: list[str] = []
     remedy = ""
     for index, vuln in enumerate(vulns):
@@ -438,9 +441,15 @@ def advisory_from_csaf(
         if cve and cve not in cves:
             cves.append(cve)
         product_status = vuln.get("product_status")
-        if product_status is not None:
+        if product_status is None:
+            partial_reasons.append(
+                f"{where} has no product_status, so it states no affected product (any "
+                "product it concerns is named only elsewhere, if at all)")
+        else:
             if not isinstance(product_status, Mapping):
                 raise AdvisoryError(f"{where}.product_status must be an object.")
+            for pid in _ids(product_status, "recommended", f"{where}.product_status"):
+                stated[pid] = None
             for key in _AFFECTED + ("under_investigation",):
                 for pid in _ids(product_status, key, f"{where}.product_status"):
                     classes.setdefault(pid, {})[key] = None
@@ -453,12 +462,24 @@ def advisory_from_csaf(
             if (isinstance(rem, Mapping) and _text(rem.get("category")) == "vendor_fix"
                     and not remedy):
                 remedy = _display(_text(rem.get("details")), "remedy", notes)
+        for section, key in (("remediations", "product_ids"), ("threats", "product_ids"),
+                             ("flags", "product_ids"), ("scores", "products")):
+            for entry in _list_of(vuln.get(section), f"{where}.{section}"):
+                if isinstance(entry, Mapping):
+                    for pid in _ids(entry, key, f"{where}.{section}[]"):
+                        elsewhere_ids.setdefault(pid, f"{where}.{section}")
     if not_affected:
         notes.append(
             f"{len(not_affected)} product(s) are listed as known_not_affected. That is "
             "ignored: it is never used to clear a machine.")
 
     dropped: list[DroppedProduct] = []
+    for pid, section in elsewhere_ids.items():
+        if pid not in classes and pid not in fixed_ids and pid not in not_affected \
+                and pid not in stated:
+            dropped.append(DroppedProduct(pid, (
+                f"it is named only in {section} and in no product_status, so the publisher "
+                "does not state whether it is affected")))
     grouped: dict[tuple[str, str], _Slot] = {}
     for pid, how in classes.items():
         product = tree.products.get(pid)
@@ -478,13 +499,11 @@ def advisory_from_csaf(
             _matching(text, f"product {pid!r} version range")
             slot.versions[text] = None
             slot.notes[text] = None
-            slot.has_range = True
         label = product.exact or "; ".join(product.ranges)
         boundary = [_BOUNDARY[k] for k in how if k in _BOUNDARY]
         if boundary:
             slot.notes[f"{label}: {' and '.join(boundary)} version of an affected range; "
                        "versions beyond it are not known to be unaffected"] = None
-            slot.has_range = True
         if set(how) == {"under_investigation"}:
             slot.notes[f"{label}: under investigation by the publisher, not confirmed"] = None
     if dropped:
@@ -504,17 +523,12 @@ def advisory_from_csaf(
         if pid in tree.conflicting or product is None or product.ranges or not product.exact:
             notes.append(
                 f"fixed product {pid!r} has no single exact version in the product tree, "
-                "so it was not used to clear anything.")
+                "so it is not listed as a fix.")
             continue
         slot = grouped.get((product.vendor, product.name))
         if slot is None:
             notes.append(f"fixed product {pid!r} ({product.name} {product.exact}) is not a "
-                         "component any affected product belongs to; it clears nothing.")
-        elif slot.has_range:
-            notes.append(
-                f"fixed version {product.exact!r} of {product.name} was not used: the "
-                "publisher also gave a range for it, and one vulnerability's fix is not the "
-                "end of another's range.")
+                         "component any affected product belongs to; it is not listed.")
         else:
             slot.fixed[_matching(product.exact, f"product {pid!r} fixed version")] = None
 
@@ -524,6 +538,10 @@ def advisory_from_csaf(
             "differs only in spelling (for example '2.001' for 'V2.001') is reported for a "
             "person to look at, never cleared.")
 
+    # Written into the data, not only the record: if the record is removed from the file the
+    # advisory still answers "a person has to look" for every label it does not list.
+    for slot in grouped.values():
+        slot.notes[_UNLISTED_NOTE] = None
     affected = tuple(
         AffectedArtefact(
             supplier=vendor, name=name, versions=tuple(slot.versions),
@@ -538,6 +556,15 @@ def advisory_from_csaf(
     if cves:
         summary = (summary + " " if summary else "") + "CVE: " + ", ".join(cves)
     title = _display(_text(head.get("title")), "title", notes)
+    # The same fail-safe in the two texts every consumer prints, whatever happens to the record.
+    label = "unsigned CSAF import"
+    if dropped:
+        shown = ", ".join(strip_invisible(d.product_id)[0] for d in dropped)
+        label += f", partial: not imported {shown}"
+    elif partial_reasons:
+        label += ", partial"
+    title = f"[{label}] {title}".rstrip()
+    summary = f"[{label}] {summary}".rstrip()
 
     record = ImportRecord(
         origin=IMPORT_ORIGINS[0], trust=TRUST_UNSIGNED_INSPECT_ONLY,

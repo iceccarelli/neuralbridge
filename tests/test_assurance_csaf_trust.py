@@ -237,7 +237,8 @@ class TestTheTranslationRecordIsInTheAdvisory:
         assert adv["affected"][0]["fixed_versions"] == ["V2.002"]
         again = ComponentAdvisory.from_dict(adv)
         assert again.affected[0].fixed_versions == ("V2.002",)
-        assert match_item(again, item("EX-100", "V2.002")) is None
+        # Superseded (round 2, F-4): a fixed label is listed, never used to clear an import.
+        assert match_item(again, item("EX-100", "V2.002"))[0] is MatchBasis.NAME_ONLY
 
     def test_a_record_claiming_a_trusted_state_is_refused(self, tmp_path):
         _, adv, _ = run_import(tmp_path, simple_doc())
@@ -324,7 +325,8 @@ class TestAPartialTranslationNeverReadsAsClear:
         path = imported_file(tmp_path, partial_doc())
         rc, out, err = change_cli(
             capsys, "assess-advisory", "--advisory", str(path), "--ledger",
-            str(tmp_path / "l.jsonl"), "--accept-unsigned", "--actor", "a.integrator")
+            str(tmp_path / "l.jsonl"), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         assert "touches no machine" not in out
         assert rc == 0
         (case,) = case_store(tmp_path / "l.jsonl").list()
@@ -389,7 +391,7 @@ class TestNothingInsideARangeOrBoundaryIsClear:
         assert found is not None, f"{text!r} was imported as an exact version; V0.9 was CLEARED"
         assert found[0] is MatchBasis.NAME_ONLY
         # Kept as range text, said so in the note...
-        assert advisory_from_csaf(d).advisory.affected[0].version_note == text
+        assert text in advisory_from_csaf(d).advisory.affected[0].version_note
 
     @pytest.mark.parametrize("text", ["All versions < V3.1", "V2.x", "vers:semver/1.2.3",
                                       "V2.0+", "all", "V2.0 and earlier"])
@@ -456,7 +458,6 @@ class TestNothingInsideARangeOrBoundaryIsClear:
             leaf("R", "vers:all/<V2.5", "product_version_range"), leaf("F", "V2.0")])],
             [{"cve": "C", "product_status": {"known_affected": ["R"], "fixed": ["F"]}}])
         adv = advisory_from_csaf(d).advisory
-        assert all(not a.to_dict().get("fixed_versions") for a in adv.affected)
         assert adv.fixed_versions == ()
         assert match_item(adv, item("EX-100", "V2.0"))[0] is MatchBasis.NAME_ONLY
 
@@ -471,8 +472,9 @@ class TestFixedVersionsBelongToTheirOwnProduct:
 
     def test_a_fixed_version_clears_only_its_own_product(self):
         d = self._doc()
-        assert verdict_of(d, "V2.002", "EX-100") is None            # fixed, no range
-        assert verdict_of(d, "V1.007", "EX-50") is None             # first_fixed
+        # Superseded (round 2, F-4): a fixed label is for a person, never a clear.
+        assert verdict_of(d, "V2.002", "EX-100")[0] is MatchBasis.NAME_ONLY
+        assert verdict_of(d, "V1.007", "EX-50")[0] is MatchBasis.NAME_ONLY
         assert verdict_of(d, "V2.001", "EX-100")[0] is MatchBasis.VERSION
         # EX-100's fixed label is not a statement about EX-50, and vice versa.
         assert verdict_of(d, "V2.002", "EX-50")[0] is MatchBasis.NAME_ONLY
@@ -529,8 +531,8 @@ class TestACaseFromAnUnsignedImportNeedsANamedPersonsOverride:
         [],
         ["--actor", "a.integrator"],
         ["--accept-unsigned"],
-        ["--accept-unsigned", "--actor", "automation"],
-        ["--accept-unsigned", "--actor", "Agent"],
+        ["--accept-unsigned", "--actor", "automation", "--reason", "x"],
+        ["--accept-unsigned", "--actor", "Agent", "--reason", "x"],
     ], ids=["no_flags", "name_only", "flag_only", "reserved_name", "reserved_name_2"])
     def test_without_the_override_and_a_person_no_case_is_opened(self, tmp_path, capsys, argv):
         ledger = _ledger_with_a_machine(tmp_path)
@@ -573,7 +575,8 @@ class TestACaseFromAnUnsignedImportNeedsANamedPersonsOverride:
         ledger = _ledger_with_a_machine(tmp_path)
         path = imported_file(tmp_path, simple_doc(tlp="AMBER"))
         change_cli(capsys, "assess-advisory", "--advisory", str(path), "--ledger",
-                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         (case,) = case_store(ledger).list()
         _, shown, _ = change_cli(capsys, "show", "--ledger", str(ledger), case.case_id, "--json")
         assert json.loads(shown)["provenance"]["advisory_trust"] == "unsigned_inspect_only"
@@ -599,7 +602,8 @@ class TestACaseFromAnUnsignedImportNeedsANamedPersonsOverride:
         ledger = _ledger_with_a_machine(tmp_path)
         path = imported_file(tmp_path, partial_doc(), "--severity", "stop_use")
         change_cli(capsys, "assess-advisory", "--advisory", str(path), "--ledger",
-                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         (case,) = case_store(ledger).list()
         _, shown, _ = change_cli(capsys, "show", "--ledger", str(ledger), case.case_id)
         marker = next(line for line in shown.splitlines() if "UNAUTHENTICATED ADVISORY" in line)
@@ -638,7 +642,8 @@ class TestEveryOtherBoundaryCarriesTheMarker:
         capsys.readouterr()
         before = datetime.now(UTC)
         rc = main(["art14", str(path), "--ledger", str(ledger), "--received-by",
-                   "a.integrator", "--open", "--register", str(register), "--json"])
+                   "a.integrator", "--open", "--register", str(register), "--json",
+                   "--accept-unsigned", "--reason", "checked"])
         out = capsys.readouterr().out
         assert rc in (0, 1)
         payload = json.loads(out)
@@ -814,11 +819,14 @@ class TestHttpBoundaries:
         assert http.get("/v1/change/cases", headers=headers).json()["cases"] == []
 
     def test_with_the_override_the_response_and_the_case_carry_the_marker(self, fx):
+        from .test_assurance_change import as_decider
+
         http, headers, *_ = fx
+        # (round 2, F-3: the override is a human decision, so it takes a decider operator key)
         r = http.post("/v1/change/assess/advisory",
-                        json={"advisory": self._csaf_adv(), "actor": "a.integrator",
-                              "accept_unsigned": True, "reason": "checked at the source"},
-                        headers=headers)
+                      json={"advisory": self._csaf_adv(), "actor": "a.integrator",
+                            "accept_unsigned": True, "reason": "checked at the source"},
+                      headers=as_decider(headers, "a.integrator"))
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["opened"] is True
@@ -907,7 +915,8 @@ class TestAnImportNeverRewritesAnotherAdvisorysCase:
         path = imported_file(tmp_path, doc(
             [name_branch("EX-100", [leaf("P", "V1")])], affected("P"), tid="EX-9"))
         change_cli(capsys, "assess-advisory", "--advisory", str(path), "--ledger",
-                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         cases = case_store(ledger).list()
         assert len(cases) == 2, "the unsigned import was folded into the trusted case"
         original = case_store(ledger).get(first.case_id)
@@ -923,14 +932,16 @@ class TestAnImportNeverRewritesAnotherAdvisorysCase:
         first = imported_file(tmp_path, doc(
             [name_branch("EX-100", [leaf("P", "V1")])], affected("P"), tid="2026-001"))
         change_cli(capsys, "assess-advisory", "--advisory", str(first), "--ledger",
-                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         other_dir = tmp_path / "other"
         other_dir.mkdir()
         second = imported_file(other_dir, doc(
             [name_branch("OTHER-1", [leaf("P", "V1")])], affected("P"), tid="2026-001",
             vendor="Other Corp"))
         change_cli(capsys, "assess-advisory", "--advisory", str(second), "--ledger",
-                   str(ledger), "--accept-unsigned", "--actor", "a.integrator")
+                   str(ledger), "--accept-unsigned", "--actor", "a.integrator",
+                   "--reason", "checked")
         cases = case_store(ledger).list()
         assert len(cases) == 2
         assert sorted(len(c.machines) for c in cases) == [1, 1]
@@ -978,7 +989,7 @@ class TestAnImportNeverRewritesAnotherAdvisorysCase:
             encoding="utf-8")
         rc, *_ = change_cli(capsys, "assess-advisory", "--advisory", str(narrower),
                             "--ledger", str(ledger), "--actor", "a.integrator")
-        assert rc == 0
+        assert rc != 0                   # round 2, F-9: said, not silently dropped
         (only,) = case_store(ledger).list()
         assert only.case_id == first.case_id
         assert only.machines == first.machines
@@ -1326,7 +1337,7 @@ class TestTheImporterStillMeansWhatPr53Said:
         adv = advisory_from_csaf(d).advisory
         assert adv.affected[0].supplier == VENDOR
         assert adv.affected[0].versions[0] == "V2.001"
-        assert adv.affected[0].version_note == "vers:all/<V9"
+        assert "vers:all/<V9" in adv.affected[0].version_note
 
     def test_the_first_classification_of_a_product_wins(self):
         d = doc([name_branch("EX-100", [leaf("A", "V2.001")])],

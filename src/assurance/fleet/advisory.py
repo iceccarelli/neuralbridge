@@ -453,6 +453,20 @@ def _match_artefact(
                 "not say who made it, so this can be neither confirmed nor cleared. "
                 "Somebody has to look."
             )
+        if advisory.import_record is not None and (
+                fold_text(artefact.name) == fold_text(item.name)):
+            # An import takes its supplier from a document somebody else wrote, and the
+            # integrator typed the machine's by hand. The same component under a supplier
+            # string that differs ("Example Controls" for "Example Controls GmbH") is more
+            # likely one spelling away than two companies with a product of one name, and
+            # a false clear is the worse mistake. Policy: engineering's; the founder may
+            # relax it.
+            return MatchBasis.NAME_ONLY, (
+                f"supplier differs: advisory says {artefact.supplier!r}, machine says "
+                f"{item.supplier!r}, for the component {item.name!r} that the advisory "
+                "concerns. Imported advisories carry the supplier as the publisher spelled "
+                "it, so this can be neither confirmed nor cleared. Somebody has to look."
+            )
         return None
 
     versions = {fold_text(v) for v in artefact.versions}
@@ -518,6 +532,19 @@ def _match_artefact(
         # together, so a fixed label is explicit and outranks the range text.
         return None  # the supplier names this version as not affected
 
+    if label and imported and (label in fixed_versions or label in own_fixed):
+        # An import collects "fixed" across every vulnerability it lists, and a version fixed
+        # for one is not thereby fixed for another that affects the same component. The
+        # publisher's fix list is shown, never used to clear.
+        listed = ", ".join(sorted({*artefact.fixed_versions, *advisory.fixed_versions}))
+        return MatchBasis.NAME_ONLY, (
+            f"this is {artefact.supplier} {artefact.name} version {item.version!r}, which "
+            f"{advisory.issued_by} lists as fixed ({listed}) for at least one vulnerability. "
+            "An imported advisory does not say it is fixed for every vulnerability that "
+            "affects this component, so a fixed label is not used to clear it. Somebody "
+            "has to look." + set_aside
+        )
+
     note = artefact.version_note.strip()
     if label and note:
         # The supplier expressed a range in free text, which is displayed and never
@@ -559,6 +586,16 @@ def _match_artefact(
     )
 
 
+def _entries_named(advisory: ComponentAdvisory, name: str) -> tuple[AffectedArtefact, ...]:
+    index = advisory.__dict__.get("_name_index")
+    if index is None:
+        index = {}
+        for artefact in advisory.affected:
+            index.setdefault(fold_text(artefact.name), []).append(artefact)
+        object.__setattr__(advisory, "_name_index", index)
+    return tuple(index.get(fold_text(name), ()))
+
+
 def match_item(
     advisory: ComponentAdvisory, item: SafetyItem,
 ) -> tuple[MatchBasis, str] | None:
@@ -575,7 +612,9 @@ def match_item(
     folds them, and never by prefix.
     """
     best: tuple[MatchBasis, str] | None = None
-    for artefact in advisory.affected:
+    # Every branch of _match_artefact that can answer needs the component NAMES to be equal,
+    # so only the entries of that name are tried (an advisory may list tens of thousands).
+    for artefact in _entries_named(advisory, item.name):
         found = _match_artefact(advisory, artefact, item)
         if found is None:
             continue
