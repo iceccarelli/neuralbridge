@@ -197,15 +197,16 @@ class TestAtMostAFewRunAtOnce:
                     state["inside"] -= 1
 
         monkeypatch.setattr(machine_routes, "build_bundle", spy)
-        _, headers = live_api.account("bound@example.de")
+        # one account each: a single account is capped lower still (see the round-2 tests)
+        heads = [live_api.account(f"bound{n}@example.de")[1] for n in range(bound * 2)]
         statuses: list[int] = []
 
-        def post() -> None:
+        def post(headers) -> None:
             with httpx.Client(base_url=live_api.url, timeout=120.0) as c:
                 statuses.append(c.post("/v1/machine/verify", json=_body(40),
                                        headers=headers).status_code)
 
-        threads = [threading.Thread(target=post, daemon=True) for _ in range(bound * 2)]
+        threads = [threading.Thread(target=post, args=(h,), daemon=True) for h in heads]
         for t in threads:
             t.start()
         for t in threads:
@@ -263,7 +264,7 @@ class TestTheGateDoesNotLeakLoops:
     def test_a_closed_loops_semaphore_is_forgotten(self):
         from assurance.api.machine_routes import _Gate
 
-        gate = _Gate(2)
+        gate = _Gate(2, 4, 1)
 
         async def take() -> None:
             gate.for_running_loop()

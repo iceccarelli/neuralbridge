@@ -1040,6 +1040,9 @@ class TestAnUnreadableChangeRecordFailsClosed:
         self._assert_fails_closed(ledger)
 
     def test_it_stays_stale_over_http_too(self, client, store):
+        """A record that is sealed (the chain verifies) but is not an intervention reads as
+        an unreadable change; one edited after sealing breaks the chain, which the
+        coverage route refuses outright (409) rather than assess."""
         from assurance.api import deps
 
         account = store.upsert_account(email="cell@example.de", tier="cell")
@@ -1047,17 +1050,22 @@ class TestAnUnreadableChangeRecordFailsClosed:
         client.post("/v1/machinery/manifest", headers=headers,
                     json={"manifest": manifest().to_dict()})
         _post_verify(client, headers, datetime(2026, 9, 14, tzinfo=UTC), 300.0, "RUN")
+        tenant = EvidenceLedger(deps.tenant_ledger_path(account.id))
+        tenant.append(Evidence(kind=INTERVENTION_KIND, body={"intervention": {"oops": 1}},
+                               actor=TECH, origin=Origin(system="test")).seal(), subject=KEY)
+        body = {"manifest": manifest().to_dict()}
+        cov = client.post("/v1/machinery/coverage", headers=headers, json=body).json()
+        assert cov["functions"][0]["coverage"] == "stale"
+        assert cov["functions"][0]["invalidated_by"].startswith("unreadable:")
         r = client.post("/v1/machinery/intervention", headers=headers, json={
             "intervention": update(when=datetime(2026, 10, 1, tzinfo=UTC)).to_dict(),
             "actor": "tech"})
         assert r.status_code == 200
-        tenant = EvidenceLedger(deps.tenant_ledger_path(account.id))
-        edit_payload(tenant, _intervention_seq(tenant),
+        edit_payload(tenant, tenant.entries(kind=INTERVENTION_KIND)[-1].seq,
                      lambda p: p["body"]["intervention"].update(reason="cosmetic"))
-        cov = client.post("/v1/machinery/coverage", headers=headers,
-                          json={"manifest": manifest().to_dict()}).json()
-        assert cov["functions"][0]["coverage"] == "stale"
-        assert cov["functions"][0]["invalidated_by"].startswith("unreadable:")
+        refused = client.post("/v1/machinery/coverage", headers=headers, json=body)
+        assert refused.status_code == 409
+        assert refused.json()["detail"]["error"] == "ledger_chain_unverified"
 
     def test_an_intact_record_is_still_read_and_named(self, ledger):
         self._recorded(ledger)

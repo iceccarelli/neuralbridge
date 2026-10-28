@@ -194,7 +194,18 @@ def post_manifest(
     }
 
 
-@machinery_router.post("/intervention", summary="Seal an intervention record")
+@machinery_router.post(
+    "/intervention",
+    summary="Seal an intervention record",
+    responses={
+        409: {"description": "`unknown_machine`: no manifest is sealed under exactly this "
+                             "unit key (another case, another serial, another unit, a "
+                             "product line). Nothing was written."},
+        422: {"description": "`invalid_intervention`, or `unknown_function`: the record names "
+                             "a safety function the sealed manifest does not declare "
+                             "(`unknown_functions` lists them). Nothing was written."},
+    },
+)
 def post_intervention(
     body: InterventionIn,
     principal: Annotated[Principal, Machine],
@@ -255,6 +266,12 @@ def post_intervention(
 @machinery_router.post(
     "/coverage",
     summary="Which safety functions still have valid evidence",
+    responses={
+        409: {"description": "`ledger_chain_unverified`: this account's ledger chain does not "
+                             "verify, so no function is assessed. A coverage read from a "
+                             "store whose records can be deleted or edited could be made to "
+                             "pass. Nothing is assessed."},
+    },
 )
 def coverage(
     body: CoverageIn,
@@ -269,6 +286,15 @@ def coverage(
     """
     manifest = _manifest(body.manifest)
     key = manifest.machine.key
+    chain_ok, chain_problems = register.ledger.verify_chain()
+    if not chain_ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ledger_chain_unverified",
+                    "detail": "the ledger chain does not verify, so coverage was not "
+                              "assessed: " + "; ".join(chain_problems[:3]),
+                    "problems": chain_problems[:5]},
+        )
     report = assess_coverage(
         manifest,
         VerificationRecord.from_ledger(

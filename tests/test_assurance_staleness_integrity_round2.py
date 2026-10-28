@@ -16,7 +16,6 @@ Each class below states the invariant, not the implementation.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 import threading
@@ -573,28 +572,28 @@ class TestTheHeavyRoutesAreOffTheEventLoop:
                 offenders.append(f"{sorted(route.methods or [])} {route.path}")
         assert offenders == []
 
-    def test_the_fleet_read_does_a_bounded_number_of_ledger_reads_per_machine(self, ledger,
-                                                                              monkeypatch):
+    def test_the_fleet_read_opens_a_bounded_number_of_connections_per_machine(
+            self, ledger, monkeypatch):
         machines = 12
         for n in range(machines):
             serial = f"{n:04d}"
-            key = f"Acme/AR-7#{serial}"
             record_manifest(ledger, manifest(mid=f"A{n}", serial=serial, fw=HASH_A))
             record_manifest(ledger, manifest(mid=f"B{n}", serial=serial, fw=HASH_B))
-            body = raw_body("2026-10-01T08:00:00Z", verified=CHECKS)
-            seal_raw_body(ledger, body, subject=key)
-        calls = {"n": 0}
-        real = EvidenceLedger.entries
+            seal_raw_body(ledger, raw_body("2026-10-01T08:00:00Z", verified=CHECKS),
+                          subject=f"Acme/AR-7#{serial}")
+        opened = {"n": 0}
+        real = EvidenceLedger._connect
 
-        def counting(self, *args, **kwargs):
-            calls["n"] += 1
-            return real(self, *args, **kwargs)
+        def counting(self):
+            opened["n"] += 1
+            return real(self)
 
-        monkeypatch.setattr(EvidenceLedger, "entries", counting)
+        monkeypatch.setattr(EvidenceLedger, "_connect", counting)
         fleet = Fleet.from_ledger(ledger)
         assert len(fleet.records) == machines
-        # one walk to find the machines, a handful of reads for each: never quadratic
-        assert calls["n"] <= 6 * machines + 5
+        # one connection per kind of record read for each machine (interventions, manifests,
+        # verifications), plus a fixed handful for the fleet itself: linear, never quadratic
+        assert opened["n"] <= 4 * machines + 10
 
 
 class TestTheVerifyGateBoundsWhatWaits:
@@ -685,27 +684,3 @@ class TestTheSpecAndTheTypesSayWhatTheServerDoes:
         text = (Path(__file__).resolve().parent.parent / "app" / "lib"
                 / "assuranceApi.ts").read_text()
         assert "unrecorded_changes: number" in text
-
-
-class TestTheGateReleasesWhenTheLoopCloses:
-    def test_per_loop_state_is_still_pruned(self):
-        from assurance.api.machine_routes import _Gate
-
-        gate = _Gate(2)
-
-        async def take() -> None:
-            gate.for_running_loop()
-
-        for _ in range(2):
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(take())
-            finally:
-                loop.close()
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(take())
-            assert len(gate._by_loop) == 1
-        finally:
-            loop.close()
-

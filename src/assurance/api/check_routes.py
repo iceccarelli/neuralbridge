@@ -71,7 +71,7 @@ def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
     "/machine",
     summary="Machine Assurance Check — one manifest, one advisory, no account",
 )
-async def check_machine(
+def check_machine(
     body: MachineCheckIn,
     principal: Annotated[Principal, Anyone],
 ) -> dict[str, Any]:
@@ -95,7 +95,7 @@ async def check_machine(
     "/fleet-machine",
     summary="Machine Assurance Check — an enrolled machine, its ledger history",
 )
-async def check_fleet_machine(
+def check_fleet_machine(
     body: FleetMachineCheckIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
