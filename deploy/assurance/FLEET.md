@@ -115,6 +115,70 @@ them as if they were is how a cell gets cleared that should have been stopped,
 and an advisory that means "everything before 3.9" can enumerate the versions it
 means.
 
+## Importing a CSAF advisory (unsigned, inspect-only, possibly partial)
+
+```bash
+assurance fleet import-csaf vendor-advisory.json --out advisory.json
+assurance fleet advisory advisory.json --ledger register.db        # inspect
+assurance change assess-advisory --advisory advisory.json --ledger register.db \
+        --accept-unsigned --actor "a.integrator" --reason "checked against the publisher's page"
+```
+
+Vendors and CERTs publish CSAF 2.0. `import-csaf` translates one into this product's
+advisory format so nobody retypes it. **What it is:** unsigned third-party content. Nothing
+here checks a signature, pins a key, opens a case or decides anything is affected.
+
+**What it imports:** the header (tracking id, publisher, release date, title, reference,
+summary, CVE ids); each affected product from the product tree as supplier + component +
+version; the first `vendor_fix` remediation as the remedy.
+
+**What it records in the advisory itself** (`import_record`, covered by the content hash, so
+it survives every copy): origin `csaf_import`; trust `unsigned_inspect_only` (the only value
+that loads); `partial` and the products dropped, each with the reason; where the severity came
+from (`defaulted_by_importer` or `operator_flag`); the document's TLP label, tracking status,
+category and release date; and the importer's notes. A file with no `import_record` (anything
+written by hand or published in a signed feed) loads exactly as before and its hash and
+signature do not change.
+
+**What it drops, and what that means.** An affected product the importer cannot map to a
+vendor, product name and version (it is only in `full_product_names` or `relationships`, its
+branch lacks a version, its id is defined twice with different content) is *dropped*. The
+advisory is then **partial**. A partial advisory is never `clear`: `fleet advisory`,
+`change assess-advisory`, the free check, the report and the Article 14 draft all say
+"incomplete translation" and name the dropped ids. `fleet advisory` exit codes: 0 clear;
+1 a finding; 2 the command could not run; **3 incomplete** (nothing matched, but the
+advisory is partial).
+
+**Versions are never interpreted.** A `product_version` that is one plain token (`V2.001`)
+is an exact label. Anything else (`All versions < V3.1`, `V2.x`, `2.0 and earlier`), every
+`product_version_range` and the `first_affected` / `last_affected` boundaries are kept as
+text, and the matcher answers "a person has to look" for any other version of that component.
+A fixed version is kept per component and is only used for a component with no range. For an
+imported advisory a version label it does not list (including a spelling difference such as
+`2.001` for `V2.001`) is also "a person has to look", not "unaffected". `known_not_affected`
+is ignored.
+
+**What it never claims.** That the advisory is authentic; that the severity came from the
+publisher (CSAF has no such field, so the importer defaults to `safety_relevant` and says
+so); that nothing else is affected; that a machine is safe because nothing matched.
+`draft` / `interim` documents are refused unless `--allow-draft`, and then marked partial.
+Control, invisible and direction-changing characters are removed from display text (and
+said); in a vendor, product or version name, where removing them would change what matches,
+the document is refused. Wrong-typed fields, a tree deeper than 64 levels, more than 100,000
+products or a file over 32 MiB are a message and exit 2, never a traceback. `--out` may not
+be the input file.
+
+**Opening a case on one.** `change assess-advisory` (and `POST /v1/change/assess/advisory`)
+refuse an unsigned import unless a **named person** passes `--accept-unsigned` (API:
+`accept_unsigned: true` with `actor`); software or an unnamed caller cannot. The case then
+carries `advisory_trust`, `advisory_origin`, `advisory_partial`, `advisory_dropped_products`,
+`advisory_severity_source`, `advisory_tlp`, who accepted it and why, in its provenance and
+its export, and it opens with a human decision to confirm the advisory against the
+publisher. An imported advisory has its own case id (advisory id, issuer and trust class), so
+it can never merge into, or rewrite, a case opened from a signed advisory. A hand-written bare
+advisory file or request body needs a named person too and is marked
+`unauthenticated_file` / `unauthenticated_input`.
+
 ## Already-lapsed is not newly in question
 
 A machine whose coverage was already `stale` is reported and is **not** counted
