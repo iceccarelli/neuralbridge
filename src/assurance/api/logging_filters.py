@@ -11,17 +11,41 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import unquote_plus
 
 __all__ = ["REDACTED_PARAMS", "RedactQueryFilter", "install"]
 
 #: Query parameters whose value is a bearer capability or a secret.
 REDACTED_PARAMS = ("session_id", "api_key", "key", "token", "secret")
-_PATTERN = re.compile(
-    r"([?&](?:" + "|".join(REDACTED_PARAMS) + r")=)[^&\s\"']*", re.IGNORECASE)
+
+_REDACTED = frozenset(REDACTED_PARAMS)
+_QUERY = re.compile(r"\?[^\s\"'#]*")
+
+
+def _name(raw: str) -> str:
+    """A parameter name as the application reads it: percent-decoded (to a fixed point, so a
+    name encoded twice is still caught), and lower-cased."""
+    for _ in range(4):
+        decoded = unquote_plus(raw)
+        if decoded == raw:
+            break
+        raw = decoded
+    return raw.lower()
+
+
+def _scrub_query(match: re.Match[str]) -> str:
+    query = match.group(0)[1:]
+    parts = []
+    for pair in query.split("&"):
+        name, sep, _value = pair.partition("=")
+        parts.append(f"{name}=[redacted]" if sep and _name(name) in _REDACTED else pair)
+    return "?" + "&".join(parts)
 
 
 def _scrub(value: object) -> object:
-    return _PATTERN.sub(r"\1[redacted]", value) if isinstance(value, str) else value
+    if not isinstance(value, str):
+        return value
+    return _QUERY.sub(_scrub_query, value)
 
 
 class RedactQueryFilter(logging.Filter):

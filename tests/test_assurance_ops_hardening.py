@@ -38,8 +38,6 @@ from .support_billing import (  # noqa: F401
     subscription_event,
 )
 
-PORTS = (21300, 21301, 21302, 21303)  # this suite's loopback ports: 21300-21309 only
-
 
 def _cell(client, customer="cus_1", sub="sub_1", session="cs_1"):
     assert send(client, checkout_event(session, customer, sub, "cell", T)).status_code == 200
@@ -133,7 +131,8 @@ def test_l2_watch_push_ignores_proxy_environment(monkeypatch):
     sniffed: list[bytes] = []
     sniffer = socket.socket()
     sniffer.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sniffer.bind(("127.0.0.1", PORTS[0]))
+    sniffer.bind(("127.0.0.1", 0))          # ephemeral: no fixed port to collide on
+    sniffer_port = sniffer.getsockname()[1]
     sniffer.listen(4)
     sniffer.settimeout(0.5)
 
@@ -147,7 +146,8 @@ def test_l2_watch_push_ignores_proxy_environment(monkeypatch):
             sniffed.append(conn.recv(4096))
             conn.close()
 
-    server = HTTPServer(("127.0.0.1", PORTS[1]), _Quiet)
+    server = HTTPServer(("127.0.0.1", 0), _Quiet)
+    server_port = server.server_address[1]
     threads = [threading.Thread(target=sniff, daemon=True),
                threading.Thread(target=server.serve_forever, daemon=True)]
     for t in threads:
@@ -156,9 +156,9 @@ def test_l2_watch_push_ignores_proxy_environment(monkeypatch):
         for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
             monkeypatch.delenv(name, raising=False)
         for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
-            monkeypatch.setenv(name, f"http://127.0.0.1:{PORTS[0]}")
+            monkeypatch.setenv(name, f"http://127.0.0.1:{sniffer_port}")
         with make_client(5) as client:
-            reply = client.get(f"http://localhost:{PORTS[1]}/v1/watch/report")
+            reply = client.get(f"http://localhost:{server_port}/v1/watch/report")
         assert reply.json() == {"from": "the-named-host"}
     finally:
         server.shutdown()
@@ -337,23 +337,28 @@ def test_l7_the_claim_capability_is_redacted_from_an_access_log_line():
     assert "session_id=[redacted]" in line and "x=1" in line
 
 
-def test_l7_a_real_uvicorn_access_log_does_not_contain_the_session_id(billing_env, capfd):
+def _serve(app):
+    """A real uvicorn on an ephemeral loopback port. Returns (server, thread, port)."""
     import uvicorn
 
-    from assurance.api import service
-
-    config = uvicorn.Config(service.create_app(), host="127.0.0.1", port=PORTS[2],
-                            log_level="info", access_log=True)
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="info", access_log=True)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
+    for _ in range(200):
+        if server.started:
+            break
+        time.sleep(0.05)
+    assert server.started
+    return server, thread, server.servers[0].sockets[0].getsockname()[1]
+
+
+def test_l7_a_real_uvicorn_access_log_does_not_contain_the_session_id(billing_env, capfd):
+    from assurance.api import service
+
+    server, thread, port = _serve(service.create_app())
     try:
-        for _ in range(100):
-            if server.started:
-                break
-            time.sleep(0.05)
-        assert server.started
-        httpx.get(f"http://127.0.0.1:{PORTS[2]}/v1/checkout/complete",
+        httpx.get(f"http://127.0.0.1:{port}/v1/checkout/complete",
                   params={"session_id": "cs_live_SECRET"}, timeout=5, trust_env=False)
     finally:
         server.should_exit = True
@@ -361,6 +366,68 @@ def test_l7_a_real_uvicorn_access_log_does_not_contain_the_session_id(billing_en
     out = capfd.readouterr()
     joined = out.out + out.err
     assert "/v1/checkout/complete" in joined, joined
+    assert "cs_live_SECRET" not in joined
+
+
+@pytest.mark.parametrize("query", [
+    "session%5Fid=cs_live_SECRET",              # percent-encoded underscore
+    "%73ession_id=cs_live_SECRET",              # percent-encoded first letter
+    "%73%65%73%73%69%6f%6e%5f%69%64=cs_live_SECRET",
+    "SESSION_ID=cs_live_SECRET",
+    "session+id=x&session_id=cs_live_SECRET",
+    "a=1&session%5fid=cs_live_SECRET&b=2",
+    "%2573ession_id=cs_live_SECRET",            # encoded twice
+])
+def test_l7_a_percent_encoded_parameter_name_is_redacted_too(query):
+    from assurance.api.logging_filters import RedactQueryFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5", "GET", f"/v1/checkout/complete?{query}", "1.1", 202), None)
+    RedactQueryFilter().filter(record)
+    line = record.getMessage()
+    assert "cs_live_SECRET" not in line, line
+    assert "/v1/checkout/complete" in line and "HTTP/1.1" in line and " 202" in line
+
+
+def test_l7_other_routes_keep_their_harmless_query_strings_readable():
+    from assurance.api.logging_filters import RedactQueryFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5", "GET", "/v1/usage?period=2026-10&x=a%20b", "1.1", 200), None)
+    RedactQueryFilter().filter(record)
+    assert "period=2026-10&x=a%20b" in record.getMessage()
+
+
+def test_l7_the_redaction_is_case_insensitive_on_a_real_log_line():
+    from assurance.api.logging_filters import RedactQueryFilter
+
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5", "GET", "/v1/x?Api_Key=cs_live_SECRET&TOKEN=t0k", "1.1", 200), None)
+    RedactQueryFilter().filter(record)
+    line = record.getMessage()
+    assert "cs_live_SECRET" not in line and "t0k" not in line
+
+
+def test_l7_an_encoded_name_that_the_app_accepts_is_not_in_a_real_access_log(
+        billing_env, capfd):
+    from assurance.api import service
+
+    server, thread, port = _serve(service.create_app())
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/v1/checkout/complete?session%5Fid=cs_live_SECRET",
+                      timeout=5, trust_env=False)
+        r2 = httpx.get(f"http://127.0.0.1:{port}/v1/checkout/complete?%73ession_id=cs_live_SECRET2",
+                       timeout=5, trust_env=False)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert r.status_code == r2.status_code == 202          # the app does read the encoded name
+    out = capfd.readouterr()
+    joined = out.out + out.err
+    assert "/v1/checkout/complete" in joined
     assert "cs_live_SECRET" not in joined
 
 
