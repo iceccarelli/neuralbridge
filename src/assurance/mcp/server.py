@@ -284,9 +284,11 @@ async def change_reverify(
 
     A 200 means the submission was recorded, not that it cleared anything: while the
     case still awaits re-verification the body carries ``blocked_reason`` (a ``code``
-    such as ``below_validated_tier``, the ``entries`` and a sentence). Today no
-    verification this package produces reaches ``validated``, so a person has to waive
-    the entry. Read ``blocked_reason`` before reporting the case as progressing.
+    such as ``below_validated_tier`` or ``below_validated_unit_binding``, the ``entries``
+    and a sentence). A verification clears an entry only at ``validated``, which needs a
+    recorder attestation accepted under the server's trust list AND a seal for the exact
+    unit key; otherwise a person has to waive the entry. Read ``blocked_reason`` before
+    reporting the case as progressing.
 
     Cell-tier only. There is deliberately no tool here to close, reject, defer or
     resume a case, to answer its open questions or to waive a re-verification: those

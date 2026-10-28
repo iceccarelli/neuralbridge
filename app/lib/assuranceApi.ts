@@ -21,6 +21,10 @@ export type FleetRow = {
   // provenance): the recorded evidence stands, the behaviour was not demonstrated on the machine.
   // Optional: older servers omit the floor.
   evidence_tier_floor?: string;
+  // Why the unit binding held a verification below the tier it was sealed at (sealed for another
+  // unit key or none, or its recording is another unit's). Empty for validated cover and for cover
+  // that is community only by declared provenance. Optional: older servers omit it.
+  tier_notes?: string[];
 };
 
 export type Fleet = {
