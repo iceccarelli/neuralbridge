@@ -138,3 +138,42 @@ class TestTheLibraryDefault:
             collect(plan(), root, serial="0412",
                     taken_by=Actor(identifier="a.rossi", role="engineer", kind="person"),
                     hash_source=HashSource.DECLARED)
+
+
+class TestWatchTargetsCarryTheSameAssertion:
+    """``watch run`` reads export folders too, and its manifests are what hosted ingest judges."""
+
+    def _watch(self, tmp_path, *, asserted: bool):
+        import json as _json
+
+        from assurance.watch.config import WatchConfig
+        from assurance.watch.runner import run_watch
+
+        from .support import plan_dict
+
+        (tmp_path / "plan.json").write_text(_json.dumps(plan_dict()))
+        write_export(tmp_path / "0412", stamp="2026-09-14T06:00:00Z", operator="m.tech",
+                     seq="4181")
+        target = {"serial": "0412", "plan": "plan.json", "root": "0412",
+                  "site": "Plant 2", "country": "DE"}
+        if asserted:
+            target["read_from_machine"] = True
+        (tmp_path / "watch.json").write_text(_json.dumps({
+            "watch_id": "W", "max_age_hours": 168, "targets": [target]}))
+        config = WatchConfig.from_json(tmp_path / "watch.json")
+        ledger = EvidenceLedger(tmp_path / "ev.db")
+        run_watch(config, ledger)
+        return config, manifests_from_ledger(ledger, "Grimaldi/AR-7#0412")[-1]
+
+    def test_a_target_is_not_asserted_by_default(self, tmp_path):
+        config, manifest = self._watch(tmp_path, asserted=False)
+        assert config.targets[0].read_from_machine is False
+        assert {i.hash_source for i in manifest.items} == {HashSource.SUPPLIED_BY_VENDOR}
+        assert not_a_look(manifest)
+
+    def test_the_assertion_survives_loading_the_config_and_labels_the_manifest(self, tmp_path):
+        config, manifest = self._watch(tmp_path, asserted=True)
+        assert config.targets[0].read_from_machine is True
+        assert config.targets[0].to_dict()["read_from_machine"] is True
+        assert {i.hash_source for i in manifest.items} == {HashSource.READ_FROM_MACHINE}
+        assert "OPERATOR ASSERTION" in manifest.method

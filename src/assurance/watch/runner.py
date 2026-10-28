@@ -59,7 +59,7 @@ from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
-from assurance.machinery.manifest import ManifestSource
+from assurance.machinery.manifest import HashSource, ManifestSource
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -451,6 +451,8 @@ def run_watch(
                 plan, target.root, serial=target.serial, taken_by=actor,
                 site=target.site, country=target.country, year=target.year,
                 source=ManifestSource.AS_FOUND, taken_at=started,
+                hash_source=HashSource.READ_FROM_MACHINE if target.read_from_machine
+                else HashSource.SUPPLIED_BY_VENDOR,
             )
         except (CollectionError, FileNotFoundError, OSError) as exc:
             detail = f"could not be collected: {exc}"

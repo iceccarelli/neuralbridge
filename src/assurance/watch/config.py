@@ -45,6 +45,12 @@ class WatchTarget:
     country: str = ""
     year: str = ""
     notes: str = ""
+    #: The operator's assertion that the watch runs ON this machine, so the hashes
+    #: describe the unit and not an export of it. False (the default) labels every
+    #: item ``supplied_by_vendor`` (community ceiling), which hosted ingest and the
+    #: change workflow do not accept as a look at the machine. Nothing here can
+    #: check the assertion; it is recorded in the manifest as the operator's.
+    read_from_machine: bool = False
 
     def __post_init__(self) -> None:
         if not self.serial or not self.plan or not self.root:
@@ -58,7 +64,7 @@ class WatchTarget:
         return {
             "serial": self.serial, "plan": self.plan, "root": self.root,
             "site": self.site, "country": self.country, "year": self.year,
-            "notes": self.notes,
+            "notes": self.notes, "read_from_machine": self.read_from_machine,
         }
 
     @classmethod
@@ -67,6 +73,7 @@ class WatchTarget:
             serial=str(d["serial"]), plan=str(d["plan"]), root=str(d["root"]),
             site=str(d.get("site", "")), country=str(d.get("country", "")).upper(),
             year=str(d.get("year", "")), notes=str(d.get("notes", "")),
+            read_from_machine=d.get("read_from_machine") is True,
         )
 
 
@@ -255,6 +262,7 @@ class WatchConfig:
                     root=str((base / t.root).resolve()) if not Path(t.root).is_absolute()
                     else t.root,
                     site=t.site, country=t.country, year=t.year, notes=t.notes,
+                    read_from_machine=t.read_from_machine,
                 )
                 for t in config.targets
             ),

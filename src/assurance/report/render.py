@@ -246,7 +246,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
         f"<span class='site'>{e(m.machine.manufacturer)} {e(m.machine.model)}"
         + (f" · {e(m.machine.site)}" if m.machine.site else "") + "</span>",
         f"<span class='cfg'>config {e(m.configuration_hash()[:16])} · "
-        f"{len(m.items)} item(s) · tier {e(m.tier_ceiling.value)}</span>",
+        f"{len(m.items)} item(s) · tier ceiling {e(m.tier_ceiling.value)}</span>",
         "</header><div class='body'>",
     ]
     for f in sorted(record.coverage.functions,
