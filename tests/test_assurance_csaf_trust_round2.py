@@ -319,6 +319,7 @@ class TestArt14OpeningNeedsTheSameOverrideAsACase:
         ["--received-by", "automation"],
         ["--received-by", "a.integrator"],
         ["--received-by", "a.integrator", "--accept-unsigned"],
+        ["--received-by", "a.integrator", "--reason", "checked"],
         ["--received-by", "automation", "--accept-unsigned", "--reason", "x"],
         ["--received-by", "x", "--actor", "agent", "--accept-unsigned", "--reason", "x"],
     ])
@@ -341,6 +342,11 @@ class TestArt14OpeningNeedsTheSameOverrideAsACase:
         payload = json.loads(out.out)
         assert payload["case_id"] != "CASE-EX-9" and payload["case_id"].startswith("CASE-EX-9-")
         assert payload["advisory_provenance"]["trust"] == "unsigned_inspect_only"
+        from assurance.evidence.ledger import EvidenceLedger
+
+        roles = {e.evidence().actor.role for e in
+                 EvidenceLedger(tmp_path / "register.jsonl").entries()}
+        assert any("unsigned import accepted: checked the publisher page" in r for r in roles)
 
     def test_a_trusted_advisory_with_the_same_id_can_still_be_opened_afterwards(
             self, tmp_path, capsys):
@@ -456,6 +462,26 @@ class TestNoRawEscapeInAnyTextPath:
         for text in (out, listing):
             for ch in ("\x1b", "\x07", "‮"):
                 assert ch not in text
+
+
+class TestTheDraftSummaryNeverPrintsARawEscape:
+    def test_every_line_of_the_summary_is_neutralised(self, tmp_path):
+        import dataclasses
+
+        from assurance.bridge.art14 import draft_from_advisory
+        from assurance.evidence.ledger import EvidenceLedger
+        from assurance.fleet.impact import assess_impact
+        from assurance.fleet.registry import Fleet
+
+        ledger = make_ledger(tmp_path / "l.jsonl", manifest("0412", item("EX-100", "V2.001")))
+        del ledger
+        fleet = Fleet.from_ledger(EvidenceLedger(tmp_path / "l.jsonl"))
+        advisory = advisory_from_csaf(simple_doc()).advisory
+        draft = draft_from_advisory(advisory, assess_impact(advisory, fleet), fleet,
+                                    received_by="a.integrator")
+        hostile = dataclasses.replace(draft, decisions_required=("bad\x1b[2J\u202e",))
+        text = hostile.summary()
+        assert "bad" in text and "\x1b" not in text and "\u202e" not in text
 
 
 class TestADroppedUpdateIsSaidNotReportedAsOpened:
