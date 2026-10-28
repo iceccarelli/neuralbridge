@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from assurance.change.service import advisory_case_id
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor, Evidence
 from assurance.core.identity import utc_now
@@ -157,7 +158,8 @@ class CaseDraft:
         lines.append("  still to be decided by a person:")
         for d in self.decisions_required:
             lines.append(f"    - {d}")
-        return "\n".join(lines)
+        # Much of this is text from an advisory nobody here wrote.
+        return neutralise("\n".join(lines), multiline=True)
 
 
 def draft_from_advisory(
@@ -304,7 +306,7 @@ def draft_from_advisory(
     ]
 
     return CaseDraft(
-        case_id=case_id or f"CASE-{advisory.advisory_id}",
+        case_id=case_id or _default_case_id(advisory, impact),
         signal=Signal(
             received_at=(received_at or (utc_now() if import_rec is not None
                                          else advisory.issued_at)),
@@ -327,6 +329,15 @@ def draft_from_advisory(
         advisory_hash=impact.advisory_hash,
         advisory_provenance=import_rec.to_dict() if import_rec is not None else {},
     )
+
+
+def _default_case_id(advisory: ComponentAdvisory, impact: ImpactReport) -> str:
+    """``CASE-<advisory id>`` as it always was; an unsigned import's id carries the same
+    trust-and-publisher derivation as its change case, so opening it first can never take
+    the id a trusted advisory with the same tracking id will need."""
+    if advisory.import_record is None:
+        return f"CASE-{advisory.advisory_id}"
+    return f"CASE-{advisory.advisory_id}-{advisory_case_id(impact)[len('case-'):][:8]}"
 
 
 def _signal_description(advisory: ComponentAdvisory) -> str:
