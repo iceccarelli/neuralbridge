@@ -35,7 +35,17 @@ __all__ = [
     "InterventionError",
     "InterventionKind",
     "Revalidation",
+    "UnreadableIntervention",
+    "ImpliedIntervention",
+    "IMPLIED_PREFIX",
+    "UNREADABLE_PREFIX",
 ]
+
+#: ``intervention_id`` prefixes of records the reader derived rather than read. Nobody
+#: sealed these: they stand in for a change the ledger shows, or for a record the
+#: ledger holds and the reader cannot use. Neither is ever an ordinary intervention.
+IMPLIED_PREFIX = "implied:"
+UNREADABLE_PREFIX = "unreadable:"
 
 
 class InterventionError(AssuranceError):
@@ -296,3 +306,35 @@ class Intervention:
         for f in self.findings:
             lines.append(f"    !! {f}")
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class ImpliedIntervention(Intervention):
+    """A change the ledger's own manifests show and no intervention record explains.
+
+    Derived, never sealed. ``occurred_at`` is when the manifest showing the change was
+    *filed* (the ledger's clock, not the manifest's ``taken_at``, which is the filer's
+    word and could be back-dated to make older evidence look newer than the change). The
+    change happened at some unknown time before that, so a verification that began
+    earlier cannot be shown to describe the machine as it now is. ``ledger_seq`` is the
+    position of that manifest in the ledger, which settles a tie at the clock's
+    one-second resolution: a verification filed after it, in the same second, is read as
+    having come after.
+    """
+
+    ledger_seq: int = 0
+
+
+@dataclass(frozen=True)
+class UnreadableIntervention(Intervention):
+    """A change record the ledger holds and the reader cannot use.
+
+    Its seal fails, or it is not an intervention, or its row is not readable at all.
+    What it recorded is unknown, so it is assumed to have touched every safety function
+    of the machine it was filed for. ``occurred_at`` is the ledger's own time for the
+    row (when it was filed), because the record's own date cannot be trusted; a
+    verification that began after that has seen the machine as it was left.
+    """
+
+    ledger_seq: int = 0
+    why: str = ""

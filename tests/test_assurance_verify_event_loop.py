@@ -164,3 +164,49 @@ class TestTheServerStaysResponsive:
         # server that was blocked for the run.
         assert worst < max(1.0, duration * 0.5), (
             f"liveness stalled {worst:.2f}s of a {duration:.2f}s verification")
+
+
+class TestAtMostAFewRunAtOnce:
+    """Moving the engine off the event loop must not let a crowd of maximum-size traces
+    sit in memory at once (the blocked loop used to serialise them by accident)."""
+
+    def test_concurrent_engine_runs_never_exceed_the_documented_bound(
+            self, live_api, monkeypatch):
+        from assurance.api import machine_routes
+
+        bound = machine_routes.MAX_CONCURRENT_VERIFICATIONS
+        real = machine_routes.build_bundle
+        lock = threading.Lock()
+        over_bound = threading.Event()
+        state = {"inside": 0, "max": 0}
+
+        def spy(*args, **kwargs):
+            with lock:
+                state["inside"] += 1
+                state["max"] = max(state["max"], state["inside"])
+                if state["inside"] > bound:
+                    over_bound.set()
+            try:
+                # hold the run open until one MORE than the bound is inside, or give up
+                over_bound.wait(timeout=0.8)
+                return real(*args, **kwargs)
+            finally:
+                with lock:
+                    state["inside"] -= 1
+
+        monkeypatch.setattr(machine_routes, "build_bundle", spy)
+        _, headers = live_api.account("bound@example.de")
+        statuses: list[int] = []
+
+        def post() -> None:
+            with httpx.Client(base_url=live_api.url, timeout=120.0) as c:
+                statuses.append(c.post("/v1/machine/verify", json=_body(40),
+                                       headers=headers).status_code)
+
+        threads = [threading.Thread(target=post, daemon=True) for _ in range(bound * 2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+        assert statuses == [200] * (bound * 2)
+        assert state["max"] == bound

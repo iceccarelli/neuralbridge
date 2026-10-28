@@ -35,13 +35,20 @@ from assurance.machinery.divergence import compare
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
+    UnknownFunctionError,
+    UnknownMachineError,
     build_passport,
+    check_intervention,
     interventions_from_ledger,
     record_intervention,
     record_manifest,
     verify_passport,
 )
-from assurance.machinery.staleness import VerificationRecord, assess_coverage
+from assurance.machinery.staleness import (
+    VerificationRecord,
+    affected_functions,
+    assess_coverage,
+)
 
 __all__ = ["machinery_router"]
 
@@ -194,12 +201,36 @@ async def post_intervention(
     A change with no authorisation and no re-validation is recorded, not
     refused — and its findings travel with it. Refusing would push the change
     back to where it lives now, which is nowhere.
+
+    What is refused is a change that could not be about anything the ledger holds:
+    ``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key
+    with another case or serial is a different unit), ``422 unknown_function`` naming any
+    safety function the sealed manifest does not declare. Function ids are written back
+    as the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the
+    functions the manifest says the changed item implements are disturbed regardless
+    (``effective_affects_functions``).
     """
     try:
         intervention = Intervention.from_dict(body.intervention)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "intervention") from exc
     actor = _declared_actor(body)
+    try:
+        intervention, sealed_manifest = check_intervention(register.ledger, intervention)
+    except UnknownMachineError as exc:
+        # 409: the request conflicts with what the ledger holds. A key that differs by
+        # case or by a digit is a different unit; it is refused, never attributed.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "unknown_machine", "detail": str(exc),
+                    "machine": intervention.machine_key},
+        ) from exc
+    except UnknownFunctionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "unknown_function", "detail": str(exc),
+                    "unknown_functions": list(exc.unknown)},
+        ) from exc
     evidence = record_intervention(register.ledger, intervention, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -207,7 +238,12 @@ async def post_intervention(
         "intervention_id": intervention.intervention_id,
         "authorised": intervention.is_authorised,
         "revalidated": intervention.is_revalidated,
+        # as the manifest spells them
         "affects_functions": list(intervention.affects_functions),
+        # what coverage will treat this change as disturbing: the functions it names plus
+        # those the manifest says the changed item implements
+        "effective_affects_functions": sorted(
+            affected_functions(sealed_manifest, intervention)),
         "findings": list(intervention.findings),
     }
 

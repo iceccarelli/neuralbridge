@@ -26,6 +26,7 @@ from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
     build_passport,
+    check_intervention,
     interventions_from_ledger,
     record_divergence,
     record_intervention,
@@ -114,6 +115,9 @@ def _cmd_record_change(args: argparse.Namespace) -> int:
     intervention = Intervention.from_json(args.intervention)
     ledger = EvidenceLedger(args.ledger)
     actor = _actor(args) if args.actor else None
+    # Refused (exit 2) when no manifest is sealed for exactly this unit key, or when it
+    # names a function the manifest does not declare: the same rule as the API.
+    intervention, _ = check_intervention(ledger, intervention)
     evidence = record_intervention(ledger, intervention, actor=actor)
     print(intervention.summary())
     print(f"    sealed {evidence.content_hash[:16]} as entry {len(ledger)}")

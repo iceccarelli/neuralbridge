@@ -51,6 +51,9 @@ LEDGER_SCHEMA_VERSION = 1
 
 #: ``prev_hash`` of the first record. A fixed, published constant so that an
 #: empty chain and a truncated chain are distinguishable.
+_UNREADABLE_ROW = ("a stored record is not readable JSON ({exc}) -- the ledger file was "
+                   "edited or damaged outside this system")
+
 GENESIS = "0" * 64
 
 #: Most other-subject entries a subject bundle carries as a skeleton (seq, at, kind,
@@ -417,6 +420,9 @@ class EvidenceLedger:
             return ([f"the ledger's storage is damaged and cannot be read ({exc}) "
                      "— restore from a backup and run "
                      "`python -m assurance.evidence.restore_check verify`"], 0, GENESIS)
+        except ValueError as exc:
+            # A stored payload that is not JSON at all (JSONDecodeError is a ValueError).
+            return ([_UNREADABLE_ROW.format(exc=exc)], 0, GENESIS)
         for entry in entries:
             problems.extend(self._check_entry(entry, prev, expected_seq))
             expected_seq = entry.seq + 1
@@ -492,7 +498,10 @@ class EvidenceLedger:
             problems, head_seq, head_link = self.verify_full()
             started = now
         else:
-            problems, head_seq, head_link = self._verify_since(known.seq, known.link_hash)
+            try:
+                problems, head_seq, head_link = self._verify_since(known.seq, known.link_hash)
+            except ValueError as exc:
+                problems, head_seq, head_link = [_UNREADABLE_ROW.format(exc=exc)], 0, GENESIS
             started = known.full_pass_at
         if problems:
             chain_cache.drop(key)
