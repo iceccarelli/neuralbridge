@@ -317,8 +317,11 @@ class VerificationResult:
             f"  envelope {self.envelope_hash[:12]}",
         ]
         for c in self.checks:
+            # `unchecked` is written out: `??` told a reader nothing, and this is the
+            # outcome that must never be mistaken for a pass. The other marks keep their
+            # four-character form, which the homepage sample and the docs reproduce.
             mark = {"verified": "ok  ", "violated": "FAIL", "not_applicable": "n/a ",
-                    "unchecked": "??  "}[c.outcome.value]
+                    "unchecked": "unchecked"}[c.outcome.value]
             if c.violations:
                 # The margin of the samples that passed says nothing about how
                 # badly the others failed; the figure that matters is the shortfall.

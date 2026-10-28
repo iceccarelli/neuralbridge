@@ -178,6 +178,55 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _unit_key_problem(subject: str) -> str:
+    """Why *subject* is not a unit key (``manufacturer/model#serial``); "" if it is.
+
+    Only the spelling is judged, never whether the unit exists. Coverage, the passport
+    and re-verification look a verification up under the machine's key exactly as the
+    manifest writes it, so any other spelling is filed and never found.
+    """
+    head, hash_, serial = subject.partition("#")
+    maker, slash, model = head.partition("/")
+    if not hash_:
+        return "it has no '#serial'"
+    if not slash or not maker.strip() or not model.strip():
+        return "it does not name a manufacturer/model before the '#'"
+    if not serial:
+        return "it has no serial after the '#'"
+    if "#" in serial:
+        return "its serial contains another '#'"
+    if serial != serial.strip() or not subject.isprintable():
+        return "it holds a leading or trailing space or a control character"
+    return ""
+
+
+def _subject_warning(subject: str, ledger: EvidenceLedger | None) -> str:
+    """What to tell the person when this subject will not be found by coverage. "" if fine.
+
+    A warning, never a refusal: a product-line subject (``product@version``) is accepted,
+    and what is accepted does not change. Printed to stderr so ``--json`` stays a document.
+    """
+    if not subject:
+        return ""
+    problem = _unit_key_problem(subject)
+    if problem:
+        return (
+            f"warning: --subject {subject!r} is not a unit key ({problem}), so coverage "
+            "will not see this verification: it is looked up under the machine's key "
+            "written exactly manufacturer/model#serial, as the manifest records it.")
+    if ledger is not None:
+        from assurance.machinery.record import MANIFEST_KIND
+
+        known = {e.subject for e in ledger.entries(kind=MANIFEST_KIND)}
+        if subject not in known:
+            return (
+                f"warning: this ledger holds no manifest recorded for {subject!r}, so "
+                "coverage will not see this verification unless that is exactly the "
+                "machine's key as its manifest writes it"
+                + (f" (manifests here: {', '.join(sorted(known))})." if known else "."))
+    return ""
+
+
 def _read_trust(path: Path | None) -> RecorderTrust | None:
     return RecorderTrust.from_json(path) if path else None
 
@@ -221,6 +270,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
     attestations = [load_attestation_file(p) for p in args.recorder_attestation]
     recorder_trust = _read_trust(args.recorder_trust)
+    warning = _subject_warning(args.subject, ledger)
+    if warning:
+        print(warning, file=sys.stderr)
 
     bundle = build_bundle(
         envelope, trace,
