@@ -51,6 +51,7 @@ __all__ = [
     "Coverage",
     "CoverageReport",
     "FunctionCoverage",
+    "UnitClaims",
     "VerificationRecord",
     "VerificationRecordError",
     "assess_coverage",
@@ -189,43 +190,48 @@ def _reproduces(
                 and assessed.attestation_hash == pa.get("attestation_hash"))
 
 
-def _apply_unit_binding(
-    ledger: EvidenceLedger, subject: str | None, recorder_trust: RecorderTrust | None,
-    records: list[VerificationRecord],
-) -> list[VerificationRecord]:
-    """Name why the unit binding capped a record, and cap a recording's second claimant.
+class UnitClaims:
+    """Which unit key holds each recording as its validated evidence.
 
-    One recording is the validated evidence of ONE unit key. When the same trace is the
-    basis of validated evidence filed under two different unit keys, the earlier filing
-    (lower ledger position) keeps it and the later is ``community`` with the reason named:
-    a recorder key signs a serial, not a maker, so nothing else tells two units' evidence
-    apart when the same bytes are offered for both. Only a bundle that would itself read
-    ``validated`` counts as a claim, so a community copy filed first claims nothing.
-    ``reverify`` refuses the same case outright (``_trace_filed_elsewhere``).
+    One recording is the validated evidence of ONE unit key. The map is built from the ledger
+    in a single pass over the bundles and answers, per trace hash, which unit key holds it: the
+    earliest filing that would itself read ``validated`` (sealed for its own key, a coherent
+    attestation that still holds under the reader's trust list) **under a unit key that is
+    enrolled in the same ledger** (a manifest for it was sealed there). A filing under a key
+    nobody enrolled holds nothing, so a mistyped or hostile first claim cannot burn the
+    recording for the real unit; whoever can enrol a manifest for a hostile key still can
+    (the ledger is append-only: the remedy is a new recording attested for the unit).
+
+    Build it ONCE per ledger read and share it (``Fleet.from_ledger`` does): the expensive work,
+    a seal verification and an attestation assessment, is done for the first valid claim on each
+    recording and for nothing else, so a fleet read is linear in its bundles.
     """
-    if not records:
-        return records
-    by_seq = {r.ledger_seq: r for r in records}
 
-    def note(r: VerificationRecord, why: str, tier: str | None = None) -> VerificationRecord:
-        return replace(r, tier=tier if tier is not None else r.tier, tier_note=why)
+    def __init__(self, holders: dict[str, tuple[int, str]]) -> None:
+        self._holders = holders
 
-    # 1. Name the binding reason on records the unit binding capped (cheap: the subject's own).
-    for entry in ledger.entries(kind=BUNDLE_KIND, subject=subject):
-        record = by_seq.get(entry.seq)
-        if record is None or tier_reaches_validated(record.tier):
-            continue
-        body = entry.payload.get("body")
-        if not isinstance(body, dict) or not tier_reaches_validated(str(body.get("tier", ""))):
-            continue
-        _, why = _tier_and_why(body, recorder_trust, _unit_binding(entry.subject))
-        if why:
-            by_seq[entry.seq] = note(record, why)
+    def holder(self, trace_hash: str) -> tuple[int, str] | None:
+        """``(ledger position, unit key)`` of the claim that holds the recording, if any."""
+        return self._holders.get(trace_hash)
 
-    # 2. One recording, one unit: only when something here could be validated.
-    if any(tier_reaches_validated(r.tier) for r in by_seq.values()):
-        claimant: dict[str, tuple[int, str]] = {}
-        held: dict[int, tuple[str, str]] = {}
+    @classmethod
+    def build(
+        cls, ledger: EvidenceLedger, recorder_trust: RecorderTrust | None, *,
+        only: set[str] | None = None,
+    ) -> UnitClaims:
+        """Read the ledger once. ``only`` limits the work to those trace hashes."""
+        from assurance.machinery.record import MANIFEST_KIND
+
+        enrolled: dict[str, bool] = {}
+
+        def is_enrolled(subject: str) -> bool:
+            if subject not in enrolled:
+                enrolled[subject] = any(
+                    e.evidence().verify()
+                    for e in ledger.entries(kind=MANIFEST_KIND, subject=subject))
+            return enrolled[subject]
+
+        holders: dict[str, tuple[int, str]] = {}
         for entry in ledger.entries(kind=BUNDLE_KIND):
             unit = _unit_binding(entry.subject)
             if unit is None or not unit.well_formed:
@@ -235,23 +241,61 @@ def _apply_unit_binding(
                     str(body.get("tier", ""))):
                 continue        # cheap first: only a stored 'validated' can be a claim
             trace_hash = str(body.get("trace_hash") or "")
-            if not trace_hash or not entry.evidence().verify():
+            if (not trace_hash or trace_hash in holders
+                    or (only is not None and trace_hash not in only)):
                 continue
-            if not tier_reaches_validated(_tier_and_why(body, recorder_trust, unit)[0]):
-                continue
-            claimant.setdefault(trace_hash, (entry.seq, entry.subject))
-            held[entry.seq] = (entry.subject, trace_hash)
-        for seq, record in list(by_seq.items()):
-            mine = held.get(seq)
-            if mine is None or not tier_reaches_validated(record.tier):
-                continue
-            first = claimant[mine[1]]
-            if first[1] != mine[0]:
+            if (is_enrolled(entry.subject) and entry.evidence().verify()
+                    and tier_reaches_validated(_tier_and_why(body, recorder_trust, unit)[0])):
+                holders[trace_hash] = (entry.seq, entry.subject)
+        return cls(holders)
+
+
+def _apply_unit_binding(
+    ledger: EvidenceLedger, subject: str | None, recorder_trust: RecorderTrust | None,
+    records: list[VerificationRecord], claims: UnitClaims | None = None,
+) -> list[VerificationRecord]:
+    """Name why the unit binding capped a record, and cap a recording's later claimant.
+
+    A record that would read ``validated`` but whose recording is held by another unit key
+    (:class:`UnitClaims`) is ``community`` with the holder named in ``tier_note``.
+    ``reverify`` refuses the same case outright (``_trace_filed_elsewhere``).
+    """
+    if not records:
+        return records
+    by_seq = {r.ledger_seq: r for r in records}
+    where: dict[int, tuple[str, str]] = {}      # seq -> (subject, trace hash), validated only
+
+    def note(r: VerificationRecord, why: str, tier: str | None = None) -> VerificationRecord:
+        return replace(r, tier=tier if tier is not None else r.tier, tier_note=why)
+
+    for entry in ledger.entries(kind=BUNDLE_KIND, subject=subject):
+        record = by_seq.get(entry.seq)
+        body = entry.payload.get("body")
+        if record is None or not isinstance(body, dict):
+            continue
+        if tier_reaches_validated(record.tier):
+            if _unit_binding(entry.subject) is not None:
+                where[entry.seq] = (entry.subject, str(body.get("trace_hash") or ""))
+            continue
+        if not tier_reaches_validated(str(body.get("tier", ""))):
+            continue
+        # capped by the unit binding: say why (cheap: the subject's own entries)
+        _, why = _tier_and_why(body, recorder_trust, _unit_binding(entry.subject))
+        if why:
+            by_seq[entry.seq] = note(record, why)
+
+    if where:
+        if claims is None:
+            claims = UnitClaims.build(ledger, recorder_trust,
+                                      only={t for _, t in where.values() if t})
+        for seq, (unit_key, trace_hash) in where.items():
+            held = claims.holder(trace_hash) if trace_hash else None
+            if held is not None and held[1] != unit_key:
                 by_seq[seq] = note(
-                    record,
-                    f"the recording it rests on (trace {mine[1][:12]}) is already the "
-                    f"validated evidence of {first[1]!r} (filed first, ledger position "
-                    f"{first[0]}); one recording is evidence about one unit",
+                    by_seq[seq],
+                    f"the recording it rests on (trace {trace_hash[:12]}) is already the "
+                    f"validated evidence of {held[1]!r} (filed first, ledger position "
+                    f"{held[0]}); one recording is evidence about one unit",
                     tier="community")
     return [by_seq[r.ledger_seq] for r in records]
 
@@ -363,7 +407,7 @@ class VerificationRecord:
     @classmethod
     def from_ledger(
         cls, ledger: EvidenceLedger, *, subject: str | None = None,
-        recorder_trust: RecorderTrust | None = None,
+        recorder_trust: RecorderTrust | None = None, claims: UnitClaims | None = None,
     ) -> list[VerificationRecord]:
         """Read every sealed machine verification out of a ledger.
 
@@ -413,7 +457,7 @@ class VerificationRecord:
                 checks_unchecked=unchecked,
                 date_suspect=suspect,
             ))
-        return _apply_unit_binding(ledger, subject, recorder_trust, out)
+        return _apply_unit_binding(ledger, subject, recorder_trust, out, claims)
 
 
 @dataclass(frozen=True)
