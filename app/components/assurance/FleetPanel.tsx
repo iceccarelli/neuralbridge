@@ -208,7 +208,8 @@ export default function FleetPanel({
             {data.summary.machines} machine(s): {data.summary.covered} with every declared safety function covered on
             evidence at validated or better,{' '}
             {data.summary.covered_at_community ?? 0} covered only on evidence below validated (a provenance the filer
-            declared: the recorded evidence stands, the behaviour was not demonstrated on the machine),{' '}
+            declared, or evidence held down by its unit binding — see each row for which; the recorded evidence
+            stands, the behaviour was not demonstrated on the machine),{' '}
             {data.summary.with_gaps} not fully covered (a declared function with a gap, or no safety function declared
             at all — see each row).
           </p>
@@ -264,6 +265,12 @@ export default function FleetPanel({
                             <span className="aw-note" data-testid="evidence-tier">
                               covered at {m.evidence_tier_floor || 'community'} only — below validated
                             </span>
+                            {(m.tier_notes ?? []).map((note) => (
+                              <span key={note} className="aw-note" data-testid="evidence-tier-note">
+                                <br />
+                                held down by its unit binding: {note}
+                              </span>
+                            ))}
                           </>
                         )}
                       </td>

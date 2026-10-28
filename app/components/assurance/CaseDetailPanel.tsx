@@ -232,7 +232,7 @@ export default function CaseDetailPanel({
         const whoState = who ? 'ready' : whoPending ? 'loading' : 'unavailable';
         const reverifyEvents = c.history.filter((h) => h.kind === 'assurance.change.reverification');
         // Entries a submission was recorded for but could not clear because the evidence is under the floor.
-        const belowFloor = c.required_reverifications.filter((e) => (c.evidence_current[e] ?? '').startsWith('below_validated:'));
+        const belowFloor = c.required_reverifications.filter((e) => (c.evidence_current[e] ?? '').startsWith('below_validated'));
         return (
           <div className="aw-detail" data-testid="case-detail">
             <h3>

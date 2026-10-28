@@ -84,6 +84,11 @@ class MachineRecord:
             # The weakest tier among the verifications the current functions rest on
             # ("" when none is current). `verdict` is `covered` only at validated or better.
             "evidence_tier_floor": self.coverage.evidence_tier_floor,
+            # Why the unit binding held a verification below the tier it was sealed at (it was
+            # sealed for another unit key, or none, or its recording is another unit's). Empty
+            # for validated cover and for cover that is community only by declared provenance.
+            "tier_notes": list(dict.fromkeys(
+                v.tier_note for v in self.verifications if v.tier_note)),
         }
 
 

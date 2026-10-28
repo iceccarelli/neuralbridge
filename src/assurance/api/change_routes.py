@@ -422,8 +422,11 @@ async def reverify_case_route(
     ``200`` means the submission was accepted and recorded, **not** that it cleared
     anything. When the case is still waiting the response carries ``blocked_reason``
     (absent when nothing is outstanding): ``code`` is ``below_validated_tier`` when a
-    required entry was read current on evidence under the floor, or
-    ``evidence_not_current`` when coverage did not read the entry current at all;
+    required entry was read current on evidence under the floor (no accepted recorder
+    attestation), ``below_validated_unit_binding`` when the evidence is held down by its
+    unit key (sealed for another key or none: re-seal it under the exact key, an attestation
+    is not what is missing), or ``evidence_not_current`` when coverage did not read the
+    entry current at all;
     ``entries`` maps each outstanding entry to its recorded reason and ``message``
     says what would clear it. A decider may waive an entry
     (``waive-reverification``); a waiver is recorded as one and never reads as
