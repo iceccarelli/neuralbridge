@@ -48,7 +48,8 @@ def test_a_utf16_or_utf32_body_cannot_hide_its_nesting(quiet_client, caplog, enc
     with caplog.at_level(logging.DEBUG):
         r = quiet_client.post("/v1/spec/validate", content=HIDDEN.encode(encoding),
                               headers={"content-type": "application/json"})
-    assert 400 <= r.status_code < 500, (encoding, r.status_code, r.text[:80])
+    assert r.status_code == 415 and "json_not_utf8" in r.text, (
+        encoding, r.status_code, r.text[:80])
     _clean(r, caplog)
 
 
@@ -65,6 +66,47 @@ def test_a_non_ascii_utf8_body_is_still_read(quiet_client):
     r = quiet_client.post("/v1/spec/validate", content=body,
                           headers={"content-type": "application/json"})
     assert r.status_code == 422 and "utf" not in r.text.lower()
+
+
+def _request(body: bytes):
+    from starlette.requests import Request
+
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request({"type": "http", "method": "POST", "path": "/v1/spec/validate",
+                    "query_string": b"", "headers": []}, receive)
+
+
+def test_the_request_fingerprint_of_a_too_deep_body_is_its_bytes_not_an_exception():
+    import asyncio
+    import hashlib
+
+    from assurance.api.deps import request_fingerprint
+
+    body = b"[" * 200_000
+    digest = asyncio.run(request_fingerprint(_request(body), "validate"))
+    expected = hashlib.sha256()
+    for part in ("validate", "POST", "/v1/spec/validate", ""):
+        expected.update(part.encode())
+        expected.update(b"\x00")
+    expected.update(body)
+    assert digest == expected.hexdigest()
+
+
+def test_the_cap_is_exactly_the_configured_depth(quiet_client):
+    ok = quiet_client.post("/v1/spec/validate", content=b"[" * 100 + b"]" * 100,
+                           headers={"content-type": "application/json"})
+    over = quiet_client.post("/v1/spec/validate", content=b"[" * 101 + b"]" * 101,
+                             headers={"content-type": "application/json"})
+    assert "json_too_deeply_nested" not in ok.text and ok.status_code < 500
+    assert over.status_code == 422 and "json_too_deeply_nested" in over.text
 
 
 @pytest.mark.parametrize("content_type", ["text/plain", "application/x-www-form-urlencoded", ""])

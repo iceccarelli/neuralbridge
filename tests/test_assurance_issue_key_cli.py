@@ -82,6 +82,21 @@ def test_it_refuses_unknown_and_operator_accounts(store, capsys, argv):
     assert capsys.readouterr().out == ""
 
 
+def test_it_refuses_the_operator_account_even_if_it_looks_like_a_paying_customer(
+        store, capsys):
+    import sqlite3
+
+    acct = _account(store, customer="cus_op")
+    db = sqlite3.connect(store.path)
+    db.execute("UPDATE accounts SET id='operator' WHERE id=?", (acct.id,))
+    db.commit()
+    db.close()
+    assert issue.main(["--customer", "cus_op"]) == 1
+    out, err = capsys.readouterr()
+    assert out == "" and "operator" in err
+    assert store.keys_for("operator") == []
+
+
 def test_it_refuses_an_account_with_no_stripe_customer(store, capsys):
     acct = store.upsert_account(email="m@x.invalid", tier="cell", status="active")
     assert issue.main(["--account", acct.id]) == 1
