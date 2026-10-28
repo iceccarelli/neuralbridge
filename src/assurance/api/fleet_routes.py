@@ -389,7 +389,9 @@ async def declaration_check(
 
     status = check_declaration(declaration, manifest, coverage)
     payload = status.to_dict()
-    payload["coverage_assessed"] = coverage is not None
+    # `coverage_assessed` is whether any evidence was actually assessed, not whether a
+    # report object existed: a report over zero functions assesses nothing.
+    payload["coverage_assessed"] = status.evidence_assessed
     if body.with_coverage and coverage is None:
         payload["checks_skipped"] = [
             "coverage was requested and not assessed: reading the evidence ledger "
