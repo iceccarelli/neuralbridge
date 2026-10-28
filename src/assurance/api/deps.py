@@ -890,8 +890,11 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 # on the structure (strings are skipped), so brackets inside text do not count. Applied to
 # bodies the middleware caps at no more than the evidence-verify allowance, except the
 # anonymous evidence verifier itself (_EVIDENCE_PATHS): it spends the caller's allowance
-# before it reads the body and analyses hostile nesting on purpose (tests pin both), and the
-# larger recorded-trace allowance is for an authenticated caller and has its own handling.
+# before it reads the body and analyses hostile nesting on purpose (tests pin both). The
+# scan reads bytes, so a JSON body must be UTF-8 (a UTF-16/32 body, which the stdlib parser
+# would still accept, is refused with 415). The larger recorded-trace allowance (32 MiB, an
+# authenticated caller) is too large to scan on the event loop: a RecursionError that escapes
+# the app for any /v1 write is answered with the same 422 (BodySizeLimitMiddleware._guarded).
 _DEPTH_ENV = "ASSURANCE_MAX_JSON_DEPTH"
 _DEFAULT_JSON_DEPTH = 100
 _DEPTH_SCAN_MAX_BYTES = 4 * 1024 * 1024
