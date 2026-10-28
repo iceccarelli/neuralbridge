@@ -362,3 +362,32 @@ def test_l7_a_real_uvicorn_access_log_does_not_contain_the_session_id(billing_en
     joined = out.out + out.err
     assert "/v1/checkout/complete" in joined, joined
     assert "cs_live_SECRET" not in joined
+
+
+# ---------------------------------------------------------------------------
+# invalid-key flood: an unknown key must not queue for the accounts write lock
+# ---------------------------------------------------------------------------
+def test_an_invalid_key_does_not_take_the_accounts_write_lock(tmp_path):
+    import sqlite3
+
+    from assurance.billing.accounts import AccountStore
+
+    store = AccountStore(tmp_path / "accounts.db")
+    acct = store.upsert_account(email="a@x.invalid", tier="cell", stripe_customer_id="cus_k")
+    good = store.issue_key(acct.id)
+    holder = sqlite3.connect(store.path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")        # somebody else is mid-write (a billing webhook)
+    try:
+        done: list[object] = []
+        worker = threading.Thread(
+            target=lambda: done.append(store.resolve_key("asr_" + "x" * 43)), daemon=True)
+        worker.start()
+        worker.join(timeout=3)
+        assert not worker.is_alive(), "an unknown key waited for the write lock"
+        assert done == [None]
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    principal = store.resolve_key(good)       # a real key still resolves and records last_used
+    assert principal is not None and principal.account.id == acct.id
+    assert store.keys_for(acct.id)[0]["last_used"] is not None
