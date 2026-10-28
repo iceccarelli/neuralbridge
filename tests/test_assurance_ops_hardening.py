@@ -207,6 +207,53 @@ def test_l3_https_and_loopback_are_still_served(mcp_sent, monkeypatch, url):
     assert mcp_sent[0]["headers"]["X-API-Key"].startswith("asr_")
 
 
+@pytest.mark.parametrize("url", ["http://[", "http://[::1", "https://[1", "http://[::1]x",
+                                 "http://a:b", "https://a:99999", "http://127.0.0.1:x"])
+def test_l3_a_malformed_url_is_a_refusal_not_an_exception(mcp_sent, monkeypatch, url):
+    from assurance.core.api_url import api_url_problem
+    from assurance.mcp import server
+    from assurance.watch.push import PushError, check_url
+
+    assert isinstance(api_url_problem(url), str)
+    with pytest.raises(PushError):
+        check_url(url)
+    monkeypatch.setenv("ASSURANCE_API_URL", url)
+    out = asyncio.run(server._call("GET", "/v1/me"))
+    assert mcp_sent == [] and out["error"] == "assurance_api_url_not_allowed"
+    assert "asr_throwaway" not in json.dumps(out)
+
+
+def test_l3_the_loopback_rule_is_exactly_these_three_names_and_nothing_near_them():
+    from assurance.core.api_url import LOOPBACK_HOSTS, api_url_problem
+
+    assert LOOPBACK_HOSTS == frozenset({"localhost", "127.0.0.1", "::1"})
+    for host in ("0.0.0.0", "[::]", "10.0.0.5", "192.0.2.1", "127.0.0.2", "127.0.1.1",  # noqa: S104
+                 "localhost.evil.example", "127.0.0.1.evil.example", "example.com", "[::2]"):
+        assert api_url_problem(f"http://{host}:8000"), host
+    for host in ("localhost", "127.0.0.1", "[::1]"):
+        assert api_url_problem(f"http://{host}:8000") is None, host
+
+
+# ---------------------------------------------------------------------------
+# L2 for the MCP relay: its client does not read the proxy environment either
+# ---------------------------------------------------------------------------
+def test_l2_the_mcp_relay_ignores_proxy_environment(monkeypatch):
+    from assurance.mcp import server
+
+    seen: list[bool] = []
+
+    async def fake_request(self, method, url, **kw):
+        seen.append(self.trust_env)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    monkeypatch.setenv("ASSURANCE_API_KEY", "asr_throwaway_not_a_key")
+    monkeypatch.setenv("ASSURANCE_API_URL", "https://api.some-host.example")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    asyncio.run(server._call("GET", "/v1/me"))
+    assert seen == [False]
+
+
 # ---------------------------------------------------------------------------
 # L4
 # ---------------------------------------------------------------------------

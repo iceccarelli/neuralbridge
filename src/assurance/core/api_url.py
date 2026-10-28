@@ -16,7 +16,13 @@ LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 def api_url_problem(api_url: str) -> str | None:
     """Why a key must not be sent to ``api_url``, or ``None`` if the URL is acceptable."""
-    parts = urlsplit(api_url.strip())
+    try:
+        parts = urlsplit(api_url.strip())
+        parts.port  # noqa: B018 - raises ValueError for a port that is not a number in range
+    except ValueError:
+        # `http://[`, `http://[::1`, `http://host:99999`: a refusal, not a traceback. The URL
+        # is not echoed: it may carry a credential.
+        return "--api-url is not a valid URL, e.g. https://api.example.com"
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return "--api-url must be an http(s) URL, e.g. https://api.example.com"
     if parts.username or parts.password:

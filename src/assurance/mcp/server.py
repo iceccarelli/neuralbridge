@@ -122,7 +122,9 @@ async def _call(method: str, path: str, *, json_body: dict[str, Any] | None = No
         }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # trust_env=False: the key goes to the host named in ASSURANCE_API_URL and to no proxy
+        # an environment variable names (`assurance watch push` does the same).
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
             response = await client.request(method, f"{base}{path}", headers=_headers(),
                                             json=json_body, params=params)
     except httpx.RequestError as exc:
