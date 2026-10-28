@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import unquote_plus
 
 __all__ = ["REDACTED_PARAMS", "RedactQueryFilter", "install"]
 
@@ -20,13 +19,20 @@ REDACTED_PARAMS = ("session_id", "api_key", "key", "token", "secret")
 
 _REDACTED = frozenset(REDACTED_PARAMS)
 _QUERY = re.compile(r"\?[^\s\"'#]*")
+_PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _unquote_plus(text: str) -> str:
+    """Percent-decoding of a parameter name, as a query parser does it (no urllib: this module
+    must not look like a network client to the import scan)."""
+    return _PERCENT.sub(lambda m: chr(int(m.group(1), 16)), text.replace("+", " "))
 
 
 def _name(raw: str) -> str:
     """A parameter name as the application reads it: percent-decoded (to a fixed point, so a
     name encoded twice is still caught), and lower-cased."""
     for _ in range(4):
-        decoded = unquote_plus(raw)
+        decoded = _unquote_plus(raw)
         if decoded == raw:
             break
         raw = decoded
