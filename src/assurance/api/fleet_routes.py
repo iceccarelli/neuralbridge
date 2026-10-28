@@ -29,7 +29,7 @@ from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.fleet.advisory import ComponentAdvisory, match_item
 from assurance.fleet.declaration import DeclarationOfConformity, check_declaration
-from assurance.fleet.impact import assess_impact
+from assurance.fleet.impact import advisory_provenance, assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger
@@ -159,6 +159,15 @@ async def advisory_check(
         skipped.append(
             f"{advisory.issued_by} published no artefact hashes, so any match here "
             "rests on a version label.")
+    record = advisory.import_record
+    if record is not None:
+        skipped.append(
+            "this advisory is an unsigned CSAF import: nobody has authenticated it.")
+        if record.partial:
+            skipped.append(
+                "this advisory is a PARTIAL translation (not imported: "
+                + (", ".join(record.dropped_ids) or "; ".join(record.partial_reasons))
+                + "), so 'not affected' here is not a statement that nothing is affected.")
     unhashed = [i.item_id for i in manifest.uncomparable_items]
     if unhashed:
         skipped.append(
@@ -175,7 +184,9 @@ async def advisory_check(
         "matches": matches,
         "remedy": advisory.remedy,
         "checks_skipped": skipped,
-        "provenance": _BARE_ADVISORY,
+        "provenance": advisory_provenance(advisory, _BARE_ADVISORY),
+        "advisory_import": record.to_dict() if record is not None else None,
+        "incomplete": bool(record is not None and record.partial),
     }
     meter.commit(response)
     return result

@@ -36,7 +36,8 @@ from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory, match_item
-from assurance.fleet.impact import ImpactReport, assess_impact
+from assurance.fleet.impact import ImpactReport, advisory_provenance, assess_impact
+from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.intervention import Intervention
@@ -101,6 +102,12 @@ class MachineAssuranceCheck:
     fleet_machines_affected: int | None
     assessed_at: str
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
+    #: How far the advisory was trusted. An advisory handed over in a request is
+    #: unauthenticated; an unsigned import says so (and whether it is partial) here.
+    advisory_provenance: dict[str, Any] = field(default_factory=dict)
+    advisory_import: dict[str, Any] | None = None
+    #: True when the advisory is a partial translation: "no match" is then not "no impact".
+    incomplete: bool = False
 
     @property
     def affected(self) -> bool:
@@ -133,6 +140,9 @@ class MachineAssuranceCheck:
             } if self.fleet_machines_analyzed is not None else None,
             "assessed_at": self.assessed_at,
             "checks_skipped": list(self.checks_skipped),
+            "advisory_provenance": dict(self.advisory_provenance),
+            "advisory_import": dict(self.advisory_import) if self.advisory_import else None,
+            "incomplete": self.incomplete,
         }
 
 
@@ -209,7 +219,7 @@ def _decide_verdict(
     *, advisory_evaluated: bool, matches: list[dict[str, Any]],
     human_review_required: bool, coverage: CoverageReport | None,
     required_actions: list[str], valid: int, insufficient: int,
-    cannot_determine: int, chain_verified: bool = True,
+    cannot_determine: int, chain_verified: bool = True, incomplete: bool = False,
 ) -> AssuranceVerdict:
     """The customer's one answer.
 
@@ -222,7 +232,7 @@ def _decide_verdict(
     """
     if advisory_evaluated:
         if not matches:
-            return (AssuranceVerdict.NO_IMPACT_FOUND if chain_verified
+            return (AssuranceVerdict.NO_IMPACT_FOUND if chain_verified and not incomplete
                     else AssuranceVerdict.CANNOT_DETERMINE)
         if required_actions:
             return AssuranceVerdict.REQUIRES_REVERIFICATION
@@ -247,6 +257,32 @@ def _decide_verdict(
     return AssuranceVerdict.VERIFIED
 
 
+def _import_of(advisory: ComponentAdvisory | None) -> dict[str, Any] | None:
+    if advisory is None or advisory.import_record is None:
+        return None
+    return advisory.import_record.to_dict()
+
+
+def _is_incomplete(advisory: ComponentAdvisory | None) -> bool:
+    return bool(advisory is not None and advisory.import_record is not None
+                and advisory.import_record.partial)
+
+
+def _advisory_caveats(advisory: ComponentAdvisory | None) -> list[str]:
+    record = advisory.import_record if advisory is not None else None
+    if record is None:
+        return []
+    out = ["the advisory is an unsigned CSAF import (inspect only): nobody has "
+           "authenticated it, so this is a statement about the document, not about a "
+           "supplier's word."]
+    if record.partial:
+        out.append(
+            "the advisory is a PARTIAL translation of its source (not imported: "
+            + (", ".join(record.dropped_ids) or "; ".join(record.partial_reasons))
+            + "), so no match is not 'no impact'.")
+    return out
+
+
 def run_ad_hoc_check(
     manifest: SafetyManifest, advisory: ComponentAdvisory | None = None,
 ) -> MachineAssuranceCheck:
@@ -263,11 +299,14 @@ def run_ad_hoc_check(
         "manifest you provided. It cannot say whether standing safety evidence "
         "for this machine is still valid — that needs the machine enrolled, "
         "with its interventions and verifications sealed in the ledger.",
+        *_advisory_caveats(advisory),
     ]
+    incomplete = _is_incomplete(advisory)
     verdict = _decide_verdict(
         advisory_evaluated=True, matches=matches,
         human_review_required=human_review_required, coverage=None,
         required_actions=[], valid=0, insufficient=0, cannot_determine=0,
+        incomplete=incomplete,
     )
     return MachineAssuranceCheck(
         machine_key=manifest.machine.key, verdict=verdict, enrolled=False,
@@ -278,6 +317,8 @@ def run_ad_hoc_check(
         latest_intervention=None, fleet_machines_analyzed=None,
         fleet_machines_affected=None, assessed_at=format_utc(utc_now()),
         checks_skipped=tuple(checks_skipped),
+        advisory_provenance=advisory_provenance(advisory, bare_provenance("body")),
+        advisory_import=_import_of(advisory), incomplete=incomplete,
     )
 
 
@@ -312,7 +353,8 @@ def run_enrolled_check(
     fleet_report: ImpactReport | None = None
     if advisory is not None:
         matches, human_review_required = _match_manifest(record.manifest, advisory)
-        fleet_report = assess_impact(advisory, fleet)
+        fleet_report = assess_impact(advisory, fleet, provenance=bare_provenance("body"))
+        checks_skipped.extend(_advisory_caveats(advisory))
         checks_skipped.extend(
             c for c in fleet_report.checks_skipped if c not in checks_skipped
         )
@@ -325,6 +367,7 @@ def run_enrolled_check(
         human_review_required=human_review_required, coverage=record.coverage,
         required_actions=required, valid=valid, insufficient=insufficient,
         cannot_determine=cannot_determine, chain_verified=fleet.chain_verified,
+        incomplete=_is_incomplete(advisory),
     )
     interventions = sorted(record.interventions, key=lambda i: i.occurred_at)
     latest = _intervention_summary(interventions[-1]) if interventions else None
@@ -345,4 +388,6 @@ def run_enrolled_check(
                                   if fleet_report is not None else None),
         assessed_at=format_utc(utc_now()),
         checks_skipped=tuple(dict.fromkeys(checks_skipped)),
+        advisory_provenance=(fleet_report.provenance if fleet_report is not None else {}),
+        advisory_import=_import_of(advisory), incomplete=_is_incomplete(advisory),
     )
