@@ -102,12 +102,12 @@ def test_exact_versions_range_and_fixed_are_mapped_as_the_publisher_wrote_them()
     a = imported().advisory
     ex100 = next(x for x in a.affected if x.name == "EX-100")
     assert ex100.versions == ("V2.001", "vers:all/<V2.001")
-    assert ex100.version_note == "vers:all/<V2.001"
+    assert "vers:all/<V2.001" in ex100.version_note
     # Changed from `a.fixed_versions == ("V2.002",)`: that was the bug. A fixed version was
     # unioned across the whole advisory and used to clear a machine inside another
     # product's (or another CVE's) range. A fixed version is now kept per component, and a
-    # component that has a range keeps none, because one fix is not the end of every range.
-    assert a.fixed_versions == () and ex100.fixed_versions == ()
+    # component's fix is listed for a person but never used to clear (round 2, F-4).
+    assert a.fixed_versions == ()
 
 
 def test_matching_follows_the_publishers_facts():
@@ -122,7 +122,9 @@ def test_matching_follows_the_publishers_facts():
     plain = csaf()
     plain["product_tree"]["branches"][0]["branches"][0]["branches"].pop(1)   # drop the range
     plain["vulnerabilities"][0]["product_status"]["known_affected"].remove("P2")
-    assert match_item(advisory_from_csaf(plain).advisory, item("EX-100", "V2.002")) is None
+    # Round 2 (F-4): even then the fix is listed for a person, not used to clear.
+    found = match_item(advisory_from_csaf(plain).advisory, item("EX-100", "V2.002"))
+    assert found is not None and found[0] is MatchBasis.NAME_ONLY
 
 
 def test_a_range_is_never_a_clear_for_a_version_the_matcher_cannot_place():

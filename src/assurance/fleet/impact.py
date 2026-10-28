@@ -470,6 +470,14 @@ def assess_impact(
                     "so this match rests entirely on labels."
                 )
 
+    if advisory.import_record is not None and not exposures:
+        pairs = sorted({f"{a.supplier} / {a.name}" for a in advisory.affected})
+        shown = "; ".join(neutralise(p) for p in pairs[:20]) + (
+            f"; and {len(pairs) - 20} more" if len(pairs) > 20 else "")
+        caveats.append(
+            "no component name matched exactly. This imported advisory names (supplier / "
+            f"component): {shown}. If one of these is a component your machines carry under "
+            "another spelling, this result is wrong, and only a person can see that.")
     if not advisory.publishes_hashes:
         caveats.append(
             f"{advisory.issued_by} published no artefact hashes with "
