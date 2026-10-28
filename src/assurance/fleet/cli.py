@@ -337,8 +337,10 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
     manifest = SafetyManifest.from_json(args.manifest)
 
     coverage = None
+    chain_ok = True
     if args.ledger:
         ledger = EvidenceLedger(args.ledger)
+        chain_ok = ledger.verify_chain()[0]
         key = manifest.machine.key
         coverage = assess_coverage(
             manifest,
@@ -348,8 +350,11 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
 
     status = check_declaration(declaration, manifest, coverage)
     if args.json:
-        print(json.dumps(status.to_dict(), indent=2))
+        print(json.dumps({**status.to_dict(), "ledger_chain_verified": chain_ok}, indent=2))
     else:
+        if not chain_ok:
+            print("THE LEDGER CHAIN DOES NOT VERIFY — the evidence below is drawn from a "
+                  "store whose integrity is in question.\n")
         print(status.summary())
         if status.checks_skipped:
             print("\n  not checked:")
@@ -359,6 +364,8 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
             print("\n  The evidence was NOT assessed. Supply --ledger (and a manifest that "
                   "declares safety functions) to check the evidence as well as the "
                   "configuration.")
+    if not chain_ok:
+        return 2        # could not vouch: not a pass, whatever the evidence reads
     if status.is_sound:
         return 0
     # 2: could not vouch (the evidence was never looked at), as for an unverifiable ledger.
