@@ -881,6 +881,14 @@ def verify_log(
     records = list(attestations)
     problems: list[str] = []
     skipped: list[str] = []
+    if not records:
+        # A log that is missing, emptied or never written vouches for nothing. Reading it
+        # as "no problems" would let whoever removes the log also remove the evidence that
+        # the ledger was rolled back.
+        problems.append(
+            "the log holds no attestations, so nothing about the ledger was established "
+            "(a deleted or emptied log is indistinguishable from one that was never written)"
+        )
 
     expected_sequence = 1
     previous: HeadAttestation | None = None
