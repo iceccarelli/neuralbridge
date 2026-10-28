@@ -393,17 +393,38 @@ sealed for:
 - **a bundle sealed before this field existed, or sealed for a product line, carries no
   `unit_key` and is `community` under a unit-key subject.** There is no silent grandfathering:
   re-seal it with the unit's key as `subject` (the recorder's attestation is unchanged);
-- one recording is the validated evidence of ONE unit key. When the same trace is the validated
-  basis of bundles filed under two unit keys, the earlier filing keeps it and the later is
-  `community`. `POST /v1/machine/verify` with `seal` refuses to seal the later one (422
-  `invalid_subject`, naming the first); `change.service.reverify` has always refused it;
+- one recording is the validated evidence of ONE **enrolled** unit key. Only a filing that still
+  reads `validated` under the reader's trust list AND sits under a unit key a manifest was sealed
+  for in the same ledger holds the recording (`UnitClaims`, built once per ledger read; the first
+  such filing wins). A later claimant is `community`, with the holder named in `tier_note`.
+  A filing under a key nobody enrolled (a typo, `Evil/Co#0001`) holds nothing, so it cannot burn
+  the recording for the real unit: seal the real unit's manifest and its bundle, and the typo's
+  claim then reads `community`. `POST /v1/machine/verify` with `seal` refuses to seal a claim the
+  reader would cap (422 `invalid_subject`, naming the holder and the remedy);
+  `change.service.reverify` has always refused it. Because the question is the reader's, a first
+  claim whose recorder key was later revoked blocks nothing;
 - a stored `certified` tier (only a resealed body can carry one; the checker rejects it) is read
   as `validated` at most. Nothing in this product certifies.
 
-A recording claimed under a mistyped maker or model with the right serial keeps that claim (the
-recorder's signature names the serial, so the typo can still read `validated` for the wrong key).
-There is no un-file in a hash-chained ledger: the remedy is a new recording attested for the unit,
-or a human decision recorded against it.
+**Residual, stated.** Someone who can enrol a manifest for a hostile or mistyped key and seal the
+recording under it first still holds it: the ledger is append-only and has no withdrawal, so the
+remedy is a new recording on the real unit with its own attestation (the refusal says so). A
+decider-recorded withdrawal is not built. Where nothing is enrolled (a ledger that holds bundles
+and no manifests), two unit keys can each read `validated` for one recording: the
+one-recording-one-unit rule is enforced among enrolled units only.
+
+**Concurrency.** The refusal at sealing is a check followed by the append, not one atomic step.
+With several API workers, two simultaneous seals of the same recording for two enrolled units can
+both return 200 `validated`; every reader still caps the later one (`tier_note`), so the fleet,
+passport and cases never believe both.
+
+**Unsealed runs.** `POST /v1/machine/verify` with `seal: false` and a unit-key subject compares
+nothing with the ledger; the response says so in `unit_binding_note` and the tier shown is the
+sealing engine's, not what a reader would believe if the run were filed.
+
+**Why it is not the reader's problem.** `Fleet.from_ledger` builds the claim map once and each
+machine's read asks it, so a fleet read is linear in its bundles (150 attested machines: 0.5 s on
+the previous release, 16 s with the first version of this rule, under 1 s now).
 
 **What this does not do.** The recorder trust list is the *server's* and is not scoped to a
 tenant, a machine or a serial: any key it names can attest any serial for any account. The seal

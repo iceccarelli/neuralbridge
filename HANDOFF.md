@@ -42,6 +42,22 @@ standing facts; none of this is customer-validated.
   `tests/test_assurance_community_is_not_verified.py`.
 - **`unchecked` and `incomplete` are coverage states** (they were folded into `failing`, "did not pass").
   *Tests:* `tests/test_assurance_coverage_states.py`.
+- **Round 2 (re-review of the above, same branch).** The first one-recording-one-unit scan made a
+  fleet read quadratic (150 attested machines 0.5 s on `main`, 16.6 s on the first version, 0.7 s now;
+  300 machines 1.0 s / 68 s / 1.6 s); `UnitClaims` is built once per ledger read and shared. A mistyped
+  or hostile first claim could burn a recording for the real unit; now only a claim under a unit
+  **enrolled in the same ledger** (a manifest sealed there) holds it, and the refusal names the
+  remedy. Residual: whoever can enrol a manifest for a hostile key and seal first still holds it, there
+  is no withdrawal in an append-only ledger, and the refusal is check-then-append (readers cap the
+  later of two simultaneous seals). The unit-binding reason now reaches the re-verification case
+  (`blocked_reason` code `below_validated_unit_binding`), the fleet row (`tier_notes`) and the panel.
+  A broken ledger chain is exit 2 on `machinery coverage|passport` and `fleet declaration`; a passport
+  sealed from one is `ledger_chain_not_verified`. Passports at `covered_at_community` /
+  `ledger_chain_not_verified` are schema `/2` (an older verifier refuses them by name). Unchecked and
+  incomplete functions are required work again in the check pipeline; `watch` calls a function
+  recovered only at `validated`; "valid evidence" copy narrowed (route summaries, OpenAPI, the
+  `routes.ts` pin). Not built: a decider-recorded claim withdrawal; scoping the recorder trust list
+  to a tenant or serial.
 - **Docs corrected:** the two `LIFTING_BASES is empty` / `no recorder-attestation signer exists` statements in
   §0.0 below were already false on `main` (see the inline corrections); `docs/claims-registry.md` now says what
   the signature binds (product, version, serial, the recording) and what the service binds (the unit key), and
