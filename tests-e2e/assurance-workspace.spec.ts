@@ -54,6 +54,10 @@ test.describe('Assurance workspace', () => {
     await expect(fleet).toBeVisible({ timeout: 15_000 });
     for (const m of seed.machines) await expect(fleet).toContainText(m);
     await expect(page.getByTestId('fleet-summary')).toContainText('2 machine(s)');
+    // Seeded verifications declare their provenance (tier community): current there is not
+    // "covered", and the page says so instead of counting it with the demonstrated machines.
+    await expect(page.getByTestId('fleet-summary')).toContainText('covered only on evidence below validated');
+    await expect(page.getByTestId('evidence-tier').first()).toContainText('below validated');
     await expect(page.getByTestId('chain-broken')).toHaveCount(0);
 
     const cases = page.getByTestId('case-table');
