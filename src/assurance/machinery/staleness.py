@@ -410,10 +410,12 @@ def assess_coverage(
         is skipped; a newer failing run ends the cover an older passing one gave.
         """
         for v in reversed(verifs):
-            if check in v.checks_verified:
-                return v, True
+            # Failure first: a record that carries the same check as both verified and
+            # failed is contradictory, and contradictory evidence is not cover.
             if check in v.failed_checks:
                 return v, False
+            if check in v.checks_verified:
+                return v, True
         return None
 
     for fn in sorted(manifest.functions, key=lambda f: f.function_id):
