@@ -240,6 +240,7 @@ export default function AdvisoriesPanel({
   const [opening, setOpening] = useState(false);
   const [confirmWithdrawn, setConfirmWithdrawn] = useState(false);
   const [acceptUnsigned, setAcceptUnsigned] = useState(false);
+  const [acceptReason, setAcceptReason] = useState('');
   const [existing, setExisting] = useState<Set<string> | null>(null);
   const [expectSupplier, setExpectSupplier] = useState('');
   const [candidateKey, setCandidateKey] = useState('');
@@ -255,6 +256,7 @@ export default function AdvisoriesPanel({
     setHostedOut(null);
     setConfirmWithdrawn(false);
     setAcceptUnsigned(false);
+    setAcceptReason('');
     setSigned(null);
   };
 
@@ -318,7 +320,7 @@ export default function AdvisoriesPanel({
     setExisting(before);
     const out = await call<AssessAdvisoryResult>(API_BASE, apiKey, '/v1/change/assess/advisory', {
       method: 'POST',
-      body: { advisory: selected.advisory, actor: actor.trim(), ...(isUnsignedImport ? { accept_unsigned: acceptUnsigned } : {}) },
+      body: { advisory: selected.advisory, actor: actor.trim(), ...(isUnsignedImport ? { accept_unsigned: acceptUnsigned, reason: acceptReason.trim() } : {}) },
     });
     setOpening(false);
     setCaseOut(out);
@@ -532,7 +534,13 @@ export default function AdvisoriesPanel({
             <label className="aw-field" data-testid="accept-unsigned">
               <input type="checkbox" checked={acceptUnsigned} onChange={(e) => setAcceptUnsigned(e.target.checked)} /> This advisory is an
               unsigned import whose origin nobody has checked. I have read it against the publisher&apos;s own page and take
-              responsibility for opening a case on it
+              responsibility for opening a case on it (the server accepts this only from an operator key with the decider role, and needs a reason)
+            </label>
+          )}
+          {isUnsignedImport && (
+            <label className="aw-field">
+              Why (what you checked, against what; recorded on the case)
+              <input type="text" value={acceptReason} onChange={(e) => setAcceptReason(e.target.value)} />
             </label>
           )}
           {selected.withdrawnLater && (
@@ -543,7 +551,7 @@ export default function AdvisoriesPanel({
           )}
           <button
             className="btn btn-primary"
-            disabled={opening || (selected.withdrawnLater && !confirmWithdrawn) || (isUnsignedImport && !acceptUnsigned)}
+            disabled={opening || (selected.withdrawnLater && !confirmWithdrawn) || (isUnsignedImport && (!acceptUnsigned || !acceptReason.trim()))}
             onClick={() => void openCase()}
           >
             Open assurance case

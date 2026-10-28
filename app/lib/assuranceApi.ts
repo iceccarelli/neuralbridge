@@ -706,6 +706,11 @@ export type TrustedAdvisoryRow = {
   implications_reviewed: boolean;
   case_opened: string;
   evaluated_at: string;
+  // Set by the server for an advisory that is an unsigned import found inside a signed feed: the
+  // signature is over the supplier's file, the file says it is a translation nobody has
+  // authenticated, so no consequence is permitted whatever the pinned key says.
+  inspect_only?: boolean;
+  advisory_import?: AdvisoryImportRecord | null;
 };
 
 export type FeedTrust = {
