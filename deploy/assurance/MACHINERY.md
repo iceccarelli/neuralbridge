@@ -17,8 +17,19 @@ assurance machinery record-change   intervention.json --ledger register.db
 assurance machinery coverage        manifest.json --ledger register.db
 ```
 
-`coverage` exits non-zero when any declared safety function is not currently
-covered, so it is a gate, not a report.
+`coverage` (and `passport`) is a gate, not a report. Exit codes:
+
+| exit | verdict | meaning |
+|---|---|---|
+| 0 | `covered` | every declared function is current on evidence at `validated` or better |
+| 3 | `covered_at_community` | every function reads current, but on evidence whose provenance the filer only declared (`community`): the recorded evidence stands, it was not a demonstration on the machine |
+| 1 | `gaps`, `no_functions_declared` | at least one function is not current |
+| 2 | | an error (an unreadable file or ledger) |
+
+Per function, `coverage` is one of `current`, `stale` (verified, then a recorded intervention
+disturbed it), `failing` (a check's newest run VIOLATED it), `unchecked` (the newest run left the
+function's checks unchecked, so nothing was shown and nothing failed), `incomplete` (some checks
+verified, others left unchecked), `never_verified` or `not_demonstrable`. Only `current` is cover.
 
 ## What a manifest is
 

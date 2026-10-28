@@ -374,6 +374,42 @@ Reusing an attestation for a *different* trace is impossible (the trace hash is
 signed); reusing it for the same trace is the same fact. Nothing here detects the
 same attestation being submitted to two different accounts.
 
+### The whole unit key is bound, by the service (not by the recorder's signature)
+
+The recorder key signs `(product, product_version, machine_serial)` and the recording. It
+cannot name a maker or model: `machine_ref` has no such field and **the attestation format is
+not changed by this**. A serial alone does not identify a unit (`Acme/AR-7#0001` and
+`Beta/XY-9#0001` share one), so the *service* binds the verification to the unit key it was
+sealed for:
+
+- when the subject is a unit key, the sealed bundle body records it as `unit_key`
+  (hashed content; absent for a product line). `check_bundle_data` requires it to be a
+  well-formed key whose serial is the body's `machine_serial`; replay takes the recorded value;
+- every ledger reader (`VerificationRecord.from_ledger`: coverage, passport, fleet, check,
+  declaration, change cases) reads a stored `validated` as `validated` under a unit-key subject
+  **only if** `unit_key` equals that subject exactly. `acme/AR-7#0001`, `Acme /AR-7#0001` and a
+  Cyrillic `А` are different units; the answer is `community` with the reason in
+  `VerificationRecord.tier_note` and in the coverage caveats;
+- **a bundle sealed before this field existed, or sealed for a product line, carries no
+  `unit_key` and is `community` under a unit-key subject.** There is no silent grandfathering:
+  re-seal it with the unit's key as `subject` (the recorder's attestation is unchanged);
+- one recording is the validated evidence of ONE unit key. When the same trace is the validated
+  basis of bundles filed under two unit keys, the earlier filing keeps it and the later is
+  `community`. `POST /v1/machine/verify` with `seal` refuses to seal the later one (422
+  `invalid_subject`, naming the first); `change.service.reverify` has always refused it;
+- a stored `certified` tier (only a resealed body can carry one; the checker rejects it) is read
+  as `validated` at most. Nothing in this product certifies.
+
+A recording claimed under a mistyped maker or model with the right serial keeps that claim (the
+recorder's signature names the serial, so the typo can still read `validated` for the wrong key).
+There is no un-file in a hash-chained ledger: the remedy is a new recording attested for the unit,
+or a human decision recorded against it.
+
+**What this does not do.** The recorder trust list is the *server's* and is not scoped to a
+tenant, a machine or a serial: any key it names can attest any serial for any account. The seal
+is a hash, not a signature: whoever can write the ledger file can reseal a body with another
+`unit_key`. An attestation proves what a key signed, not that the machine is safe.
+
 ### Sealing, replay and the checker
 
 The sealed body (engine 6) records the assessment (`recorder_attestation`: statuses,
