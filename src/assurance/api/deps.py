@@ -661,6 +661,21 @@ def _payment_required(principal: Principal, error: str, remedy: str) -> HTTPExce
     account = principal.account
     assert account is not None
     note = _LAPSED_NOTE if account.ever_paid else ""
+    if account.is_manual_grant:
+        # Not the checkout/portal remedy: checkout would create a second account and a second
+        # ledger, splitting the evidence, and the portal has no Stripe customer to open.
+        # Whoever issued the pilot is who can change it.
+        remedy = (
+            "Your account is a pilot provisioned by an operator and invoiced outside Stripe; "
+            "its plan is changed by that operator, not by checkout (which would open a second "
+            "account and split your evidence). Ask whoever issued it.")
+        note = ""
+        if account.grant_lapsed:
+            remedy = (
+                f"Your pilot access, provisioned by an operator, ended on "
+                f"{account.grant_expires_on or 'a date this service cannot read'} (UTC). "
+                "Ask whoever issued it to extend it; checkout would open a second account and "
+                "split your evidence.")
     return HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail={

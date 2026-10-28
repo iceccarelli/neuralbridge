@@ -79,7 +79,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Machinery Annex III',
-    body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
+    body: 'What safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change.',
     href: `/docs/assurance/machinery`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-annex-iii',
@@ -192,7 +192,7 @@ export default function IndustrialAutonomousAssuranceSite() {
             </div>
             <div className="hero-panel">
               <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-              <div className="hero-code">{`pip install -e '.[assurance-attest]'
+              <div className="hero-code">{`pip install cryptography && export PYTHONPATH=src
 python -m assurance kit init plant/
 python -m assurance kit check plant/kit.json
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>

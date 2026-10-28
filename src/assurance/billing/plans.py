@@ -270,8 +270,8 @@ PLANS: dict[Tier, Plan] = {
             "For a manufacturer or integrator shipping machines: everything in "
             "Register, plus machine safety assurance: check a recorded run against "
             "the safety envelope you declared, track what safety software is on each "
-            "machine and who changed it, and know which safety functions still have "
-            "evidence that describes the machine as it is today."
+            "machine and who changed it, and know which safety functions have a "
+            "recorded verification dated after the last recorded change."
         ),
         price_env="ASSURANCE_PRICE_CELL",
         price_label="€1,290 / month",
@@ -309,8 +309,11 @@ PLANS: dict[Tier, Plan] = {
             "by a named person's waiver",
             "Counter-signed head attestation: POST /v1/ledger/attest signs the "
             "head of your ledger with a key you do not hold, so a rewind "
-            "contradicts a signed statement. Your ledger is never uploaded — "
-            "we sign three numbers and never see a record",
+            "contradicts a signed statement. It answers 503 until the operator "
+            "configures a service signing key, and none is configured on any "
+            "deployment today. Attestation sends three numbers and never a record; "
+            "machine verification (POST /v1/machine/verify) does receive the full "
+            "trace you submit",
         ),
     ),
     # Listed by public_catalogue() only when payg_available(): a deployment that

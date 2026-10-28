@@ -50,7 +50,7 @@ export default function CliPage() {
             <p>No account, no upload — every domain reads and writes local files unless it explicitly names an API call below.</p>
           </div>
           <p className="code-panel-label">Install and check</p>
-          <pre className="code-panel">{`pip install -e '.[assurance-attest]'
+          <pre className="code-panel">{`pip install cryptography && export PYTHONPATH=src   # from a checkout; nothing else to install
 python -m assurance                     # lists every domain
 python -m assurance kit init plant/     # a runnable kit
 python -m assurance kit check plant/kit.json`}</pre>

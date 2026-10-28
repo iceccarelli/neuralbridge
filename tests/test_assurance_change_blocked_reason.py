@@ -163,7 +163,7 @@ class TestTheMessagesTellTheTruth:
 # =====================================================================
 
 class TestCliSaysWhy:
-    def test_reverify_prints_the_reason_and_still_exits_zero(self, tmp_path, capsys):
+    def test_reverify_prints_the_reason_and_exits_not_cleared(self, tmp_path, capsys):
         from assurance.change.cli import main
 
         path = tmp_path / "cli.db"
@@ -177,7 +177,7 @@ class TestCliSaysWhy:
                    "--manifest", str(manifest_path),
                    "--verification-hash", bundle.content_hash, "--actor", "v.grimaldi"])
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 3        # accepted and sealed, but it cleared nothing: not success (B7)
         assert "awaiting_reverification" in out
         assert "blocked: below_validated_tier" in out
         assert "community" in out and "waive" in out and "attestation" in out

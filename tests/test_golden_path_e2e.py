@@ -314,6 +314,7 @@ class TestTheGoldenPath:
         collected = run_cli("collect", "run", "plans/cell.json", "--root", "exports/0501",
                             "--serial", "0501", "--actor", "m.keller", "--site", "Plant 2",
                             "--country", "DE", "--out", baseline_path, "--json",
+                            "--read-from-machine",     # the harness plays an on-machine collector (B6)
                             cwd=plant.root)
         assert collected.returncode == 0, collected.stdout + collected.stderr
         baseline = json.loads(collected.stdout)

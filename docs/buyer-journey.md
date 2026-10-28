@@ -36,21 +36,24 @@ reads on every request:
 
 ```bash
 export ASSURANCE_ACCOUNTS=./buyer-journey-accounts.db
-python3 - <<'PY'
-from assurance.billing.accounts import AccountStore
-store = AccountStore("buyer-journey-accounts.db")
-account = store.upsert_account(email="you@example.com", tier="cell", company="Your Company")
-key = store.issue_key(account.id, label="buyer-journey")
-print(key)
-PY
+python3 -m assurance billing grant --create --store "$ASSURANCE_ACCOUNTS" \
+    --email you@example.com --tier cell --company "Your Company" \
+    --note "buyer-journey walkthrough"
 ```
 
-Copy the printed key — it's shown once, only its hash is kept
-(`AccountStore.issue_key`'s own docstring). Export it:
+Copy the printed key — it's shown once, only its hash is kept. Export it:
 
 ```bash
 export BUYER_KEY=<the key printed above>
 ```
+
+`assurance billing grant` is the operator path for a pilot **invoiced outside Stripe**
+(the same command, against the hosted volume's `/data/accounts.db`, is the runbook in
+`deploy/assurance/README.md`). It works on the account file only: no network, no
+Stripe, no charge. The account it makes is marked `source: manual_grant` in
+`GET /v1/me` and is never mistaken for a Stripe-paid one; `--expires-on` ends it on a
+date, and a lapsed grant gets no evidence read-out (an open founder decision). **The
+founder decides who gets a grant.** Nothing here is evidence of a customer.
 
 ## 2. Start the assurance API and open your first Register case
 

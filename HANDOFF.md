@@ -74,6 +74,40 @@ standing facts; none of this is customer-validated.
   bundles. *Tests:* `tests/test_assurance_merge_interactions.py`. Still open: MCP `machine_verify` takes no
   `subject`, so an MCP-sealed verification is filed under `product@version` and never counts for a unit.
 
+## 0.00 Pilot-readiness work (branch `claude/pilot-readiness`, not merged)
+
+Found by walking the smallest evaluable-and-payable workflow for real, then reviewed
+independently (the review's findings are the second round). Zero revenue, customers and
+pilots remain the standing facts (§4.4); nothing here is evidence of one.
+
+- **An export folder is not a look at the machine.** `collect(hash_source=)` defaults to
+  `supplied_by_vendor` (tier ceiling `community`). `read_from_machine` is the operator's
+  assertion (`kit run` / `collect run --read-from-machine`, `"read_from_machine": true` in a
+  watch target), written into the manifest and the report limits and carried into a case
+  export as `hash_source_basis: operator_assertion`. Without it `not_a_look` refuses the manifest
+  for a re-verification and for hosted ingest, and `watch run` reports an unchanged hash as
+  degraded (exit 2), not quiet. A pilot that wants "one real change taken to closure" from
+  exports needs the assertion, or collection on the machine.
+- **`change reverify` exits 3** when the submission is recorded and cleared nothing (1 stays
+  "refused"). `machine verify` headlines a PASS over a self-declared trace as such; coverage
+  and the report say "evidence recorded, NOT validated (tier X)" below `validated`.
+- **`assurance billing grant | issue-key | revoke-key | extend | end | list`**: provision a
+  pilot invoiced outside Stripe on the local account store (no network, no Stripe). Marks
+  `source: manual_grant`; `ever_paid` stays false, so a lapsed grant gets no evidence
+  read-out (**open founder decision**, `EVIDENCE_READOUT_AFTER_LAPSE` untouched). Not
+  convertible through checkout (409 `pilot_account`). Runbook: `deploy/assurance/README.md`.
+- **Install truth.** `pip install cryptography` plus `PYTHONPATH=src` runs the offline kit;
+  `pip install -e '.[assurance-attest]'` installs the 22 core dependencies (the extra adds
+  nothing). The hosted counter-signature needs a service key configured on no deployment.
+- Kit: the shipped `ITM-ZONES` noise rule was a literal-backslash regex that matched nothing;
+  `kit check` names every placeholder; `machine verify --subject` warns when coverage will
+  not see it; a closed pipe exits 141 quietly (but `billing grant` revokes a key it could not
+  deliver).
+- Open: the trust-hardening, staleness-integrity and csaf-unsigned-trust branches edit
+  neighbouring code (`staleness.py` coverage strings, `plans.ts`/`plans.py` coverage line).
+
+---
+
 ## 0.0 Changes on 2026-10-23 (supersede §0.1 where they differ)
 
 Branch `claude/serene-gauss-va283c`, not merged. Verified locally against PostgreSQL 16;

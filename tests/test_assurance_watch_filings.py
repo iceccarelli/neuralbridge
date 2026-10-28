@@ -76,7 +76,8 @@ def site(tmp_path):
             "watch_id": "plant-1",
             "targets": [
                 {"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
-                 "site": "Plant 1", "country": "IT"}
+                 "site": "Plant 1", "country": "IT",
+                 "read_from_machine": True}      # the harness plays an on-machine watch
                 for s in ("CELL-0412", "CELL-0501")],
             "feeds": [{"supplier_id": "controlco", "feed": "feed.jsonl",
                        "public_key": "controlco.pub"}],

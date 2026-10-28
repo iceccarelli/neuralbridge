@@ -28,13 +28,14 @@ and when. That record is what this builds.
 ## Start here
 
 ```bash
-pip install -e '.[assurance-attest]'
+pip install cryptography                       # the one third-party package the offline kit imports
+export PYTHONPATH=src                          # run from the checkout; nothing else is installed
 python -m assurance kit init plant/            # a runnable kit
 python -m assurance kit check plant/kit.json    # what it would open. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
-Your ledger, your disk. No account, no API key, no upload. See
+Your ledger, your disk. For the kit: no account, no API key, no upload. See
 [Getting started](getting-started.md) for the full walkthrough, or the
 [Assurance engines](assurance/index.md) for what each command actually does.
 

@@ -21,7 +21,7 @@ const NEEDS: { key: NeedKey; label: string; gate: Gate }[] = [
   { key: 'annex3', gate: 'machine_verification', label: 'Machinery Annex III manifests and passports' },
   { key: 'fleet', gate: 'machine_verification', label: 'Fleet advisory fan-out across enrolled machines' },
   { key: 'change', gate: 'machine_verification', label: 'Change-assurance cases (open, claim, submit re-verification evidence; human-decided closure, over /v1/change/*)' },
-  { key: 'attest', gate: 'signed_attestation', label: 'Counter-signed head attestation' },
+  { key: 'attest', gate: 'signed_attestation', label: 'Counter-signed head attestation (needs a service signing key; none is configured on any deployment today)' },
 ];
 
 type Recommendation = { tier: string; reason: string };

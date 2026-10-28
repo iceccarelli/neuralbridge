@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import Any
 
 from assurance.core.identity import format_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.declaration import (
     DeclarationOfConformity,
@@ -249,7 +250,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
         f"<span class='site'>{e(m.machine.manufacturer)} {e(m.machine.model)}"
         + (f" · {e(m.machine.site)}" if m.machine.site else "") + "</span>",
         f"<span class='cfg'>config {e(m.configuration_hash()[:16])} · "
-        f"{len(m.items)} item(s) · tier {e(m.tier_ceiling.value)}</span>",
+        f"{len(m.items)} item(s) · tier ceiling {e(m.tier_ceiling.value)}</span>",
         "</header><div class='body'>",
     ]
     for f in sorted(record.coverage.functions,
@@ -490,15 +491,18 @@ def render_report(data: ReportInput) -> str:
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
-    below_validated = sum(1 for r in fleet.records
-                          if r.coverage.verdict == "covered_at_community")
-    parts.append(_tile(functions - uncovered, "functions with current evidence",
-                       "good" if (uncovered == 0 and not below_validated
-                                  and fleet.chain_verified) else ""))
-    if below_validated:
-        # Current is not demonstrated: say so beside the tile that says "current".
-        parts.append(_tile(below_validated, "machine(s) current only on evidence below "
-                           "validated", "warn"))
+    # The count is of functions with a verification recorded and no recorded change
+    # since. How much that verification is worth is its tier, so the tile shows the
+    # weakest tier among them and is coloured good only when that tier is validated.
+    floors = [AssuranceTier(r.coverage.evidence_tier_floor) for r in fleet.records
+              if r.coverage.evidence_tier_floor in {t.value for t in AssuranceTier}]
+    weakest = min(floors, key=lambda t: t.rank) if floors else None
+    floor = weakest.value if weakest else ""
+    strong = weakest is not None and weakest.may_claim_physical_behaviour
+    parts.append(_tile(
+        functions - uncovered,
+        "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),
+        ("good" if strong else "warn") if uncovered == 0 and floor else ""))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
                        "warn" if uncovered - stale else ""))
@@ -595,8 +599,9 @@ def render_report(data: ReportInput) -> str:
         "<p class='disclaimer'>This report is a record of what was collected, sealed and "
         "verified, and of what that evidence no longer supports. It is not a declaration "
         "of conformity and not a certification, and it does not say that any machine is "
-        "safe. Where it shows evidence as current, that means a recorded verification "
-        "still describes the configuration found, nothing more.</p>"
+        "safe. Where it shows evidence as current, that means no change has been recorded "
+        "since the verification run was recorded; the run is not bound to the "
+        "configuration found, and nothing more is claimed.</p>"
         "</footer></div></body></html>")
 
     return "".join(parts)
