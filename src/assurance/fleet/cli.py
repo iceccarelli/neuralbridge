@@ -12,7 +12,8 @@ whatever runs when a supplier bulletin lands or before a machine ships.
 Exit codes: 0 nothing found (and, for ``declaration``, the evidence was assessed and
 stands); 1 a finding; 2 could not vouch (an unverifiable ledger, an error, or a
 ``declaration`` check whose evidence was NOT assessed: only the configuration was
-compared, which is not a pass).
+compared, which is not a pass); 3 (``list``, ``declaration``) no gaps, but the cover
+rests only on evidence below ``validated``.
 """
 
 from __future__ import annotations
@@ -119,7 +120,11 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(fleet.table())
     if not fleet.chain_verified:
         return 2          # could not vouch for the ledger; not 'quiet', not 'gaps'
-    return 0 if not fleet.with_gaps() else 1
+    if fleet.with_gaps():
+        return 1
+    # 3: nothing is uncovered, but some machine is covered only on evidence below
+    # 'validated' (a declared provenance): standing, not demonstrated. Not a pass.
+    return 3 if fleet.covered_at_community() else 0
 
 
 #: Said once, loudly, wherever an unverified advisory is acted on. The point of
@@ -357,8 +362,11 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
     if status.is_sound:
         return 0
     # 2: could not vouch (the evidence was never looked at), as for an unverifiable ledger.
+    # 3: the evidence stands, but only below 'validated' (as for `machinery coverage`).
     # 1: a finding (changed configuration, wrong machine, lapsed evidence).
-    return 2 if status.verdict.is_unassessed else 1
+    if status.verdict.is_unassessed:
+        return 2
+    return 3 if status.verdict.is_below_validated else 1
 
 
 def main(argv: list[str] | None = None) -> int:

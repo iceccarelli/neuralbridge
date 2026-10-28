@@ -57,6 +57,11 @@ class DeclarationVerdict(StrEnum):
     DESCRIBES_THE_MACHINE = "describes_the_machine"
     #: The configuration is the declared one; some safety evidence has lapsed.
     CONFIGURATION_INTACT_EVIDENCE_LAPSED = "configuration_intact_evidence_lapsed"
+    #: The configuration is the declared one and every declared safety function reads
+    #: current, but on evidence below ``validated`` (a trace whose provenance the filer only
+    #: declared). The recorded evidence stands; it was not a demonstration on the machine.
+    CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED = (
+        "configuration_intact_evidence_below_validated")
     #: The configuration is the declared one and the evidence was never looked at: no
     #: coverage assessment was supplied, the manifest declares no safety function, or the
     #: assessment is for another machine or configuration. This is NOT a pass: the
@@ -70,6 +75,11 @@ class DeclarationVerdict(StrEnum):
     @property
     def is_sound(self) -> bool:
         return self is DeclarationVerdict.DESCRIBES_THE_MACHINE
+
+    @property
+    def is_below_validated(self) -> bool:
+        """Does the evidence stand, but only below ``validated``? Not a pass."""
+        return self is DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED
 
     @property
     def is_unassessed(self) -> bool:
@@ -359,6 +369,24 @@ def check_declaration(
             ),
             checks_skipped=tuple(caveats),
             evidence_assessed=False,
+        )
+
+    if coverage is not None and not coverage.is_demonstrated:
+        floor = coverage.evidence_tier_floor or "unknown"
+        return DeclarationStatus(
+            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
+            verdict=DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED,
+            declared_configuration=declaration.configuration_hash,
+            current_configuration=current, lapsed_functions=(),
+            statement=(
+                f"{manifest.machine.key} runs configuration {current[:12]}, which is the "
+                f"one declaration {declaration.doc_id} was signed against, and every "
+                f"declared safety function has evidence that still stands, but only at "
+                f"tier {floor!r}, below 'validated': it describes a recorded file or a "
+                "model whose provenance was declared, not a demonstration on the machine."
+            ),
+            checks_skipped=tuple(caveats),
+            evidence_assessed=True,
         )
 
     return DeclarationStatus(

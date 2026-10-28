@@ -41,7 +41,11 @@ from assurance.fleet.registry import Fleet
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
-from assurance.machinery.staleness import Coverage, CoverageReport
+from assurance.machinery.staleness import (
+    Coverage,
+    CoverageReport,
+    tier_reaches_validated,
+)
 
 __all__ = [
     "AssuranceVerdict",
@@ -68,6 +72,11 @@ class AssuranceVerdict(StrEnum):
     POTENTIALLY_AFFECTED = "potentially_affected"
     CANNOT_DETERMINE = "cannot_determine"
     NO_IMPACT_FOUND = "no_impact_found"
+    #: Every declared safety function reads current, on evidence below ``validated``: a trace
+    #: whose provenance the filer only declared (capped at ``community``). The recorded
+    #: evidence still stands; it was not a demonstration on the machine, so it is not
+    #: ``verified``.
+    VERIFIED_AT_COMMUNITY = "verified_at_community"
     VERIFIED = "verified"
 
     @property
@@ -75,7 +84,8 @@ class AssuranceVerdict(StrEnum):
         return {
             "requires_human_review": 0, "requires_reverification": 1,
             "insufficient_evidence": 2, "potentially_affected": 3,
-            "cannot_determine": 4, "no_impact_found": 5, "verified": 6,
+            "cannot_determine": 4, "no_impact_found": 5,
+            "verified_at_community": 6, "verified": 7,
         }[self.value]
 
 
@@ -101,11 +111,17 @@ class MachineAssuranceCheck:
     fleet_machines_affected: int | None
     assessed_at: str
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
+    #: Functions that read current on evidence below ``validated``. They are NOT in
+    #: ``evidence_valid``: standing evidence is not demonstrated evidence.
+    evidence_valid_below_validated: int = 0
+    #: The weakest tier among the verifications the current functions rest on, or "".
+    evidence_tier_floor: str = ""
 
     @property
     def affected(self) -> bool:
         return self.verdict not in (
             AssuranceVerdict.NO_IMPACT_FOUND, AssuranceVerdict.VERIFIED,
+            AssuranceVerdict.VERIFIED_AT_COMMUNITY,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,6 +135,8 @@ class MachineAssuranceCheck:
             "functions": list(self.functions),
             "evidence": {
                 "valid": self.evidence_valid,
+                "valid_below_validated": self.evidence_valid_below_validated,
+                "tier_floor": self.evidence_tier_floor,
                 "stale": self.evidence_stale,
                 "insufficient": self.evidence_insufficient,
                 "cannot_determine": self.evidence_cannot_determine,
@@ -175,23 +193,30 @@ def _match_manifest(manifest: SafetyManifest, advisory: ComponentAdvisory) -> tu
 
 
 def _tally(coverage: CoverageReport | None) -> tuple[
-    list[dict[str, Any]], int, int, int, int, list[str],
+    list[dict[str, Any]], int, int, int, int, list[str], int,
 ]:
     """Fold a coverage report into the four evidence buckets a customer reads.
 
     ``stale``/``failing`` are both work to do, so both land in
     ``required_actions``; ``never_verified`` has no prior evidence to lose, so
     it is reported as insufficient rather than as work a change caused.
+
+    ``valid`` counts functions current on evidence at ``validated`` or better; those
+    current on weaker evidence are the last element, ``below_validated``.
     """
     functions: list[dict[str, Any]] = []
-    valid = stale = insufficient = cannot_determine = 0
+    valid = stale = insufficient = cannot_determine = below_validated = 0
     required: list[str] = []
     if coverage is None:
-        return functions, valid, stale, insufficient, cannot_determine, required
+        return (functions, valid, stale, insufficient, cannot_determine, required,
+                below_validated)
     for f in coverage.functions:
         functions.append(f.to_dict())
         if f.coverage is Coverage.CURRENT:
-            valid += 1
+            if tier_reaches_validated(f.evidence_tier):
+                valid += 1
+            else:
+                below_validated += 1
         elif f.coverage is Coverage.STALE:
             stale += 1
             required.append(f.function_id)
@@ -202,14 +227,15 @@ def _tally(coverage: CoverageReport | None) -> tuple[
             insufficient += 1
         elif f.coverage is Coverage.NOT_DEMONSTRABLE:
             cannot_determine += 1
-    return functions, valid, stale, insufficient, cannot_determine, required
+    return (functions, valid, stale, insufficient, cannot_determine, required,
+            below_validated)
 
 
 def _decide_verdict(
     *, advisory_evaluated: bool, matches: list[dict[str, Any]],
     human_review_required: bool, coverage: CoverageReport | None,
     required_actions: list[str], valid: int, insufficient: int,
-    cannot_determine: int, chain_verified: bool = True,
+    cannot_determine: int, chain_verified: bool = True, below_validated: int = 0,
 ) -> AssuranceVerdict:
     """The customer's one answer.
 
@@ -218,7 +244,9 @@ def _decide_verdict(
     verify the answer is ``cannot_determine`` — unless something was found, in
     which case what was found stands (a broken chain can hide a record, never
     invent a match). And ``verified`` needs at least one declared function that is
-    current: a machine with no declared safety functions has nothing verified.
+    current: a machine with no declared safety functions has nothing verified. When every
+    function is current but any rests on evidence below ``validated``, the answer is
+    ``verified_at_community``, never ``verified``.
     """
     if advisory_evaluated:
         if not matches:
@@ -237,13 +265,15 @@ def _decide_verdict(
         return AssuranceVerdict.REQUIRES_REVERIFICATION
     if not chain_verified or not coverage.functions:
         return AssuranceVerdict.CANNOT_DETERMINE
-    if cannot_determine and not valid and not insufficient:
+    if cannot_determine and not (valid + below_validated) and not insufficient:
         # every declared function is NOT_DEMONSTRABLE: there is no check that
         # could ever cover it, which is a structural gap, not a missing
         # verification — "insufficient evidence" would imply one is owed.
         return AssuranceVerdict.CANNOT_DETERMINE
     if insufficient or cannot_determine:
         return AssuranceVerdict.INSUFFICIENT_EVIDENCE
+    if below_validated:
+        return AssuranceVerdict.VERIFIED_AT_COMMUNITY
     return AssuranceVerdict.VERIFIED
 
 
@@ -317,14 +347,14 @@ def run_enrolled_check(
             c for c in fleet_report.checks_skipped if c not in checks_skipped
         )
 
-    functions, valid, stale, insufficient, cannot_determine, required = _tally(
-        record.coverage
-    )
+    (functions, valid, stale, insufficient, cannot_determine, required,
+     below_validated) = _tally(record.coverage)
     verdict = _decide_verdict(
         advisory_evaluated=advisory is not None, matches=matches,
         human_review_required=human_review_required, coverage=record.coverage,
         required_actions=required, valid=valid, insufficient=insufficient,
         cannot_determine=cannot_determine, chain_verified=fleet.chain_verified,
+        below_validated=below_validated,
     )
     interventions = sorted(record.interventions, key=lambda i: i.occurred_at)
     latest = _intervention_summary(interventions[-1]) if interventions else None
@@ -345,4 +375,6 @@ def run_enrolled_check(
                                   if fleet_report is not None else None),
         assessed_at=format_utc(utc_now()),
         checks_skipped=tuple(dict.fromkeys(checks_skipped)),
+        evidence_valid_below_validated=below_validated,
+        evidence_tier_floor=record.coverage.evidence_tier_floor,
     )

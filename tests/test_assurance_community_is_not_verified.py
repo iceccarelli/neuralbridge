@@ -102,12 +102,11 @@ class TestCoverageVerdict:
 
     def test_a_gap_stays_a_gap_whatever_the_tier(self, tmp_path):
         led = ledger(tmp_path)
-        record_manifest(led, manifest(checks=("workspace_containment", "speed_limit",
-                                              "ssm_separation")))
-        community_bundle(KEY, file_under=led)
+        wide = manifest(checks=("workspace_containment", "speed_limit", "pfl_contact"))
+        record_manifest(led, wide)
+        community_bundle(KEY, file_under=led)       # never exercised pfl_contact
         report = assess_coverage(
-            manifest(checks=("workspace_containment", "speed_limit", "ssm_separation")),
-            VerificationRecord.from_ledger(led, subject=KEY), [])
+            wide, VerificationRecord.from_ledger(led, subject=KEY), [])
         assert report.verdict == "gaps"
 
 
@@ -224,6 +223,23 @@ class TestTheFleet:
         table = Fleet.from_ledger(_community_ledger(tmp_path)).table()
         assert "1 covered at community" in table
         assert "0 covered," in table
+
+
+class TestTheHtmlReport:
+    TILE = ('<div class="tile good"><div class="n">1</div>'
+            '<div class="k">functions with current evidence</div></div>')
+
+    def test_a_community_only_fleet_is_not_a_good_tile(self, tmp_path):
+        from assurance.report.render import ReportInput, render_report
+        html = render_report(ReportInput(ledger=_community_ledger(tmp_path)))
+        assert "current only on evidence below validated" in html
+        assert self.TILE not in html
+
+    def test_a_validated_fleet_keeps_its_good_tile_and_adds_no_warning(self, tmp_path):
+        from assurance.report.render import ReportInput, render_report
+        html = render_report(ReportInput(ledger=_validated_ledger(tmp_path)))
+        assert "current only on evidence below validated" not in html
+        assert self.TILE in html
 
 
 class TestTheDeclaration:

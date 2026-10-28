@@ -370,6 +370,14 @@ async def declaration_check(
     Whether a changed configuration amounts to a substantial modification is a
     question for the manufacturer and their notified body. What this settles is
     the fact that question rests on.
+
+    ``verdict`` is ``describes_the_machine`` only when the configuration is the declared
+    one AND the evidence was assessed (``evidence_assessed: true``: the caller has a plan
+    that reads its ledger and asked for ``with_coverage``) and every declared safety
+    function is current at ``validated`` or better. Without that, the answer is
+    ``configuration_matches_coverage_not_assessed`` (the evidence was not looked at; this is
+    the default for an anonymous caller) or
+    ``configuration_intact_evidence_below_validated``: neither is a pass.
     """
     try:
         declaration = DeclarationOfConformity.from_dict(body.declaration)

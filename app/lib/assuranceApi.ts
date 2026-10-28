@@ -16,10 +16,23 @@ export type FleetRow = {
   interventions: number;
   verifications: number;
   tier_ceiling: string;
+  // `verdict` is `covered` only when every declared function is current on evidence at
+  // `validated` or better; `covered_at_community` is current on weaker evidence (a declared
+  // provenance): the recorded evidence stands, the behaviour was not demonstrated on the machine.
+  // Optional: older servers omit the floor.
+  evidence_tier_floor?: string;
 };
 
 export type Fleet = {
-  summary: { machines: number; covered: number; with_gaps: number; by_worst: Record<string, number> };
+  summary: {
+    machines: number;
+    // machines = covered + covered_at_community + with_gaps. Optional: older servers count
+    // community cover as `covered` and omit this.
+    covered: number;
+    covered_at_community?: number;
+    with_gaps: number;
+    by_worst: Record<string, number>;
+  };
   machines: FleetRow[];
   chain_verified: boolean;
   chain_problems: string[];

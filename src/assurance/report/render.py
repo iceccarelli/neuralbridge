@@ -452,8 +452,14 @@ def render_report(data: ReportInput) -> str:
 
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
+    below_validated = sum(1 for r in fleet.records
+                          if r.coverage.verdict == "covered_at_community")
     parts.append(_tile(functions - uncovered, "functions with current evidence",
-                       "good" if uncovered == 0 else ""))
+                       "good" if uncovered == 0 and not below_validated else ""))
+    if below_validated:
+        # Current is not demonstrated: say so beside the tile that says "current".
+        parts.append(_tile(below_validated, "machine(s) current only on evidence below "
+                           "validated", "warn"))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
                        "warn" if uncovered - stale else ""))
