@@ -389,7 +389,10 @@ class TestTheHostedRoute:
         refused = self._verify(client, h, "Beta/XY-9#0001")
         assert refused.status_code == 422
         after = client.get("/v1/ledger/verify", headers=h)
-        assert after.json()["attestation"] == before.json()["attestation"]
+        stable = ("length", "head_seq", "head_link_hash")      # not `attested_at`, a clock
+        assert {k: after.json()["attestation"][k] for k in stable} == \
+            {k: before.json()["attestation"][k] for k in stable}
+        assert before.json()["attestation"]["length"] >= 1
 
     def test_the_same_recording_for_the_same_unit_again_is_fine(
             self, client, store, monkeypatch, tmp_path):
