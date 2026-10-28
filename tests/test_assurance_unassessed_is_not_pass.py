@@ -101,6 +101,24 @@ class TestTheLibrary:
         assert s.verdict.value == NOT_ASSESSED
         assert s.evidence_assessed is False
 
+    def test_a_coverage_report_for_the_same_machine_at_another_configuration_is_not_used(self):
+        man = manifest()
+        other_config = assess_coverage(manifest(fw="b" * 64), [], [])
+        assert other_config.machine_key == man.machine.key
+        s = check_declaration(_doc(man), man, other_config)
+        assert s.verdict.value == NOT_ASSESSED
+        assert s.evidence_assessed is False
+
+    def test_a_changed_configuration_says_whether_the_evidence_was_assessed(self):
+        man, changed = manifest(), manifest(fw="b" * 64)
+        none = check_declaration(_doc(man), changed, None)
+        assert none.verdict.value == "configuration_changed"
+        assert none.evidence_assessed is False
+        looked = check_declaration(_doc(man), changed, assess_coverage(changed, [], []))
+        assert looked.verdict.value == "configuration_changed"
+        assert looked.evidence_assessed is True
+        assert looked.lapsed_functions == ("SF-1",)
+
     def test_the_other_verdicts_are_unchanged(self):
         man = manifest()
         changed = check_declaration(_doc(man), manifest(fw="b" * 64), None)

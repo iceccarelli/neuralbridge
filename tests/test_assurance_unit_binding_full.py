@@ -29,7 +29,7 @@ import sqlite3
 import pytest
 
 from assurance.fleet.registry import Fleet
-from assurance.machine.bundle import build_bundle, check_bundle_data
+from assurance.machine.bundle import BUNDLE_KIND, build_bundle, check_bundle_data
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.record import build_passport, record_manifest
 from assurance.machinery.staleness import (
@@ -130,6 +130,15 @@ class TestOldBundlesAreNotGrandfathered:
         bundle, _ = legacy_bundle("0001")
         assert _tiers(tmp_path, bundle.evidence, KEY, None) == ["community"]
 
+    def test_the_reader_names_why_a_serial_only_bundle_is_not_validated(self, tmp_path):
+        bundle, rec = legacy_bundle("0001")
+        led = ledger(tmp_path)
+        led.append(bundle.evidence, subject=KEY)
+        (record,) = _read(led, KEY, rec.trust())
+        assert record.tier == "community"
+        assert record.tier_note.startswith("it was sealed without a unit key")
+        assert record.to_dict()["tier_note"] == record.tier_note
+
     def test_a_serial_less_bundle_is_community_under_a_unit_key(self, tmp_path):
         bundle, rec = legacy_bundle("")
         assert _tiers(tmp_path, bundle.evidence, KEY, rec.trust()) == ["community"]
@@ -156,6 +165,17 @@ class TestMalformedUnitKeys:
     def test_a_serial_less_bundle_under_a_key_with_two_hashes_is_community(self, tmp_path):
         bundle, rec = legacy_bundle("")
         assert _tiers(tmp_path, bundle.evidence, "mk/md#A#B", rec.trust()) == ["community"]
+
+    def test_the_serial_in_the_key_must_be_the_serial_sealed_even_with_no_trust_list(
+            self, tmp_path):
+        """No list to re-assess the attestation under: the body's own serial is the guard."""
+        bundle, _ = attested_bundle(KEY)
+        forged = reseal_body(bundle.evidence, unit_key="Acme/AR-7#0002")
+        assert _tiers(tmp_path, forged, "Acme/AR-7#0002", None) == ["community"]
+        ledger_note = ledger(tmp_path, "n.db")
+        ledger_note.append(forged, subject="Acme/AR-7#0002")
+        (record,) = _read(ledger_note, "Acme/AR-7#0002", None)
+        assert "matched against serial '0001', not '0002'" in record.tier_note
 
     def test_a_forged_body_naming_a_malformed_key_is_community(self, tmp_path):
         """Reseal a body that records the malformed key itself: only the well-formedness
@@ -284,6 +304,38 @@ class TestOneRecordingIsOneUnit:
         led.append(good.evidence, subject=KEY)
         assert [r.tier for r in _read(led, KEY, rec.trust())] == ["validated"]
 
+    def test_a_filing_the_unit_binding_already_caps_claims_nothing(self, tmp_path):
+        """Stored 'validated' but filed under a key it was not sealed for: it reads community
+        and so is no claim on the recording either."""
+        led = ledger(tmp_path)
+        rec, tr = Recorder(), laptop_trace()
+        stray, _ = legacy_bundle("0002", rec=rec, trace=tr)     # sealed with a serial only
+        assert stray.tier.value == "validated"
+        led.append(stray.evidence, subject="Beta/XY-9#0002")
+        good, _ = attested_bundle(KEY, rec=rec, trace=tr)
+        led.append(good.evidence, subject=KEY)
+        assert [r.tier for r in _read(led, "Beta/XY-9#0002", rec.trust())] == ["community"]
+        assert [r.tier for r in _read(led, KEY, rec.trust())] == ["validated"]
+
+    def test_an_entry_that_fails_its_own_seal_claims_nothing(self, tmp_path):
+        """A tampered earlier filing is skipped everywhere; it does not take the recording."""
+        import json
+        first, second = "Beta/XY-9#0002", KEY
+        led, rec = self._two_units(tmp_path, first=first, second=second)
+        db = sqlite3.connect(led.path)
+        seq, payload = db.execute(
+            "select seq,payload from chain where subject=? and kind=?",
+            (first, BUNDLE_KIND)).fetchone()
+        p = json.loads(payload)
+        p["body"]["verdict"] = "pass-edited"
+        db.execute("update chain set payload=? where seq=?",
+                   (json.dumps(p, sort_keys=True, separators=(",", ":")), seq))
+        db.commit()
+        db.close()
+        assert _read(led, first, rec.trust()) == []
+        (mine,) = _read(led, second, rec.trust())
+        assert mine.tier == "validated" and mine.tier_note == ""
+
     def test_it_holds_without_a_trust_list_too(self, tmp_path):
         first, second = KEY, "Beta/XY-9#0002"
         led, _ = self._two_units(tmp_path, first=first, second=second)
@@ -332,11 +384,12 @@ class TestTheHostedRoute:
         server_trust(monkeypatch, tmp_path)
         h = keyed(store, "cell")
         self._verify(client, h, "Acme/AR-7#0001")
-        before = client.get("/v1/evidence", headers=h)
-        self._verify(client, h, "Beta/XY-9#0001")
-        after = client.get("/v1/evidence", headers=h)
-        if before.status_code == 200:
-            assert after.json() == before.json()
+        before = client.get("/v1/ledger/verify", headers=h)
+        assert before.status_code == 200 and before.json()["verified"] is True
+        refused = self._verify(client, h, "Beta/XY-9#0001")
+        assert refused.status_code == 422
+        after = client.get("/v1/ledger/verify", headers=h)
+        assert after.json()["attestation"] == before.json()["attestation"]
 
     def test_the_same_recording_for_the_same_unit_again_is_fine(
             self, client, store, monkeypatch, tmp_path):

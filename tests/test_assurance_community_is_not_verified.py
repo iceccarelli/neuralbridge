@@ -133,6 +133,22 @@ class TestThePassport:
         assert passport.verdict == "covered"
         assert passport.evidence.validation_state.value == "verified"
 
+    def test_a_validated_floor_beside_covered_at_community_is_refused(self, tmp_path):
+        """The state is only for cover below validated: a file that says otherwise is edited."""
+        from assurance.core.evidence import Evidence
+        led = _validated_ledger(tmp_path)
+        raw = json.loads(json.dumps(build_passport(led, manifest(), actor=ACTOR,
+                                                   seal=False).to_dict()))
+        assert raw["evidence"]["body"]["evidence_tier_floor"] == "validated"
+        raw["evidence"]["body"]["verdict"] = "covered_at_community"
+        raw["coverage"]["verdict"] = "covered_at_community"
+        raw["evidence"]["content_hash"] = Evidence.from_dict(raw["evidence"]).compute_hash()
+        path = tmp_path / "edited.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        ok, problems = verify_passport(path)
+        assert ok is False
+        assert any("covered_at_community" in p for p in problems)
+
     def test_a_passport_sealed_before_the_state_existed_still_checks(self, tmp_path):
         """A passport filed by the previous release recorded verdict 'covered' beside a
         community floor and was already INDETERMINATE / low. It is not rejected for that."""
@@ -272,6 +288,29 @@ class TestTheCliExitCodes:
 
     def _db(self, tmp_path: Path) -> str:
         return str(tmp_path / "ledger.db")
+
+    def test_fleet_declaration_exit_3_for_community_and_0_for_validated(self, tmp_path,
+                                                                         capsys):
+        man = manifest()
+        m, d = tmp_path / "manifest.json", tmp_path / "doc.json"
+        m.write_text(json.dumps(man.to_dict()), encoding="utf-8")
+        d.write_text(json.dumps(DeclarationOfConformity.bind(
+            man, doc_id="DOC-1", issued_by="G", issued_at=datetime(2026, 10, 1, tzinfo=UTC),
+            legislation=("Regulation (EU) 2023/1230",)).to_dict()), encoding="utf-8")
+        _community_ledger(tmp_path)
+        rc = fleet_cli(["declaration", str(d), "--manifest", str(m),
+                        "--ledger", self._db(tmp_path), "--json"])
+        out = json.loads(capsys.readouterr().out)
+        assert out["verdict"] == "configuration_intact_evidence_below_validated"
+        assert out["evidence_assessed"] is True
+        assert rc == 3
+        other = tmp_path / "v"
+        other.mkdir()
+        _validated_ledger(other)
+        rc = fleet_cli(["declaration", str(d), "--manifest", str(m),
+                        "--ledger", str(other / "ledger.db"), "--json"])
+        assert json.loads(capsys.readouterr().out)["verdict"] == "describes_the_machine"
+        assert rc == 0
 
     def test_machinery_coverage_exit_3_for_community(self, tmp_path, capsys):
         _community_ledger(tmp_path)
