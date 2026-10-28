@@ -510,6 +510,27 @@ class TestReadingHandTypedFunctionIds:
                    for c in report.checks_skipped)
 
 
+class TestAChangeIsCheckedAgainstTheNewestSealedManifest:
+    def test_a_function_declared_only_by_the_newest_manifest_is_known(self, ledger):
+        from dataclasses import replace
+
+        from assurance.machinery.record import UnknownFunctionError, check_intervention
+
+        record_manifest(ledger, manifest(mid="M-A"))
+        newer = manifest(mid="M-B")
+        newer = replace(newer, functions=(*newer.functions,
+                                          SafetyFunction("SF-2", "second", verified_by=CHECKS)))
+        record_manifest(ledger, newer)
+        checked, used = check_intervention(
+            ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("sf-2",)))
+        assert checked.affects_functions == ("SF-2",)
+        assert used.manifest_id == "M-B"
+        with pytest.raises(UnknownFunctionError) as refused:
+            check_intervention(
+                ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=("SF-3",)))
+        assert refused.value.unknown == ("SF-3",)
+
+
 class TestTheInterventionRouteChecksWhatItIsTold:
     def _ready(self, client, store):
         headers = keyed(store, "cell")
@@ -825,7 +846,7 @@ class TestWhichManifestDifferencesAreChanges:
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A", extra_items=(doc,)))
         seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
         record_intervention(ledger, update(when=utc_now() - timedelta(hours=1), item="doc",
-                                           from_hash="c" * 64, to_hash=HASH_B, affects=()))
+                                           from_hash="", to_hash=HASH_B, affects=()))
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B", extra_items=(doc,)))
         assert any(i.intervention_id.startswith("implied:") and i.item_id == "fw"
                    for i in interventions_from_ledger(ledger, KEY))
