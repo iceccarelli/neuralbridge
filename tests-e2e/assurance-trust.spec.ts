@@ -71,6 +71,40 @@ test.describe('Assurance workspace — supplier trust, classification, record so
   };
   const state = (page: Page, id: string) => adv(page).getByTestId(id);
 
+  test('an unsigned CSAF import inside a signed feed is marked, with no case control and no override form', async ({ page }) => {
+    // The server's behaviour (row.automated_consequences_permitted is false for an import even
+    // under a pinned key) is pinned in tests/test_assurance_csaf_trust_round2.py against the real
+    // API. This test stubs ONE thing, labelled here: it takes the real /v1/fleet/advisory/signed
+    // response for the seeded feed and adds the import record the server sends for such a row, so
+    // the page's rendering of it can be seen. Nothing else is stubbed.
+    await page.route('**/v1/fleet/advisory/signed', async (route) => {
+      const real = await route.fetch();
+      const body = await real.json();
+      body.inspect_only = true;
+      body.advisories[0].automated_consequences_permitted = false;
+      body.advisories[0].inspect_only = true;
+      body.advisories[0].advisory_import = {
+        origin: 'csaf_import', trust: 'unsigned_inspect_only', partial: true,
+        dropped: [{ product_id: 'B', reason: 'defined only in full_product_names' }],
+        severity_source: 'defaulted_by_importer', tlp: '', tracking_status: 'final',
+        document_category: 'csaf_security_advisory', document_date: '2026-10-02T08:30:00Z', notes: [],
+      };
+      await route.fulfill({ response: real, json: body });
+    });
+    await enter(page, seed.key_g);
+    await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    await evaluate(page, seed.supplier.feed_path);
+    const first = adv(page).getByTestId('trust-advisory').first();
+    const marker = first.getByTestId('signed-import-marker');
+    await expect(marker).toHaveAttribute('data-advisory-trust', 'unsigned_inspect_only');
+    await expect(marker).toContainText(/Unsigned import inside a signed feed/);
+    await expect(marker).toContainText(/partial/);
+    await expect(first).toHaveAttribute('data-permitted', 'false');
+    await expect(first.getByRole('button', { name: /Open assurance case from/ })).toBeDisabled();
+    await expect(first.getByTestId('case-disabled-why')).toBeVisible();
+    await expect(first.getByTestId('override-flow')).toHaveCount(0);
+  });
+
   test('with no key pinned the feed is readable but not trusted: inspect only, no case control, states apart', async ({ page, request }) => {
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });

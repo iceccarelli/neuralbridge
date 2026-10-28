@@ -188,6 +188,8 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await panel(page).getByLabel(/Your name/).fill('e2e.reviewer');
     await expect(open).toBeDisabled();
     await panel(page).getByTestId('accept-unsigned').getByRole('checkbox').check();
+    await expect(open).toBeDisabled(); // a reason is needed too
+    await panel(page).getByLabel(/^Why/).fill('read against the publisher page');
     await expect(open).toBeEnabled();
 
     // The same refusal from the API itself, with a named person but no explicit override. Nothing
