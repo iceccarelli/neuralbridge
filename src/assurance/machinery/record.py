@@ -28,7 +28,7 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machine.trace import MAX_FILE_BYTES
@@ -132,10 +132,17 @@ def record_intervention(
 ) -> Evidence:
     """Seal an intervention record. Findings are carried, not suppressed.
 
+    Refused (:class:`UnknownMachineError`, :class:`UnknownFunctionError`) when it cannot
+    be about anything this ledger holds; see :func:`check_intervention`.
+
     An intervention with no authorisation and no revalidation is still recorded —
     and its own ``findings`` become the evidence object's ``checks_skipped``, so
     the gap travels with the record instead of being lost between systems.
     """
+    # The library is the single gate: a change filed under a key no manifest was sealed
+    # for, or against a function no manifest declares, is about nothing the coverage
+    # assessment reads. Raises UnknownMachineError / UnknownFunctionError; nothing is written.
+    intervention, _ = check_intervention(ledger, intervention)
     findings = intervention.findings
     evidence = Evidence(
         kind=INTERVENTION_KIND,
@@ -232,32 +239,41 @@ _READER = Actor(identifier="assurance.ledger-reader", role="derived, not recorde
                 kind="automation")
 
 
-def _unreadable(machine_key: str, *, seq: int, at: datetime, why: str) -> UnreadableIntervention:
+def _unreadable(
+    machine_key: str, *, seq: int, at: datetime, why: str, what: str = "change record",
+) -> UnreadableIntervention:
     return UnreadableIntervention(
-        intervention_id=f"{UNREADABLE_PREFIX}seq-{seq}" if seq else f"{UNREADABLE_PREFIX}ledger",
-        machine_key=machine_key, item_id="(unreadable)", kind=InterventionKind.RECONSTRUCTED,
-        occurred_at=at, performed_by=_READER,
-        reason=f"a change record that cannot be read: {why}",
+        intervention_id=f"{UNREADABLE_PREFIX}{'manifest-' if what == 'manifest' else ''}"
+                        f"seq-{seq}",
+        machine_key=machine_key,
+        item_id="(unreadable manifest)" if what == "manifest" else "(unreadable)",
+        kind=InterventionKind.RECONSTRUCTED, occurred_at=at, performed_by=_READER,
+        reason=f"a {what} that cannot be read: {why}",
         notes="derived by the reader; nobody sealed this", ledger_seq=seq, why=why,
     )
 
 
+@dataclass(frozen=True)
+class _Filed:
+    """A readable intervention with where and when the ledger says it was filed."""
+
+    intervention: Intervention
+    filed: datetime
+    seq: int
+
+
 def _read_interventions(
     ledger: EvidenceLedger, machine_key: str,
-) -> list[Intervention]:
+) -> tuple[list[_Filed], list[UnreadableIntervention]]:
     """Every intervention filed under the key: the ones that read, and a stand-in for each
-    one that does not. A record is dropped from the list only by being a different kind."""
-    out: list[Intervention] = []
-    try:
-        entries = ledger.entries(kind=INTERVENTION_KIND, subject=machine_key)
-    except ValueError as exc:     # a stored row that is not JSON: we cannot even tell which
-        return [_unreadable(machine_key, seq=0, at=utc_now(),
-                            why=f"the intervention rows could not be read: {exc}")]
+    one that does not. A record is dropped only by being a different kind."""
+    clock = ledger.filing_clock(machine_key)
+    entries, damaged = ledger.entries_tolerant(kind=INTERVENTION_KIND, subject=machine_key)
+    good: list[_Filed] = []
+    lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
+                        why=row.why) for row in damaged]
     for entry in entries:
-        try:
-            filed = parse_utc(entry.at)
-        except (ValueError, TypeError):
-            filed = utc_now()
+        filed = clock.get(entry.seq) or utc_now()
         try:
             evidence = entry.evidence()
             if not evidence.verify():
@@ -267,28 +283,34 @@ def _read_interventions(
                 raise ValueError(f"it is filed under {entry.subject!r} but names "
                                  f"{found.machine_key!r}")
         except (AssuranceError, KeyError, ValueError, TypeError, AttributeError) as exc:
-            out.append(_unreadable(machine_key, seq=entry.seq, at=filed, why=str(exc)[:200]))
+            lost.append(_unreadable(machine_key, seq=entry.seq, at=filed, why=str(exc)[:200]))
             continue
-        out.append(found)
-    return out
+        good.append(_Filed(found, filed, entry.seq))
+    return good, lost
 
 
 def _sealed_manifests(
     ledger: EvidenceLedger, machine_key: str,
-) -> list[tuple[datetime, int, SafetyManifest]]:
-    """Readable manifests for a machine with the ledger's filing time and position,
-    oldest first."""
-    out: list[tuple[datetime, int, SafetyManifest]] = []
-    for entry in ledger.entries(kind=MANIFEST_KIND, subject=machine_key):
+) -> tuple[list[tuple[datetime, int, SafetyManifest]], list[UnreadableIntervention]]:
+    """Readable manifests for a machine with the ledger's filing time and position, oldest
+    first; and a stand-in for each one that cannot be read (assumed to have changed
+    everything, dated when it was filed)."""
+    clock = ledger.filing_clock(machine_key)
+    entries, damaged = ledger.entries_tolerant(kind=MANIFEST_KIND, subject=machine_key)
+    good: list[tuple[datetime, int, SafetyManifest]] = []
+    lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
+                        why=row.why, what="manifest") for row in damaged]
+    for entry in entries:
+        filed = clock.get(entry.seq) or utc_now()
         try:
             evidence = entry.evidence()
             if not evidence.verify():
-                continue
-            out.append((parse_utc(entry.at), entry.seq,
-                        SafetyManifest.from_dict(evidence.body["manifest"])))
-        except (AssuranceError, KeyError, ValueError, TypeError, AttributeError):
-            continue
-    return out
+                raise ValueError("it no longer matches its own seal; the body was edited")
+            good.append((filed, entry.seq, SafetyManifest.from_dict(evidence.body["manifest"])))
+        except (AssuranceError, KeyError, ValueError, TypeError, AttributeError) as exc:
+            lost.append(_unreadable(machine_key, seq=entry.seq, at=filed,
+                                    why=str(exc)[:200], what="manifest"))
+    return good, lost
 
 
 def _explains(
@@ -319,9 +341,11 @@ def _explains(
 
 
 def implied_interventions(
-    ledger: EvidenceLedger, machine_key: str, recorded: list[Intervention],
-) -> list[ImpliedIntervention]:
-    """Changes the ledger's own manifests show that no intervention record explains.
+    ledger: EvidenceLedger, machine_key: str, recorded: list[_Filed],
+    *, manifests: tuple[list[tuple[datetime, int, SafetyManifest]],
+                        list[UnreadableIntervention]] | None = None,
+) -> list[Intervention]:
+    """Changes the ledger's own manifests show, and manifests it cannot read.
 
     Walk the readable manifests in the order they were filed. Each ``as_found`` manifest
     is compared with the latest earlier one that was a look or a declaration (a plan,
@@ -329,14 +353,18 @@ def implied_interventions(
     not a configuration, so it is never the earlier side and items it did not collect are
     not read as removed). A safety-bearing item whose hash differs, or that appeared or
     vanished, is a change; so is a version moving on a safety-bearing item that carries no
-    hash to compare (the only sign there is).
+    hash to compare (the only sign there is). A manifest that cannot be read at all is
+    assumed to have changed everything (see :class:`UnreadableIntervention`).
 
-    A change is *explained* when an intervention for the same item, dated after the
-    earlier look and no later than the filing of the manifest that showed it, accounts
-    for it (see :func:`_explains`): for a changed hash its ``to_hash`` must be the hash
-    now found. An explained change is the intervention's, with its own date. An
-    unexplained one becomes an :class:`ImpliedIntervention` dated when the manifest that
-    showed it was filed, not the manifest's own ``taken_at``.
+    Every such change is an :class:`ImpliedIntervention`, dated when the manifest that
+    showed it was FILED (the ledger's filing clock, never the manifest's own ``taken_at``,
+    which is the filer's word). A recorded intervention for the same item, dated after the
+    earlier look and no later than that filing, whose ``to_hash`` is the hash now found,
+    *explains* it (see :func:`_explains`): the change is marked ``explained_by`` it and
+    dated no later than the explanation was FILED. It is never removed. An explanation
+    carries the filer's word about when the change happened, and a record that could be
+    back-dated to before the last verification would erase the change in one call; filed
+    time cannot be back-dated.
 
     What counts is the smallest sound rule, not the whole truth: only items that
     implement a declared safety function; only changes visible between two manifests of
@@ -345,17 +373,18 @@ def implied_interventions(
     The conservative direction is stale: a verification that began before the change was
     filed is read as no longer describing the machine until one is run after it.
     """
-    out: list[ImpliedIntervention] = []
+    sealed, lost = manifests if manifests is not None else _sealed_manifests(ledger, machine_key)
+    explicit = recorded
+    out: list[Intervention] = list(lost)
     prior: tuple[datetime, SafetyManifest] | None = None
-    explicit = [i for i in recorded if not isinstance(i, UnreadableIntervention)]
-    for filed, seq, manifest in _sealed_manifests(ledger, machine_key):
+    for filed, seq, manifest in sealed:
         if manifest.machine.key != machine_key:
             continue
         if manifest.source is ManifestSource.AS_INTENDED:
             continue
         partial = _PARTIAL_LOOK_MARK in manifest.notes
         if prior is not None and manifest.source is ManifestSource.AS_FOUND:
-            prior_filed, before = prior
+            _, before = prior
             divergence = compare(before, manifest)
             for change in divergence.changes:
                 if partial and change.kind is ChangeKind.REMOVED:
@@ -367,21 +396,28 @@ def implied_interventions(
                     continue
                 found = (change.after or {}).get("content_hash", "")
                 was = (change.before or {}).get("content_hash", "")
-                if any(_explains(i, change, was=was, found=found,
-                                 after=before.taken_at, until=filed) for i in explicit):
-                    continue
+                why = next((r for r in explicit
+                            if _explains(r.intervention, change, was=was, found=found,
+                                         after=before.taken_at, until=filed)), None)
+                when, order = filed, seq
+                if why is not None and (why.filed, why.seq) < (filed, seq):
+                    when, order = why.filed, why.seq
                 out.append(ImpliedIntervention(
-                    intervention_id=f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}:"
+                    intervention_id=f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}@{seq}:"
                                     f"{change.item_id}",
                     machine_key=machine_key, item_id=change.item_id,
-                    kind=InterventionKind.RECONSTRUCTED, occurred_at=filed,
+                    kind=InterventionKind.RECONSTRUCTED, occurred_at=when,
                     performed_by=_READER,
                     reason=f"the ledger's manifests show {change.item_id} changed "
-                           f"({change.kind.value}) and no intervention record explains it",
-                    from_hash=was, ledger_seq=seq,
-                    to_hash=found, affects_functions=tuple(change.functions),
+                           f"({change.kind.value})"
+                           + (f"; recorded as {why.intervention.intervention_id}"
+                              if why else " and no intervention record explains it"),
+                    from_hash=was, ledger_seq=order, to_hash=found,
+                    affects_functions=tuple(change.functions),
+                    observed_configuration=manifest.configuration_hash(),
+                    explained_by=why.intervention.intervention_id if why else "",
                     notes="derived by comparing sealed manifests; nobody recorded this "
-                          f"change. {change.detail}",
+                          f"change as a change. {change.detail}",
                 ))
         if not partial:
             prior = (filed, manifest)
@@ -393,23 +429,27 @@ def interventions_from_ledger(
 ) -> list[Intervention]:
     """Every change to a machine the ledger can account for, in the order they occurred.
 
-    The sealed interventions, plus two kinds of record nobody wrote and every consumer
-    must treat as changes:
+    The sealed interventions, plus the records nobody wrote and every consumer must treat
+    as changes:
 
     * an :class:`UnreadableIntervention` for each record filed as an intervention that
       cannot be used (its seal fails, it is not an intervention, or its row is not JSON).
       The one input whose absence only ever makes evidence look *fresher* is never
       silently dropped; and
     * with ``include_implied`` (the default), an :class:`ImpliedIntervention` for each
-      safety-bearing change the ledger's own manifests show with no record explaining it
-      (see :func:`implied_interventions`).
+      safety-bearing change the ledger's own manifests show (see
+      :func:`implied_interventions`), and an :class:`UnreadableIntervention` for each
+      manifest that cannot be read.
 
     ``include_implied=False`` is for a caller that wants only what was recorded.
     """
-    recorded = _read_interventions(ledger, machine_key)
+    good, lost = _read_interventions(ledger, machine_key)
+    out: list[Intervention] = [r.intervention for r in good] + list(lost)
     if include_implied:
-        recorded = [*recorded, *implied_interventions(ledger, machine_key, recorded)]
-    return sorted(recorded, key=lambda i: i.occurred_at)
+        sealed = _sealed_manifests(ledger, machine_key)
+        if len(sealed[0]) + len(sealed[1]) > 1 or sealed[1]:
+            out.extend(implied_interventions(ledger, machine_key, good, manifests=sealed))
+    return sorted(out, key=lambda i: i.occurred_at)
 
 
 class InterventionRefusedError(AssuranceError):
@@ -441,14 +481,24 @@ def check_intervention(
     :class:`UnknownFunctionError` when it names a safety function the manifest does not
     declare. Nothing is written by this function.
     """
-    sealed = _sealed_manifests(ledger, intervention.machine_key)
+    sealed, _ = _sealed_manifests(ledger, intervention.machine_key)
     if not sealed:
         raise UnknownMachineError(
             f"no manifest is sealed in this ledger under the unit key "
             f"{intervention.machine_key!r}. A unit key is maker/model#serial, exactly as "
             "sealed (a different case or serial is a different unit). Seal the unit's "
             "manifest first, or correct the key.")
-    manifest = sealed[-1][2]
+    # What was found and declared, not what is planned: the functions of the newest look
+    # and the newest declaration together. A plan (`as_intended`) with fewer functions
+    # must not make a declared function unknown.
+    looks = [m for _, _, m in sealed if m.source is not ManifestSource.AS_INTENDED]
+    base = looks[-1] if looks else sealed[-1][2]
+    functions = {f.function_id: f for f in base.functions}
+    for source in (ManifestSource.AS_FOUND, ManifestSource.AS_DECLARED):
+        newest = next((m for m in reversed(looks) if m.source is source), None)
+        for f in (newest.functions if newest else ()):
+            functions.setdefault(f.function_id, f)
+    manifest = replace(base, functions=tuple(functions.values()))
     resolved, unknown = manifest.resolve_function_ids(intervention.affects_functions)
     if unknown:
         declared = ", ".join(f.function_id for f in manifest.functions) or "none declared"

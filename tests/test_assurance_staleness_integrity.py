@@ -130,6 +130,31 @@ def ledger(tmp_path: Path) -> EvidenceLedger:
     return EvidenceLedger(tmp_path / "ledger.db")
 
 
+class Clock:
+    """The ledger's clock, held and moved by the test (what ``at`` is stamped from)."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.now = datetime(2026, 10, 1, tzinfo=UTC)
+        monkeypatch.setattr("assurance.evidence.ledger.utc_now", lambda: self.now)
+
+    def at(self, hour: int, minute: int = 0, day: int = 1) -> datetime:
+        self.now = datetime(2026, 10, day, hour, minute, tzinfo=UTC)
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    return Clock(monkeypatch)
+
+
+def file_unchecked(ledger: EvidenceLedger, iv: Intervention) -> None:
+    """File an intervention the way an older writer (or a hand-edited ledger) could have:
+    with none of the checks ``record_intervention`` now makes. The READER must cope."""
+    ledger.append(Evidence(
+        kind=INTERVENTION_KIND, body={"intervention": iv.to_dict(), "findings": []},
+        actor=iv.performed_by, origin=Origin(system="test")).seal(), subject=iv.machine_key)
+
+
 def edit_payload(ledger: EvidenceLedger, seq: int, edit) -> None:
     db = sqlite3.connect(ledger.path)
     payload = json.loads(db.execute("select payload from chain where seq=?", (seq,))
@@ -445,8 +470,7 @@ class TestTheJoinDoesNotDependOnAHandTypedList:
     def test_a_change_to_a_safety_item_disturbs_what_the_manifest_says_it_implements(
             self, ledger, label, affects):
         verified_machine(ledger)
-        record_intervention(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC),
-                                           affects=affects))
+        file_unchecked(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC), affects=affects))
         report, _ = coverage_of(ledger)
         fn = report.functions[0]
         assert fn.coverage is Coverage.STALE, label
@@ -651,10 +675,13 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
         seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
         record_intervention(ledger, update(when=utc_now() - timedelta(hours=3)))
-        seal(ledger, utc_now() - timedelta(hours=2), tid="REVERIFY", expect="pass")
+        seal(ledger, utc_now(), tid="REVERIFY", expect="pass")   # begins after it was filed
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
         report, _ = coverage_of(ledger, m=manifest(fw=HASH_B))
         assert report.functions[0].coverage is Coverage.CURRENT
+        (marker,) = [i for i in interventions_from_ledger(ledger, KEY)
+                     if i.intervention_id.startswith("implied:")]
+        assert marker.explained_by == "INT-1"
 
     def test_an_intervention_naming_another_hash_does_not_explain_the_change(self, ledger):
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
@@ -790,7 +817,7 @@ class TestWhichManifestDifferencesAreChanges:
             kind=InterventionKind.REMOVAL, occurred_at=utc_now() - timedelta(hours=1),
             performed_by=TECH, reason="module removed", affects_functions=("SF-1",))
         record_intervention(ledger, removal)
-        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        seal(ledger, utc_now(), tid="AFTER", expect="pass")
         newer = manifest(mid="M-B")
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)
@@ -818,7 +845,7 @@ class TestWhichManifestDifferencesAreChanges:
             kind=InterventionKind.INSTALL, occurred_at=utc_now() - timedelta(hours=1),
             performed_by=TECH, reason="module installed", affects_functions=("SF-1",))
         record_intervention(ledger, install)
-        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        seal(ledger, utc_now(), tid="AFTER", expect="pass")
         added = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
                            HashSource.READ_FROM_MACHINE, implements=("SF-1",))
         newer = manifest(mid="M-B", extra_items=(added,))
@@ -849,6 +876,7 @@ class TestWhichManifestDifferencesAreChanges:
                                            from_hash="", to_hash=HASH_B, affects=()))
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B", extra_items=(doc,)))
         assert any(i.intervention_id.startswith("implied:") and i.item_id == "fw"
+                   and i.explained_by == ""
                    for i in interventions_from_ledger(ledger, KEY))
 
     def test_an_intervention_dated_after_the_manifest_was_filed_does_not_explain_it(
@@ -859,7 +887,8 @@ class TestWhichManifestDifferencesAreChanges:
         record_intervention(ledger, update(when=utc_now() + timedelta(days=30)))
         seal(ledger, utc_now(), tid="AFTER", expect="pass")
         ivs = interventions_from_ledger(ledger, KEY)
-        assert any(i.intervention_id.startswith("implied:") for i in ivs)
+        assert any(i.intervention_id.startswith("implied:") and i.explained_by == ""
+                   for i in ivs)
 
     def test_a_record_whose_from_hash_is_not_the_one_before_does_not_explain_it(self, ledger):
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
@@ -868,7 +897,8 @@ class TestWhichManifestDifferencesAreChanges:
                                            from_hash="c" * 64, to_hash=HASH_B))
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
         ivs = interventions_from_ledger(ledger, KEY)
-        assert any(i.intervention_id.startswith("implied:") for i in ivs)
+        assert any(i.intervention_id.startswith("implied:") and i.explained_by == ""
+                   for i in ivs)
 
     def test_a_digest_written_with_a_prefix_or_in_capitals_is_the_same_hash(self, ledger):
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
@@ -876,8 +906,9 @@ class TestWhichManifestDifferencesAreChanges:
         record_intervention(ledger, update(when=utc_now() - timedelta(hours=1),
                                            to_hash="SHA256:" + HASH_B.upper()))
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
-        assert not [i for i in interventions_from_ledger(ledger, KEY)
-                    if i.intervention_id.startswith("implied:")]
+        (marker,) = [i for i in interventions_from_ledger(ledger, KEY)
+                     if i.intervention_id.startswith("implied:")]
+        assert marker.explained_by == "INT-1"
 
     def test_the_partial_look_mark_is_the_one_the_watch_writes(self):
         from assurance.change.service import INCOMPLETE_COLLECTION_MARK

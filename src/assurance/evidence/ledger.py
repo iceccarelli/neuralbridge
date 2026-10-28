@@ -35,25 +35,26 @@ import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..core.errors import LedgerConflictError, LedgerIntegrityError
 from ..core.evidence import Evidence
-from ..core.identity import content_hash_of, format_utc, utc_now
+from ..core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
-           "AnchorContradictsLedgerError", "EvidenceLedger", "LedgerEntry"]
+           "AnchorContradictsLedgerError", "DamagedRow", "EvidenceLedger", "LedgerEntry"]
 
 LEDGER_SCHEMA_VERSION = 1
 
-#: ``prev_hash`` of the first record. A fixed, published constant so that an
-#: empty chain and a truncated chain are distinguishable.
 _UNREADABLE_ROW = ("a stored record is not readable JSON ({exc}) -- the ledger file was "
                    "edited or damaged outside this system")
 
+#: ``prev_hash`` of the first record. A fixed, published constant so that an
+#: empty chain and a truncated chain are distinguishable.
 GENESIS = "0" * 64
 
 #: Most other-subject entries a subject bundle carries as a skeleton (seq, at, kind,
@@ -127,6 +128,18 @@ class LedgerEntry:
 
     def evidence(self) -> Evidence:
         return Evidence.from_dict(self.payload)
+
+
+@dataclass(frozen=True)
+class DamagedRow:
+    """A ledger row whose payload cannot be read at all (see ``entries_tolerant``)."""
+
+    seq: int
+    at: str
+    kind: str
+    subject: str
+    content_hash: str
+    why: str
 
 
 class EvidenceLedger:
@@ -348,6 +361,78 @@ class EvidenceLedger:
             return int(db.execute("SELECT COUNT(*) FROM chain").fetchone()[0])
         finally:
             db.close()
+
+    def entries_tolerant(
+        self, *, subject: str | None = None, kind: str | None = None,
+    ) -> tuple[list[LedgerEntry], list[DamagedRow]]:
+        """Like :meth:`entries`, but a row whose payload is not JSON is reported, not raised.
+
+        Returns ``(readable, damaged)``. A reader whose job is to notice that something
+        recorded here is no longer usable (a coverage assessment, say) must not be taken
+        out by the very row it needs to count: ``entries`` raises on the first such row and
+        names none. The damaged row's position and filing time still come from the columns
+        the link hash covers.
+        """
+        sql = "SELECT * FROM chain"
+        clauses, args = [], []
+        if subject is not None:
+            clauses.append("subject = ?")
+            args.append(subject)
+        if kind is not None:
+            clauses.append("kind = ?")
+            args.append(kind)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY seq"
+        readable: list[LedgerEntry] = []
+        damaged: list[DamagedRow] = []
+        db = self._connect()
+        try:
+            for row in db.execute(sql, args):
+                try:
+                    readable.append(self._row_to_entry(row))
+                except ValueError as exc:
+                    damaged.append(DamagedRow(
+                        seq=row["seq"], at=row["at"], kind=row["kind"],
+                        subject=row["subject"], content_hash=row["content_hash"],
+                        why=f"the stored payload is not JSON ({exc})"))
+        finally:
+            db.close()
+        return readable, damaged
+
+    def filing_clock(self, subject: str | None = None) -> dict[int, datetime]:
+        """When each record was filed, as the ledger can vouch for it: ``seq -> time``.
+
+        The ``at`` column is stamped from the clock of the machine that wrote the record,
+        and a clock can step backwards (NTP, DST, a restored VM). A reader that dates a
+        change or a run by it would then see a record filed *before* ones that came
+        earlier in the chain. So a record's filing time is the latest ``at`` among the
+        records at or before it in the chain (for ``subject``, or the whole ledger when
+        none): time as the chain saw it never runs backwards. Reads no payload, so a
+        damaged row has a time too. An unparseable ``at`` takes the time before it.
+        """
+        sql = "SELECT seq, at FROM chain"
+        args: list[Any] = []
+        if subject is not None:
+            sql += " WHERE subject = ?"
+            args.append(subject)
+        sql += " ORDER BY seq"
+        out: dict[int, datetime] = {}
+        latest: datetime | None = None
+        db = self._connect()
+        try:
+            for row in db.execute(sql, args):
+                try:
+                    stamped = parse_utc(row["at"])
+                except (ValueError, TypeError):
+                    stamped = None
+                if stamped is not None and (latest is None or stamped > latest):
+                    latest = stamped
+                if latest is not None:
+                    out[row["seq"]] = latest
+        finally:
+            db.close()
+        return out
 
     # -- integrity --------------------------------------------------------
     @staticmethod

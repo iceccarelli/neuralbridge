@@ -56,7 +56,7 @@ from enum import StrEnum
 from typing import Any
 
 from assurance.core.errors import AssuranceError
-from assurance.core.identity import format_utc, parse_utc
+from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.bundle import (
     BUNDLE_KIND,
@@ -241,6 +241,18 @@ class VerificationRecord:
     #: ``effective_at`` is then the filing time. A pass in such a record is read as the
     #: earliest possible instant and is never current; a failure in it still fails.
     date_suspect: bool = False
+    #: When the ledger says this was filed, as the chain vouches for it (see
+    #: ``EvidenceLedger.filing_clock``: never earlier than a record before it). A FAILURE
+    #: is dated by this and never by ``effective_at``, which the filer chose: a logger with
+    #: a dead clock must not be able to sort its failing run under an older pass. A pass
+    #: supersedes a failure only if it *began* after the failure was filed. ``None`` for a
+    #: record built by hand, which is then dated by ``effective_at``.
+    filed_at: datetime | None = None
+    #: True for a stand-in for a bundle the ledger holds and the reader cannot use (its
+    #: seal fails, or its row is not readable). It is assumed to have failed every check,
+    #: dated when it was filed; ``unreadable_why`` says why.
+    unreadable: bool = False
+    unreadable_why: str = ""
 
     def __post_init__(self) -> None:
         if self.effective_at.tzinfo is None:
@@ -268,6 +280,8 @@ class VerificationRecord:
             "checks_not_verified": list(self.checks_not_verified),
             "checks_not_applicable": list(self.checks_not_applicable),
             "date_suspect": self.date_suspect,
+            "filed_at": format_utc(self.filed_at) if self.filed_at else "",
+            "unreadable": self.unreadable,
         }
 
     @classmethod
@@ -281,25 +295,46 @@ class VerificationRecord:
         ``validated`` tier is kept only if the recorded attestation still re-assesses
         under it (revocation takes effect). See :func:`_believed_tier`.
 
-        A bundle whose evidence no longer matches its own hash is skipped rather
-        than trusted: a tampered record must not be able to make a stale
-        function look current.
+        A bundle that cannot be used (its seal no longer matches, it is not a bundle, or its
+        row is not JSON) is never dropped: a tampered record must not be able to make a
+        function look current by disappearing, and a failing run is the record somebody
+        has most reason to damage. It becomes a stand-in assumed to have failed every
+        check, dated when the ledger says it was filed.
         """
+        clock = ledger.filing_clock(subject)
+        readable, damaged = ledger.entries_tolerant(kind=BUNDLE_KIND, subject=subject)
+
+        def stand_in(seq: int, content_hash: str, filed: datetime, why: str) -> VerificationRecord:
+            return cls(
+                content_hash=content_hash, effective_at=filed, ledger_seq=seq,
+                product="", product_version="", verdict="unreadable", tier="",
+                checks_verified=(), checks_not_verified=(), filed_at=filed,
+                unreadable=True, unreadable_why=why[:200])
+
         out: list[VerificationRecord] = []
-        for entry in ledger.entries(kind=BUNDLE_KIND, subject=subject):
-            evidence = entry.evidence()
-            if not evidence.verify():
+        for row in damaged:
+            out.append(stand_in(row.seq, row.content_hash,
+                                clock.get(row.seq) or utc_now(), row.why))
+        for entry in readable:
+            filed = clock.get(entry.seq) or utc_now()
+            try:
+                evidence = entry.evidence()
+                if not evidence.verify():
+                    raise ValueError("it no longer matches its own seal; the body was edited")
+                body = evidence.body
+                if not isinstance(body, dict):
+                    raise TypeError("the body is not an object")
+                checks = [c for c in (body.get("checks") or [])
+                          if isinstance(c, dict) and isinstance(c.get("name"), str)]
+            except (AssuranceError, KeyError, ValueError, TypeError, AttributeError) as exc:
+                out.append(stand_in(entry.seq, entry.content_hash, filed, str(exc)))
                 continue
-            body = evidence.body
-            checks = [c for c in (body.get("checks") or [])
-                      if isinstance(c, dict) and isinstance(c.get("name"), str)]
             verified = tuple(c["name"] for c in checks
                              if c.get("outcome") == "verified")
             others = tuple(c["name"] for c in checks
                            if c.get("outcome") != "verified")
             not_applicable = tuple(c["name"] for c in checks
                                    if c.get("outcome") == "not_applicable")
-            filed = parse_utc(entry.at)
             suspect = False
             try:
                 effective = parse_utc(str(body.get("trace_started_at")))
@@ -326,8 +361,9 @@ class VerificationRecord:
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
                 date_suspect=suspect,
+                filed_at=filed,
             ))
-        return out
+        return sorted(out, key=lambda v: v.ledger_seq)
 
 
 @dataclass(frozen=True)
@@ -453,6 +489,13 @@ class CoverageReport:
 UNDATABLE_PREFIX = "undatable:"
 
 
+def _fail_time(v: VerificationRecord) -> datetime:
+    """When a FAILURE in ``v`` is taken to have happened: when it was filed, the latest it
+    can have run. The run's own start is the filer's word, and a failure dated by it can
+    be sorted under any older pass by a clock set to 1970."""
+    return v.filed_at or v.effective_at
+
+
 def _cover_time(v: VerificationRecord) -> datetime:
     """When a PASS in ``v`` is believed to describe the machine, for ordering and for
     deciding which changes came after it. An undatable pass describes no known moment."""
@@ -469,8 +512,10 @@ def _came_after(i: Intervention, v: VerificationRecord) -> bool:
     the verification in the same second are not read as stale for it.
     """
     cover = _cover_time(v)
-    if i.occurred_at != cover:
-        return i.occurred_at > cover
+    if i.occurred_at > cover:
+        return True
+    if i.occurred_at < cover:
+        return False
     seq = getattr(i, "ledger_seq", 0)
     return not (seq and v.ledger_seq > seq)
 
@@ -528,26 +573,29 @@ def assess_coverage(
         A run in which the check was not applicable says nothing either way and
         is skipped; a newer failing run ends the cover an older passing one gave.
 
-        Each outcome is dated in the direction that is safe for it. A pass in a record
-        whose date cannot be used is the earliest instant there is, so anything dated
-        outranks it; a failure in such a record keeps its filing time, the latest it can
-        have run, so an older pass cannot outrank it. A run that began after that failure
-        was filed does.
+        Each outcome is dated in the direction that is safe for it. A pass is dated by when
+        its run began (the earliest instant there is, when that date cannot be used), so a
+        pass can only look older than it is. A failure is dated by when it was FILED, the
+        latest it can have run, whatever start it claims: an older pass cannot outrank it.
+        A pass supersedes a failure only if it began after the failure was filed.
         """
-        best: tuple[tuple[datetime, int, int], VerificationRecord, bool] | None = None
+        candidates: list[tuple[tuple[datetime, int, int], VerificationRecord, bool]] = []
         for index, v in enumerate(verifs):
             # Failure first: a record that carries the same check as both verified and
-            # failed is contradictory, and contradictory evidence is not cover.
-            if check in v.failed_checks:
+            # failed is contradictory, and contradictory evidence is not cover. A damaged
+            # record is assumed to have failed everything.
+            if v.unreadable or check in v.failed_checks:
                 passed = False
             elif check in v.checks_verified:
                 passed = True
             else:
                 continue
-            key = (_cover_time(v) if passed else v.effective_at, v.ledger_seq, index)
-            if best is None or key >= best[0]:
-                best = (key, v, passed)
-        return None if best is None else (best[1], best[2])
+            when = _cover_time(v) if passed else _fail_time(v)
+            candidates.append(((when, v.ledger_seq, index), v, passed))
+        if not candidates:
+            return None
+        _, newest, newest_passed = max(candidates, key=lambda c: c[0])
+        return newest, newest_passed
 
     for fn in sorted(manifest.functions, key=lambda f: f.function_id):
         checks = set(fn.verified_by)
@@ -577,16 +625,23 @@ def assess_coverage(
 
         if failing:
             last = max((e[0] for e in failing.values()),
-                       key=lambda v: (v.effective_at, v.ledger_seq))
+                       key=lambda v: (_fail_time(v), v.ledger_seq))
+            if last.unreadable:
+                why = (f"a verification record in the ledger (position {last.ledger_seq}) is "
+                       f"damaged ({last.unreadable_why}) and is assumed to have failed "
+                       f"{', '.join(sorted(failing))}. A run that began after it was filed "
+                       "supersedes it")
+            else:
+                why = (f"the most recent run of {', '.join(sorted(failing))} "
+                       f"({last.content_hash[:12]}, {last.verdict}) did not pass "
+                       "it. Coverage has never been established, or has ended")
             coverages.append(FunctionCoverage(
                 function_id=fn.function_id, description=fn.description,
                 required_performance=fn.required_performance,
                 coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
                 last_verified_hash=last.content_hash,
-                last_verified_at=format_utc(last.effective_at),
-                detail=f"the most recent run of {', '.join(sorted(failing))} "
-                       f"({last.content_hash[:12]}, {last.verdict}) did not pass "
-                       "it. Coverage has never been established, or has ended.",
+                last_verified_at=format_utc(_fail_time(last)),
+                detail=why + ".",
             ))
             continue
 
@@ -694,6 +749,13 @@ def assess_coverage(
             "current here means the recorded evidence still stands, not that the "
             "behaviour was demonstrated on the machine."
         )
+    for v in verifs:
+        if v.unreadable:
+            caveats.append(
+                f"verification record at ledger position {v.ledger_seq} is damaged "
+                f"({v.unreadable_why}). It is assumed to have failed every check, dated "
+                "when the ledger says it was filed; a run that began after that stands."
+            )
     for v in verifs:
         if v.date_suspect:
             caveats.append(
