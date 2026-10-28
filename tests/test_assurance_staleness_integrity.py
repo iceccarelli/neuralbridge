@@ -1125,10 +1125,12 @@ class TestTheOfflineCommandsAgree:
 
     def test_coverage_json_names_the_unreadable_record_and_exits_1(
             self, tmp_path, ledger, capsys):
+        """A record that is sealed (the chain verifies) but is not an intervention. A
+        chain that does not verify is refused outright by the CLI (exit 2)."""
         verified_machine(ledger)
-        record_intervention(ledger, update(when=datetime(2026, 10, 1, tzinfo=UTC)))
-        edit_payload(ledger, _intervention_seq(ledger),
-                     lambda p: p["body"]["intervention"].update(reason="cosmetic"))
+        ledger.append(Evidence(kind=INTERVENTION_KIND, body={"intervention": {"oops": 1}},
+                               actor=TECH, origin=Origin(system="test")).seal(), subject=KEY)
+        assert ledger.verify_chain()[0]
         code, out, _ = _run_cli(["coverage", str(self._files(tmp_path, ledger)),
                                  "--ledger", str(ledger.path), "--json"], capsys)
         body = json.loads(out)
@@ -1137,6 +1139,7 @@ class TestTheOfflineCommandsAgree:
         assert body["functions"][0]["coverage"] == "stale"
         assert body["functions"][0]["invalidated_by"].startswith("unreadable:")
         assert body["unrevalidated_interventions"] == [body["functions"][0]["invalidated_by"]]
+
 
     def test_coverage_json_names_the_implied_change(self, tmp_path, ledger, capsys):
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
