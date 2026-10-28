@@ -311,6 +311,11 @@ async def change_assess_drift(
     Cell-tier only. Both manifests are the caller's claim about the machine, and the
     engine judges them as such; this opens a case for a person to work, it does not
     clear or close anything. ``actor`` is the named person this step is taken for.
+
+    Read ``baseline_source`` in the answer before reporting a verdict: ``ledger`` means
+    the account's own sealed baseline was used (and ``request_baseline_ignored`` says if
+    yours differed); ``request`` means the account has none, so "unchanged" only says the
+    two manifests you sent match each other, not that the machine matches anything sealed.
     """
     return await _call("POST", "/v1/change/assess/drift",
                        json_body={"baseline": baseline, "observed": observed, "actor": actor})
