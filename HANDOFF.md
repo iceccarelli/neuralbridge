@@ -8,7 +8,12 @@ so, because a handoff that flatters the work is worse than no handoff.
 below were observed on 2026-10-21, not carried forward from older text.
 
 **Verified 2026-10-29** at `bdfd2db`: `python -m pytest tests/ -q --no-cov` with the Postgres env
-from `ci.yml` — 6535 passed, 0 skipped; `ruff check src/ tests/` clean. `npx tsc` / `npm run build` were not run.
+from `ci.yml` — 6535 passed, 0 skipped; `ruff check src/ tests/` clean. `npx tsc --noEmit` and
+`npm run build` (Next 16.4.3, TypeScript 5.9.3) exit 0. Re-run on `5eb0a51` after the workflow pack: 6550 passed, 0 skipped.
+Sandbox gotcha: pip and npm bypass the egress proxy because `NO_PROXY`/`no_proxy`/`npm_config_noproxy` list the
+registries, and fail with a DNS error that npm reports as "Exit handler never called". Clear all three **in the same
+command** (`NO_PROXY= no_proxy= npm_config_noproxy=x npm ci`); a Postgres started with `service postgresql start`
+does not survive across tool calls, and `NEURALBRIDGE_REQUIRE_POSTGRES=1` turns that into errors, not skips.
 
 ---
 
