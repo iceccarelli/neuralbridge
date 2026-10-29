@@ -92,7 +92,7 @@ Nothing in this repository can do these; none has been done.
 - [ ] The five browser checks in `SMOKE.md`, with Stripe's test card.
 - [ ] In the Stripe dashboard (test mode), *Send test webhook* or complete a test checkout, to show **real** delivery rather than a synthetic signed event.
 - [ ] `fly ssh console -C "python -m assurance.billing.reconcile"` (dry run) against the TEST account; read the report.
-- [ ] Optional: `ASSURANCE_ATTEST_KEY_PEM` if you want to show counter-signed attestation.
+- [ ] Optional: `ASSURANCE_ATTEST_KEY_PEM` (counter-signed attestation) and `ASSURANCE_RECORDER_TRUST` (without it nothing hosted rises above `community`). Where each comes from and how to rotate or revoke: `deploy/assurance/TRUST-RUNBOOK.md`.
 - [ ] Revoke any Fly token that was ever pasted into an agent chat (§0).
 - [ ] Enable GitHub Pages for the docs site if you want them public (not needed for the rehearsal).
 - [ ] Anything involving live Stripe keys, real cards, a production Fly app, announcing, or outreach. None of it is in this document.
