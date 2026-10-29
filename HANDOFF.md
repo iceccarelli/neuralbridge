@@ -28,6 +28,20 @@ does not survive across tool calls, and `NEURALBRIDGE_REQUIRE_POSTGRES=1` turns 
   the bundle, swaps the trace and drops the trust list; each is rejected or downgraded. The pack's first draft was
   rejected by the engine for dating a calibration after the run it supported — that is the `input_dates` check working.
   Not in the pack: the emergency-stop function (no trace check can demonstrate it).
+- **Fleet pack** `examples/fleet/run.py` (five invented machines, one ledger, the shipped advisory): covered at
+  validated, covered at community only, stale after an unverified firmware change, never verified, and an advisory that
+  matches by hash on some, is "contradictory label versus hash" on one (needs a person, counted neither affected nor
+  clear) and prints the "paperwork, not observed" caveat on all. Found by building it: `assurance fleet list --json`
+  (and what `/v1/fleet/machines` serves from the same method) was alphabetical while the command is documented "worst
+  coverage first" and the table is; `Fleet.worst_first()` now orders both. Independent oracle:
+  `neuralbridge-stress-test/tests/test_fleet_pack.py` (red on the old order, green on the new).
+- **MCP** gained five read-or-verify tools: `machine_check`, `evidence_verify`, `machinery_coverage`,
+  `machinery_passport_check`, `fleet_report`. None decides or records, none can supply a trust list or key; the tool
+  list is pinned in `deploy/assurance/CHANGE.md` and `tests/test_interfaces_mcp.py`, and live tests run them against a
+  real API on the workflow pack's artefacts (an edited bundle and an edited passport are rejected through MCP too).
+  Still not on MCP, by design: anything that writes the ledger (manifest, intervention, passport seal) or decides a case.
+- **Founder checklist** for the two production settings is at the end of `deploy/assurance/TRUST-RUNBOOK.md`; nothing on
+  it has been done.
 - **`evidence verify` on a machine bundle or passport** still exits 2 (it checks ledger exports only) but names
   `machine check` / `machinery check` instead of "no `entries` list". The hosted `/v1/evidence/verify` is still the one
   verifier that dispatches on kind; the offline CLI is not unified.
