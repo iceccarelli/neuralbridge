@@ -295,6 +295,12 @@ class TestTheCrashWindow:
         sealed_hash = manifests_from_ledger(ledger, KEY_0501)[-1].content_hash()
         assert sealed_hash in {link["content_hash"]
                                for link in store.list()[0].linked_evidence}
+        # ...and only that one: the reading that was never sealed is not left behind as a
+        # second "observed manifest" pointer (a repeat look at the same drift is the same
+        # fact read again, so the freshest reading replaces its evidence pointers).
+        observed = [link["content_hash"] for link in store.list()[0].linked_evidence
+                    if link.get("note") == "observed manifest"]
+        assert observed == [sealed_hash]
         assert reconstruct_case(ledger, drifted.case_id).ok
         ok, problems = ledger.verify_chain()
         assert ok, problems

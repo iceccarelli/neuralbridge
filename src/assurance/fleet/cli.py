@@ -8,6 +8,11 @@
 
 ``advisory`` and ``declaration`` exit non-zero on a finding, so both belong in
 whatever runs when a supplier bulletin lands or before a machine ships.
+
+``advisory`` exit codes: 0 every advisory is clear; 1 a finding (a match, or a ledger whose
+chain does not verify); 2 the command could not run; 3 INCOMPLETE: nothing matched, but at
+least one advisory is a partial translation of its source (``import-csaf`` dropped an
+affected product), so "nothing matched" is not "nothing is affected".
 """
 
 from __future__ import annotations
@@ -19,9 +24,10 @@ from pathlib import Path
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, ComponentAdvisory
-from assurance.fleet.csaf import advisory_from_csaf
+from assurance.fleet.csaf import advisory_from_csaf, load_csaf_document
 from assurance.fleet.declaration import (
     DeclarationOfConformity,
     check_declaration,
@@ -75,9 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
     ic.add_argument("csaf", type=Path, help="a CSAF 2.0 document as JSON")
     ic.add_argument("--out", type=Path, default=None,
                     help="write the advisory here instead of standard output")
-    ic.add_argument("--severity", default="safety_relevant",
+    ic.add_argument("--severity", default=None,
                     choices=[s.value for s in AdvisorySeverity],
-                    help="CSAF does not say; the default over-reports rather than clears")
+                    help="CSAF does not say. Without this the advisory is imported as "
+                         "safety_relevant (over-report rather than clear) and the file "
+                         "records that the importer chose it; with it, the file records "
+                         "that you did")
+    ic.add_argument("--allow-draft", action="store_true",
+                    help="import a document whose tracking status is draft or interim "
+                         "(refused otherwise); the result is marked partial")
 
     dc = verbs.add_parser("declare",
                           help="bind a declaration to a manifest's configuration")
@@ -260,6 +272,11 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
     fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
     reports = [assess_impact(a, fleet, provenance=provenance.get(a.advisory_id))
                for a in advisories]
+    for a in advisories:
+        if a.import_record is not None:
+            notes = [*notes, f"{neutralise(a.advisory_id)} is an unsigned CSAF import "
+                             f"({a.import_record.trust}); it was assessed for inspection "
+                             "only."]
 
     if args.json:
         print(json.dumps({
@@ -269,30 +286,58 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
         }, indent=2))
     else:
         for advisory, report in zip(advisories, reports, strict=True):
-            print(f"{advisory.advisory_id} — {advisory.title}")
+            print(f"{neutralise(advisory.advisory_id)} — {neutralise(advisory.title)}")
             print(report.summary())
             if report.checks_skipped:
                 print("\n  not checked:")
                 for c in report.checks_skipped:
-                    print(f"    - {c}")
+                    print(f"    - {neutralise(c)}")
             print()
         print("  provenance:")
         for note in notes:
-            print(f"    - {note}")
-    return 0 if all(r.verdict == "clear" for r in reports) else 1
+            print(f"    - {neutralise(note)}")
+    if all(r.verdict == "clear" for r in reports):
+        return 0
+    if all(r.verdict == "clear" or (r.incomplete and not r.exposures and r.chain_verified)
+           for r in reports):
+        return 3      # nothing matched, but the translation was partial: not clear
+    return 1
 
 
 def _cmd_import_csaf(args: argparse.Namespace) -> int:
-    document = json.loads(args.csaf.read_text(encoding="utf-8"))
-    result = advisory_from_csaf(document, severity=AdvisorySeverity(args.severity))
-    text = json.dumps(result.advisory.to_dict(), indent=2, sort_keys=True) + "\n"
+    if args.out is not None:
+        try:
+            same = args.out.exists() and args.csaf.exists() and args.out.samefile(args.csaf)
+        except OSError:
+            same = False
+        if same or args.out.absolute() == args.csaf.absolute():
+            print(f"error: --out {args.out} is the input file; the source document is "
+                  "never overwritten.", file=sys.stderr)
+            return 2
+    document = load_csaf_document(args.csaf)
+    result = advisory_from_csaf(
+        document, severity=AdvisorySeverity(args.severity) if args.severity else None,
+        allow_draft=args.allow_draft)
+    advisory = result.advisory
+    record = advisory.import_record
+    text = json.dumps(advisory.to_dict(), indent=2, sort_keys=True) + "\n"
     if args.out:
         args.out.write_text(text, encoding="utf-8")
     else:
         print(text, end="")
     for note in result.notes:
-        print(f"note: {note}", file=sys.stderr)
-    print(f"imported {result.advisory.advisory_id} ({len(result.advisory.affected)} affected "
+        print(f"note: {neutralise(note)}", file=sys.stderr)
+    if record is not None:
+        print(f"severity: {advisory.severity.value} "
+              f"({record.severity_source.replace('_', ' ')})", file=sys.stderr)
+        if record.partial:
+            print("PARTIAL: the advisory written is NOT the whole document; "
+                  + ("not imported: " + ", ".join(neutralise(i) for i in record.dropped_ids)
+                     if record.dropped else "; ".join(neutralise(r)
+                                                       for r in record.partial_reasons))
+                  + ". It is marked partial and no consumer will report it as clear.",
+                  file=sys.stderr)
+    print(f"imported {neutralise(advisory.advisory_id)} ({len(advisory.affected)} affected "
           f"component(s)); run `assurance fleet advisory <file> --ledger ...` to see which "
           "machines it touches.", file=sys.stderr)
     return 0
@@ -365,8 +410,8 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except (AssuranceError, ValueError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    except (AssuranceError, ValueError, OSError) as exc:
+        print(f"error: {neutralise(exc)}", file=sys.stderr)
         return 2
 
 

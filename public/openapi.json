@@ -2170,6 +2170,11 @@
       "assurance__api__change_routes__AdvisoryIn": {
         "additionalProperties": false,
         "properties": {
+          "accept_unsigned": {
+            "default": false,
+            "title": "Accept Unsigned",
+            "type": "boolean"
+          },
           "actor": {
             "default": "",
             "maxLength": 200,
@@ -2180,6 +2185,12 @@
             "additionalProperties": true,
             "title": "Advisory",
             "type": "object"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
           }
         },
         "required": [

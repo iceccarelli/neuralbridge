@@ -30,6 +30,7 @@ from enum import StrEnum
 from typing import Any
 
 from assurance.core.identity import parse_utc, utc_now
+from assurance.core.text import neutralise
 
 __all__ = [
     "CaseStatus",
@@ -270,6 +271,16 @@ class ChangeAssuranceCase:
         if self.before_hash or self.after_hash:
             lines.append(f"  config     {self.before_hash[:12] or '—'} -> "
                          f"{self.after_hash[:12] or '—'}")
+        if self.provenance.get("advisory_trust"):
+            p = self.provenance
+            lines.append(
+                f"  !! UNAUTHENTICATED ADVISORY: {p['advisory_trust']} ({p.get('advisory_origin', '')}); "
+                f"accepted by {p.get('advisory_accepted_by', '?')}"
+                + (f"; PARTIAL, not imported: {p.get('advisory_dropped_products') or 'see reasons'}"
+                   if p.get("advisory_partial") == "true" else "")
+                + (f"; TLP:{p['advisory_tlp']}" if p.get("advisory_tlp") else "")
+                + (f"; severity {p['advisory_severity_source'].replace('_', ' ')}"
+                   if p.get("advisory_severity_source") else ""))
         lines.append("")
         lines.append("  what changed:")
         for c in self.changed_items:
@@ -324,7 +335,9 @@ class ChangeAssuranceCase:
             for ref in self.linked_evidence:
                 lines.append(f"    {ref.get('relation', '')}: "
                              f"{ref.get('content_hash', '')[:16]}  {ref.get('note', '')}")
-        return "\n".join(lines)
+        # Much of this came from files nobody here wrote (advisories, manifests): a terminal
+        # escape or a direction override in any of it must not reach the reader's screen.
+        return neutralise("\n".join(lines), multiline=True)
 
     def to_dict(self) -> dict[str, Any]:
         out = self._to_dict()
