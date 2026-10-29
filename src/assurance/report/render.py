@@ -210,6 +210,15 @@ _COVERAGE_WORDS = {
 }
 
 
+def _pill(coverage: str, chain_ok: bool) -> str:
+    """A function's coverage word. On a chain that does not verify the green "Current" is not
+    shown: the rows were read from a store whose records can have been deleted or edited, the
+    same reason ``Fleet`` demotes the machine to ``gaps``."""
+    if coverage == "current" and not chain_ok:
+        return "<span class='pill unchecked'>Chain not verified</span>"
+    return f"<span class='pill {e(coverage)}'>{e(_COVERAGE_WORDS[coverage])}</span>"
+
+
 def _tile(value: Any, label: str, tone: str = "") -> str:
     return (f'<div class="tile {tone}"><div class="n">{e(value)}</div>'
             f'<div class="k">{e(label)}</div></div>')
@@ -222,11 +231,12 @@ def _fleet_table(fleet: Fleet) -> str:
     body = []
     for r in rows:
         worst = r.worst.value if r.worst else "—"
+        worst_cell = (_pill(worst, r.chain_verified) if worst in _COVERAGE_WORDS
+                      else f"<span class='pill {e(worst)}'>{e(worst)}</span>")
         body.append(
             f"<tr><td class='mono'>{e(r.machine_key)}</td>"
             f"<td>{e(r.site or '—')}</td>"
-            f"<td><span class='pill {e(worst)}'>"
-            f"{e(_COVERAGE_WORDS.get(worst, worst))}</span></td>"
+            f"<td>{worst_cell}</td>"
             f"<td class='n'>{r.stale_count}</td>"
             f"<td class='n'>{len(r.coverage.functions)}</td>"
             f"<td class='n'>{len(r.interventions)}</td>"
@@ -262,8 +272,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             f"<span>{e(f.description)}</span>"
             + (f"<span class='perf'>{e(f.required_performance)}</span>"
                if f.required_performance else "")
-            + f"<span class='pill {e(f.coverage.value)}'>"
-              f"{e(_COVERAGE_WORDS[f.coverage.value])}</span></div>"
+            + _pill(f.coverage.value, record.chain_verified) + "</div>"
             f"<div class='why'>{e(f.detail)}</div>"
             + (f"<div class='days'>Running {days} day(s) without a standing verification "
                "for this function.</div>" if days is not None else "")
@@ -499,18 +508,29 @@ def render_report(data: ReportInput) -> str:
     weakest = min(floors, key=lambda t: t.rank) if floors else None
     floor = weakest.value if weakest else ""
     strong = weakest is not None and weakest.may_claim_physical_behaviour
-    parts.append(_tile(
-        functions - uncovered,
-        "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),
-        ("good" if strong else "warn") if uncovered == 0 and floor else ""))
-    parts.append(_tile(stale, "stale", "bad" if stale else ""))
-    parts.append(_tile(uncovered - stale, "otherwise uncovered",
-                       "warn" if uncovered - stale else ""))
+    if fleet.chain_verified:
+        parts.append(_tile(
+            functions - uncovered,
+            "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),
+            ("good" if strong else "warn") if uncovered == 0 and floor else ""))
+        parts.append(_tile(stale, "stale", "bad" if stale else ""))
+        parts.append(_tile(uncovered - stale, "otherwise uncovered",
+                           "warn" if uncovered - stale else ""))
+    else:
+        # Not assessed is not zero. The banner above says the store is in question; a
+        # count drawn from it, or a green tile, would contradict it.
+        parts.append(_tile("—", "functions with a recorded verification (not assessed: "
+                           "the ledger chain does not verify)", "bad"))
+        parts.append(_tile("—", "stale", "warn"))
+        parts.append(_tile("—", "otherwise uncovered", "warn"))
     if impact is not None:
         parts.append(_tile(len(impact.machines_affected), "advisory matches",
                            "bad" if impact.machines_affected else
                            "warn" if impact.incomplete else "good"))
-    if statuses:
+    if statuses and not fleet.chain_verified:
+        parts.append(_tile("—", "declarations in doubt (not assessed: the ledger chain "
+                           "does not verify)", "bad"))
+    elif statuses:
         parts.append(_tile(unsound, "declarations in doubt",
                            "bad" if unsound else "good"))
     parts.append("</div>")

@@ -156,6 +156,10 @@ def post_checkout(
             cancel_url=f"{market}/#pricing",
             tier=plan.tier,
             metered=plan.metered_overage,
+            # A lapsed customer who comes back authenticated stays on their own Stripe
+            # customer (and so their own account and ledger). An anonymous buyer is new.
+            customer_id=(account.stripe_customer_id
+                         if account is not None and account.id != "operator" else ""),
         )
     except stripe.StripeError as exc:
         raise HTTPException(
@@ -243,24 +247,48 @@ async def post_webhook(
         return _handle_checkout(accounts, kind, obj, event_id, created)
 
     if kind == "invoice.payment_failed":
-        # Stripe retries the charge on its own schedule and tells us when it
-        # gives up (customer.subscription.updated/deleted). Until then the
-        # account keeps its plan and is flagged. Only an active account moves:
-        # a retry that fails after the subscription was cancelled must not
-        # turn a cancelled account back into one that is entitled.
-        customer = obj.get("customer", "") or ""
-        outcome = accounts.apply_subscription_event(
-            event_id=event_id, kind=kind, stripe_customer_id=customer,
-            status="past_due", tier=None, event_created=created,
-            hold_if_unknown=False, only_from=frozenset({"active"}),
-        )
-        return _subscription_response(kind, outcome, "marked_past_due")
+        return _handle_payment_failed(accounts, kind, obj, event_id, created)
 
     if kind in {"customer.subscription.updated", "customer.subscription.deleted"}:
         return _handle_subscription(accounts, kind, obj, event_id, created)
 
     # Everything else is acknowledged and ignored, so Stripe stops retrying.
     return {"handled": None, "ignored": kind}
+
+
+def _invoice_subscription(invoice: dict[str, Any]) -> str:
+    """The subscription an invoice belongs to, or the empty string if it names none.
+
+    Stripe puts it at ``subscription`` on older API versions and under
+    ``parent.subscription_details.subscription`` on newer ones.
+    """
+    direct = invoice.get("subscription")
+    if isinstance(direct, dict):
+        direct = direct.get("id")
+    if isinstance(direct, str) and direct:
+        return direct
+    parent = invoice.get("parent")
+    details = parent.get("subscription_details") if isinstance(parent, dict) else None
+    nested = details.get("subscription") if isinstance(details, dict) else None
+    return nested if isinstance(nested, str) else ""
+
+
+def _handle_payment_failed(
+    accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
+) -> dict[str, Any]:
+    # Stripe retries the charge on its own schedule and tells us when it
+    # gives up (customer.subscription.updated/deleted). Until then the
+    # account keeps its plan and is flagged. Only an active account moves:
+    # a retry that fails after the subscription was cancelled must not
+    # turn a cancelled account back into one that is entitled.
+    customer = obj.get("customer", "") or ""
+    outcome = accounts.apply_subscription_event(
+        event_id=event_id, kind=kind, stripe_customer_id=customer,
+        status="past_due", tier=None, event_created=created,
+        hold_if_unknown=False, only_from=frozenset({"active"}),
+        stripe_subscription_id=_invoice_subscription(obj), payment_failure=True,
+    )
+    return _subscription_response(kind, outcome, "marked_past_due")
 
 
 def _handle_checkout(
@@ -339,6 +367,7 @@ def _handle_subscription(
         status=state.status, tier=state.tier, event_created=created,
         hold_if_unknown=state.ours,
         stripe_subscription_id=obj.get("id", "") or "",
+        ours=state.ours,
     )
     return _subscription_response(kind, outcome, state.label)
 

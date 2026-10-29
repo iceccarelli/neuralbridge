@@ -163,3 +163,43 @@ def test_the_cli_exit_code_for_an_unasserted_unchanged_folder_is_two(work, unass
     watch_main(args)
     rc = watch_main(args)
     assert rc == 2
+
+
+class TestUnitBindingAndTheWatch:
+    """A unit-bound, validated recording does not turn an export folder into a look."""
+
+    def _bind(self, ledger, key, *, validated):
+        from .support_trust_hardening import attested_bundle, community_bundle
+        if validated:
+            bundle, _ = attested_bundle(key, file_under=ledger)
+        else:
+            bundle = community_bundle(key, file_under=ledger)
+        return bundle
+
+    def _floor(self, ledger):
+        from assurance.fleet.registry import Fleet
+        row = next(m for m in Fleet.from_ledger(ledger).to_dict()["machines"]
+                   if KEY_0412 in json.dumps(m))
+        return row["verdict"], row["evidence_tier_floor"]
+
+    def test_validated_cover_over_an_unasserted_folder_is_still_not_quiet(
+            self, work, unasserted, ledger):
+        run_watch(unasserted, ledger, now=T0)                  # enrols the unit's manifest
+        assert self._bind(ledger, KEY_0412, validated=True).tier.value == "validated"
+        verdict, floor = self._floor(ledger)
+        assert (verdict, floor) == ("covered", "validated")    # the strongest cover there is
+        run = run_watch(unasserted, ledger, now=T0 + WEEK)
+        assert _out(run).status == "observed" and _out(run).not_a_look
+        assert run.verdict == "degraded"                       # but the folder is no look
+        assert self._floor(ledger) == ("covered", "validated")  # and the watch changes no tier
+
+    def test_community_capped_cover_over_an_asserted_folder_is_not_promoted(
+            self, work, config, ledger):
+        run_watch(config, ledger, now=T0)
+        assert self._bind(ledger, KEY_0412, validated=False).tier.value == "community"
+        verdict, floor = self._floor(ledger)
+        assert (verdict, floor) == ("covered_at_community", "community")
+        run = run_watch(config, ledger, now=T0 + WEEK)
+        assert _out(run).status == "observed"
+        # the asserted look is a look, but it never makes the evidence validated
+        assert self._floor(ledger) == ("covered_at_community", "community")

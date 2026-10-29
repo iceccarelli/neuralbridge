@@ -66,6 +66,9 @@ def test_an_out_of_order_older_checkout_cannot_overwrite_the_current_subscriptio
     _checkout(store, "sub_B", event="evt_c2", session="cs_2", created=2000)
     _checkout(store, "sub_A", event="evt_c1", session="cs_1", created=1000)  # arrives late
     assert _state(store).stripe_subscription_id == "sub_B"
+    # The old subscription is cancelled too (one that was never cancelled still pays, and
+    # then the account follows it once B ends: tests/test_assurance_billing_precedence.py).
+    assert _cancel(store, "sub_A", event="evt_d0", created=2500) == "other_subscription"
     assert _cancel(store, "sub_B", event="evt_d", created=3000) == "applied"
     row = _state(store)
     assert row.status == "cancelled" and row.tier == "free"

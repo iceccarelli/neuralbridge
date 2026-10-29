@@ -552,10 +552,11 @@ class TestWhoIsNeverTouched:
         before = store.account(acct.id)
         run(store, FakeStripe([sub("sub_a", "cus_a", status="canceled")]), apply=True)
         after = store.account(acct.id)
-        assert (after.email, after.company, after.stripe_customer_id,
-                after.stripe_subscription_id) == (before.email, before.company,
-                                                  before.stripe_customer_id,
-                                                  before.stripe_subscription_id)
+        assert (after.email, after.company, after.stripe_customer_id) == (
+            before.email, before.company, before.stripe_customer_id)
+        # The one other field: the account follows the subscription the finding names, so
+        # that subscription's own later end is not ignored as "another subscription".
+        assert (before.stripe_subscription_id, after.stripe_subscription_id) == ("", "sub_a")
         assert store.resolve_key(key) is not None, "keys are not revoked or minted here"
         assert store.active_key_count(acct.id) == 1
 

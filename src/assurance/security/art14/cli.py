@@ -230,6 +230,11 @@ def cmd_fields(args: argparse.Namespace) -> int:
 def cmd_case(args: argparse.Namespace) -> int:
     register = _register(args)
     case = register.case(args.case_id)
+    if case.signal is None and case.awareness is None:
+        # The same rule as GET /v1/cases/{id} (404): an id nothing was recorded under is not a
+        # case in some state, and a report that says otherwise reads like a real case.
+        print(f"error: no case {args.case_id!r}.", file=sys.stderr)
+        return 2
     if args.json:
         print(json.dumps(case.to_dict(), indent=2, ensure_ascii=False))
         return 0
@@ -410,7 +415,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except (AssuranceError, ValueError) as exc:
+        # A step out of order, an unknown case, a time that cannot be read: the person at the
+        # keyboard made a mistake, nothing was written, and a traceback is not an answer.
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
