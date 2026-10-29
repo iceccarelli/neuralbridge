@@ -1274,6 +1274,7 @@ def reverify(
     coverage = assess_coverage(sealed, verifications, interventions)
     cleared: set[str] = set()
     weak: list[str] = []
+    bound: list[str] = []
     evidence_current = dict(case.evidence_current)
     for entry in mine:
         fid = _entry_function(case, entry)
@@ -1289,13 +1290,28 @@ def reverify(
             # Current on evidence under the 'validated' floor is a statement about
             # a recorded file, not a demonstration on the machine. It does not
             # clear the entry; only a person can accept it, by waiving it.
-            evidence_current[entry] = f"below_validated:{record.tier or 'unknown'}"
-            weak.append(entry)
+            if record.tier_note:
+                # Held down by the UNIT BINDING (sealed for another unit key or none, or the
+                # same recording is another unit's): re-attesting would not help, re-sealing
+                # under the exact key would. Say that, not "a recorder attestation is needed".
+                evidence_current[entry] = (
+                    f"{_BOUND}{record.tier or 'unknown'}")
+                bound.append(entry)
+            else:
+                evidence_current[entry] = f"below_validated:{record.tier or 'unknown'}"
+                weak.append(entry)
         else:
             evidence_current[entry] = Coverage.CURRENT.value
             cleared.add(entry)
     still_required = tuple(e for e in case.required_reverifications if e not in cleared)
     skipped = case.checks_skipped
+    if bound:
+        skipped = _union(skipped, [
+            f"{', '.join(bound)}: the re-verification evidence {record.content_hash[:12]} is "
+            f"held at tier {record.tier or 'unknown'!r} by its unit binding, not by a missing "
+            f"attestation: {record.tier_note}. Re-seal the run with the exact unit key as the "
+            f"subject ({key}); the recorder's attestation is unchanged. A decider operator may "
+            "waive the entry; a waiver is still a waiver."])
     if weak:
         skipped = _union(skipped, [
             f"{', '.join(weak)}: the re-verification evidence "
@@ -1326,14 +1342,17 @@ def reverify(
         detail=f"re-verified {key} against {verification_content_hash[:12]}; "
               f"{len(still_required)} entr{'y' if len(still_required) == 1 else 'ies'} "
               "still not current"
-              + (f" ({len(weak)} on evidence below 'validated': tier "
-                 f"{record.tier or 'unknown'!r})" if weak else ""))
+              + (f" ({len(weak) + len(bound)} on evidence below 'validated': tier "
+                 f"{record.tier or 'unknown'!r}"
+                 + (", held by its unit binding" if bound else "") + ")"
+                 if weak or bound else ""))
 
 
 #: The tier a verification must reach to clear a required re-verification.
 REVERIFICATION_TIER_FLOOR = AssuranceTier.VALIDATED.value
 
 _BELOW = "below_validated:"
+_BOUND = "below_validated_unit_binding:"
 
 
 def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
@@ -1354,8 +1373,28 @@ def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
                for e in case.required_reverifications}
     tiers = sorted({r[len(_BELOW):] or "unknown" for r in entries.values()
                     if r.startswith(_BELOW)})
+    bound_tiers = sorted({r[len(_BOUND):] or "unknown" for r in entries.values()
+                          if r.startswith(_BOUND)})
     waive = ("A decider operator may waive an entry (waive-reverification); that is "
              "recorded as a waiver and never reads as current.")
+    if bound_tiers and not tiers:
+        return {
+            "code": "below_validated_unit_binding",
+            "tier_floor": REVERIFICATION_TIER_FLOOR,
+            "tiers": bound_tiers,
+            "entries": entries,
+            "message": (
+                f"Not cleared: the evidence is at tier "
+                f"{', '.join(repr(t) for t in bound_tiers)} because of its UNIT BINDING, "
+                "not because an attestation is missing: it was sealed for another unit key, "
+                "or for none (a bundle sealed before bundles recorded one), or the same "
+                "recording is already the validated evidence of another unit. Re-seal the "
+                "run with the exact unit key as the subject "
+                f"({', '.join(case.machines) or 'maker/model#serial'}; "
+                "`assurance machine verify --subject <that key>`); the recorder's "
+                "attestation is unchanged. The case's checks_skipped names the specific "
+                "reason. " + waive),
+        }
     if tiers:
         return {
             "code": "below_validated_tier",
@@ -1370,7 +1409,10 @@ def blocked_reason(case: ChangeAssuranceCase) -> dict[str, object] | None:
                 "attestation accepted under the verifier's own recorder trust list "
                 "(a signed statement by a key the verifier trusts over these exact "
                 "trace bytes; not proof the recording is physically true), so one is "
-                "needed to clear this by evidence. " + waive),
+                "needed to clear this by evidence. "
+                + ("Some of these entries are held down by a unit binding instead: "
+                   "re-seal those with the exact unit key as the subject. "
+                   if bound_tiers else "") + waive),
         }
     return {
         "code": "evidence_not_current",

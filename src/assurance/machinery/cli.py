@@ -3,12 +3,17 @@
     record-manifest   seal what is on the machine today
     record-change     seal an intervention in safety-relevant software
     diff              compare a baseline manifest against what was found
-    coverage          which safety functions still have valid evidence
+    coverage          which safety functions a recorded verification still stands for
     passport          seal and export the machine's whole evidence position
     check             re-verify a passport somebody else produced
 
-``coverage`` exits non-zero when any declared safety function is not currently
-covered, which makes it a gate rather than a report.
+``coverage`` and ``passport`` exit non-zero unless every declared safety function is
+currently covered on evidence at ``validated`` or better, which makes them a gate rather
+than a report. Exit codes: 0 covered; 1 gaps (a function stale, failing, unchecked,
+incomplete, never verified or not demonstrable); 2 error, or the ledger chain does not verify
+(could not vouch); 3 covered only at community
+(every function reads current, but on evidence whose provenance the filer only declared:
+the recorded evidence stands, it was not a demonstration on the machine).
 """
 
 from __future__ import annotations
@@ -170,7 +175,13 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
             print("\n  not checked:")
             for c in report.checks_skipped:
                 print(f"    - {c}")
-    return 0 if report.verdict == "covered" else 1
+    return _exit_for(report.verdict)
+
+
+def _exit_for(verdict: str) -> int:
+    """0 covered, 3 covered at community, 2 ledger chain not verified, 1 anything else."""
+    return {"covered": 0, "covered_at_community": 3,
+            "ledger_chain_not_verified": 2}.get(verdict, 1)
 
 
 def _cmd_passport(args: argparse.Namespace) -> int:
@@ -190,7 +201,7 @@ def _cmd_passport(args: argparse.Namespace) -> int:
                 print(f"    - {c}")
         if args.out:
             print(f"\n  passport written to {args.out}")
-    return 0 if passport.verdict == "covered" else 1
+    return _exit_for(passport.verdict)
 
 
 def _cmd_check(args: argparse.Namespace) -> int:

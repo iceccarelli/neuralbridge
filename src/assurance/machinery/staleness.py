@@ -1,4 +1,4 @@
-"""Which of this machine's safety functions are still covered by valid evidence?
+"""Which of this machine's safety functions does a recorded verification still stand for?
 
 This is the join that neither half can make alone, and the reason both halves
 exist in one package.
@@ -50,10 +50,10 @@ filer controls are bounded by the ledger's own clock and record:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc, utc_now
@@ -78,6 +78,7 @@ __all__ = [
     "Coverage",
     "CoverageReport",
     "FunctionCoverage",
+    "UnitClaims",
     "VerificationRecord",
     "VerificationRecordError",
     "affected_functions",
@@ -110,23 +111,74 @@ def tier_reaches_validated(tier: str) -> bool:
     return _TIER_RANK.get(tier, -1) >= _TIER_RANK["validated"]
 
 
-def _unit_binding(subject: str | None) -> tuple[str, bool] | None:
-    """The unit a ledger subject names, as ``(serial, well_formed)``; None for a product line.
+class _UnitBinding(NamedTuple):
+    """The unit a ledger subject names: the whole key, its serial, and whether it parses."""
+
+    key: str
+    serial: str
+    well_formed: bool
+
+
+def _unit_binding(subject: str | None) -> _UnitBinding | None:
+    """The unit a ledger subject names; None for a product line.
 
     A subject with no ``#`` names a product line and binds nothing. One with a ``#`` is a
-    unit key (``maker/model#serial``); a malformed one cannot be tied to any unit.
+    unit key (``maker/model#serial``); a malformed one cannot be tied to any unit. The WHOLE
+    key is kept: a recorder attestation signs a serial, never a maker or model, so what
+    binds a bundle to a unit is the key the bundle was sealed for (``unit_key`` in its body).
     """
     if not subject or "#" not in subject:
         return None
     try:
-        return resolve_machine_serial(subject), True
+        return _UnitBinding(subject, resolve_machine_serial(subject), True)
     except MachineSubjectError:
-        return "", False
+        return _UnitBinding(subject, "", False)
+
+
+def _tier_and_why(
+    body: dict[str, Any], recorder_trust: RecorderTrust | None = None,
+    unit: _UnitBinding | None = None,
+) -> tuple[str, str]:
+    """:func:`_believed_tier` and, when the unit binding capped it, the named reason."""
+    stored = str(body.get("tier", ""))
+    if not tier_reaches_validated(stored):
+        return stored, ""
+    if unit is not None:
+        # Filed under one unit's key: the evidence must have been sealed for THAT unit, whole.
+        # The serial alone is not enough (an attestation made for serial 0001 on one maker's
+        # machine says nothing about another maker's 0001), and a bundle sealed for a product
+        # line accepts a recorder attestation made on ANY unit, so under a unit key it would
+        # otherwise lend unit B the recorder of unit A.
+        sealed_for = body.get("unit_key")
+        if not unit.well_formed:
+            return "community", (f"it is filed under {unit.key!r}, which is not a unit key "
+                                 "(maker/model#serial), so it names no unit")
+        if not isinstance(sealed_for, str) or not sealed_for:
+            return "community", (
+                "it was sealed without a unit key (for a product line, or before bundles "
+                "recorded one), so nothing shows which maker and model its recorder was "
+                f"attached to; it is not believed validated for {unit.key!r}")
+        if sealed_for != unit.key:
+            return "community", (f"it was sealed for {sealed_for!r} and is filed under "
+                                 f"{unit.key!r}")
+        if str(body.get("machine_serial") or "") != unit.serial:
+            return "community", (f"it was matched against serial "
+                                 f"{str(body.get('machine_serial') or '')!r}, not "
+                                 f"{unit.serial!r}")
+    engine = parse_engine_version(body.get("engine_version")) or 0
+    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
+            and provenance_lifts_tier(body)
+            and (recorder_trust is None
+                 or _reproduces(body, recorder_trust, unit.serial if unit else None))):
+        # Nothing in this product certifies: a stored 'certified' (only a resealed body can
+        # carry one; the bundle checker rejects it) is read as 'validated' at most.
+        return "validated", ""
+    return "community", ""
 
 
 def _believed_tier(
     body: dict[str, Any], recorder_trust: RecorderTrust | None = None,
-    unit: tuple[str, bool] | None = None,
+    unit: _UnitBinding | None = None,
 ) -> str:
     """The tier a sealed verification body is worth *today*, whatever it says.
 
@@ -135,7 +187,12 @@ def _believed_tier(
     one that could not yet verify a recorder attestation (engine 5), or whose basis is
     not ``recorder_attested`` with a coherent accepted attestation recorded beside it,
     is read at ``community`` at most; the public bundle checker refuses the same bodies.
-    A lower stored tier is never raised.
+    A lower stored tier is never raised, and nothing is read above ``validated``.
+
+    Filed under a unit key (``unit``), the body must also have been sealed for that exact
+    key (``unit_key``, case- and whitespace-sensitive) and for its serial; a body that
+    records no unit key is ``community`` there (no grandfathering of bundles sealed before
+    the field existed).
 
     With ``recorder_trust`` (the reader's own list) the recorded attestations are also
     re-assessed under it, so a key the reader has since revoked or removed stops
@@ -150,24 +207,7 @@ def _believed_tier(
     (``api/recorder_trust.py:reader_recorder_trust``) -- so a missing or broken trust
     file can never make a reader more generous than a valid one.
     """
-    stored = str(body.get("tier", ""))
-    if not tier_reaches_validated(stored):
-        return stored
-    if unit is not None:
-        # Filed under one unit's key: the evidence must have been sealed for that unit.
-        # A bundle sealed for a product line (no serial) accepts a recorder attestation
-        # made on ANY unit, so under a unit key it would otherwise lend unit B the
-        # recorder of unit A.
-        serial, well_formed = unit
-        if not well_formed or str(body.get("machine_serial") or "") != serial:
-            return "community"
-    engine = parse_engine_version(body.get("engine_version")) or 0
-    if (engine >= _FIRST_ENGINE_WITH_A_PROVENANCE_BASIS
-            and provenance_lifts_tier(body)
-            and (recorder_trust is None
-                 or _reproduces(body, recorder_trust, unit[0] if unit else None))):
-        return stored
-    return "community"
+    return _tier_and_why(body, recorder_trust, unit)[0]
 
 
 def _reproduces(
@@ -178,6 +218,115 @@ def _reproduces(
     pa = body.get("provenance_assessment")
     return bool(assessed is not None and assessed.attested and isinstance(pa, dict)
                 and assessed.attestation_hash == pa.get("attestation_hash"))
+
+
+class UnitClaims:
+    """Which unit key holds each recording as its validated evidence.
+
+    One recording is the validated evidence of ONE unit key. The map is built from the ledger
+    in a single pass over the bundles and answers, per trace hash, which unit key holds it: the
+    earliest filing that would itself read ``validated`` (sealed for its own key, a coherent
+    attestation that still holds under the reader's trust list) **under a unit key that is
+    enrolled in the same ledger** (a manifest for it was sealed there). A filing under a key
+    nobody enrolled holds nothing, so a mistyped or hostile first claim cannot burn the
+    recording for the real unit; whoever can enrol a manifest for a hostile key still can
+    (the ledger is append-only: the remedy is a new recording attested for the unit).
+
+    Build it ONCE per ledger read and share it (``Fleet.from_ledger`` does): the expensive work,
+    a seal verification and an attestation assessment, is done for the first valid claim on each
+    recording and for nothing else, so a fleet read is linear in its bundles.
+    """
+
+    def __init__(self, holders: dict[str, tuple[int, str]]) -> None:
+        self._holders = holders
+
+    def holder(self, trace_hash: str) -> tuple[int, str] | None:
+        """``(ledger position, unit key)`` of the claim that holds the recording, if any."""
+        return self._holders.get(trace_hash)
+
+    @classmethod
+    def build(
+        cls, ledger: EvidenceLedger, recorder_trust: RecorderTrust | None, *,
+        only: set[str] | None = None,
+    ) -> UnitClaims:
+        """Read the ledger once. ``only`` limits the work to those trace hashes."""
+        from assurance.machinery.record import MANIFEST_KIND
+
+        enrolled: dict[str, bool] = {}
+        manifests: dict[str, list[Any]] = {}
+
+        def manifests_of(subject: str) -> list[Any]:
+            if only is not None:
+                # one machine's read: just that unit's rows, not the whole ledger's
+                return ledger.read_subject(subject, MANIFEST_KIND)[0]
+            if not manifests:       # a whole-ledger build: one read, shared by every unit
+                for e in ledger.read_subject(None, MANIFEST_KIND)[0]:
+                    manifests.setdefault(e.subject, []).append(e)
+                manifests.setdefault("", [])
+            return manifests.get(subject, [])
+
+        def is_enrolled(subject: str) -> bool:
+            if subject not in enrolled:
+                # A manifest row the reader cannot use (not JSON, shape, seal) enrols nothing:
+                # damage must not be able to enrol a unit, and must not stop the read either.
+                enrolled[subject] = any(_seal_holds(e) for e in manifests_of(subject))
+            return enrolled[subject]
+
+        holders: dict[str, tuple[int, str]] = {}
+        readable, _, _ = ledger.read_subject(None, BUNDLE_KIND)
+        for entry in readable:
+            unit = _unit_binding(entry.subject)
+            if unit is None or not unit.well_formed:
+                continue
+            body = entry.payload.get("body") if isinstance(entry.payload, dict) else None
+            if not isinstance(body, dict) or not tier_reaches_validated(
+                    str(body.get("tier", ""))):
+                continue        # cheap first: only a stored 'validated' can be a claim
+            trace_hash = str(body.get("trace_hash") or "")
+            if (not trace_hash or trace_hash in holders
+                    or (only is not None and trace_hash not in only)):
+                continue
+            if (is_enrolled(entry.subject) and _seal_holds(entry)
+                    and tier_reaches_validated(_tier_and_why(body, recorder_trust, unit)[0])):
+                holders[trace_hash] = (entry.seq, entry.subject)
+        return cls(holders)
+
+
+def _seal_holds(entry: Any) -> bool:
+    """Does this ledger entry's payload parse as evidence whose seal still matches?"""
+    try:
+        return bool(entry.evidence().verify())
+    except (AssuranceError, KeyError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def _cap_to_the_holder(
+    ledger: EvidenceLedger, recorder_trust: RecorderTrust | None,
+    records: list[VerificationRecord], where: dict[int, tuple[str, str]],
+    claims: UnitClaims | None,
+) -> list[VerificationRecord]:
+    """Cap a recording's later claimant: ``community``, naming the unit that holds it.
+
+    ``where`` maps the ledger position of each record that reads ``validated`` under a unit
+    key to ``(that key, its recording's trace hash)``. One whose recording is held by another
+    unit key (:class:`UnitClaims`) is ``community`` with the holder named in ``tier_note``.
+    ``reverify`` refuses the same case outright (``_trace_filed_elsewhere``).
+    """
+    if not where:
+        return records
+    if claims is None:
+        claims = UnitClaims.build(ledger, recorder_trust,
+                                  only={t for _, t in where.values() if t})
+    capped: dict[int, str] = {}
+    for seq, (unit_key, trace_hash) in where.items():
+        held = claims.holder(trace_hash) if trace_hash else None
+        if held is not None and held[1] != unit_key:
+            capped[seq] = (
+                f"the recording it rests on (trace {trace_hash[:12]}) is already the "
+                f"validated evidence of {held[1]!r} (filed first, ledger position "
+                f"{held[0]}); one recording is evidence about one unit")
+    return [replace(r, tier="community", tier_note=capped[r.ledger_seq])
+            if r.ledger_seq in capped else r for r in records]
 
 
 class VerificationRecordError(AssuranceError, ValueError):
@@ -191,8 +340,15 @@ class Coverage(StrEnum):
     CURRENT = "current"
     #: It was verified, and a later intervention invalidated that verification.
     STALE = "stale"
-    #: A verification exists but the checks for this function did not pass.
+    #: A run exercised this function's checks and at least one VIOLATED its limit.
     FAILING = "failing"
+    #: The newest run left this function's checks UNCHECKED: it could not be judged (the trace
+    #: gave it nothing to evaluate), none of its checks is verified, and none was violated.
+    #: Nothing has been shown for the function, for or against; that is not a failure.
+    UNCHECKED = "unchecked"
+    #: Some of this function's checks are verified by their newest run and at least one other
+    #: was left unchecked (and none was violated). Partly shown; cover needs every check.
+    INCOMPLETE = "incomplete"
     #: No verification has ever exercised this function.
     NEVER_VERIFIED = "never_verified"
     #: The function declares no checks, so no verification could cover it.
@@ -205,8 +361,8 @@ class Coverage(StrEnum):
     @property
     def rank(self) -> int:
         """Worst first, for sorting a report a human reads top-down."""
-        return {"failing": 0, "stale": 1, "never_verified": 2,
-                "not_demonstrable": 3, "current": 4}[self.value]
+        return {"failing": 0, "stale": 1, "unchecked": 2, "incomplete": 3,
+                "never_verified": 4, "not_demonstrable": 5, "current": 6}[self.value]
 
 
 @dataclass(frozen=True)
@@ -236,6 +392,14 @@ class VerificationRecord:
     #: function. A record that does not say which are which — every manually
     #: built one — has every non-verified check treated as failed.
     checks_not_applicable: tuple[str, ...] = ()
+    #: The subset of ``checks_not_verified`` whose outcome was ``unchecked`` (the run could
+    #: not judge that check). They are not violations. A record that does not say which are
+    #: which, every manually built one, has every non-verified check treated as violated.
+    checks_unchecked: tuple[str, ...] = ()
+    #: Why ``tier`` is below what the sealed body stored, when the UNIT BINDING is what
+    #: capped it (sealed for another unit key or none, or the same recording claimed by an
+    #: earlier unit). Empty otherwise.
+    tier_note: str = ""
     #: True when ``effective_at`` could not be taken from the bundle: its trace
     #: start was unreadable, or more than a day later than the moment it was filed.
     #: ``effective_at`` is then the filing time. A pass in such a record is read as the
@@ -279,6 +443,8 @@ class VerificationRecord:
             "checks_verified": list(self.checks_verified),
             "checks_not_verified": list(self.checks_not_verified),
             "checks_not_applicable": list(self.checks_not_applicable),
+            "checks_unchecked": list(self.checks_unchecked),
+            "tier_note": self.tier_note,
             "date_suspect": self.date_suspect,
             "filed_at": format_utc(self.filed_at) if self.filed_at else "",
             "unreadable": self.unreadable,
@@ -287,7 +453,7 @@ class VerificationRecord:
     @classmethod
     def from_ledger(
         cls, ledger: EvidenceLedger, *, subject: str | None = None,
-        recorder_trust: RecorderTrust | None = None,
+        recorder_trust: RecorderTrust | None = None, claims: UnitClaims | None = None,
     ) -> list[VerificationRecord]:
         """Read every sealed machine verification out of a ledger.
 
@@ -311,6 +477,7 @@ class VerificationRecord:
                 unreadable=True, unreadable_why=why[:200])
 
         out: list[VerificationRecord] = []
+        where: dict[int, tuple[str, str]] = {}      # seq -> (unit key, trace hash), validated only
         for row in damaged:
             out.append(stand_in(row.seq, row.content_hash,
                                 clock.get(row.seq) or utc_now(), row.why))
@@ -334,6 +501,7 @@ class VerificationRecord:
                            if c.get("outcome") != "verified")
             not_applicable = tuple(c["name"] for c in checks
                                    if c.get("outcome") == "not_applicable")
+            unchecked = tuple(c["name"] for c in checks if c.get("outcome") == "unchecked")
             suspect = False
             try:
                 effective = parse_utc(str(body.get("trace_started_at")))
@@ -348,6 +516,10 @@ class VerificationRecord:
                     # ahead of the filing would let this pass outrank a later failure and
                     # hide a change recorded in between.
                     effective = filed
+            unit = _unit_binding(entry.subject)
+            tier, tier_note = _tier_and_why(body, recorder_trust, unit)
+            if unit is not None and tier_reaches_validated(tier):
+                where[entry.seq] = (entry.subject, str(body.get("trace_hash") or ""))
             out.append(cls(
                 content_hash=evidence.content_hash,
                 effective_at=effective,
@@ -355,14 +527,17 @@ class VerificationRecord:
                 product=str(body.get("product", "")),
                 product_version=str(body.get("product_version", "")),
                 verdict=str(body.get("verdict", "")),
-                tier=_believed_tier(body, recorder_trust, _unit_binding(entry.subject)),
+                tier=tier,
+                tier_note=tier_note,
                 checks_verified=verified,
                 checks_not_verified=others,
                 checks_not_applicable=not_applicable,
+                checks_unchecked=unchecked,
                 date_suspect=suspect,
                 filed_at=filed,
             ))
-        return sorted(out, key=lambda v: v.ledger_seq)
+        out.sort(key=lambda v: v.ledger_seq)
+        return _cap_to_the_holder(ledger, recorder_trust, out, where, claims)
 
 
 @dataclass(frozen=True)
@@ -384,10 +559,13 @@ class FunctionCoverage:
     #: Whether that intervention re-ran anything with sealed evidence.
     intervention_revalidated: bool = False
     detail: str = ""
+    #: For a CURRENT function: the weakest tier among the verifications its cover rests on
+    #: (``profile`` | ``community`` | ``validated`` | ``certified``). Empty otherwise.
+    evidence_tier: str = ""
 
     @property
     def days_uncovered(self) -> int | None:
-        """Days the machine has run without valid evidence for this function."""
+        """Days the machine has run without a verification that stands for this function."""
         if self.coverage is not Coverage.STALE or not self.invalidated_at:
             return None
         try:
@@ -411,6 +589,7 @@ class FunctionCoverage:
             "intervention_revalidated": self.intervention_revalidated,
             "days_uncovered": self.days_uncovered,
             "detail": self.detail,
+            "evidence_tier": self.evidence_tier,
         }
 
 
@@ -435,10 +614,26 @@ class CoverageReport:
 
     @property
     def verdict(self) -> str:
-        """``covered`` | ``gaps`` | ``no_functions_declared``."""
+        """``covered`` | ``covered_at_community`` | ``gaps`` | ``no_functions_declared``.
+
+        ``covered`` means every declared function reads current AND the evidence each rests
+        on is at ``validated`` or better. Cover that rests on evidence below that (a trace
+        whose provenance the filer only declared is capped at ``community``) is
+        ``covered_at_community``: the recorded evidence still stands, but it describes a
+        model or a recorded file, not a demonstration on the machine, and it must not read
+        as ``covered`` in a headline, a count or an exit code.
+        """
         if not self.functions:
             return "no_functions_declared"
-        return "covered" if all(f.coverage.is_covered for f in self.functions) else "gaps"
+        if not all(f.coverage.is_covered for f in self.functions):
+            return "gaps"
+        return ("covered" if tier_reaches_validated(self.evidence_tier_floor)
+                else "covered_at_community")
+
+    @property
+    def is_demonstrated(self) -> bool:
+        """Is every declared function covered by evidence at ``validated`` or better?"""
+        return self.verdict == "covered"
 
     @property
     def stale(self) -> tuple[FunctionCoverage, ...]:
@@ -463,6 +658,7 @@ class CoverageReport:
 
     def summary(self) -> str:
         mark = {"current": "ok    ", "stale": "STALE ", "failing": "FAIL  ",
+                "unchecked": "UNCHK ", "incomplete": "INCOMP",
                 "never_verified": "never ", "not_demonstrable": "n/a   "}
         lines = [
             f"{self.machine_key} — {self.verdict.upper()}",
@@ -476,7 +672,7 @@ class CoverageReport:
             lines.append(f"           {f.detail}")
             days = f.days_uncovered
             if days is not None:
-                lines.append(f"           running {days} day(s) without valid evidence "
+                lines.append(f"           running {days} day(s) without a standing verification "
                              "for this function.")
         if self.unrevalidated_interventions:
             lines.append("  Interventions on safety-bearing items with nothing re-run: "
@@ -625,23 +821,53 @@ def assess_coverage(
         if failing:
             last = max((e[0] for e in failing.values()),
                        key=lambda v: (_fail_time(v), v.ledger_seq))
-            if last.unreadable:
-                why = (f"a verification record in the ledger (position {last.ledger_seq}) is "
-                       f"damaged ({last.unreadable_why}) and is assumed to have failed "
-                       f"{', '.join(sorted(failing))}. A run that began after it was filed "
-                       "supersedes it")
+            ran_unchecked = sorted(c for c, e in failing.items()
+                                   if c in e[0].checks_unchecked and not e[0].unreadable)
+            violated = sorted(set(failing) - set(ran_unchecked))
+            if violated:
+                last = max((failing[c][0] for c in violated),
+                           key=lambda v: (_fail_time(v), v.ledger_seq))
+                if last.unreadable:
+                    why = (f"a verification record in the ledger (position "
+                           f"{last.ledger_seq}) is damaged ({last.unreadable_why}) and is "
+                           f"assumed to have failed {', '.join(violated)}. A run that began "
+                           "after it was filed supersedes it")
+                else:
+                    why = (f"the most recent run of {', '.join(violated)} "
+                           f"({last.content_hash[:12]}, {last.verdict}) did not pass "
+                           "it. Coverage has never been established, or has ended")
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
+                    last_verified_hash=last.content_hash,
+                    last_verified_at=format_utc(_fail_time(last)),
+                    detail=why + ".",
+                ))
+                continue
+            # No check was violated; the newest run left some UNCHECKED. That is a check
+            # that was not run, not one that failed. (A damaged record is never here: it is
+            # assumed to have failed, not to have left anything unchecked.)
+            shown = sorted(c for c, e in state.items() if e is not None and e[1])
+            what = (f"{', '.join(ran_unchecked)} was left unchecked by its most recent "
+                    f"run ({last.content_hash[:12]}, {last.verdict}): the check was not "
+                    "run on that trace, so nothing was shown for or against it.")
+            if shown:
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.INCOMPLETE, checks=tuple(sorted(checks)),
+                    detail=f"{', '.join(shown)} verified, but {what} Cover needs every "
+                           "check the function declares: run the rest on a trace that "
+                           "exercises it.",
+                ))
             else:
-                why = (f"the most recent run of {', '.join(sorted(failing))} "
-                       f"({last.content_hash[:12]}, {last.verdict}) did not pass "
-                       "it. Coverage has never been established, or has ended")
-            coverages.append(FunctionCoverage(
-                function_id=fn.function_id, description=fn.description,
-                required_performance=fn.required_performance,
-                coverage=Coverage.FAILING, checks=tuple(sorted(checks)),
-                last_verified_hash=last.content_hash,
-                last_verified_at=format_utc(_fail_time(last)),
-                detail=why + ".",
-            ))
+                coverages.append(FunctionCoverage(
+                    function_id=fn.function_id, description=fn.description,
+                    required_performance=fn.required_performance,
+                    coverage=Coverage.UNCHECKED, checks=tuple(sorted(checks)),
+                    detail=f"{what} Run it on a trace that exercises it.",
+                ))
             continue
 
         if missing:
@@ -694,6 +920,7 @@ def assess_coverage(
                 function_id=fn.function_id, description=fn.description,
                 required_performance=fn.required_performance,
                 coverage=Coverage.CURRENT, checks=tuple(sorted(checks)),
+                evidence_tier=weakest,
                 last_verified_hash=last_good.content_hash,
                 last_verified_at=format_utc(last_good.effective_at),
                 detail=f"verified by {last_good.content_hash[:12]} on "
@@ -754,6 +981,10 @@ def assess_coverage(
             "behaviour was demonstrated on the machine."
         )
     for v in verifs:
+        if v.tier_note:
+            caveats.append(
+                f"verification {v.content_hash[:12]} is read at tier {v.tier!r}, not the "
+                f"tier it was sealed at: {v.tier_note}.")
         if v.unreadable:
             caveats.append(
                 f"verification record at ledger position {v.ledger_seq} is damaged "

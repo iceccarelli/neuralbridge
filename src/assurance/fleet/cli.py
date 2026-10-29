@@ -9,10 +9,15 @@
 ``advisory`` and ``declaration`` exit non-zero on a finding, so both belong in
 whatever runs when a supplier bulletin lands or before a machine ships.
 
-``advisory`` exit codes: 0 every advisory is clear; 1 a finding (a match, or a ledger whose
-chain does not verify); 2 the command could not run; 3 INCOMPLETE: nothing matched, but at
-least one advisory is a partial translation of its source (``import-csaf`` dropped an
-affected product), so "nothing matched" is not "nothing is affected".
+Exit codes: 0 nothing found (and, for ``declaration``, the evidence was assessed and
+stands); 1 a finding (for ``advisory`` a match, or a ledger whose chain does not verify:
+nothing was cleared); 2 could not vouch (the command could not run, an error, ``list`` or
+``declaration`` on a ledger that does not verify, or a ``declaration`` check whose evidence
+was NOT assessed: only the configuration was compared, which is not a pass); 3 INCOMPLETE,
+not a pass: for ``advisory``, nothing matched but at least one advisory is a partial
+translation of its source (``import-csaf`` dropped an affected product), so "nothing
+matched" is not "nothing is affected"; for ``list`` and ``declaration``, no gaps, but the
+cover rests only on evidence below ``validated``.
 """
 
 from __future__ import annotations
@@ -126,7 +131,11 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print(fleet.table())
     if not fleet.chain_verified:
         return 2          # could not vouch for the ledger; not 'quiet', not 'gaps'
-    return 0 if not fleet.with_gaps() else 1
+    if fleet.with_gaps():
+        return 1
+    # 3: nothing is uncovered, but some machine is covered only on evidence below
+    # 'validated' (a declared provenance): standing, not demonstrated. Not a pass.
+    return 3 if fleet.covered_at_community() else 0
 
 
 #: Said once, loudly, wherever an unverified advisory is acted on. The point of
@@ -372,8 +381,10 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
     manifest = SafetyManifest.from_json(args.manifest)
 
     coverage = None
+    chain_ok = True
     if args.ledger:
         ledger = EvidenceLedger(args.ledger)
+        chain_ok = ledger.verify_chain()[0]
         key = manifest.machine.key
         coverage = assess_coverage(
             manifest,
@@ -383,17 +394,30 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
 
     status = check_declaration(declaration, manifest, coverage)
     if args.json:
-        print(json.dumps(status.to_dict(), indent=2))
+        print(json.dumps({**status.to_dict(), "ledger_chain_verified": chain_ok}, indent=2))
     else:
+        if not chain_ok:
+            print("THE LEDGER CHAIN DOES NOT VERIFY — the evidence below is drawn from a "
+                  "store whose integrity is in question.\n")
         print(status.summary())
         if status.checks_skipped:
             print("\n  not checked:")
             for c in status.checks_skipped:
                 print(f"    - {c}")
-        if coverage is None:
-            print("\n  Supply --ledger to check the evidence as well as the "
+        if not status.evidence_assessed:
+            print("\n  The evidence was NOT assessed. Supply --ledger (and a manifest that "
+                  "declares safety functions) to check the evidence as well as the "
                   "configuration.")
-    return 0 if status.is_sound else 1
+    if not chain_ok:
+        return 2        # could not vouch: not a pass, whatever the evidence reads
+    if status.is_sound:
+        return 0
+    # 2: could not vouch (the evidence was never looked at), as for an unverifiable ledger.
+    # 3: the evidence stands, but only below 'validated' (as for `machinery coverage`).
+    # 1: a finding (changed configuration, wrong machine, lapsed evidence).
+    if status.verdict.is_unassessed:
+        return 2
+    return 3 if status.verdict.is_below_validated else 1
 
 
 def main(argv: list[str] | None = None) -> int:

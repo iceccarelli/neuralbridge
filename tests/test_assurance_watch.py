@@ -173,7 +173,6 @@ class TestNewVersusOutstanding:
             self, work, config, ledger, tmp_path):
         """Coverage returns when a verification lands between two runs."""
         from assurance.core.evidence import Actor
-        from assurance.machine.bundle import build_bundle
         from assurance.machine.envelope import (
             FigureBasis,
             SafetyEnvelope,
@@ -203,8 +202,11 @@ class TestNewVersusOutstanding:
                       samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                            tcp_speed=400.0, mode=OperatingMode.SSM,
                                            separation=2200.0) for i in range(10)))
-        build_bundle(env, trace, actor=Actor("eng", "engineer"), ledger=ledger,
-                     subject="Grimaldi/AR-7#0412")
+        # attested: a function is RECOVERED only on evidence at 'validated' or better (a declared
+        # provenance is recorded, not recovered; see test_assurance_round2_lows.py)
+        from .support_recorder import build_attested_bundle
+        build_attested_bundle(env, trace, actor=Actor("eng", "engineer"), ledger=ledger,
+                              subject="Grimaldi/AR-7#0412")
 
         reexport(work, "0412")
         reexport(work, "0501")

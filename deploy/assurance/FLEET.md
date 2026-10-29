@@ -21,8 +21,15 @@ Grimaldi/AR-7#0501           Plant 7, Cell A        stale                 1    2
 Grimaldi/AR-7#0733           Plant 9, Line 1        never_verified        0    2  b050efe446c3
 Grimaldi/AR-7#0412           Plant 2, Line 4        current               0    2  4d77ffb0f71b
 
-5 machine(s): 3 covered, 2 with gaps
+5 machine(s): 3 covered, 0 covered at community, 2 with gaps
 ```
+
+`covered` counts machines whose every declared function is current on evidence at `validated`
+or better. A machine current only on weaker evidence (a trace whose provenance the filer
+declared) is counted as `covered at community`, never as covered or as having gaps; `fleet list`
+exits 0 only when every machine is covered, 1 when any has gaps, 3 when none has gaps but some
+is covered only at community, 2 when the ledger chain does not verify. Each row carries
+`evidence_tier_floor`.
 
 Worst first, because that is the order somebody reads it in. Every row comes
 from the same `assess_coverage` that answers one machine — this is aggregation,
@@ -240,6 +247,20 @@ Two questions, reported separately because they have different remedies:
   longer installed.
 - **`configuration_intact_evidence_lapsed`** — the software is right and the
   demonstration behind it has lapsed.
+
+Two more verdicts say what was *not* established, and neither is a pass:
+
+- **`configuration_matches_coverage_not_assessed`** — the configuration is the declared one and
+  the evidence was never looked at: no coverage was supplied (the free route's default, and what
+  an account without a plan that reads the ledger gets), the manifest declares no safety
+  function, or the coverage is for another machine or configuration. `evidence_assessed` is
+  `false`; `assurance fleet declaration` exits 2.
+- **`configuration_intact_evidence_below_validated`** — every declared function reads current,
+  but only on evidence below `validated`; `assurance fleet declaration` exits 3.
+
+`describes_the_machine` (exit 0) means the configuration is the declared one **and** a coverage
+assessment of this machine, over at least one declared function, found every one current at
+`validated` or better.
 
 `assurance fleet declare` binds a declaration to the configuration in front of
 you, so every later manifest either matches it or does not.

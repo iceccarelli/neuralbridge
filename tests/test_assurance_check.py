@@ -182,10 +182,13 @@ class TestRequiresReverification:
         assert "SF-01" in result.required_actions
         assert result.evidence_stale >= 1
 
-    def test_a_current_machine_with_no_advisory_is_verified(self, ledger):
+    def test_a_current_machine_with_no_advisory_is_verified_at_its_tier(self, ledger):
+        # `enrol` seals a bundle whose trace provenance the filer only declared (tier
+        # community), so the answer is `verified_at_community`, not `verified`. The
+        # validated case is pinned in test_assurance_community_is_not_verified.py.
         enrol(ledger, "0412", intervene=False)
         result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
-        assert result.verdict is AssuranceVerdict.VERIFIED
+        assert result.verdict is AssuranceVerdict.VERIFIED_AT_COMMUNITY
         assert result.advisory_evaluated is False
 
 

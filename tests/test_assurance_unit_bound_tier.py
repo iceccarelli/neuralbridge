@@ -1,5 +1,10 @@
 """A unit's ``validated`` tier must rest on that unit's recorder.
 
+Since the full unit key is bound (``test_assurance_unit_binding_full.py``), "sealed for the
+unit it is filed under" means sealed WITH that unit's key as the subject: a bundle that names
+only a serial is no longer believed validated under a unit key. Tests below that built such a
+bundle and expected ``validated`` encoded the serial-only binding this change replaces.
+
 Regression: ``VerificationRecord.from_ledger`` re-assessed a recorded attestation without the
 unit serial, so a bundle sealed for a product line (no serial) accepted an attestation made
 on unit A and was believed ``validated`` for unit B when filed under B's key. The honest
@@ -22,23 +27,24 @@ def _tiers(tmp_path, bundle, subject, trust):
         ledger, subject=subject, recorder_trust=trust)]
 
 
-def _bundle(serial_sealed, attested_for):
+def _bundle(serial_sealed, attested_for, subject=""):
     env, tr = envelope(), laptop_trace()
     rec = Recorder()
     att = rec.attest_for(env, tr, machine_serial=attested_for).to_dict()
     bundle = build_bundle(env, tr, actor=ACTOR, recorder_attestations=[att],
-                          recorder_trust=rec.trust(), machine_serial=serial_sealed)
+                          recorder_trust=rec.trust(), machine_serial=serial_sealed,
+                          subject=subject)
     return bundle, rec.trust()
 
 
 def test_a_bundle_sealed_for_the_unit_it_is_filed_under_stays_validated(tmp_path):
-    bundle, trust = _bundle("UNIT-A", "UNIT-A")
+    bundle, trust = _bundle("UNIT-A", "UNIT-A", subject="mk/md#UNIT-A")
     assert bundle.tier.value == "validated"
     assert _tiers(tmp_path, bundle, "mk/md#UNIT-A", trust) == ["validated"]
 
 
 def test_the_same_bundle_filed_under_another_unit_is_not_validated(tmp_path):
-    bundle, trust = _bundle("UNIT-A", "UNIT-A")
+    bundle, trust = _bundle("UNIT-A", "UNIT-A", subject="mk/md#UNIT-A")
     assert _tiers(tmp_path, bundle, "mk/md#UNIT-B", trust) == ["community"]
 
 
@@ -55,13 +61,13 @@ def test_a_product_line_subject_is_unchanged(tmp_path):
 
 
 def test_a_malformed_unit_key_cannot_be_tied_to_any_unit(tmp_path):
-    bundle, trust = _bundle("UNIT-A", "UNIT-A")
+    bundle, trust = _bundle("UNIT-A", "UNIT-A", subject="mk/md#UNIT-A")
     assert _tiers(tmp_path, bundle, "mk/md#", trust) == ["community"]
     assert _tiers(tmp_path, bundle, "mk/md#UNIT-A#X", trust) == ["community"]
 
 
 def test_without_a_trust_list_the_unit_binding_still_applies(tmp_path):
-    bundle, _ = _bundle("UNIT-A", "UNIT-A")
+    bundle, _ = _bundle("UNIT-A", "UNIT-A", subject="mk/md#UNIT-A")
     ledger = EvidenceLedger(tmp_path / "l.db")
     ledger.append(bundle.evidence, subject="mk/md#UNIT-B")
     assert [r.tier for r in VerificationRecord.from_ledger(

@@ -33,7 +33,12 @@ from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
 )
-from assurance.machinery.staleness import Coverage, VerificationRecord, assess_coverage
+from assurance.machinery.staleness import (
+    Coverage,
+    UnitClaims,
+    VerificationRecord,
+    assess_coverage,
+)
 from assurance.watch.observations import fleet_observations
 
 __all__ = ["POSITION_SCHEMA", "assess_position", "render_text"]
@@ -51,6 +56,8 @@ _PRIORITY = (
     ("function_failing", "A safety function's latest verification did not pass"),
     ("function_stale", "A safety function's verification was invalidated by a later change"),
     ("machine_unobserved", "The machine has no recent successful observation"),
+    ("function_unchecked", "A safety function's latest verification left its checks unchecked"),
+    ("function_incomplete", "A safety function's latest verification checked only part of it"),
     ("function_never_verified", "A safety function has never been verified"),
     ("inventory_not_read", "Safety items were not read off the unit"),
 )
@@ -115,6 +122,7 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
                          "kind": "recommendation", "action": action,
                          "because": statement, "refs": refs or []})
 
+    claims = UnitClaims.build(ledger, recorder_trust)      # once for every machine
     for key in keys:
         history = manifests_from_ledger(ledger, key)
         obs = observations.get(key, {})
@@ -161,7 +169,7 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
 
         cov = assess_coverage(
             m, VerificationRecord.from_ledger(ledger, subject=key,
-                                              recorder_trust=recorder_trust),
+                                              recorder_trust=recorder_trust, claims=claims),
             interventions_from_ledger(ledger, key))
         counts: dict[str, int] = {c.value: 0 for c in Coverage}
         for f in cov.functions:
@@ -172,9 +180,11 @@ def assess_position(ledger: EvidenceLedger, *, now: datetime | None = None,
             if f.coverage is Coverage.CURRENT:
                 continue
             label = {"failing": "function_failing", "stale": "function_stale",
+                     "unchecked": "function_unchecked", "incomplete": "function_incomplete",
                      "never_verified": "function_never_verified"}.get(f.coverage.value)
-            kind = "unknown" if f.coverage in (Coverage.NEVER_VERIFIED,
-                                               Coverage.NOT_DEMONSTRABLE) else "fact"
+            kind = "unknown" if f.coverage in (
+                Coverage.NEVER_VERIFIED, Coverage.NOT_DEMONSTRABLE, Coverage.UNCHECKED,
+                Coverage.INCOMPLETE) else "fact"
             fact(kind, key, f"{key}/{f.function_id}: evidence is {f.coverage.value}"
                  + (f" (invalidated by {f.invalidated_by})" if f.invalidated_by else "") + ".",
                  refs, work_kind=label or "", action=(

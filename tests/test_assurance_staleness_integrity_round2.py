@@ -309,8 +309,11 @@ class TestADamagedManifestIsAssumedToHaveChangedEverything:
         tamper_newest_manifest(ledger)
         fleet = Fleet.from_ledger(ledger).to_dict()
         assert fleet["chain_verified"] is False
-        assert fleet["machines"][0]["verdict"] != "covered"
+        # neither kind of cover survives a chain that does not verify
+        assert fleet["machines"][0]["verdict"] == "gaps"
         assert fleet["summary"]["covered"] == 0
+        assert fleet["summary"]["covered_at_community"] == 0
+        assert fleet["summary"]["with_gaps"] == 1
 
     def test_a_manifest_row_that_is_not_json_does_not_raise(self, ledger, clock):
         self._changed_machine(ledger, clock)
@@ -349,15 +352,19 @@ class TestADamagedManifestIsAssumedToHaveChangedEverything:
 class TestAChainThatDoesNotVerifyIsNeverCovered:
     def test_the_fleet_does_not_call_a_machine_covered_when_the_chain_is_broken(self, ledger):
         verified_machine(ledger)
+        # a recording with no recorder attestation stands, but only at community
         assert Fleet.from_ledger(ledger).to_dict()["machines"][0]["verdict"] in (
-            "covered", "gaps")
+            "covered", "covered_at_community")
         ledger.append(Evidence(kind="test.unrelated", body={"x": 1}, actor=TECH,
                                origin=Origin(system="test")).seal(), subject="unrelated")
         edit_payload(ledger, ledger.entries()[-1].seq, lambda p: p["body"].update(x=2))
         fleet = Fleet.from_ledger(ledger).to_dict()
         assert fleet["chain_verified"] is False
-        assert fleet["machines"][0]["verdict"] != "covered"
+        # neither kind of cover survives a chain that does not verify
+        assert fleet["machines"][0]["verdict"] == "gaps"
         assert fleet["summary"]["covered"] == 0
+        assert fleet["summary"]["covered_at_community"] == 0
+        assert fleet["summary"]["with_gaps"] == 1
 
     def test_the_coverage_route_refuses_a_chain_that_does_not_verify(self, client, store):
         from assurance.api import deps

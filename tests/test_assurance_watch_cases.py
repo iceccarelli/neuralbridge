@@ -121,6 +121,9 @@ def verify_machine(ledger: EvidenceLedger, key: str, *, when: datetime):
                              FigureBasis("measured", "S1", "2026-01-01")),
         uncertainty=SensingUncertainty(100.0, 50.0, FigureBasis("measured", "C1")),
         intrusion_distance_mm=850.0)
+    # One recording per unit: the same trace is the validated evidence of ONE unit key only
+    # (a second claim is refused at sealing and capped at community by every reader), so each
+    # machine's run carries its own id (the serial) and each refile its own second.
     serial = key.rpartition("#")[2]
     trace = Trace(trace_id=f"R-{serial}-{when:%Y%m%d%H%M%S}", provenance=Provenance.FIELD,
                   source_system="fw", started_at=when, sample_rate_hz=50.0,

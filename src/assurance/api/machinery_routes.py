@@ -265,7 +265,7 @@ def post_intervention(
 
 @machinery_router.post(
     "/coverage",
-    summary="Which safety functions still have valid evidence",
+    summary="Which safety functions a recorded verification still stands for, at what tier",
     responses={
         409: {"description": "`ledger_chain_unverified`: this account's ledger chain does not "
                              "verify, so no function is assessed. A coverage read from a "
