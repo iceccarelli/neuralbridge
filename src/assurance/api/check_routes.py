@@ -143,7 +143,7 @@ _VERDICTS = [v.value for v in AssuranceVerdict]
     "/services",
     summary="What NeuralBridge can execute for a machine right now",
 )
-async def services() -> dict[str, Any]:
+def services() -> dict[str, Any]:
     """A machine-readable catalogue an agent can discover before calling anything.
 
     Generated from the same models and the same ``PLANS`` table every other
