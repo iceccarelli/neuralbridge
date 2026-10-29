@@ -165,6 +165,7 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
 async def machine_verify(
     envelope: dict[str, Any], trace: dict[str, Any], actor: str,
     recorder_attestations: list[dict[str, Any]] | None = None, machine_serial: str = "",
+    subject: str = "",
 ) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
 
@@ -178,13 +179,18 @@ async def machine_verify(
     supply a trust list, a private key or a provenance basis. Without an accepted
     attestation a declared provenance is capped at ``community``; an accepted one proves
     a trusted key signed these exact trace bytes, not that the recording is physically
-    true. ``machine_serial`` names the unit the verification is about.
+    true. ``machine_serial`` names the unit the verification is about. ``subject`` files
+    the sealed bundle under that ledger subject, as ``--subject`` does on the CLI; give a
+    unit key (``maker/model#serial``) for it to count as evidence of that unit. Without
+    one the bundle is filed under ``product@version`` and counts for no unit.
     """
     body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
     if recorder_attestations:
         body["recorder_attestations"] = recorder_attestations
     if machine_serial:
         body["machine_serial"] = machine_serial
+    if subject:
+        body["subject"] = subject
     return await _call("POST", "/v1/machine/verify", json_body=body)
 
 

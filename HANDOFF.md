@@ -7,9 +7,12 @@ so, because a handoff that flatters the work is worse than no handoff.
 **Repository** `github.com/iceccarelli/neuralbridge` — zero tags. Test counts
 below were observed on 2026-10-21, not carried forward from older text.
 
+**Verified 2026-10-29** at `bdfd2db`: `python -m pytest tests/ -q --no-cov` with the Postgres env
+from `ci.yml` — 6535 passed, 0 skipped; `ruff check src/ tests/` clean. `npx tsc` / `npm run build` were not run.
+
 ---
 
-## 0.00 Changes on 2026-10-28 — trust hardening (branch `claude/trust-hardening`, not merged)
+## 0.00 Changes on 2026-10-28 — trust hardening (branch `claude/trust-hardening`, merged: PR #59)
 
 Found by an independent adversarial review of `origin/main` a135c0e (PR #54 and the recorder-attestation
 machinery); each item has a red-first regression test. Nothing here changes a price, a plan flag, a Stripe
@@ -71,10 +74,11 @@ standing facts; none of this is customer-validated.
   `covered` **and** `covered_at_community` to `gaps` in the fleet, and the passport is
   `ledger_chain_not_verified`. The fleet read costs about three SQLite connections per machine
   (`tests/test_assurance_staleness_integrity_round2.py` bounds it at `4N + 10`) and one shared walk over the
-  bundles. *Tests:* `tests/test_assurance_merge_interactions.py`. Still open: MCP `machine_verify` takes no
-  `subject`, so an MCP-sealed verification is filed under `product@version` and never counts for a unit.
+  bundles. *Tests:* `tests/test_assurance_merge_interactions.py`. MCP `machine_verify` now takes `subject`
+  (added 2026-10-29, `tests/test_assurance_recorder_attestation.py::TestMcp`); omitted, a verification sealed over
+  MCP is still filed under `product@version` and counts for no unit, as on the CLI and API.
 
-## 0.00 Pilot-readiness work (branch `claude/pilot-readiness`, not merged)
+## 0.00 Pilot-readiness work (branch `claude/pilot-readiness`, merged: PRs #60 and #63)
 
 Found by walking the smallest evaluable-and-payable workflow for real, then reviewed
 independently (the review's findings are the second round). Zero revenue, customers and
@@ -103,8 +107,9 @@ pilots remain the standing facts (§4.4); nothing here is evidence of one.
   `kit check` names every placeholder; `machine verify --subject` warns when coverage will
   not see it; a closed pipe exits 141 quietly (but `billing grant` revokes a key it could not
   deliver).
-- Open: the trust-hardening, staleness-integrity and csaf-unsigned-trust branches edit
-  neighbouring code (`staleness.py` coverage strings, `plans.ts`/`plans.py` coverage line).
+- (Was open: the trust-hardening, staleness-integrity and csaf-unsigned-trust branches edited
+  neighbouring code. All three are merged on `main` — PRs #59, #61, #58 — and the suite passes
+  with them together.)
 
 ---
 
