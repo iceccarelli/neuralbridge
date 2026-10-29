@@ -46,6 +46,7 @@ from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
 from assurance.fleet.impact import assess_impact
+from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
 from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
@@ -279,9 +280,11 @@ class LibraryDriver(Driver):
         return {"cases": [c.row() for c in cases], "summary": queue_summary(cases)}
 
     def assess_advisory(self, adv):
-        report = assess_impact(adv, Fleet.from_ledger(self.ledger))
-        case = assess_advisory(self.store, report, actor=Actor("operator", "fleet",
-                                                               kind="automation"))
+        # An advisory handed over as a file or body is unauthenticated: a case on it needs a
+        # named person (it was opened as automation before, which was the gap).
+        report = assess_impact(adv, Fleet.from_ledger(self.ledger),
+                               provenance=bare_provenance("file"))
+        case = assess_advisory(self.store, report, actor=_person(PERSON))
         return Out("ok", case.to_dict() if case else None)
 
     def claim(self, cid, owner, who):
@@ -365,7 +368,7 @@ class CliDriver(Driver):
     def assess_advisory(self, adv):
         path = self.plant.root / "advisory.json"
         path.write_text(json.dumps(adv.to_dict()), encoding="utf-8")
-        r = self._run("assess-advisory", "--advisory", path)
+        r = self._run("assess-advisory", "--advisory", path, "--actor", PERSON)
         assert r.returncode == 0, r.stderr
         return Out("ok", self.get(case_id_for(TriggerType.SUPPLIER_ADVISORY,
                                               adv.advisory_id)))
@@ -470,7 +473,8 @@ class ApiDriver(Driver):
         return self.http.get("/v1/change/cases").json()
 
     def assess_advisory(self, adv):
-        r = self.http.post("/v1/change/assess/advisory", json={"advisory": adv.to_dict()})
+        r = self.http.post("/v1/change/assess/advisory",
+                           json={"advisory": adv.to_dict(), "actor": PERSON})
         assert r.status_code == 200, r.text
         return Out("ok", r.json()["case"])
 

@@ -17,8 +17,27 @@ assurance machinery record-change   intervention.json --ledger register.db
 assurance machinery coverage        manifest.json --ledger register.db
 ```
 
-`coverage` exits non-zero when any declared safety function is not currently
-covered, so it is a gate, not a report.
+`coverage` (and `passport`) is a gate, not a report. Exit codes:
+
+| exit | verdict | meaning |
+|---|---|---|
+| 0 | `covered` | every declared function is current on evidence at `validated` or better |
+| 3 | `covered_at_community` | every function reads current, but on evidence whose provenance the filer only declared (`community`): the recorded evidence stands, it was not a demonstration on the machine |
+| 1 | `gaps`, `no_functions_declared` | at least one function is not current |
+| 2 | | could not vouch: an error (an unreadable file or ledger), or the ledger's chain does not verify (`coverage` assesses nothing and says why on stderr; a passport sealed from such a ledger has verdict `ledger_chain_not_verified`, INDETERMINATE, never covered) |
+
+**Passport format.** A passport is `assurance.machinery.passport/1` when an older verifier can
+express its verdict (`covered`, `gaps`, `no_functions_declared`) and
+`assurance.machinery.passport/2` when it carries `covered_at_community` or
+`ledger_chain_not_verified`. `machinery check` of this release accepts both and still accepts a
+passport written by the previous release; an older `machinery check` refuses a `/2` passport by name
+("schema is ..., expected ...passport/1") instead of calling its verdict a tamper. Re-verify a `/2`
+passport with this release or newer. Fixture: `tests/fixtures/passport_a135c0e_covered_at_community.json`.
+
+Per function, `coverage` is one of `current`, `stale` (verified, then a recorded intervention
+disturbed it), `failing` (a check's newest run VIOLATED it), `unchecked` (the newest run left the
+function's checks unchecked, so nothing was shown and nothing failed), `incomplete` (some checks
+verified, others left unchecked), `never_verified` or `not_demonstrable`. Only `current` is cover.
 
 ## What a manifest is
 
@@ -93,7 +112,7 @@ Grimaldi/AR-7#0412 — GAPS
   [STALE ] SF-01 [PL d]  Protective stop on zone intrusion
            last verified by c0f9dcda3cd6 on 2026-02-09; invalidated by INT-0007
            on 2026-03-14, which changed ITM-FW and re-ran nothing with sealed evidence.
-           running 183 day(s) without a recorded verification that still stands for this function.
+           running 183 day(s) without a standing verification for this function.
   [n/a   ] SF-03 [PL d]  Emergency stop
            this function declares no verification check, so no verification can cover it.
 ```
@@ -114,13 +133,67 @@ which a check was `not_applicable` says nothing for or against it. Cover that
 rests on a verification below the `validated` tier (a simulated trace, a datasheet
 figure) is labelled as such in the report.
 
-A verification is dated by the start of its trace. If that start is unreadable, or
-is later than the moment the bundle was filed, the date cannot be trusted and the
-verification is treated as the earliest possible time, so every recorded change
-counts as after it.
+A verification is dated by **when the run happened** (the start of its trace), not
+when the bundle was filed: a run captured in February and filed in June is evidence
+about February. That date is the filer's word, so it is bounded by the ledger's own
+clock, and the two outcomes are dated in the two opposite safe directions:
 
-A verification is dated by **when the run happened**, not when the bundle was
-filed. A run captured in February and filed in June is evidence about February.
+- a *pass* is dated by its start, which can only make it look older than it is. A run can
+  never describe a moment later than the ledger says it was filed (a start ahead of the
+  filing time is read as the filing time). A start that is unreadable, or more than a day
+  ahead, cannot be trusted (`date_suspect`): the pass is read as the earliest possible
+  time, every recorded change counts as after it, and with none to blame the function is
+  `stale` rather than `current`, naming `undatable:<hash>`;
+- a *failure* is dated by when it was **filed**, whatever start it claims: a logger with a
+  dead clock (1970, year 1) must not sort its failing run under an older pass. A pass
+  supersedes a failure only if it **began after the failure was filed**;
+- "when the ledger says it was filed" is the **filing clock**: the latest `at` among the
+  unit's records at or before it in the chain. Clocks step backwards (NTP, DST, a restored
+  VM); time as the chain saw it never does. The assumption is that the machine writing the
+  ledger does not jump far *forward* and back: a record stamped far ahead pulls every later
+  record of that unit with it, in the safe (stale) direction;
+- two things at the same second are ordered by the ledger: a verification filed after the
+  manifest that showed a change, in the same second, is read as having come after it.
+
+## What counts as a change
+
+A function is disturbed by a change in three ways, and the report names which:
+
+1. **A recorded intervention.** It disturbs the functions it names (read against the
+   manifest's own spelling: `sf-1` is `SF-1`) **and** every function the manifest says the
+   changed item implements, so a blank or mistyped list cannot make a change vanish. A
+   function id that matches nothing is reported in `checks_skipped`. `record_intervention`
+   (and so the route and `record-change`) refuses a unit with no manifest sealed under
+   exactly that key (`409 unknown_machine`; a key that differs by case or by a digit is a
+   different unit) and a function the manifest does not declare (`422 unknown_function`,
+   named). Functions are checked against the newest look and the newest declaration
+   together; a plan (`as_intended`) never narrows them.
+2. **A change the ledger's own manifests show** (`implied:<hash>@<seq>:<item>`). Each
+   `as_found` manifest is compared with the latest earlier look or declaration for the unit
+   (a plan says nothing about the machine; a look marked incomplete is never the earlier
+   side and the items it did not collect are not read as removed). A safety-bearing item
+   (one that implements a declared function) whose hash differs, that appeared or that
+   vanished, or whose version moved when it carries no hash to compare, is a change. It is
+   dated when the manifest that showed it was **filed**, not its `taken_at`, which is the
+   filer's word. An intervention for the same item, dated after the earlier look and no
+   later than that filing (for a changed hash its `to_hash` is the hash now found),
+   **explains** it: the change is marked `explained_by` that record and dated no later than
+   the record was **filed**. An explanation never removes the change, because the date in
+   it is also the filer's word and a record back-dated to before the last verification
+   would otherwise erase it in one call. Verify *after* sealing the manifest (and after
+   filing the record): the report says so. This is the smallest sound rule, not the whole
+   truth: a first look has nothing to differ from, and an item with no hash and an
+   unchanged version is invisible.
+3. **A record the reader cannot use** (`unreadable:...`). An intervention, manifest or
+   verification bundle whose seal no longer matches, whose body has the wrong shape, or
+   whose stored row is not JSON is never dropped. A damaged intervention or manifest is
+   assumed to have touched every function; a damaged bundle is assumed to have failed
+   every check. Each is dated when the ledger says it was filed, so a run that began
+   afterwards stands. The report names it and says why.
+
+A ledger whose chain does not verify is never `covered`: the coverage route answers
+`409 ledger_chain_unverified`, `assurance machinery coverage` exits 2, and the fleet reads
+every machine as `gaps` with `chain_verified: false`.
 
 ## Coverage states
 

@@ -20,7 +20,10 @@ is what makes the sealed bundle worth buying.
 
 from __future__ import annotations
 
+import asyncio
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -72,6 +75,82 @@ machine_router = APIRouter(prefix="/v1/machine", tags=["machine safety"])
 #: A trace bigger than this is a file upload problem, not an API problem, and
 #: the CLI handles it without a round trip. Refusing early beats timing out.
 MAX_SAMPLES = 200_000
+
+#: How many /verify engine runs one process executes at once. A maximum-size trace is
+#: hundreds of megabytes of Python objects.
+MAX_CONCURRENT_VERIFICATIONS = 4
+#: How many more may wait for a turn. A waiting request has already been read and parsed
+#: (the framework does that before the handler runs), so each one holds memory; beyond
+#: this the answer is 503 with ``Retry-After`` rather than another parked body. At most
+#: ``MAX_CONCURRENT_VERIFICATIONS + MAX_WAITING_VERIFICATIONS`` bodies are held at once.
+MAX_WAITING_VERIFICATIONS = 8
+#: How many of those one account may have in flight (running or waiting). One tenant
+#: cannot fill every slot; the next one is told 429 with ``Retry-After``.
+MAX_VERIFICATIONS_PER_ACCOUNT = 2
+RETRY_AFTER_SECONDS = 5
+
+
+class _LoopState:
+    def __init__(self, size: int) -> None:
+        self.slots = asyncio.Semaphore(size)
+        self.waiting = 0
+        self.in_flight: dict[str, int] = {}
+
+
+class _Gate:
+    """Admission to the verification engine: bounded running, bounded waiting, bounded per
+    account. State is per running event loop (a semaphore belongs to one loop)."""
+
+    def __init__(self, size: int, waiting: int, per_owner: int) -> None:
+        self._size, self._waiting, self._per_owner = size, waiting, per_owner
+        self._by_loop: dict[asyncio.AbstractEventLoop, _LoopState] = {}
+
+    def for_running_loop(self) -> _LoopState:
+        loop = asyncio.get_running_loop()
+        for stale in [lp for lp in self._by_loop if lp.is_closed()]:
+            del self._by_loop[stale]
+        return self._by_loop.setdefault(loop, _LoopState(self._size))
+
+    @asynccontextmanager
+    async def admit(self, owner: str) -> AsyncIterator[None]:
+        state = self.for_running_loop()
+        retry = {"Retry-After": str(RETRY_AFTER_SECONDS)}
+        # No await between these checks and the increments: the loop cannot interleave.
+        if state.in_flight.get(owner, 0) >= self._per_owner:
+            raise HTTPException(
+                status_code=429, headers=retry,
+                detail={"error": "too_many_verifications",
+                        "detail": f"this account already has {self._per_owner} "
+                                  "verification runs in flight; retry when one finishes."})
+        queued = state.slots.locked()
+        if queued and state.waiting >= self._waiting:
+            raise HTTPException(
+                status_code=503, headers=retry,
+                detail={"error": "verification_queue_full",
+                        "detail": "the service is running its limit of verifications and "
+                                  "its queue is full; retry shortly."})
+        state.in_flight[owner] = state.in_flight.get(owner, 0) + 1
+        try:
+            if queued:
+                state.waiting += 1
+                try:
+                    await state.slots.acquire()
+                finally:
+                    state.waiting -= 1
+            else:
+                await state.slots.acquire()
+            try:
+                yield
+            finally:
+                state.slots.release()
+        finally:
+            state.in_flight[owner] -= 1
+            if not state.in_flight[owner]:
+                del state.in_flight[owner]
+
+
+_VERIFY_GATE = _Gate(MAX_CONCURRENT_VERIFICATIONS, MAX_WAITING_VERIFICATIONS,
+                     MAX_VERIFICATIONS_PER_ACCOUNT)
 
 
 class SeparationIn(BaseModel):
@@ -300,6 +379,13 @@ async def separation(
 @machine_router.post(
     "/verify",
     summary="Verify a recorded run against a declared safety envelope",
+    responses={
+        429: {"description": "`too_many_verifications`: this account already has "
+                             f"{MAX_VERIFICATIONS_PER_ACCOUNT} runs in flight. "
+                             "`Retry-After` says when."},
+        503: {"description": "`verification_queue_full`: the service is running its limit "
+                             "and its queue is full. `Retry-After` says when."},
+    },
 )
 async def verify_run(
     body: VerifyIn,
@@ -330,6 +416,21 @@ async def verify_run(
             },
         )
 
+    # The engine is CPU work on a trace of up to MAX_SAMPLES samples (seconds, for a large
+    # one). Run inline it would stop the event loop for that long: nothing else on the
+    # process would be served, health checks and every other tenant included. It runs in a
+    # worker thread, like the bundle checker, and at most MAX_CONCURRENT_VERIFICATIONS at a
+    # time per process, because the thread pool alone would let dozens of maximum-size
+    # traces sit in memory at once (the event loop used to serialise them by accident).
+    owner = principal.account.id if getattr(principal, "account", None) else "(unauthenticated)"
+    async with _VERIFY_GATE.admit(owner):
+        return await run_in_threadpool(_verify_sync, body, envelope, actor, register)
+
+
+def _verify_sync(
+    body: VerifyIn, envelope: SafetyEnvelope, actor: Any, register: Any,
+) -> dict[str, Any]:
+    """Parse the trace and run the engine (and seal, when asked). Runs in a worker thread."""
     try:
         trace = Trace.from_dict(body.trace)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
@@ -376,6 +477,15 @@ async def verify_run(
             detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
+    if not body.seal and "#" in body.subject:
+        # Nothing was compared with the ledger: whether this recording already belongs to
+        # another unit (one recording, one unit) is checked only when sealing, and a refusal
+        # or a downgrade can follow then. The tier above is the sealing engine's, not a reader's.
+        payload["unit_binding_note"] = (
+            "not sealed: the tier shown was not compared with the ledger, so whether this "
+            f"recording is already the validated evidence of another unit than {body.subject!r} "
+            "was not checked. Sealing may be refused (422 invalid_subject), and a reader never "
+            "believes more than the unit key the bundle was sealed for.")
     # The hash a re-verification cites (``verification_content_hash`` on
     # POST /v1/change/cases/{id}/reverification); also at evidence.content_hash.
     payload["content_hash"] = bundle.content_hash

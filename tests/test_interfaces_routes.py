@@ -72,7 +72,7 @@ def _advisory_case(client, headers, *, contradictory: bool):
                  manifest_id="MAN-0412")
     _seal_manifest(client, headers, m)
     r = client.post("/v1/change/assess/advisory",
-                    json={"advisory": advisory().to_dict()}, headers=headers)
+                    json={"advisory": advisory().to_dict(), "actor": PERSON}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["opened"] is True
     return r.json()["case"]

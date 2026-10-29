@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from assurance.core.errors import AssuranceError
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.watch.config import WatchConfig
 from assurance.watch.runner import last_run, run_watch
@@ -127,24 +128,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # against a machine that matched is not one line among forty; it is
             # the reason this ran.
             for finding in adv.stop_use:
-                print(f"\n  ** STOP USE ** {finding.advisory_id} "
-                      f"({finding.supplier_id}) — {finding.title}")
-                print(f"       machines: {', '.join(finding.machines)}")
+                print(f"\n  ** STOP USE ** {neutralise(finding.advisory_id)} "
+                      f"({neutralise(finding.supplier_id)}) — {neutralise(finding.title)}")
+                print(f"       machines: {neutralise(', '.join(finding.machines))}")
                 if finding.remedy:
-                    print(f"       remedy:   {finding.remedy}")
+                    print(f"       remedy:   {neutralise(finding.remedy)}")
                 if finding.reference:
-                    print(f"       source:   {finding.reference}")
+                    print(f"       source:   {neutralise(finding.reference)}")
             for finding in adv.new:
                 if finding.stops_use:
                     continue
-                print(f"    new        {finding.advisory_id:<16} "
-                      f"[{finding.impact}] {finding.title[:48]}")
+                print(f"    new        {neutralise(finding.advisory_id):<16} "
+                      f"[{finding.impact}] {neutralise(finding.title[:48])}")
                 if finding.machines:
-                    print(f"               {', '.join(finding.machines)}")
+                    print(f"               {neutralise(', '.join(finding.machines))}")
             for finding in adv.withdrawn:
-                print(f"    WITHDRAWN  {finding.advisory_id:<16} "
-                      f"{finding.title[:48]}")
-                print(f"               reason: {finding.withdrawal_reason}")
+                print(f"    WITHDRAWN  {neutralise(finding.advisory_id):<16} "
+                      f"{neutralise(finding.title[:48])}")
+                print(f"               reason: {neutralise(finding.withdrawal_reason)}")
                 print("               You were told about this one. If somebody "
                       "changed a machine because")
                 print("               of it, that change now rests on a "

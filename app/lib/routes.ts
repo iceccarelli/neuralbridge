@@ -42,7 +42,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/machine/verify', tier: 'cell', summary: 'Verify a recorded machine run against its declared envelope' },
   { method: 'POST', path: '/v1/machinery/manifest', tier: 'cell', summary: 'Seal a safety software manifest' },
   { method: 'POST', path: '/v1/machinery/intervention', tier: 'cell', summary: 'Seal an intervention record' },
-  { method: 'POST', path: '/v1/machinery/coverage', tier: 'cell', summary: 'Which safety functions a recorded verification still stands for (evidence tier shown)' },
+  { method: 'POST', path: '/v1/machinery/coverage', tier: 'cell', summary: 'Which safety functions a recorded verification still stands for, at what tier' },
   { method: 'POST', path: '/v1/machinery/passport', tier: 'cell', summary: "Seal the machine's evidence position" },
   { method: 'GET', path: '/v1/fleet/machines', tier: 'cell', summary: 'Every enrolled machine, worst coverage first' },
   { method: 'GET', path: '/v1/fleet/report', tier: 'cell', summary: 'The whole fleet on one page a plant manager can read' },

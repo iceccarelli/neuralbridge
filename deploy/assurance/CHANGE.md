@@ -98,6 +98,36 @@ operators. The local CLI and open mode still take a declared `--actor`.
 `assess-intervention` remain for one-off use and for deployments that do not
 run the watch.
 
+**Behaviour changes to know about when upgrading** (they affect scripts):
+- `assess-advisory` and `POST /v1/change/assess/advisory` used to open a case from a bare
+  advisory as "automation" when no actor was given. They now refuse that (exit 1 / HTTP 409);
+  pass `--actor NAME` / `actor`.
+- A pre-work re-look at an *advisory* case (open, or in review with nothing re-verified) is now
+  additive for every advisory: it never drops a machine or a link to the advisory it was
+  opened on. Drift and intervention cases are unchanged.
+- Cases already in a ledger keep their ids and carry no marker. A bare file whose advisory id
+  matches such a case does not update it (it says so and exits non-zero).
+- `POST /v1/fleet/advisory/signed` rows for an unsigned import are inspect-only
+  (`automated_consequences_permitted: false`) even under a pinned key.
+
+**An advisory nobody has authenticated opens a case only for a named person.**
+`assess-advisory --advisory FILE` and `POST /v1/change/assess/advisory` take the
+advisory as a file or a body, so it carries no signature: both refuse it unless
+`--actor` / `actor` names a person (not "automation", "agent" and the like), and
+the case's provenance says `advisory_trust: unauthenticated_file` /
+`unauthenticated_input` and who accepted it. An advisory that is an **unsigned
+import** (`assurance fleet import-csaf`, see `FLEET.md`) needs more: the
+explicit override `--accept-unsigned` (API: `accept_unsigned: true`, with an
+optional `reason`). Its case has its own id (the advisory id, its trust class
+and its publisher), so it cannot merge into or rewrite the case of a signed
+advisory that reuses a tracking id, it carries `advisory_partial`,
+`advisory_dropped_products`, `advisory_severity_source`, `advisory_tlp` and the
+rest of the translation record in its provenance and its export, and it opens
+with a human decision to confirm the advisory against the publisher (and, when
+the translation dropped products, a second one naming them). The watch
+runner never does this: it treats an unsigned import as untrusted, whatever
+feed it is in.
+
 ## A repeat observation, a recurrence, and what each does
 
 One case per trigger: `_case_id` is a hash of `(trigger_type, trigger_id)`,
@@ -108,7 +138,7 @@ decided by the case's state, in `assurance.change.service._open_or_update`:
 | Existing case | A repeat observation of the same trigger | Ledger |
 |---|---|---|
 | none | open it | 1 `opened` entry |
-| `open`, or `in_review` with nothing re-verified | replace the **facts** with the fresh reading; the **work** (re-verifications, actions, questions) can only grow, a repeat look never drops what is outstanding | an `updated` entry **only if something differs** |
+| `open`, or `in_review` with nothing re-verified | refresh the **facts** the fresh reading re-reads; the **work** (re-verifications, actions, questions), the **machines** and the **links to evidence** can only grow, a repeat look never drops what is outstanding or what the case already names | an `updated` entry **only if something differs** |
 | `awaiting_action` and later (`awaiting_reverification`, `ready_to_close`) | **additive only**: new machines, new functions, new questions are added; a function already tracked is never re-inflated; if the addition makes `ready_to_close` untrue the case steps back | an `updated` entry only if something was added |
 | `closed` | nothing — **unless** it genuinely recurred (below) | nothing, or 1 `reopened` entry |
 | `rejected` | nothing for an identical trigger. A different trigger id (a different configuration, a different advisory) is a different case and opens normally. An **advisory** that now exposes a machine the rejection did not name reopens it, exactly as for `closed` | nothing, or 1 `reopened` entry |
@@ -376,7 +406,9 @@ POST /v1/change/assess/drift                       {baseline, observed, actor?}
         # the baseline is the newest manifest the account's ledger holds for the
         # machine in another configuration; the body's is used only if none is
         # sealed. The response says which (baseline_source: ledger | request).
-POST /v1/change/assess/advisory                    {advisory, actor?}
+POST /v1/change/assess/advisory                    {advisory, actor, accept_unsigned?, reason?}
+        # actor must name a person for an advisory handed over as a body; an
+        # unsigned import also needs accept_unsigned (409 otherwise).
 POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
 GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}

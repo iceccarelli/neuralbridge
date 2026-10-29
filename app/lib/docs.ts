@@ -153,13 +153,21 @@ export function loadRootDoc(file: string, title: string): { title: string; html:
   return { title, html, editPath: file };
 }
 
+/**
+ * Every docs page that can be rendered. A page whose source file is absent is not listed, so
+ * the static params and the sitemap never advertise a URL that would answer not-found.
+ */
 export function listDocSlugs(): { slug: string[] }[] {
-  return [
-    { slug: [] },
+  const all = [
+    { slug: [] as string[] },
     { slug: ['getting-started'] },
     { slug: ['pricing'] },
     { slug: ['platform'] },
     { slug: ['assurance'] },
     ...ENGINE_PAGES.map((p) => ({ slug: ['assurance', p.slug] })),
   ];
+  return all.filter(({ slug }) => {
+    const resolved = resolveDocSource(slug.length ? slug : undefined);
+    return resolved !== null && fs.existsSync(path.join(/*turbopackIgnore: true*/ REPO_ROOT, resolved.file));
+  });
 }

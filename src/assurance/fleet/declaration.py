@@ -57,6 +57,16 @@ class DeclarationVerdict(StrEnum):
     DESCRIBES_THE_MACHINE = "describes_the_machine"
     #: The configuration is the declared one; some safety evidence has lapsed.
     CONFIGURATION_INTACT_EVIDENCE_LAPSED = "configuration_intact_evidence_lapsed"
+    #: The configuration is the declared one and every declared safety function reads
+    #: current, but on evidence below ``validated`` (a trace whose provenance the filer only
+    #: declared). The recorded evidence stands; it was not a demonstration on the machine.
+    CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED = (
+        "configuration_intact_evidence_below_validated")
+    #: The configuration is the declared one and the evidence was never looked at: no
+    #: coverage assessment was supplied, the manifest declares no safety function, or the
+    #: assessment is for another machine or configuration. This is NOT a pass: the
+    #: comparison that was made says nothing about whether the evidence stands.
+    CONFIGURATION_MATCHES_COVERAGE_NOT_ASSESSED = "configuration_matches_coverage_not_assessed"
     #: The machine no longer runs the configuration that was declared.
     CONFIGURATION_CHANGED = "configuration_changed"
     #: The declaration is about a different machine.
@@ -65,6 +75,16 @@ class DeclarationVerdict(StrEnum):
     @property
     def is_sound(self) -> bool:
         return self is DeclarationVerdict.DESCRIBES_THE_MACHINE
+
+    @property
+    def is_below_validated(self) -> bool:
+        """Does the evidence stand, but only below ``validated``? Not a pass."""
+        return self is DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED
+
+    @property
+    def is_unassessed(self) -> bool:
+        """Was the evidence never assessed? Neither sound nor a finding against the machine."""
+        return self is DeclarationVerdict.CONFIGURATION_MATCHES_COVERAGE_NOT_ASSESSED
 
 
 @dataclass(frozen=True)
@@ -184,6 +204,10 @@ class DeclarationStatus:
     lapsed_functions: tuple[str, ...]
     statement: str
     checks_skipped: tuple[str, ...]
+    #: True only when a coverage assessment of THIS machine and configuration, over at
+    #: least one declared safety function, was actually made. False says "not looked at";
+    #: it never says the evidence lapsed or stands.
+    evidence_assessed: bool = False
 
     @property
     def is_sound(self) -> bool:
@@ -199,6 +223,7 @@ class DeclarationStatus:
             "lapsed_functions": list(self.lapsed_functions),
             "statement": self.statement,
             "checks_skipped": list(self.checks_skipped),
+            "evidence_assessed": self.evidence_assessed,
         }
 
     def summary(self) -> str:
@@ -252,8 +277,39 @@ def check_declaration(
             "and would not appear here."
         )
 
+    # Was the evidence actually assessed? Only a coverage report for THIS machine and
+    # configuration over at least one declared function counts. "Every declared function
+    # has evidence" is vacuous over zero functions and unknown without a report, and
+    # neither may read as a pass.
+    not_assessed_because = ""
+    if coverage is None:
+        not_assessed_because = "no coverage assessment was supplied"
+        caveats.append(
+            "no coverage assessment was supplied, so only the configuration was "
+            "compared. The declaration may name a configuration that is intact and "
+            "safety functions whose demonstration has lapsed."
+        )
+    elif (coverage.machine_key != manifest.machine.key
+          or coverage.configuration_hash != current):
+        not_assessed_because = ("the coverage assessment supplied is for a different "
+                                "machine or configuration than this manifest")
+        caveats.append(
+            "the coverage assessment supplied was made for "
+            f"{coverage.machine_key} at configuration {coverage.configuration_hash[:12]}, "
+            "not for this manifest, so it was not used."
+        )
+    elif not coverage.functions:
+        not_assessed_because = ("the manifest declares no safety function, so there is "
+                                "no evidence to assess")
+        caveats.append(
+            "the manifest declares no safety function, so there was no evidence to "
+            "assess. Whether any safety function exists and is demonstrated is outside "
+            "this check."
+        )
+    assessed = not not_assessed_because
+
     lapsed: tuple[str, ...] = ()
-    if coverage is not None:
+    if assessed and coverage is not None:
         lapsed = tuple(f.function_id for f in coverage.functions
                        if f.coverage is not Coverage.CURRENT)
         undem = [f.function_id for f in coverage.functions
@@ -264,12 +320,6 @@ def check_declaration(
                 "check, so this says nothing about whether they are demonstrated. "
                 "They are counted as lapsed because 'not shown' is not 'shown'."
             )
-    else:
-        caveats.append(
-            "no coverage assessment was supplied, so only the configuration was "
-            "compared. The declaration may name a configuration that is intact and "
-            "safety functions whose demonstration has lapsed."
-        )
 
     if current != declaration.configuration_hash:
         return DeclarationStatus(
@@ -286,6 +336,7 @@ def check_declaration(
                 "declaration does not describe this machine."
             ),
             checks_skipped=tuple(caveats),
+            evidence_assessed=assessed,
         )
 
     if lapsed:
@@ -301,6 +352,41 @@ def check_declaration(
                 "machine that is unchanged and a demonstration that does not."
             ),
             checks_skipped=tuple(caveats),
+            evidence_assessed=True,
+        )
+
+    if not assessed:
+        return DeclarationStatus(
+            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
+            verdict=DeclarationVerdict.CONFIGURATION_MATCHES_COVERAGE_NOT_ASSESSED,
+            declared_configuration=declaration.configuration_hash,
+            current_configuration=current, lapsed_functions=(),
+            statement=(
+                f"{manifest.machine.key} runs configuration {current[:12]}, which is the "
+                f"one declaration {declaration.doc_id} was signed against. The evidence "
+                f"for the declared safety functions was NOT assessed "
+                f"({not_assessed_because}), so this does not say whether it holds."
+            ),
+            checks_skipped=tuple(caveats),
+            evidence_assessed=False,
+        )
+
+    if coverage is not None and not coverage.is_demonstrated:
+        floor = coverage.evidence_tier_floor or "unknown"
+        return DeclarationStatus(
+            doc_id=declaration.doc_id, machine_key=manifest.machine.key,
+            verdict=DeclarationVerdict.CONFIGURATION_INTACT_EVIDENCE_BELOW_VALIDATED,
+            declared_configuration=declaration.configuration_hash,
+            current_configuration=current, lapsed_functions=(),
+            statement=(
+                f"{manifest.machine.key} runs configuration {current[:12]}, which is the "
+                f"one declaration {declaration.doc_id} was signed against, and every "
+                f"declared safety function has evidence that still stands, but only at "
+                f"tier {floor!r}, below 'validated': it describes a recorded file or a "
+                "model whose provenance was declared, not a demonstration on the machine."
+            ),
+            checks_skipped=tuple(caveats),
+            evidence_assessed=True,
         )
 
     return DeclarationStatus(
@@ -314,4 +400,5 @@ def check_declaration(
             "declared safety function has evidence that still stands."
         ),
         checks_skipped=tuple(caveats),
+        evidence_assessed=True,
     )

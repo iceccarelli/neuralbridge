@@ -83,7 +83,8 @@ def create_app(**kwargs: Any) -> FastAPI:
                                                  "1.1.9: safety software identity, "
                                                  "evidence of intervention, and which "
                                                  "safety functions a recorded "
-                                                 "verification still stands for."},
+                                                 "verification still stands for, "
+                                                 "at what tier."},
             {"name": "fleet", "description": "Every enrolled machine at once: "
                                              "component advisories fanned out to "
                                              "serial numbers, and Declarations of "

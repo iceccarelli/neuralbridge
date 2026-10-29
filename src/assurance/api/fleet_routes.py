@@ -29,7 +29,7 @@ from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.fleet.advisory import ComponentAdvisory, match_item
 from assurance.fleet.declaration import DeclarationOfConformity, check_declaration
-from assurance.fleet.impact import assess_impact
+from assurance.fleet.impact import advisory_provenance, assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger
@@ -117,7 +117,7 @@ def _advisory(raw: dict[str, Any]) -> ComponentAdvisory:
     "/advisory/check",
     summary="Is this one machine affected by this advisory?",
 )
-async def advisory_check(
+def advisory_check(
     body: AdvisoryCheckIn,
     response: Response,
     meter: Annotated[MeterTicket, Metered("advisory_check")],
@@ -159,6 +159,15 @@ async def advisory_check(
         skipped.append(
             f"{advisory.issued_by} published no artefact hashes, so any match here "
             "rests on a version label.")
+    record = advisory.import_record
+    if record is not None:
+        skipped.append(
+            "this advisory is an unsigned CSAF import: nobody has authenticated it.")
+        if record.partial:
+            skipped.append(
+                "this advisory is a PARTIAL translation (not imported: "
+                + (", ".join(record.dropped_ids) or "; ".join(record.partial_reasons))
+                + "), so 'not affected' here is not a statement that nothing is affected.")
     unhashed = [i.item_id for i in manifest.uncomparable_items]
     if unhashed:
         skipped.append(
@@ -175,14 +184,16 @@ async def advisory_check(
         "matches": matches,
         "remedy": advisory.remedy,
         "checks_skipped": skipped,
-        "provenance": _BARE_ADVISORY,
+        "provenance": advisory_provenance(advisory, _BARE_ADVISORY),
+        "advisory_import": record.to_dict() if record is not None else None,
+        "incomplete": bool(record is not None and record.partial),
     }
     meter.commit(response)
     return result
 
 
 @fleet_router.get("/machines", summary="Every enrolled machine, worst coverage first")
-async def machines(
+def machines(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -193,7 +204,7 @@ async def machines(
     "/observations",
     summary="When was each machine last looked at, and did the last attempt work?",
 )
-async def observations(
+def observations(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -215,7 +226,7 @@ async def observations(
     "/advisory",
     summary="Which of your machines does this advisory touch?",
 )
-async def advisory_impact(
+def advisory_impact(
     body: AdvisoryIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -246,7 +257,7 @@ _BARE_ADVISORY = {
     "/advisory/signed",
     summary="Assess a signed supplier feed against your fleet, with its trust state",
 )
-async def advisory_impact_signed(
+def advisory_impact_signed(
     body: SignedAdvisoryIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -296,10 +307,19 @@ async def advisory_impact_signed(
             out.append({**row, "impact": None, "error": f"unreadable advisory: {exc}"})
             continue
         prov = trust.provenance_for(aid)
-        out.append({**row, "impact": assess_impact(
-            advisory, fleet, provenance=prov).to_dict()})
+        entry = {**row, "impact": assess_impact(
+            advisory, fleet, provenance=prov).to_dict()}
+        if advisory.import_record is not None:
+            # The signature is over the supplier's file; the file says it is a translation
+            # nobody has authenticated. A pinned key does not turn that into a statement
+            # the supplier made, so no consequence is permitted whatever the policy says.
+            entry.update(automated_consequences_permitted=False, inspect_only=True,
+                         advisory_import=advisory.import_record.to_dict())
+        out.append(entry)
+    inspect_only = (trust.inspect_only if not out else
+                    not any(r.get("automated_consequences_permitted") for r in out))
     return {"trust": trust.to_dict(), "advisories": out,
-            "inspect_only": trust.inspect_only, "trust_statement": TRUST_STATEMENT}
+            "inspect_only": inspect_only, "trust_statement": TRUST_STATEMENT}
 
 
 @fleet_router.get(
@@ -307,7 +327,7 @@ async def advisory_impact_signed(
     response_class=HTMLResponse,
     summary="The whole fleet on one page a plant manager can read",
 )
-async def report(
+def report(
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
     organisation: str = "",
@@ -331,7 +351,7 @@ async def report(
 
 
 @fleet_router.post("/declare", summary="Bind a declaration to a configuration")
-async def declare(
+def declare(
     body: DeclareIn,
     principal: Annotated[Principal, Machine],
 ) -> dict[str, Any]:
@@ -360,7 +380,7 @@ async def declare(
     "/declaration/check",
     summary="Does this declaration still describe the machine? Free for anyone.",
 )
-async def declaration_check(
+def declaration_check(
     body: DeclarationCheckIn,
     principal: Annotated[Principal, Anyone],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -370,6 +390,14 @@ async def declaration_check(
     Whether a changed configuration amounts to a substantial modification is a
     question for the manufacturer and their notified body. What this settles is
     the fact that question rests on.
+
+    ``verdict`` is ``describes_the_machine`` only when the configuration is the declared
+    one AND the evidence was assessed (``evidence_assessed: true``: the caller has a plan
+    that reads its ledger and asked for ``with_coverage``) and every declared safety
+    function is current at ``validated`` or better. Without that, the answer is
+    ``configuration_matches_coverage_not_assessed`` (the evidence was not looked at; this is
+    the default for an anonymous caller) or
+    ``configuration_intact_evidence_below_validated``: neither is a pass.
     """
     try:
         declaration = DeclarationOfConformity.from_dict(body.declaration)
@@ -389,7 +417,9 @@ async def declaration_check(
 
     status = check_declaration(declaration, manifest, coverage)
     payload = status.to_dict()
-    payload["coverage_assessed"] = coverage is not None
+    # `coverage_assessed` is whether any evidence was actually assessed, not whether a
+    # report object existed: a report over zero functions assesses nothing.
+    payload["coverage_assessed"] = status.evidence_assessed
     if body.with_coverage and coverage is None:
         payload["checks_skipped"] = [
             "coverage was requested and not assessed: reading the evidence ledger "

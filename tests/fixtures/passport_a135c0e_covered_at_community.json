@@ -1,0 +1,170 @@
+{
+  "coverage": {
+    "assessed_at": "2026-10-28T09:42:38Z",
+    "checks_skipped": [
+      "SF-1 show as current on verification at tier 'community', below 'validated'. A trace's declared provenance is capped at 'community'; 'validated' needs a recorder attestation accepted under a recorder trust list the verifier holds, so current here means the recorded evidence still stands, not that the behaviour was demonstrated on the machine.",
+      "no interventions were supplied for this machine. A function shown as current is current only against the change records you have; an unrecorded change is invisible here by construction.",
+      "this joins verification bundles to intervention records through the safety functions the manifest declares. It does not confirm the manifest is complete, and a safety-relevant item nobody listed is covered by nothing here and reported by nothing here."
+    ],
+    "configuration_hash": "54896f4a098222a6c77b35f67a3ce8ccd1d1fdce4dd1dda9de1a6af817a95af9",
+    "evidence_tier_floor": "community",
+    "functions": [
+      {
+        "checks": [
+          "speed_limit",
+          "workspace_containment"
+        ],
+        "coverage": "current",
+        "days_uncovered": null,
+        "description": "safe stop",
+        "detail": "verified by 4022ff891963 on 2026-09-12 at tier community; no recorded intervention since has touched an item implementing it.",
+        "function_id": "SF-1",
+        "intervention_revalidated": false,
+        "invalidated_at": "",
+        "invalidated_by": "",
+        "invalidating_item": "",
+        "last_verified_at": "2026-09-12T04:31:00Z",
+        "last_verified_hash": "4022ff8919637b0014454de31b4f5545c31d0cc24d964a1882dbea5900671302",
+        "required_performance": ""
+      }
+    ],
+    "machine": "Acme/AR-7#0001",
+    "manifest_id": "M-Acme-AR-7-0001",
+    "unrevalidated_interventions": [],
+    "verdict": "covered"
+  },
+  "evidence": {
+    "actor": {
+      "identifier": "a.i",
+      "kind": "person",
+      "role": "verification engineer"
+    },
+    "body": {
+      "assessed_at": "2026-10-28T09:42:38Z",
+      "configuration_hash": "54896f4a098222a6c77b35f67a3ce8ccd1d1fdce4dd1dda9de1a6af817a95af9",
+      "evidence_tier_floor": "community",
+      "functions": [
+        {
+          "checks": [
+            "speed_limit",
+            "workspace_containment"
+          ],
+          "coverage": "current",
+          "days_uncovered": null,
+          "description": "safe stop",
+          "detail": "verified by 4022ff891963 on 2026-09-12 at tier community; no recorded intervention since has touched an item implementing it.",
+          "function_id": "SF-1",
+          "intervention_revalidated": false,
+          "invalidated_at": "",
+          "invalidated_by": "",
+          "invalidating_item": "",
+          "last_verified_at": "2026-09-12T04:31:00Z",
+          "last_verified_hash": "4022ff8919637b0014454de31b4f5545c31d0cc24d964a1882dbea5900671302",
+          "required_performance": ""
+        }
+      ],
+      "intervention_ids": [],
+      "ledger_chain_verified": true,
+      "ledger_head": {
+        "attested_at": "2026-10-28T09:42:38Z",
+        "head_link_hash": "e0caeaab37494fb2674e98ca8b25b9416725db36294dacc20b70356e3657f83c",
+        "head_seq": 2,
+        "ledger_schema_version": 1,
+        "length": 2
+      },
+      "machine": {
+        "country": "",
+        "manufacturer": "Acme",
+        "model": "AR-7",
+        "serial": "0001",
+        "site": "",
+        "year": ""
+      },
+      "manifest_hash": "a9ecd0e45ce4fb188989e5dba3fea3ce2824f628ec63163ece15e77dd9eb022d",
+      "manifest_id": "M-Acme-AR-7-0001",
+      "schema": "assurance.machinery.passport/1",
+      "verdict": "covered",
+      "verification_hashes": [
+        "4022ff8919637b0014454de31b4f5545c31d0cc24d964a1882dbea5900671302"
+      ]
+    },
+    "checks_skipped": [
+      "SF-1 show as current on verification at tier 'community', below 'validated'. A trace's declared provenance is capped at 'community'; 'validated' needs a recorder attestation accepted under a recorder trust list the verifier holds, so current here means the recorded evidence still stands, not that the behaviour was demonstrated on the machine.",
+      "no interventions were supplied for this machine. A function shown as current is current only against the change records you have; an unrecorded change is invisible here by construction.",
+      "this joins verification bundles to intervention records through the safety functions the manifest declares. It does not confirm the manifest is complete, and a safety-relevant item nobody listed is covered by nothing here and reported by nothing here.",
+      "every function reads current, but only on evidence at tier 'community', below 'validated'. A trace's declared provenance is capped at 'community'; 'validated' needs a recorder attestation accepted under a recorder trust list the verifier holds, so this passport is INDETERMINATE with low confidence, not verified: the behaviour was not demonstrated on the machine."
+    ],
+    "confidence": "low",
+    "content_hash": "e066b2e4d9d970ab58ea9e2238f1769183cff0cebcc284445f330ae42791a868",
+    "kind": "machinery.passport",
+    "origin": {
+      "method": "coverage assessed by joining verification bundles to intervention records through declared safety functions",
+      "reference": "Acme/AR-7#0001",
+      "system": "assurance.machinery"
+    },
+    "recorded_at": "2026-10-28T09:42:38Z",
+    "relations": [
+      {
+        "content_hash": "a9ecd0e45ce4fb188989e5dba3fea3ce2824f628ec63163ece15e77dd9eb022d",
+        "note": "the manifest this position is assessed against",
+        "relation": "concerns"
+      },
+      {
+        "content_hash": "4022ff8919637b0014454de31b4f5545c31d0cc24d964a1882dbea5900671302",
+        "note": "verification 1.0.0",
+        "relation": "derived_from"
+      }
+    ],
+    "schema_version": "1",
+    "validation_state": "indeterminate"
+  },
+  "interventions": [],
+  "manifest": {
+    "functions": [
+      {
+        "description": "safe stop",
+        "function_id": "SF-1",
+        "required_performance": "",
+        "verified_by": [
+          "workspace_containment",
+          "speed_limit"
+        ]
+      }
+    ],
+    "items": [
+      {
+        "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "hash_source": "read_from_machine",
+        "implements": [
+          "SF-1"
+        ],
+        "item_id": "fw",
+        "kind": "firmware",
+        "modifiable_in_field": false,
+        "name": "fw",
+        "notes": "",
+        "supplier": "",
+        "version": "1"
+      }
+    ],
+    "machine": {
+      "country": "",
+      "manufacturer": "Acme",
+      "model": "AR-7",
+      "serial": "0001",
+      "site": "",
+      "year": ""
+    },
+    "manifest_id": "M-Acme-AR-7-0001",
+    "method": "",
+    "notes": "",
+    "source": "as_found",
+    "taken_at": "2026-09-13T00:00:00Z",
+    "taken_by": {
+      "identifier": "t",
+      "kind": "person",
+      "role": "tech"
+    }
+  },
+  "schema": "assurance.machinery.passport/1"
+}

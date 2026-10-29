@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from assurance.core.identity import format_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.fleet.advisory import (
     AdvisorySeverity,
     ComponentAdvisory,
@@ -40,6 +41,7 @@ from assurance.machinery.staleness import Coverage
 
 __all__ = [
     "CLASSIFICATIONS",
+    "advisory_provenance",
     "Exposure",
     "FunctionExposure",
     "ImpactReport",
@@ -176,6 +178,31 @@ class ImpactReport:
     #: ``assurance.supplier.trust``). Empty for an advisory handed over as a bare
     #: file, which is itself said in the summary.
     provenance: dict[str, Any] = field(default_factory=dict)
+    #: The advisory's translation record when it is an import (``ImportRecord.to_dict()``),
+    #: else ``None``. Carried so a consumer that holds only the report can still see that
+    #: the advisory is unsigned, whether it is partial, and what was dropped.
+    advisory_import: dict[str, Any] | None = None
+
+    @property
+    def incomplete(self) -> bool:
+        """True when the advisory is a partial translation of its source.
+
+        Then "no machine matched" only means none matched what *was* translated, and a
+        report with no exposure can never be ``clear``.
+        """
+        return bool(self.advisory_import and self.advisory_import.get("partial"))
+
+    @property
+    def incomplete_reasons(self) -> tuple[str, ...]:
+        if not self.incomplete:
+            return ()
+        record = self.advisory_import or {}
+        return tuple(str(r) for r in record.get("partial_reasons") or ())
+
+    @property
+    def dropped_products(self) -> tuple[str, ...]:
+        return tuple(str(d.get("product_id", "")) for d in
+                     (self.advisory_import or {}).get("dropped") or ())
 
     @property
     def unknown_machines(self) -> tuple[str, ...]:
@@ -217,13 +244,17 @@ class ImpactReport:
     def verdict(self) -> str:
         """``clear`` | ``exposed`` | ``needs_review``.
 
-        ``clear`` means the fleet was read from a ledger that verifies and no
-        enrolled machine matches. If the chain does not verify, an empty list of
-        matches is not evidence of anything — records may have been dropped — so
-        the answer is ``needs_review``.
+        ``clear`` means the fleet was read from a ledger that verifies, the advisory
+        is a complete statement of what its source said, and no enrolled machine
+        matches. If the chain does not verify, an empty list of matches is not
+        evidence of anything — records may have been dropped — so the answer is
+        ``needs_review``; so it is when the advisory is a partial translation
+        (:attr:`incomplete`), because the product that was dropped may be the one on
+        a machine.
         """
         if not self.exposures:
-            return "clear" if self.chain_verified else "needs_review"
+            return ("clear" if self.chain_verified and not self.incomplete
+                    else "needs_review")
         if any(e.newly_in_question for e in self.exposures):
             return "exposed"
         return "needs_review"
@@ -250,6 +281,9 @@ class ImpactReport:
             "prior_evidence_in_question": [dict(f) for f in self.prior_evidence_in_question],
             "clear_is_complete": self.clear_is_complete,
             "provenance": dict(self.provenance),
+            "advisory_import": dict(self.advisory_import) if self.advisory_import else None,
+            "incomplete": self.incomplete,
+            "incomplete_reasons": list(self.incomplete_reasons),
         }
 
     def summary(self) -> str:
@@ -261,19 +295,48 @@ class ImpactReport:
         if self.verdict == "needs_review" and not self.exposures:
             head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
                     "verify, so the absence of a match is not evidence")
+            if self.incomplete:
+                head = ("NEEDS REVIEW — INCOMPLETE TRANSLATION: no machine matched what "
+                        "was imported, but the advisory is partial, so a machine running "
+                        "what was left out is not cleared")
         lines = []
+        record = self.advisory_import
+        if record:
+            lines.append(
+                f"  !! UNSIGNED IMPORT ({neutralise(record.get('origin'))}, "
+                f"{neutralise(record.get('trust'))}): nobody has authenticated this "
+                "advisory; it is for inspection, not for acting on")
+            chosen_by = ("defaulted by the importer"
+                         if record.get("severity_source") == "defaulted_by_importer"
+                         else "chosen by the operator")
+            lines.append(
+                f"     severity {self.severity.value.upper()} "
+                f"({chosen_by}; the publisher did not state it)"
+                + (f"; TLP:{neutralise(record['tlp'])}" if record.get("tlp") else "")
+                + f"; document status {neutralise(record.get('tracking_status') or 'unknown')}"
+                + f"; document dated {neutralise(record.get('document_date'))}")
+            if self.incomplete:
+                lines.append(
+                    "  !! PARTIAL TRANSLATION — not imported: "
+                    + (", ".join(neutralise(i) for i in self.dropped_products)
+                       or "(see reasons)")
+                    + ". A machine running one of these is NOT in this report, and a "
+                    "report with no match is never clear.")
+                lines.extend(f"     - {neutralise(r)}" for r in self.incomplete_reasons)
         if self.provenance.get("inspect_only"):
             lines.append(
-                f"  !! INSPECT ONLY — trust state {self.provenance.get('trust_state')}: "
+                f"  !! INSPECT ONLY — trust state "
+                f"{neutralise(self.provenance.get('trust_state'))}: "
                 "this advisory did not meet the trust policy, so nothing below may "
                 "drive a stop-use or a case as a trusted supplier statement")
         elif self.provenance.get("trust_basis") == "manual_override":
             ov = self.provenance.get("override") or {}
-            lines.append(f"  !! MANUAL OVERRIDE by {ov.get('actor', '?')}: "
-                         f"{ov.get('reason', '')}")
+            lines.append(f"  !! MANUAL OVERRIDE by {neutralise(ov.get('actor', '?'))}: "
+                         f"{neutralise(ov.get('reason', ''))}")
         lines += [
-            f"{self.advisory_id} ({self.issued_by}, {self.severity.value}) — {head}",
-            f"  {self.title}",
+            f"{neutralise(self.advisory_id)} ({neutralise(self.issued_by)}, "
+            f"{self.severity.value}) — {head}",
+            f"  {neutralise(self.title)}",
             f"  {len(self.machines_affected)} of {self.machines_in_fleet} machine(s) "
             f"match; {self.functions_newly_in_question} safety function(s) newly in "
             "question",
@@ -282,9 +345,10 @@ class ImpactReport:
         for e in sorted(self.exposures,
                         key=lambda e: (order[e.basis.value], e.machine_key)):
             lines.append("")
-            lines.append(f"  {e.machine_key}   {e.site or '—'}   "
-                         f"[{e.confidence}] {e.item_id} {e.item_version}")
-            lines.append(f"      {e.detail}")
+            lines.append(f"  {neutralise(e.machine_key)}   {neutralise(e.site or '—')}   "
+                         f"[{e.confidence}] {neutralise(e.item_id)} "
+                         f"{neutralise(e.item_version)}")
+            lines.append(f"      {neutralise(e.detail)}")
             for f in e.functions:
                 if f.newly_in_question:
                     flag = "→ NOW IN QUESTION"
@@ -298,14 +362,15 @@ class ImpactReport:
                             f"{f.coverage_before.value.replace('_', ' ')})")
                 when = (f", verified {f.last_verified_at[:10]}"
                         if f.last_verified_at else "")
-                lines.append(f"      {f.function_id}  {f.description}{when}  {flag}")
+                lines.append(f"      {neutralise(f.function_id)}  "
+                             f"{neutralise(f.description)}{when}  {flag}")
         if self.unknown_machines or self.unknown_functions:
             lines.append("")
             lines.append(
                 f"  UNKNOWN — {len(self.unknown_machines)} machine(s) and "
                 f"{len(self.unknown_functions)} safety function(s) cannot be "
                 "cleared by this assessment: "
-                + ", ".join(self.unknown_machines[:8]))
+                + ", ".join(neutralise(m) for m in self.unknown_machines[:8]))
         if self.prior_evidence_in_question:
             lines.append(
                 f"  {len(self.prior_evidence_in_question)} piece(s) of prior "
@@ -346,7 +411,12 @@ def assess_impact(
     advisory: ComponentAdvisory, fleet: Fleet, *,
     provenance: dict[str, Any] | None = None,
 ) -> ImpactReport:
-    """Fan one advisory out across a fleet, all the way to safety functions."""
+    """Fan one advisory out across a fleet, all the way to safety functions.
+
+    An advisory that is an unsigned import is inspect-only whatever ``provenance`` says: a
+    caller cannot make it more trusted by handing it over with a trusted provenance, and
+    one handed over with none is given the inspect-only provenance of what it is.
+    """
     exposures: list[Exposure] = []
     caveats: list[str] = []
 
@@ -400,6 +470,14 @@ def assess_impact(
                     "so this match rests entirely on labels."
                 )
 
+    if advisory.import_record is not None and not exposures:
+        pairs = sorted({f"{a.supplier} / {a.name}" for a in advisory.affected})
+        shown = "; ".join(neutralise(p) for p in pairs[:20]) + (
+            f"; and {len(pairs) - 20} more" if len(pairs) > 20 else "")
+        caveats.append(
+            "no component name matched exactly. This imported advisory names (supplier / "
+            f"component): {shown}. If one of these is a component your machines carry under "
+            "another spelling, this result is wrong, and only a person can see that.")
     if not advisory.publishes_hashes:
         caveats.append(
             f"{advisory.issued_by} published no artefact hashes with "
@@ -478,7 +556,9 @@ def assess_impact(
 
     for e in exposures:
         for f in e.functions:
-            if f.coverage_before is Coverage.NEVER_VERIFIED and not f.last_verified_at:
+            if (f.coverage_before in (Coverage.NEVER_VERIFIED, Coverage.UNCHECKED,
+                                      Coverage.INCOMPLETE)
+                    and not f.last_verified_at):
                 continue
             prior.append({
                 "machine": e.machine_key, "function_id": f.function_id,
@@ -515,5 +595,31 @@ def assess_impact(
         classifications=tuple(classifications),
         unknown_functions=tuple(unknown_functions),
         prior_evidence_in_question=tuple(prior),
-        provenance=dict(provenance or {}),
+        provenance=advisory_provenance(advisory, provenance),
+        advisory_import=(advisory.import_record.to_dict()
+                         if advisory.import_record is not None else None),
     )
+
+
+def advisory_provenance(
+    advisory: ComponentAdvisory, provenance: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The provenance an advisory is assessed under: what was supplied, never more trusted
+    than the advisory itself allows (an unsigned import is inspect-only whatever it is
+    handed)."""
+    record = advisory.import_record
+    if record is None:
+        return dict(provenance or {})
+    effective: dict[str, Any] = {
+        "source": record.origin, "trust_state": "unsigned_import",
+        "trust_basis": "none", "signature_state": "none", "override": None,
+        "implications_reviewed": False,
+    }
+    if provenance:
+        effective["supplied_provenance"] = {
+            k: provenance[k] for k in ("source", "trust_state", "trust_basis")
+            if k in provenance}
+        effective.update({k: v for k, v in provenance.items() if k not in effective})
+    effective.update(inspect_only=True, automated_consequences_permitted=False,
+                     advisory_trust=record.trust)
+    return effective

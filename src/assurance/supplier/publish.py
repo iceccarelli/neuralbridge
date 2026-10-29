@@ -391,6 +391,14 @@ def _publish_locked(
                 "the correction a new id, and withdraw this one if it was wrong."
             )
 
+    if advisory.import_record is not None:
+        raise PublishError(
+            f"{advisory.advisory_id} is an unsigned import (a translation of a document "
+            f"{advisory.import_record.origin}). Signing it would put your signature on "
+            "content nobody here has authenticated, and customers would treat the "
+            "import marker inside it as noise. Check it against your own source, write the "
+            "advisory yourself (without the import_record) and publish that.")
+
     if advisory.issued_by != identity.supplier_id and \
             advisory.issued_by != identity.legal_name:
         raise PublishError(

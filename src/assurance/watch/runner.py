@@ -59,6 +59,7 @@ from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
+from assurance.machinery.intervention import ImpliedIntervention
 from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
 from assurance.machinery.record import (
     interventions_from_ledger,
@@ -70,6 +71,7 @@ from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
 from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
@@ -577,13 +579,19 @@ def run_watch(
         )
         uncovered_now = {f.function_id for f in coverage.functions
                          if f.coverage is not Coverage.CURRENT}
+        # Current on evidence below 'validated' (a declared provenance) is recorded, not
+        # recovered: a function that was uncovered stays outstanding, and one that was not
+        # is not newly uncovered either.
+        weak_now = {f.function_id for f in coverage.functions
+                    if f.coverage is Coverage.CURRENT
+                    and not tier_reaches_validated(f.evidence_tier)}
         before = prior.get(target.serial, {})
         uncovered_before = set(before.get("still_uncovered", [])) | set(
             before.get("newly_uncovered", []))
 
         newly = tuple(sorted(uncovered_now - uncovered_before))
-        still = tuple(sorted(uncovered_now & uncovered_before))
-        recovered = tuple(sorted(uncovered_before - uncovered_now))
+        still = tuple(sorted((uncovered_now | weak_now) & uncovered_before))
+        recovered = tuple(sorted(uncovered_before - uncovered_now - weak_now))
 
         warnings: list[str] = []
         if not result.complete:
@@ -739,6 +747,13 @@ def _assess_interventions(
     for intervention in interventions:
         cid = case_id_for(TriggerType.INTERVENTION, intervention.intervention_id)
         if store.get(cid) is not None:
+            continue
+        if isinstance(intervention, ImpliedIntervention) and intervention.observed_configuration \
+                and store.get(case_id_for(TriggerType.MACHINE_DRIFT,
+                                          intervention.observed_configuration)) is not None:
+            # The drift case for this very change exists, whatever has become of it (open,
+            # closed, waived, rejected). It owns the change; a person's ruling on it stands
+            # and is not answered with a second case the next run.
             continue
         declared = set(intervention.affects_functions)
         if declared and any(declared <= set(c.affected_functions) for c in open_cases):

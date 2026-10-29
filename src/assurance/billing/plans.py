@@ -292,8 +292,9 @@ PLANS: dict[Tier, Plan] = {
             "Evidence bundles anyone can re-verify without an account",
             "Machinery Regulation Annex III 1.1.9: the safety software manifest, the "
             "intervention record, and the machine passport",
-            "Coverage: which declared safety functions have a recorded verification "
-            "dated after the last recorded change, and which change came after the rest",
+            "Coverage: which declared safety functions a recorded verification still "
+            "stands for, the evidence tier it rests on, and which intervention "
+            "invalidated the rest",
             "Fleet: every enrolled machine ranked worst-first, and a supplier "
             "advisory fanned out to serial numbers and the safety functions it "
             "puts in question",

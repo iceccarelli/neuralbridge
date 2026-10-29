@@ -48,7 +48,7 @@ def _tier(v, tier):
 class TestTheFloorIsReported:
     def test_a_community_cover_has_a_community_floor(self):
         report = assess_coverage(covered_manifest(), [_tier(verification(), "community")], [])
-        assert report.verdict == "covered"
+        assert report.verdict == "covered_at_community"     # not "covered": see the cap below
         assert report.evidence_tier_floor == "community"
         assert report.to_dict()["evidence_tier_floor"] == "community"
 
@@ -56,7 +56,7 @@ class TestTheFloorIsReported:
         strong = verification(seq=1, verified=("ssm_separation", "stop_characterisation"))
         weak = _tier(verification(seq=2, verified=("speed_limit",)), "community")
         report = assess_coverage(covered_manifest(), [strong, weak], [])
-        assert report.verdict == "covered"
+        assert report.verdict == "covered_at_community"
         assert report.evidence_tier_floor == "community"
 
     def test_a_validated_cover_has_a_validated_floor_and_no_tier_caveat(self):
@@ -73,7 +73,7 @@ class TestThePassportIsCappedAtTheFloor:
         p = build_passport(ledger, covered_manifest(), actor=ENG,
                            verifications=[_tier(verification(), "community")],
                            interventions=[])
-        assert p.verdict == "covered"
+        assert p.verdict == "covered_at_community"
         assert p.evidence.body["evidence_tier_floor"] == "community"
         assert p.evidence.validation_state is ValidationState.INDETERMINATE
         assert p.evidence.confidence is Confidence.LOW
@@ -84,7 +84,7 @@ class TestThePassportIsCappedAtTheFloor:
         record_manifest(ledger, covered_manifest())
         seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
         p = build_passport(ledger, covered_manifest(), actor=ENG, interventions=[])
-        assert p.verdict == "covered"
+        assert p.verdict == "covered_at_community"
         assert p.evidence.validation_state is not ValidationState.VERIFIED
         assert p.evidence.confidence not in (Confidence.HIGH, Confidence.ESTABLISHED)
 
