@@ -1,0 +1,54 @@
+{
+  "manifest_id": "MAN-DEMO-1",
+  "machine": {
+    "manufacturer": "DemoCo",
+    "model": "AR-7",
+    "serial": "DEMO-0001",
+    "year": "2026",
+    "site": "SYNTHETIC demo cell"
+  },
+  "source": "as_declared",
+  "taken_at": "2026-03-01T09:00:00Z",
+  "taken_by": {
+    "identifier": "a.integrator",
+    "role": "safety engineer",
+    "kind": "person"
+  },
+  "method": "SYNTHETIC: figures invented for the demonstration workflow",
+  "notes": "Not a real machine. Not a real firmware hash.",
+  "items": [
+    {
+      "item_id": "ITM-FW",
+      "kind": "firmware",
+      "name": "Safety controller firmware",
+      "version": "3.8.2",
+      "content_hash": "fe21623f37fada0422f8405c6f920036a8bdd84af16ece4f71dad17d6ec19f69",
+      "hash_source": "read_from_machine",
+      "supplier": "ControlCo",
+      "implements": [
+        "SF-01",
+        "SF-02"
+      ],
+      "modifiable_in_field": false
+    }
+  ],
+  "functions": [
+    {
+      "function_id": "SF-01",
+      "description": "Protective separation in speed-and-separation monitoring",
+      "required_performance": "PL d",
+      "verified_by": [
+        "ssm_separation",
+        "stop_characterisation"
+      ]
+    },
+    {
+      "function_id": "SF-02",
+      "description": "Speed limit in collaborative operation",
+      "required_performance": "PL d",
+      "verified_by": [
+        "speed_limit"
+      ]
+    }
+  ]
+}
