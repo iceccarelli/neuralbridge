@@ -31,6 +31,14 @@ does not survive across tool calls, and `NEURALBRIDGE_REQUIRE_POSTGRES=1` turns 
 - **`evidence verify` on a machine bundle or passport** still exits 2 (it checks ledger exports only) but names
   `machine check` / `machinery check` instead of "no `entries` list". The hosted `/v1/evidence/verify` is still the one
   verifier that dispatches on kind; the offline CLI is not unified.
+- **`scripts/verify_export_standalone.py`**: one stdlib-only file that checks a whole-ledger export (hash recipe
+  restated, optional Ed25519 anchor via `cryptography`). Narrower than `evidence verify` on purpose; anything it does
+  not understand is exit 3. `tests/test_standalone_verifier_constants.py` fails if the product's constants or
+  vocabularies drift from the file; the adversarial differential lives in the stress repo and was mutation-checked
+  (fifteen injected weakenings of the file, each caught). An independent review found that an unsigned tail after
+  the signed head passed as exit 0; it is now exit 3, and a clean pass needs a read-from-ledger signed head covering
+  every record. Also fixed from that review: free text in `recorded_at`, unknown top-level fields, crash/exit-2 on
+  huge numbers or deep nesting, terminal-escape injection from file text, float-noise false alarms. Documented in `deploy/assurance/ATTEST.md`.
 - Independent oracle for the engine's core rule lives in `neuralbridge-stress-test` (`tests/test_attack_machine_verify_cli.py`).
 
 ## 0.00 Changes on 2026-10-28 — trust hardening (branch `claude/trust-hardening`, merged: PR #59)
