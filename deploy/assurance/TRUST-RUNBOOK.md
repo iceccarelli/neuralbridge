@@ -134,6 +134,38 @@ python examples/workflow/run.py
   by a route independent of the attestations.
 - Do not describe a result as "validated" to a buyer without saying under whose trust list.
 
+## Go-live checklist (founder; nothing here has been done)
+
+Do these in order, on your own machine, and tick them yourself. None of them has been performed by the
+assistant or by CI; the repository can only show the software behaves as documented.
+
+**Service key (`ASSURANCE_ATTEST_KEY_PEM`)**
+
+- [ ] Run section A on a machine you control. Note the fingerprint it prints.
+- [ ] Put the fingerprint somewhere this service does not control (your own site, a signed email, a letter)
+      **before** deploying, so there is a second route to compare against.
+- [ ] `fly secrets set ASSURANCE_ATTEST_KEY_PEM="$(cat ./attest-service.pem)"`, then delete the local file or move
+      it into your password manager's secure storage.
+- [ ] Before the change: `curl -s https://<host>/v1/ledger/attest/key` answers **503**
+      (`no_attestation_key_configured`). That is today's honest state.
+- [ ] After the change: the same request answers 200 and its `fingerprint` equals the one you wrote down in step 2.
+      If it does not, stop; do not tell any customer that anything is counter-signed.
+- [ ] Revoke any token that was ever pasted into a chat (`DEPLOY_NOW.md`).
+
+**Recorder trust (`ASSURANCE_RECORDER_TRUST`)** — only when a real recorder operator exists
+
+- [ ] Receive `recorder.pub` and its fingerprint from the recorder operator by a route independent of their
+      attestations. Never accept a private key.
+- [ ] Build the list (section B), narrowest `--provenance`, read it back with the check in section C (`configured`).
+- [ ] Decide knowingly: the list is server-wide. Every account's evidence is judged against it.
+- [ ] Set `ASSURANCE_RECORDER_TRUST` to the file's path on the volume. Restart. Run one real attestation through
+      the deployed API and confirm the response names the tier it believes and why.
+- [ ] Do **not** use the synthetic demo recorder (`examples/workflow/run.py`) against a production trust list.
+      Test on a separate staging deployment with its own throwaway list.
+
+Until the second block is done, hosted results stay at `community`, which is the correct and safe state. The
+first block does not change any tier; it adds a counter-signature to ledger heads.
+
 ## Authority
 
 Setting `ASSURANCE_ATTEST_KEY_PEM` and `ASSURANCE_RECORDER_TRUST` on a production deployment is a

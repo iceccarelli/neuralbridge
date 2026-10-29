@@ -253,10 +253,18 @@ class Fleet:
             chain_verified=self.chain_verified,
         )
 
+    def worst_first(self) -> list[MachineRecord]:
+        """The records in the order ``assurance fleet list`` promises: worst coverage first,
+        then most stale functions, then machine key. The table and the JSON share this."""
+        return sorted(
+            self.records,
+            key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count, r.machine_key),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "summary": self.summary().to_dict(),
-            "machines": [r.to_row() for r in self.records],
+            "machines": [r.to_row() for r in self.worst_first()],
             "chain_verified": self.chain_verified,
             "chain_problems": list(self.chain_problems),
         }
@@ -272,11 +280,7 @@ class Fleet:
                    if not self.chain_verified else "")
         if not self.records:
             return warning + "no machines in this ledger."
-        rows = sorted(
-            self.records,
-            key=lambda r: (r.worst.rank if r.worst else 99, -r.stale_count,
-                           r.machine_key),
-        )
+        rows = self.worst_first()
         head = (f"{'machine':<28} {'site':<22} {'worst':<17} "
                 f"{'stale':>5} {'fns':>4}  config")
         out = [head, "-" * len(head)]
