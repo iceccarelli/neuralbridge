@@ -22,6 +22,7 @@ computes.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -420,6 +421,34 @@ class SafetyManifest:
 
     def functions_of(self, item: SafetyItem) -> tuple[SafetyFunction, ...]:
         return tuple(f for f in self.functions if f.function_id in item.implements)
+
+    def resolve_function_ids(
+        self, ids: Iterable[str],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Read hand-typed function ids against the functions this manifest declares.
+
+        Returns ``(resolved, unknown)``. An id is resolved to the declared spelling: an
+        exact match, else the one that differs only by case or surrounding spaces
+        (``sf-1`` for ``SF-1``). Two declared ids that differ only by case are both
+        kept for such an id, because choosing between them would be a guess and the
+        conservative reading is that the change disturbed either. An id that matches
+        nothing is ``unknown`` -- never silently dropped by the caller.
+        """
+        declared = [f.function_id for f in self.functions]
+        resolved: list[str] = []
+        unknown: list[str] = []
+        for raw in ids:
+            if raw in declared:
+                hits = [raw]
+            else:
+                folded = raw.strip().casefold()
+                hits = [d for d in declared if d.strip().casefold() == folded]
+            if not hits:
+                if raw not in unknown:
+                    unknown.append(raw)
+                continue
+            resolved.extend(h for h in hits if h not in resolved)
+        return tuple(resolved), tuple(unknown)
 
     def checks_for(self, function_ids: set[str]) -> set[str]:
         """Every verification check that exercises any of these functions."""

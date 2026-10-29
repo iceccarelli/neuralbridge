@@ -318,7 +318,12 @@ class TestOneRecordingIsOneUnit:
         assert [r.tier for r in _read(led, KEY, rec.trust())] == ["validated"]
 
     def test_an_entry_that_fails_its_own_seal_claims_nothing(self, tmp_path):
-        """A tampered earlier filing is skipped everywhere; it does not take the recording."""
+        """A tampered earlier filing does not take the recording.
+
+        It is not skipped (that was the earlier reading): a bundle that fails its own seal is
+        a stand-in assumed to have failed every check, so it can never read as cover for its
+        own unit, and it holds no recording for anyone else.
+        """
         import json
         first, second = "Beta/XY-9#0002", KEY
         led, rec = self._two_units(tmp_path, first=first, second=second)
@@ -332,7 +337,8 @@ class TestOneRecordingIsOneUnit:
                    (json.dumps(p, sort_keys=True, separators=(",", ":")), seq))
         db.commit()
         db.close()
-        assert _read(led, first, rec.trust()) == []
+        (stand_in,) = _read(led, first, rec.trust())
+        assert stand_in.unreadable and stand_in.tier == "" and not stand_in.checks_verified
         (mine,) = _read(led, second, rec.trust())
         assert mine.tier == "validated" and mine.tier_note == ""
 
@@ -501,4 +507,7 @@ class TestSurvivorKillers:
                    (json.dumps(p, sort_keys=True, separators=(",", ":")), seq))
         db.commit()
         db.close()
-        assert _read(led, KEY, rec.trust()) == []
+        # not skipped: a bundle that fails its seal is a stand-in assumed to have failed
+        # every check, so it can never be read as validated cover
+        (stand_in,) = _read(led, KEY, rec.trust())
+        assert stand_in.unreadable and stand_in.tier == "" and not stand_in.checks_verified

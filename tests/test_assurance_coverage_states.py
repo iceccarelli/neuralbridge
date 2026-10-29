@@ -45,6 +45,7 @@ from assurance.machinery.staleness import Coverage, VerificationRecord, assess_c
 
 from .support_trust_hardening import KEY, ledger, manifest, trace_in_modes
 from .test_assurance_machine_provenance import ACTOR, envelope
+from .test_assurance_staleness_integrity import Clock
 
 AUTO = (OperatingMode.AUTOMATIC,)
 SSM = (OperatingMode.SSM,)
@@ -118,14 +119,34 @@ class TestFromRealRuns:
         assert states["F-BOTH"] == "failing"
         assert states["F-ZONE"] == "current"
 
-    def test_a_later_run_that_verifies_the_check_replaces_the_unchecked(self, tmp_path):
+    def test_a_later_run_that_verifies_the_check_replaces_the_unchecked(
+            self, tmp_path, monkeypatch):
+        """The second run began AFTER the first was filed, so it supersedes it (a run that
+        did not pass is dated by when it was filed, never by the start its filer chose: see
+        ``test_assurance_staleness_integrity_round2``)."""
+        led = ledger(tmp_path)
+        clock = Clock(monkeypatch)
+        t0 = datetime(2026, 9, 12, tzinfo=UTC)
+        clock.now = t0 + timedelta(minutes=30)
+        _seal(led, AUTO, tid="R1", start=t0)
+        clock.now = t0 + timedelta(hours=2)
+        _seal(led, SSM, tid="R2", start=t0 + timedelta(hours=1))
+        states, _ = _states(led)
+        assert states["F-STOP"] == "current"
+        assert states["F-BOTH"] == "current"
+
+    def test_a_pass_that_began_before_the_unchecked_run_was_filed_does_not_replace_it(
+            self, tmp_path):
+        """Both runs filed late, together: nothing in the ledger shows the verifying run came
+        after the unchecked one, so the check stays unchecked (cover is never inferred from an
+        order the ledger cannot vouch for). This was current before the filing clock existed."""
         led = ledger(tmp_path)
         t0 = datetime(2026, 9, 12, tzinfo=UTC)
         _seal(led, AUTO, tid="R1", start=t0)
         _seal(led, SSM, tid="R2", start=t0 + timedelta(hours=1))
         states, _ = _states(led)
-        assert states["F-STOP"] == "current"
-        assert states["F-BOTH"] == "current"
+        assert states["F-STOP"] == "unchecked"
+        assert states["F-BOTH"] == "incomplete"
 
     def test_an_unchecked_newest_run_does_not_leave_an_older_pass_standing(self, tmp_path):
         led = ledger(tmp_path)
@@ -139,6 +160,7 @@ class TestFromRealRuns:
     def test_stale_is_not_a_pass_and_stays_stale(self, tmp_path):
         led = ledger(tmp_path)
         t0 = datetime(2026, 9, 12, tzinfo=UTC)
+        record_manifest(led, _man())        # a change can only be recorded for an enrolled unit
         _seal(led, SSM, start=t0)
         record_intervention(led, Intervention(
             intervention_id="INT-1", machine_key=KEY, item_id="fw",

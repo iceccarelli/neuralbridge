@@ -119,6 +119,9 @@ def _cmd_record_change(args: argparse.Namespace) -> int:
     intervention = Intervention.from_json(args.intervention)
     ledger = EvidenceLedger(args.ledger)
     actor = _actor(args) if args.actor else None
+    # record_intervention is the single gate: refused (exit 2, via AssuranceError) when no
+    # manifest is sealed for exactly this unit key, or when it names a function the
+    # manifest does not declare. The same rule as the API.
     evidence = record_intervention(ledger, intervention, actor=actor)
     print(intervention.summary())
     print(f"    sealed {evidence.content_hash[:16]} as entry {len(ledger)}")
