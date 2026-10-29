@@ -86,7 +86,9 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
+    assert tool_names == {"plans", "capabilities", "spec_validate", "machine_verify", "machine_check",
+                         "evidence_verify", "machinery_coverage", "machinery_passport_check",
+                         "fleet_report", "register_cases",
                          "services", "machine_assurance_check", "fleet_machine_assurance",
                          "change_cases", "change_case", "change_export", "change_claim",
                          "change_advance", "change_reverify", "change_assess_drift",
@@ -246,3 +248,72 @@ async def test_no_api_url_fails_closed_honestly() -> None:
     result = await plans()
     assert result["error"] == "assurance_api_url_not_configured"
     assert "remedy" in result
+
+
+# ---------------------------------------------------------------------------
+# the verify/read tools agree with the CLI on the same artefacts (examples/workflow)
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def pack(tmp_path_factory):
+    """The shipped synthetic workflow, run for real once; its sealed outputs are the inputs."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    work = tmp_path_factory.mktemp("pack")
+    script = Path(__file__).resolve().parents[1] / "examples" / "workflow" / "run.py"
+    run = subprocess.run([sys.executable, str(script), "--keep", str(work)],  # noqa: S603
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stdout[-500:]
+    load = lambda n: json.loads((work / n).read_text("utf-8"))  # noqa: E731
+    return {n: load(f"{n}.json") for n in ("bundle-after", "envelope", "trace-after", "passport",
+                                           "manifest")}
+
+
+@pytest.mark.asyncio
+async def test_machine_check_reproduces_a_real_bundle_and_rejects_an_edited_one(
+        mcp_env: str, pack) -> None:
+    import copy
+
+    from assurance.mcp.server import machine_check
+
+    ok = await machine_check(pack["bundle-after"], pack["envelope"], pack["trace-after"])
+    assert ok["status"] == 200, ok
+    assert "REJECTED" not in str(ok["body"])
+    # The server holds no recorder trust list here, so it will not believe `validated`.
+    assert "validated" not in str(ok["body"].get("tier_believed", ""))
+
+    edited = copy.deepcopy(pack["bundle-after"])
+    edited["result"]["verdict"] = "fail" if edited["result"]["verdict"] != "fail" else "pass"
+    bad = await machine_check(edited, pack["envelope"], pack["trace-after"])
+    assert bad["status"] == 200 and (bad["body"].get("ok") is False
+                                     or "REJECTED" in str(bad["body"]).upper()), bad
+
+
+@pytest.mark.asyncio
+async def test_passport_check_accepts_the_real_passport_and_rejects_an_edited_one(
+        mcp_env: str, pack) -> None:
+    import copy
+
+    from assurance.mcp.server import machinery_passport_check
+
+    ok = await machinery_passport_check(pack["passport"])
+    assert ok["status"] == 200 and ok["body"].get("ok") is True, ok
+    edited = copy.deepcopy(pack["passport"])
+    edited["coverage"] = {**edited["coverage"], "verdict": "gaps"}
+    bad = await machinery_passport_check(edited)
+    assert bad["status"] == 200 and bad["body"].get("ok") is False, bad
+
+
+@pytest.mark.asyncio
+async def test_evidence_verify_and_the_read_tools_make_real_calls(mcp_env: str, pack) -> None:
+    from assurance.mcp.server import evidence_verify, fleet_report, machinery_coverage
+
+    # A non-export is refused by the real verifier, never reported as a pass.
+    refused = await evidence_verify({"not": "an export"})
+    assert refused["status"] in (200, 422) and refused["body"].get("ok") is not True, refused
+    cov = await machinery_coverage(pack["manifest"])
+    assert cov["status"] in (200, 402, 404, 422) and "body" in cov, cov
+    report = await fleet_report(organisation="Synthetic Org", prepared_by="test")
+    assert report["status"] in (200, 402) and "body" in report, report

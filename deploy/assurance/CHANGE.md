@@ -429,7 +429,7 @@ Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
 no new plan was added. 401 with no or an invalid key, 402 when authenticated but
 not entitled, always from the account's own ledger.
 
-MCP tools (exactly these): plans, spec_validate, machine_verify, register_cases, services, machine_assurance_check, fleet_machine_assurance, change_cases, change_case, change_export, change_claim, change_advance, change_reverify, change_assess_drift, change_assess_intervention
+MCP tools (exactly these): plans, capabilities, spec_validate, machine_verify, machine_check, evidence_verify, machinery_coverage, machinery_passport_check, fleet_report, register_cases, services, machine_assurance_check, fleet_machine_assurance, change_cases, change_case, change_export, change_claim, change_advance, change_reverify, change_assess_drift, change_assess_intervention
 
 The change tools are thin relays to the routes above, with no local logic:
 `change_cases`, `change_case` and `change_export` read; `change_claim`,

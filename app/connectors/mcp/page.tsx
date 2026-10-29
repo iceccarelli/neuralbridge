@@ -13,8 +13,14 @@ type McpTool = { name: string; route: string; tier: Tier; agentWrite: boolean };
 // pins the names and routes to the @mcp.tool() functions in src/assurance/mcp/server.py.
 const MCP_TOOLS: McpTool[] = [
   { name: 'plans', route: 'GET /v1/plans', tier: 'free', agentWrite: false },
+  { name: 'capabilities', route: 'GET /v1/capabilities', tier: 'free', agentWrite: false },
   { name: 'spec_validate', route: 'POST /v1/spec/validate', tier: 'free', agentWrite: false },
   { name: 'machine_verify', route: 'POST /v1/machine/verify', tier: 'cell', agentWrite: false },
+  { name: 'machine_check', route: 'POST /v1/machine/bundle/check', tier: 'free', agentWrite: false },
+  { name: 'evidence_verify', route: 'POST /v1/evidence/verify', tier: 'free', agentWrite: false },
+  { name: 'machinery_coverage', route: 'POST /v1/machinery/coverage', tier: 'cell', agentWrite: false },
+  { name: 'machinery_passport_check', route: 'POST /v1/machinery/passport/check', tier: 'free', agentWrite: false },
+  { name: 'fleet_report', route: 'GET /v1/fleet/report', tier: 'cell', agentWrite: false },
   { name: 'register_cases', route: 'GET /v1/cases', tier: 'register', agentWrite: false },
   { name: 'services', route: 'GET /v1/check/services', tier: 'free', agentWrite: false },
   { name: 'machine_assurance_check', route: 'POST /v1/check/machine', tier: 'free', agentWrite: false },

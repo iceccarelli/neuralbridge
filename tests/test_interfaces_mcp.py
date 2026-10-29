@@ -34,11 +34,17 @@ DOC = ROOT / "deploy" / "assurance" / "CHANGE.md"
 _ID = r"[^/]+"
 ALLOWED = [
     ("GET", r"/v1/plans"),
+    ("GET", r"/v1/capabilities"),
     ("POST", r"/v1/spec/validate"),
     ("POST", r"/v1/machine/verify"),
     ("GET", r"/v1/check/services"),
     ("POST", r"/v1/check/machine"),
     ("POST", r"/v1/check/fleet-machine"),
+    ("POST", r"/v1/machine/bundle/check"),
+    ("POST", r"/v1/evidence/verify"),
+    ("POST", r"/v1/machinery/coverage"),
+    ("POST", r"/v1/machinery/passport/check"),
+    ("GET", r"/v1/fleet/report"),
     ("GET", r"/v1/cases"),
     ("GET", r"/v1/change/cases"),
     ("GET", rf"/v1/change/cases/{_ID}"),

@@ -10,16 +10,20 @@ site uses (see ``/console`` and ``/developers``).
 
 Tool set is deliberately small, and pinned to the list in
 ``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``: the always-free routes
-(``plans``, ``spec_validate``, ``services``, ``machine_assurance_check``), the paid routes
-(``machine_verify``, Cell tier; ``register_cases``, Register tier; ``fleet_machine_assurance``,
-Cell tier) chosen because calling them on the wrong plan or with no key surfaces the API's real,
-structured 401/402 shape (the thing an agent needs to see to route a human to checkout, not a
-summary of it), and the change queue: three reads (``change_cases``, ``change_case``,
-``change_export``), three writes an agent may make (``change_claim``, ``change_advance``,
-``change_reverify``) and two that open a case from a machine's own manifests
-(``change_assess_drift``, ``change_assess_intervention``). There is no tool that assesses an
-advisory, and no tool that closes, rejects, defers or resumes a case, answers its open questions
-or waives a re-verification: those are a named person's, on the CLI or the HTTP API.
+(``plans``, ``spec_validate``, ``services``,
+``machine_assurance_check``, ``machine_check``, ``evidence_verify``, ``machinery_passport_check``),
+the paid routes (``machine_verify``, ``machinery_coverage``, ``fleet_report``,
+``fleet_machine_assurance``, Cell tier; ``register_cases``, Register tier) chosen because calling
+them on the wrong plan or with no key surfaces the API's real, structured 401/402 shape (the thing
+an agent needs to see to route a human to checkout, not a summary of it), and the change queue:
+three reads (``change_cases``, ``change_case``, ``change_export``), three writes an agent may make
+(``change_claim``, ``change_advance``, ``change_reverify``) and two that open a case from a
+machine's own manifests (``change_assess_drift``, ``change_assess_intervention``). Everything
+beyond the case work reads or verifies and never decides or records, and none of it can supply a
+trust list or a public key, so what an agent asks the server to check is judged under the server's
+own configuration. There is no tool that assesses an advisory, and no tool that closes, rejects,
+defers or resumes a case, answers its open questions or waives a re-verification: those are a
+named person's, on the CLI or the HTTP API.
 
 Run with ``assurance-mcp`` (installed via ``pip install -e '.[assurance-mcp]'``)
 or ``python -m assurance.mcp.server``. Transport is stdio by default, which
@@ -41,7 +45,8 @@ mcp: MCPServer = MCPServer(
     instructions=(
         "Tools for the Industrial Autonomous Assurance API "
         "(CRA Article 14 / Machinery Regulation Annex III evidence). "
-        "Free tools (plans, spec_validate) need no configuration beyond "
+        "Free tools (plans, spec_validate, evidence_verify, machine_check, "
+        "machinery_passport_check) need no configuration beyond "
         "ASSURANCE_API_URL. Paid tools (machine_verify, register_cases, the "
         "change_* tools) also want ASSURANCE_API_KEY; without one they return "
         "the API's real 401, which is the correct, informative answer — not an "
@@ -135,6 +140,18 @@ async def plans() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def capabilities() -> dict[str, Any]:
+    """GET /v1/capabilities — every capability of this service and which surface offers it.
+
+    Free, no key. Lists what the command line, the HTTP API and this MCP server each offer, the plan
+    flag that gates each API route, and every surface that is missing together with whether that is
+    by design (a human decision, an offline step, key custody) or a known gap. Use it to find out
+    what you can do before you try. ``present`` means it exists, not that the surfaces behave alike.
+    """
+    return await _call("GET", "/v1/capabilities")
+
+
+@mcp.tool()
 async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
     """POST /v1/spec/validate — validate an Article 14 draft submission without recording it. Free, no key.
 
@@ -151,6 +168,7 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
 async def machine_verify(
     envelope: dict[str, Any], trace: dict[str, Any], actor: str,
     recorder_attestations: list[dict[str, Any]] | None = None, machine_serial: str = "",
+    subject: str = "",
 ) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
 
@@ -164,14 +182,85 @@ async def machine_verify(
     supply a trust list, a private key or a provenance basis. Without an accepted
     attestation a declared provenance is capped at ``community``; an accepted one proves
     a trusted key signed these exact trace bytes, not that the recording is physically
-    true. ``machine_serial`` names the unit the verification is about.
+    true. ``machine_serial`` names the unit the verification is about. ``subject`` files
+    the sealed bundle under that ledger subject, as ``--subject`` does on the CLI; give a
+    unit key (``maker/model#serial``) for it to count as evidence of that unit. Without
+    one the bundle is filed under ``product@version`` and counts for no unit.
     """
     body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
     if recorder_attestations:
         body["recorder_attestations"] = recorder_attestations
     if machine_serial:
         body["machine_serial"] = machine_serial
+    if subject:
+        body["subject"] = subject
     return await _call("POST", "/v1/machine/verify", json_body=body)
+
+
+@mcp.tool()
+async def machine_check(
+    bundle: dict[str, Any], envelope: dict[str, Any] | None = None,
+    trace: dict[str, Any] | None = None, machine_serial: str = "",
+) -> dict[str, Any]:
+    """POST /v1/machine/bundle/check — re-verify a machine verification bundle somebody else sealed.
+
+    Free, no key. With the ``envelope`` and ``trace`` it was made from, the engine is re-run and
+    the result compared with what the bundle records; without them only the seal is checked and
+    the answer says so. This tool cannot supply a recorder trust list: the server judges the
+    bundle's recorder attestation under the list it is configured with, and with none, a
+    recorded ``validated`` is believed only as ``community``. A seal is not a signature, and a
+    pass does not show the recording came from a real machine.
+    """
+    body: dict[str, Any] = {"bundle": bundle}
+    if envelope is not None:
+        body["envelope"] = envelope
+    if trace is not None:
+        body["trace"] = trace
+    if machine_serial:
+        body["machine_serial"] = machine_serial
+    return await _call("POST", "/v1/machine/bundle/check", json_body=body)
+
+
+@mcp.tool()
+async def evidence_verify(bundle: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/evidence/verify — check an evidence export you were handed. Free, anonymous.
+
+    Checks hashes, links and chain structure of a ledger export (and detects other sealed
+    artefacts). Without a signed anchor under a key you obtained elsewhere, completeness is
+    NOT established and the answer says so; the tool cannot supply that key. Nothing is stored.
+    """
+    return await _call("POST", "/v1/evidence/verify", json_body=bundle)
+
+
+@mcp.tool()
+async def machinery_coverage(manifest: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/machinery/coverage — which of a machine's declared safety functions a recorded
+    verification still stands for, at what evidence tier, and why any does not.
+
+    Reads the account's own ledger; records nothing. Entitlement and key rules are the API's
+    (a real 401/402 comes back as is). ``covered_at_community`` is not ``covered``: the
+    evidence stands, but nobody demonstrated it on the machine.
+    """
+    return await _call("POST", "/v1/machinery/coverage", json_body={"manifest": manifest})
+
+
+@mcp.tool()
+async def machinery_passport_check(passport: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/machinery/passport/check — re-verify a machine passport you did not produce.
+
+    Free, no key. Confirms the passport's seal and that its printed blocks repeat what the seal
+    covers; it cannot confirm the records the passport names exist without the ledger.
+    """
+    return await _call("POST", "/v1/machinery/passport/check", json_body={"passport": passport})
+
+
+@mcp.tool()
+async def fleet_report(organisation: str = "", prepared_by: str = "") -> dict[str, Any]:
+    """GET /v1/fleet/report — the whole fleet on one page: which machines are covered, stale,
+    failing or unchecked, from the account's own ledger. Read-only.
+    """
+    params = {k: v for k, v in (("organisation", organisation), ("prepared_by", prepared_by)) if v}
+    return await _call("GET", "/v1/fleet/report", params=params or None)
 
 
 @mcp.tool()

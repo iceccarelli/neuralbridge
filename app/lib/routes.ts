@@ -19,6 +19,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/spec/fields', tier: 'free', summary: 'The platform field specification for a track/stage' },
   { method: 'POST', path: '/v1/spec/validate', tier: 'free', summary: 'Validate a draft submission without recording it' },
   { method: 'GET', path: '/v1/plans', tier: 'free', summary: 'What is on sale — this table, live' },
+  { method: 'GET', path: '/v1/capabilities', tier: 'free', summary: 'Every capability, and which of the CLI, API and MCP offers it' },
   { method: 'POST', path: '/v1/machine/separation', tier: 'free', summary: 'ISO/TS 15066 protective separation distance' },
   { method: 'POST', path: '/v1/machine/bundle/check', tier: 'free', summary: "Re-verify someone else's evidence bundle" },
   { method: 'POST', path: '/v1/machinery/diff', tier: 'free', summary: 'Is the machine still the configuration you signed off?' },
