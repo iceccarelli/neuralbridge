@@ -45,7 +45,7 @@ fly secrets set ASSURANCE_ATTEST_KEY_PEM="$(cat ./attest-service.pem)"
 ```
 
 Keep the key **outside** the data volume, so a copy of the volume is not a copy of the key
-(`deploy/assurance/README.md`, "key lives outside the data volume on purpose"). Also set
+(the attestation key is held apart from the data on purpose: an attacker who can rewrite the ledger must not also hold the key that vouches for it). Also set
 `ASSURANCE_ATTEST_LOGS` to a directory on the volume (already in `fly.toml`). Prefer the secrets
 manager's own backup of the key: lose it and you can no longer extend a chain of signed heads under
 one identity (see rotation below).
