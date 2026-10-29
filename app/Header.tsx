@@ -37,6 +37,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
       { name: 'Assurance API', blurb: 'GET /v1/plans mirrors the entitlements the code enforces.', href: `${SRC}/api`, external: true },
       { name: 'Workspace', blurb: 'Your fleet, cases, supplier advisories and plan, read from the API with your key.', href: '/assurance' },
       { name: 'Console', blurb: 'Browser REST console for the Assurance API — key paste, real /v1 calls.', href: '/console' },
+      { name: 'Investigate', blurb: 'An enrolled machine’s configuration, evidence, interventions and fleet impact in one place.', href: '/investigate' },
       { name: 'AI (agent control plane)', blurb: 'Discover a connection, read it, plan a write, approve, get a receipt.', href: '/ai' },
     ],
   },
@@ -307,6 +308,10 @@ export default function Header() {
                 <strong>Console</strong>
                 <span>Paste an API key, call real /v1 routes from your browser.</span>
               </a>
+              <a className="finder-item" href="/investigate" onClick={closeAll}>
+                <strong>Investigate</strong>
+                <span>An enrolled machine's configuration, evidence and intervention history in one place.</span>
+              </a>
               <a className="finder-item" href="/ai" onClick={closeAll}>
                 <strong>AI</strong>
                 <span>Discover a connection, read it, plan a write, approve it.</span>
@@ -404,6 +409,7 @@ export default function Header() {
               <a className="mobile-drill-item" href="/connectors/cursor" onClick={() => setMobileOpen(false)}>Cursor connector</a>
               <a className="mobile-drill-item" href="/assurance" onClick={() => setMobileOpen(false)}>Workspace</a>
               <a className="mobile-drill-item" href="/console" onClick={() => setMobileOpen(false)}>Console</a>
+              <a className="mobile-drill-item" href="/investigate" onClick={() => setMobileOpen(false)}>Investigate</a>
               <a className="mobile-drill-item" href="/ai" onClick={() => setMobileOpen(false)}>AI</a>
               <a className="mobile-drill-item" href="/roadmap" onClick={() => setMobileOpen(false)}>Roadmap</a>
               <a className="mobile-drill-item" href="/security" onClick={() => setMobileOpen(false)}>Security</a>

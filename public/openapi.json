@@ -4652,6 +4652,30 @@
         ]
       }
     },
+    "/v1/check/services": {
+      "get": {
+        "description": "A machine-readable catalogue an agent can discover before calling anything.\n\nGenerated from the same models and the same ``PLANS`` table every other\nroute enforces \u2014 nothing here is a price or a capability this deployment\ncannot actually execute. See ``GET /v1/plans`` for the full pricing table\nthis catalogue's ``required_plan``/``price`` fields are drawn from.",
+        "operationId": "services_v1_check_services_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Services V1 Check Services Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "What NeuralBridge can execute for a machine right now",
+        "tags": [
+          "check"
+        ]
+      }
+    },
     "/v1/checkout": {
       "post": {
         "operationId": "post_checkout_v1_checkout_post",

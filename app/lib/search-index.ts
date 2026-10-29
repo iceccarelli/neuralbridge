@@ -44,6 +44,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'MCP connector', group: 'Docs', href: '/connectors/mcp', blurb: 'The assurance API surface as MCP tools.' },
   { title: 'AI control plane', group: 'Docs', href: '/ai', blurb: 'Discover, read, plan, approve: the shared demo connection is read-only; writes need your own bound connection.' },
   { title: 'Console', group: 'Docs', href: '/console', blurb: 'Paste an API key, call real /v1 routes from your browser.' },
+  { title: 'Investigate', group: 'Docs', href: '/investigate', blurb: 'An enrolled machine’s configuration, evidence, interventions and fleet impact in one place.' },
   { title: 'Contact / sales', group: 'Docs', href: '/contact', blurb: 'Register, Cell, or Supplier inquiries — one form.' },
   { title: 'OpenAPI schema', group: 'Docs', href: '/openapi.json', blurb: 'The real OpenAPI 3 schema, generated from the FastAPI app.' },
   { title: 'README — full source', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },

@@ -26,6 +26,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/fleet/advisory/check', tier: 'free', summary: 'Is this one machine affected by this advisory?' },
   { method: 'POST', path: '/v1/fleet/declaration/check', tier: 'free', summary: 'Does this declaration still describe the machine?' },
   { method: 'POST', path: '/v1/check/machine', tier: 'free', summary: 'Machine Assurance Check — one manifest, one advisory, no account' },
+  { method: 'GET', path: '/v1/check/services', tier: 'free', summary: 'The Machine Assurance Check service catalogue, machine-readable' },
   { method: 'POST', path: '/v1/evidence/verify', tier: 'free', summary: 'Check an evidence file you were handed (ledger export, machine bundle, attestation log); stores nothing' },
   { method: 'GET', path: '/v1/ledger/attest/key', tier: 'free', summary: 'The public key this service counter-signs with' },
   { method: 'POST', path: '/v1/ledger/attest/verify', tier: 'free', summary: 'Check an attestation log' },
