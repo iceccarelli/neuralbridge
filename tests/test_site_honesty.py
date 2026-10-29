@@ -661,7 +661,7 @@ class TestAgentDescriptorMatchesCheckout:
 # 7 + 8. "live, purchasable" and the tier-floor rule are not pricing claims
 # ---------------------------------------------------------------------------
 class TestPricingProseIsHonest:
-    @pytest.mark.parametrize("relative", ["docs/pricing.md", "docs/index.md"])
+    @pytest.mark.parametrize("relative", ["docs/pricing.md"])
     def test_the_docs_do_not_call_the_pricing_page_purchasable(self, relative):
         text = page_text(read(relative))
         assert not re.search(r"live,? purchasable", text, re.I)
@@ -678,7 +678,7 @@ class TestPricingProseIsHonest:
                      if pattern.search(ts_strings(p.read_text(encoding="utf-8", errors="ignore")))]
         assert not offenders, offenders
 
-    @pytest.mark.parametrize("relative", ["app/page.tsx", "docs/pricing.md", "docs/index.md", "public/llms.txt"])
+    @pytest.mark.parametrize("relative", ["app/page.tsx", "docs/pricing.md", "public/llms.txt"])
     def test_the_verification_tier_rule_is_not_in_pricing_copy(self, relative):
         assert not re.search(r"tiers are computed from the weakest input", page_text(read(relative)), re.I)
 
@@ -742,7 +742,7 @@ class TestRecheckWordingIsUniformAndTrue:
 
     @pytest.mark.parametrize("relative", [
         "app/page.tsx", "app/solutions/[slug]/page.tsx", "app/lib/solutions.ts",
-        "docs/pricing.md", "docs/index.md", "README.md", "public/llms.txt",
+        "docs/pricing.md", "README.md", "public/llms.txt",
     ])
     def test_the_full_allowance_sentence_is_in_the_pages_that_discuss_the_limits(self, relative):
         _, allowances = _allowance_sentences()
@@ -751,7 +751,7 @@ class TestRecheckWordingIsUniformAndTrue:
 
     @pytest.mark.parametrize("relative", [
         "app/page.tsx", "app/layout.tsx", "app/solutions/[slug]/page.tsx", "app/lib/solutions.ts",
-        "docs/pricing.md", "docs/index.md", "README.md", "public/llms.txt", "public/.well-known/agent.json",
+        "docs/pricing.md", "README.md", "public/llms.txt", "public/.well-known/agent.json",
     ])
     def test_no_copy_generalises_the_allowance_or_the_unmetered_claim(self, relative):
         text = ts_strings(read(relative)) if relative.endswith(".ts") else page_text(read(relative))
@@ -786,7 +786,7 @@ class TestRecheckWordingIsUniformAndTrue:
                            headers={"Content-Type": "application/json"}).status_code != 429
         assert "evidence_verify" not in METERED_SCOPES and "validate" in METERED_SCOPES
 
-    @pytest.mark.parametrize("relative", ["README.md", "docs/pricing.md", "docs/index.md", "docs/claims-registry.md"])
+    @pytest.mark.parametrize("relative", ["README.md", "docs/pricing.md", "docs/claims-registry.md"])
     def test_no_copy_says_the_verifier_shares_the_validators_allowance(self, relative):
         text = page_text(read(relative))
         assert not re.search(r"same daily allowance|same allowance as|spends a unit of the same|shared? (?:the )?counter",
@@ -857,7 +857,7 @@ class TestSecurityPolicyPromisesNoResponseTime:
 # 12. unreproducible "prior run" claim
 # ---------------------------------------------------------------------------
 class TestNoUnreproduciblePriorRunClaim:
-    @pytest.mark.parametrize("relative", ["app/page.tsx", "public/llms.txt", "README.md", "docs/index.md"])
+    @pytest.mark.parametrize("relative", ["app/page.tsx", "public/llms.txt", "README.md"])
     def test_absent(self, relative):
         assert not re.search(r"prior run|previous run against", page_text(read(relative)), re.I)
 
@@ -1055,7 +1055,7 @@ class TestDocsDescriptions:
           }
           process.stdout.write(JSON.stringify(out));
         """, stub_marked=True)
-        assert len(docs) >= 14
+        assert len(docs) >= 13      # the docs landing page (docs/index.md) was removed
         for doc in docs:
             source = read(doc["file"])
             description = doc["description"]
@@ -1099,3 +1099,19 @@ class TestSourceTidiness:
         assert head.count("tests/test_site_honesty.py") == 1
         assert head.count("sealed as") == 1
         assert not re.search(r"fails\s+// if|and fails if a line shown is not\s+// there", head)
+
+
+class TestTheDocsIndexListsOnlyPagesThatExist:
+    def test_no_listed_doc_slug_lacks_a_source_file(self):
+        """The static params and the sitemap come from ``listDocSlugs``; a page with no source
+        would be advertised and answer not-found."""
+        slugs = _node("""
+          const m = await import('./app/lib/docs.ts');
+          const out = m.listDocSlugs().map(({ slug }) => {
+            const d = m.loadDoc(slug.length ? slug : undefined);
+            return { slug: slug.join('/'), loaded: d !== null };
+          });
+          process.stdout.write(JSON.stringify(out));
+        """, stub_marked=True)
+        assert slugs, "no docs page is listed at all"
+        assert all(s["loaded"] for s in slugs), [s["slug"] for s in slugs if not s["loaded"]]
