@@ -246,19 +246,23 @@ class TestTheFleet:
 
 class TestTheHtmlReport:
     TILE = ('<div class="tile good"><div class="n">1</div>'
-            '<div class="k">functions with current evidence</div></div>')
+            '<div class="k">functions with a recorded verification (tier validated)</div></div>')
 
-    def test_a_community_only_fleet_is_not_a_good_tile(self, tmp_path):
+    COMMUNITY_TILE = ('<div class="tile warn"><div class="n">1</div>'
+                      '<div class="k">functions with a recorded verification '
+                      '(tier community)</div></div>')
+
+    def test_a_community_only_fleet_is_a_warning_tile_naming_its_tier(self, tmp_path):
         from assurance.report.render import ReportInput, render_report
         html = render_report(ReportInput(ledger=_community_ledger(tmp_path)))
-        assert "current only on evidence below validated" in html
+        assert self.COMMUNITY_TILE in html
         assert self.TILE not in html
 
-    def test_a_validated_fleet_keeps_its_good_tile_and_adds_no_warning(self, tmp_path):
+    def test_a_validated_fleet_keeps_its_good_tile(self, tmp_path):
         from assurance.report.render import ReportInput, render_report
         html = render_report(ReportInput(ledger=_validated_ledger(tmp_path)))
-        assert "current only on evidence below validated" not in html
         assert self.TILE in html
+        assert "(tier community)" not in html
 
 
 class TestTheDeclaration:

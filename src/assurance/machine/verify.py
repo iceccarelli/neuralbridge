@@ -309,16 +309,27 @@ class VerificationResult:
         }
 
     def summary(self) -> str:
+        # A PASS over a trace nobody attested is the one headline that reads as comfort it
+        # has not earned: the engine compared a recording to an envelope, and the recording
+        # is the filer's own declaration. Say so in the headline, not only below it.
+        declared_pass = (self.verdict is Verdict.PASS
+                         and self.provenance_basis == "declared_by_filer"
+                         and not self.may_claim_physical_behaviour)
+        headline = (
+            f"PASS (self-declared trace, not hardware-validated; tier {self.tier.value})"
+            if declared_pass else f"{self.verdict.value.upper()} at tier {self.tier.value}")
         lines = [
-            f"{self.product} {self.product_version} — {self.verdict.value.upper()} "
-            f"at tier {self.tier.value}",
+            f"{self.product} {self.product_version} — {headline}",
             f"  trace {self.trace_id} ({self.provenance}, {self.provenance_basis}) "
             f"{self.trace_hash[:12]}",
             f"  envelope {self.envelope_hash[:12]}",
         ]
         for c in self.checks:
+            # `unchecked` is written out: `??` told a reader nothing, and this is the
+            # outcome that must never be mistaken for a pass. The other marks keep their
+            # four-character form, which the homepage sample and the docs reproduce.
             mark = {"verified": "ok  ", "violated": "FAIL", "not_applicable": "n/a ",
-                    "unchecked": "??  "}[c.outcome.value]
+                    "unchecked": "unchecked"}[c.outcome.value]
             if c.violations:
                 # The margin of the samples that passed says nothing about how
                 # badly the others failed; the figure that matters is the shortfall.
@@ -347,8 +358,14 @@ class VerificationResult:
             lines.append(
                 f"  The trace's provenance ({self.provenance!r}) is the filer's own "
                 "declaration; no recorder attestation was accepted under a trust list "
-                "this verifier holds, so it does not lift the tier above community."
+                "this verifier holds, so the trace itself cannot lift this result above "
+                "community."
             )
+            if self.tier.rank < AssuranceTier.COMMUNITY.rank:
+                lines.append(
+                    f"  This result is at tier {self.tier.value}, below community: the "
+                    "weakest input to it (the trace's origin, or a figure in the envelope "
+                    "or a limits table) is at that tier.")
         elif self.provenance_basis == "recorder_attested":
             lines.append(
                 "  A recorder attestation was accepted under this verifier's own trust "

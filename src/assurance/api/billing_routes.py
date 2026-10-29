@@ -94,6 +94,20 @@ def post_checkout(
     body: CheckoutIn, request: Request, principal: Principal = Depends(current_principal)
 ) -> CheckoutOut:
     account = principal.account
+    if account is not None and account.is_manual_grant:
+        # A pilot is not converted here: a checkout would create a second Stripe customer,
+        # account and ledger beside it, and the billing portal has no customer to open.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pilot_account",
+                "tier": account.tier,
+                "remedy": "This account is a pilot provisioned by an operator and invoiced "
+                          "outside Stripe. Ask the operator who issued it to change or extend "
+                          "it: a checkout would open a second account with a second, empty "
+                          "ledger, splitting your evidence.",
+            },
+        )
     if account is not None and account.id != "operator" and account.status in {"active", "past_due"} \
             and account.tier in _PURCHASABLE_TIERS:
         # A second checkout would create a second Stripe customer, a second
@@ -358,12 +372,27 @@ def get_me(
         "usage_today": accounts.usage_today(principal.subject),
     }
     if principal.account is not None:
+        account = principal.account
         body["account"] = {
-            "id": principal.account.id,
-            "company": principal.account.company,
-            "email": principal.account.email,
-            "status": principal.account.status,
+            "id": account.id,
+            "company": account.company,
+            "email": account.email,
+            "status": account.status,
+            # How this account came to exist. A manual grant is a pilot an operator
+            # provisioned by hand and invoices outside Stripe; it is never shown as, or
+            # mistaken for, a Stripe-paid account.
+            "source": ("manual_grant" if account.is_manual_grant
+                       else "stripe" if account.stripe_customer_id else "unbilled"),
         }
+        if account.is_manual_grant:
+            body["account"]["grant"] = {
+                "note": account.grant_note,
+                "granted_at": account.granted_at,
+                "granted_by": account.granted_by,
+                "expires_on": account.grant_expires_on,
+                "lapsed": account.grant_lapsed,
+                "invoiced_outside_stripe": True,
+            }
         body["keys"] = accounts.keys_for(principal.account.id)
         body["usage"] = usage_report(
             accounts, principal.account, period=parse_period(None, utc_now()), now=utc_now())

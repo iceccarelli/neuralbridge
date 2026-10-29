@@ -10,8 +10,15 @@ Python 3.11/3.12/3.13 install on every push) — not hand-typed and hoped for.
 git clone https://github.com/iceccarelli/neuralbridge.git
 cd neuralbridge
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[assurance-attest]'
+pip install cryptography        # the one third-party package the offline kit imports
+export PYTHONPATH=src           # run from this checkout; nothing else is installed
 ```
+
+`pip install -e '.[assurance-attest]'` also works, but it installs all 22 core
+dependencies of the NeuralBridge middleware project (fastapi, sqlalchemy, asyncpg,
+redis, tiktoken, ...) as well; the extra adds nothing, because `cryptography` is already
+one of the 22 core dependencies. The hosted API
+below needs its own extra, `.[assurance-api]`, and that one is a real install.
 
 ## The free path: the offline enrolment kit
 

@@ -15,7 +15,7 @@ instance returns this same table, generated from the entitlements
 | Annex III manifests & passports | — | — | ✓ |
 | Fleet advisory fan-out | — | — | ✓ |
 | Change-assurance cases (`/v1/change/*`; closure is a named human decision; a validated verification needs a recorder attestation accepted under a trust list the operator configures, none is configured in a default deployment, so a required re-verification is closed in practice by a named person's waiver) | — | — | ✓ |
-| Counter-signed head attestation | — | — | ✓ |
+| Counter-signed head attestation (needs a service signing key that is not configured on any deployment today; answers 503 until it is) | — | — | ✓ |
 
 | | Price |
 |---|---|

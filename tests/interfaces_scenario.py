@@ -122,7 +122,11 @@ class Plant:
         (root / "watch.json").write_text(json.dumps({
             "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
             "targets": [{"serial": s, "plan": "plans/cell.json", "root": f"exports/{s}",
-                         "site": "Plant 2", "country": "DE"} for s in serials]}),
+                         "site": "Plant 2", "country": "DE",
+                         # The harness plays a watch running ON the machine; since the
+                         # collector stopped labelling export folders read_from_machine,
+                         # that is an explicit operator assertion (B6).
+                         "read_from_machine": True} for s in serials]}),
             encoding="utf-8")
 
     @property
@@ -135,12 +139,16 @@ class Plant:
 
     def kit_run(self, via: str) -> None:
         if via == "cli":
-            r = run_cli("kit", "run", "kit.json", "--out", "out", cwd=self.root)
+            # --read-from-machine: the harness plays a kit running ON the machine; an
+            # export folder is no longer labelled that implicitly (B6).
+            r = run_cli("kit", "run", "kit.json", "--out", "out", "--read-from-machine",
+                        cwd=self.root)
             assert r.returncode == 0, r.stdout + r.stderr
         else:
             from assurance.kit.enrol import KitConfig, run_kit
 
-            run = run_kit(KitConfig.from_json(self.root / "kit.json"), self.root / "out")
+            run = run_kit(KitConfig.from_json(self.root / "kit.json"), self.root / "out",
+                          read_from_machine=True)
             assert run.verdict == "complete" and run.airgap.held
 
     def watch_run(self, via: str, *, expect: int) -> None:
@@ -337,6 +345,10 @@ class CliDriver(Driver):
 
     def _out(self, r: subprocess.CompletedProcess[str], cid: str = "") -> Out:
         if r.returncode == 0:
+            return Out("ok", self.get(cid) if cid else None, r.stdout)
+        if r.returncode == 3:
+            # `reverify` recorded the submission and cleared nothing (exit 3, B7): the API
+            # answers 200 with the case still awaiting re-verification, which is "ok".
             return Out("ok", self.get(cid) if cid else None, r.stdout)
         if r.returncode == 1 and r.stderr.startswith("finding:"):
             return Out("refused", text=r.stderr)

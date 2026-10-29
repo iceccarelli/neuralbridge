@@ -68,8 +68,10 @@ def _plant(tmp_path):
         write_export(root / serial, stamp="2026-09-14T06:00:00Z", operator="m.tech", seq="4181")
     (root / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-PUSH", "max_age_hours": 168,
+        # read_from_machine: the harness plays a watch running ON the machine; an
+        # export folder is no longer labelled that implicitly (B6).
         "targets": [{"serial": s, "plan": "plan.json", "root": s, "site": "Plant 2",
-                     "country": "DE"} for s in SERIALS],
+                     "country": "DE", "read_from_machine": True} for s in SERIALS],
     }))
     return root
 

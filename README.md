@@ -35,15 +35,25 @@ That record is what this builds.
 ## Start here: one command, inside your plant, nothing uploaded
 
 ```bash
-pip install -e '.[assurance-attest]'
+pip install cryptography                       # the one third-party package the offline kit imports
+export PYTHONPATH=src                          # run from this checkout; nothing else is installed
 python -m assurance kit init plant/            # a runnable kit
 python -m assurance kit check plant/kit.json   # what it would open. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
 You get `plant/out/report.html`, `plant/out/evidence.db` and
-`plant/out/attestation-request.json`. **Your ledger, your disk.** No account, no
-API key, no upload, nothing to procure.
+`plant/out/attestation-request.json`. **Your ledger, your disk.** For the kit:
+no account, no API key, no upload, nothing to procure. (That is true of the kit
+and of the other offline commands. It is not true of the hosted service below,
+which needs an account and a key.)
+
+`pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
+this project declares 22 core dependencies unconditionally (fastapi, sqlalchemy,
+asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
+platform, and the extra adds nothing to them: `cryptography` is already one of the 22 core
+dependencies, so the extra is a label, not a smaller install. The offline kit imports
+`cryptography` and nothing else outside the standard library.
 
 The run arms a guard over the process's socket layer, refuses every outbound
 connection — including name resolution, because resolving a name has already
@@ -58,14 +68,17 @@ See [`deploy/assurance/KIT.md`](deploy/assurance/KIT.md).
 
 ## What it does, and where each claim is enforced
 
-Every row below maps to code that runs. Nothing is listed here that the
-software does not do.
+Every row below maps to code that runs, offline, on your own files. The hosted
+counter-signature (`POST /v1/ledger/attest`) is a separate thing: it answers 503
+`no_attestation_key_configured` until the service has a signing key, and none is
+configured on any deployment today. Nothing is listed here that the software does
+not do; what it does not do is listed in each command's output.
 
 | | Command | What it establishes |
 |---|---|---|
 | **Collect** | `assurance collect run` | A sealed manifest of the safety-relevant software on one machine, with normalisation rules so a vendor export's own timestamps do not read as drift. `collect probe` finds those noisy rules for you before they produce a year of false alarms. |
 | **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
-| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine *as it is today*. |
+| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change. |
 | **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
 | **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |
 | **Attest** | `assurance attest sign` | A signature over the ledger head by a key the ledger's operator does not hold. A hash chain detects editing; only this detects **deletion**. |
@@ -84,7 +97,8 @@ software does not do.
   argument. Free to check (the route never calls the meter), because the person who most needs it is the
   buyer, not the seller.
 - **A ledger that was quietly shortened.** Caught by joining a counter-signature
-  back to the chain.
+  back to the chain: one you made yourself with a key held apart from the ledger
+  (`assurance attest sign`), since the hosted service has no signing key yet.
 
 ## Three rules this codebase is built on
 

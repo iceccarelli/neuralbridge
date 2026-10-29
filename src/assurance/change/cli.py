@@ -23,8 +23,13 @@ cases itself; these commands are for the people who work them.
 
 Exit codes: 0 fine, 1 a case needs attention (list/show only) or a transition
 was refused, 2 the command could not run — which includes a case id the ledger
-does not hold, on every verb (the HTTP API answers 404 for the same id). The
-same convention every other domain in this CLI uses.
+does not hold, on every verb (the HTTP API answers 404 for the same id), and
+3 a re-verification was recorded but cleared nothing (``reverify`` only): the
+submission is evidence and is sealed, the case still awaits re-verification, and
+the printed ``blocked:`` reason says why. 3 is the code ``assurance evidence
+verify`` uses for "nothing wrong was found, but something asked for is not
+established", so a script reading ``$?`` cannot take an uncleared case for a
+cleared one. Otherwise the same convention every other domain in this CLI uses.
 
 ``list`` prints the work queue — open cases, and a count of deferred ones — and
 exits 1 while any case is open. ``list --json`` prints the document
@@ -75,7 +80,10 @@ from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
-__all__ = ["build_parser", "main"]
+__all__ = ["EXIT_NOT_CLEARED", "build_parser", "main"]
+
+#: ``reverify`` sealed the submission and the case still has required entries.
+EXIT_NOT_CLEARED = 3
 
 
 def _actor(name: str, role: str) -> Actor:
@@ -347,7 +355,9 @@ def _cmd_reverify(args: argparse.Namespace) -> int:
         if reason is not None:
             print(f"  blocked: {reason['code']}")
             print(f"  {reason['message']}")
-    return 0
+    # Accepted and sealed, but the case still waits: not success. See the module
+    # docstring for why this is 3 and not the 1 of a refused transition.
+    return EXIT_NOT_CLEARED if case.required_reverifications else 0
 
 
 def _cmd_resolve_decision(args: argparse.Namespace) -> int:

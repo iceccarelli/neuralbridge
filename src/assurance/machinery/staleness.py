@@ -665,10 +665,18 @@ class CoverageReport:
             f"  configuration {self.configuration_hash[:12]}  "
             f"manifest {self.manifest_id}",
         ]
+        weak_floor = (self.evidence_tier_floor
+                      if self.evidence_tier_floor
+                      and _TIER_RANK.get(self.evidence_tier_floor, 0) < _TIER_RANK["validated"]
+                      else "")
         for f in sorted(self.functions, key=lambda f: (f.coverage.rank, f.function_id)):
             perf = f" [{f.required_performance}]" if f.required_performance else ""
+            # `ok` says a recorded verification is not contradicted by a recorded change.
+            # It does not say the evidence is validated; below that tier the line says so.
+            caveat = (f"  (evidence recorded, tier floor={weak_floor}, NOT validated)"
+                      if weak_floor and f.coverage is Coverage.CURRENT else "")
             lines.append(f"  [{mark[f.coverage.value]}] {f.function_id}{perf}  "
-                         f"{f.description}")
+                         f"{f.description}{caveat}")
             lines.append(f"           {f.detail}")
             days = f.days_uncovered
             if days is not None:
@@ -923,10 +931,15 @@ def assess_coverage(
                 evidence_tier=weakest,
                 last_verified_hash=last_good.content_hash,
                 last_verified_at=format_utc(last_good.effective_at),
-                detail=f"verified by {last_good.content_hash[:12]} on "
-                       f"{format_utc(last_good.effective_at)[:10]} at tier "
-                       f"{weakest}; no recorded intervention since has "
-                       "touched an item implementing it.",
+                detail=(
+                    f"verified by {last_good.content_hash[:12]} on "
+                    f"{format_utc(last_good.effective_at)[:10]} at tier {weakest}; "
+                    "no intervention recorded since."
+                    if _TIER_RANK.get(weakest, 0) >= _TIER_RANK["validated"] else
+                    f"evidence recorded, NOT validated (tier {weakest}); verified by "
+                    f"{last_good.content_hash[:12]} on "
+                    f"{format_utc(last_good.effective_at)[:10]}; no intervention "
+                    "recorded since."),
             ))
             continue
 

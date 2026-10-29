@@ -104,7 +104,14 @@ plainly rather than letting you assume otherwise.
 For a manufacturer or integrator who does not want to run a second host, and
 whose auditor will not accept self-signed evidence anyway. Cell plan.
 
-**The ledger never leaves the premises.** The customer computes their own head —
+**Status: needs a service key that is not configured on any deployment today.** Until
+the operator sets `ASSURANCE_ATTEST_KEY_PEM` (or `ASSURANCE_ATTEST_KEY`), this route
+answers 503 `no_attestation_key_configured`. The offline path in section 1 needs no
+service key.
+
+**The ledger never leaves the premises** for this call (that is true of attestation
+only: hosted `POST /v1/machine/verify` receives the full trace you submit, and the
+hosted routes receive what you send them). The customer computes their own head —
 which requires trusting nobody — and sends three numbers:
 
 ```bash

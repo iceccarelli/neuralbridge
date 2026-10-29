@@ -18,6 +18,24 @@ assurance watch status watch.json --ledger register.db
 pass, `2` the watch could not see part of the fleet. *"I could not look"* and
 *"nothing moved"* must never share an exit code.
 
+**A folder of exports is not a look at the machine.** A watch reads the export
+folder each target names, and a folder cannot show which machine it came off. So
+a target is `supplied_by_vendor` (tier ceiling `community`) unless its entry in
+the watch configuration says, as the JSON value `true` (nothing else counts),
+that the watch runs on the machine itself:
+
+```json
+{"serial": "0412", "plan": "plan.json", "root": "exports/0412", "read_from_machine": true}
+```
+
+That is the operator's assertion, recorded in every manifest the run seals; the
+software cannot check it. Without it an unchanged hash is reported as
+`[EXP  ] ... this is an export folder, not a look at the machine`, the run is
+**degraded (exit 2), never quiet**, and `watch push` of the same ledger is refused
+by the hosted ingest for the same reason (`manifest_not_a_look_at_the_machine`):
+the local verdict and the hosted one use one rule (`machinery.manifest.not_a_look`).
+A *changed* hash is still a finding (exit 1) either way.
+
 ## Four judgements that decide whether anybody reads it
 
 **Seal only on change — but record every look.** A weekly watch over forty
