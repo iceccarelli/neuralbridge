@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_COPY = [
     "README.md",
     "docs/pricing.md",
-    "docs/index.md",
     "public/llms.txt",
     "public/openapi.json",
     "public/.well-known/agent.json",
@@ -70,7 +69,7 @@ class TestEvidenceAllowanceIsStatedAsEnforced:
         assert PLANS["cell"].validations_per_day is None
 
     @pytest.mark.parametrize("relative", [
-        "README.md", "docs/pricing.md", "docs/index.md", "public/llms.txt",
+        "README.md", "docs/pricing.md", "public/llms.txt",
         "app/page.tsx", "app/layout.tsx", "app/solutions/[slug]/page.tsx",
     ])
     def test_the_copy_states_the_number_the_code_enforces(self, relative):

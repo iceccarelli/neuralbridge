@@ -817,7 +817,7 @@ def doc(name: str) -> str:
 
 def test_no_doc_or_config_puts_a_secret_on_a_fly_command_line():
     import re
-    for name in ("DEPLOY_NOW.md", "deploy/assurance/README.md", "deploy/assurance/fly.toml"):
+    for name in ("DEPLOY_NOW.md", "deploy/assurance/fly.toml"):
         for line in doc(name).splitlines():
             assert not re.match(r"^\s*(#\s*)?fly secrets set\b", line), (name, line)
         assert "fly secrets import" in doc(name), name

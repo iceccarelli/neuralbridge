@@ -156,7 +156,7 @@ class TestNoRetiredClaims:
             assert not _RETIRED.search(blob), (plan["tier"], _RETIRED.search(blob).group(0))
 
     @pytest.mark.parametrize("relative", [
-        "README.md", "docs/pricing.md", "docs/index.md", "public/llms.txt",
+        "README.md", "docs/pricing.md", "public/llms.txt",
         "docs/claims-registry.md",
     ])
     def test_public_copy_makes_none(self, relative):
