@@ -562,7 +562,8 @@ def run_kit(
             origin=Origin(
                 system="assurance.kit.airgap",
                 reference=config.kit_id,
-                method="socket-layer guard armed for the duration of the run",
+                method=("socket-layer guard and Python audit hook armed for the duration of "
+                    "the run"),
             ),
             validation_state=ValidationState.VERIFIED,
             checks_skipped=AIRGAP_LIMITS,

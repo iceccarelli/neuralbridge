@@ -28,7 +28,7 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import content_hash_of, format_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machine.trace import MAX_FILE_BYTES
@@ -41,7 +41,12 @@ from assurance.machinery.intervention import (
     InterventionKind,
     UnreadableIntervention,
 )
-from assurance.machinery.manifest import ManifestSource, SafetyManifest, normalised_digest
+from assurance.machinery.manifest import (
+    MachineIdentity,
+    ManifestSource,
+    SafetyManifest,
+    normalised_digest,
+)
 from assurance.machinery.staleness import (
     CoverageReport,
     VerificationRecord,
@@ -794,6 +799,35 @@ def _passport_coherence(
         if content_hash_of(printed_cov.get("functions")) != content_hash_of(functions):
             problems.append("the printed coverage's functions differ from the sealed "
                             "evidence's. The coverage block was edited.")
+        # The fields below are repeated in the sealed body; one that differs was edited by
+        # hand. The tier floor is the one that says community or validated.
+        for name in ("manifest_id", "configuration_hash", "evidence_tier_floor"):
+            if name in printed_cov and body.get(name) is not None \
+                    and printed_cov[name] != body[name]:
+                problems.append(
+                    f"the printed coverage says {name} is {printed_cov[name]!r}; the sealed "
+                    f"evidence says {body[name]!r}. The coverage block was edited.")
+        try:
+            sealed_key = MachineIdentity.from_dict(body["machine"]).key
+        except (AssuranceError, KeyError, TypeError, ValueError, AttributeError):
+            sealed_key = None
+        if sealed_key is not None and "machine" in printed_cov \
+                and printed_cov["machine"] != sealed_key:
+            problems.append(
+                f"the printed coverage is for {printed_cov['machine']!r}; the sealed evidence "
+                f"is for {sealed_key!r}. The coverage block was edited.")
+        if "assessed_at" in printed_cov and body.get("assessed_at"):
+            # taken a moment apart when the passport is built, so a second or two is normal
+            try:
+                apart = abs((parse_utc(str(printed_cov["assessed_at"]))
+                             - parse_utc(str(body["assessed_at"]))).total_seconds())
+            except (ValueError, TypeError):
+                apart = None
+            if apart is None or apart > 5:
+                problems.append(
+                    f"the printed coverage was assessed at {printed_cov['assessed_at']!r}; the "
+                    f"sealed evidence says {body['assessed_at']!r}. The coverage block was "
+                    "edited.")
 
     printed_man = raw.get("manifest")
     if printed_man is None:
@@ -827,6 +861,37 @@ def _passport_coherence(
                 f"{list(body.get('intervention_ids') or [])}). An intervention was "
                 "added or removed.")
     return problems, limits
+
+
+def _printed_interventions_vs_ledger(
+    raw: dict[str, Any], body: dict[str, Any], ledger: EvidenceLedger,
+) -> list[str]:
+    """Each intervention printed in a passport must equal the record sealed in the ledger.
+
+    The passport's seal names the interventions by id only, so a reader of the printed list is
+    trusting text the seal does not cover. With the ledger in hand the content can be compared.
+    """
+    printed = raw.get("interventions")
+    if not isinstance(printed, list):
+        return []
+    try:
+        key = MachineIdentity.from_dict(body["machine"]).key
+    except (AssuranceError, KeyError, TypeError, ValueError, AttributeError):
+        return []
+    sealed = {i.intervention_id: i for i in interventions_from_ledger(ledger, key)}
+    out: list[str] = []
+    for entry in printed:
+        if not isinstance(entry, dict):
+            continue
+        iid = entry.get("intervention_id")
+        record = sealed.get(iid)
+        if record is None:
+            out.append(f"printed intervention {iid!r} is not sealed in the supplied ledger "
+                       f"under {key!r}.")
+        elif content_hash_of(entry) != content_hash_of(record.to_dict()):
+            out.append(f"printed intervention {iid!r} differs from the record sealed in the "
+                       "ledger. The intervention list was edited.")
+    return out
 
 
 def verify_passport(
@@ -896,9 +961,15 @@ def verify_passport(
                 problems.append(
                     f"verification {str(h)[:12]} is named by this passport and is not "
                     "in the supplied ledger.")
+        problems.extend(_printed_interventions_vs_ledger(raw, body, ledger))
     else:
         limitations.insert(0, (
             "NOT CHECKED: no ledger was supplied, so only the passport's internal "
             "integrity was confirmed. Nothing here shows the records it names exist."))
+        if raw.get("interventions"):
+            limitations.append(
+                "NOT CHECKED: the printed interventions' contents (reason, date, kind, "
+                "affected functions) are not covered by the seal, which names only their ids. "
+                "Supply the ledger to compare them with the sealed records.")
 
     return not problems, problems + limitations

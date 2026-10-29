@@ -58,6 +58,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import uuid
@@ -290,7 +291,13 @@ def _client_address(request: Request, fly_client_ip: str | None) -> str:
     if os.environ.get(_FLY_ENV) == "1" and fly_client_ip:
         candidate = fly_client_ip.strip()
         if 0 < len(candidate) <= 64 and re.fullmatch(r"[0-9A-Fa-f:.]+", candidate):
-            return _bucket(candidate)
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                # Not an address: anything else would be a quota bucket of its own naming.
+                pass
+            else:
+                return _bucket(candidate)
     return _bucket(request.client.host) if request.client else "unknown"
 
 
@@ -595,7 +602,9 @@ async def request_fingerprint(request: Request, scope: str) -> str:
     try:
         canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
                                ensure_ascii=True).encode() if raw else b""
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON (or nested too deep to be data): the bytes it is. The depth guard in
+        # BodySizeLimitMiddleware is what answers such a body; this must never be the 500.
         canonical = raw
     digest = hashlib.sha256()
     for part in (scope, request.method, request.url.path,
@@ -890,6 +899,54 @@ _WEBHOOK_PATH = "/v1/billing/webhook"
 _WEBHOOK_BODY = 1024 * 1024
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
+# A JSON body nested a thousand levels deep is not data: it is a way to exhaust the
+# interpreter's recursion limit inside validation, error rendering or encoding, and answer
+# the caller with a 500 and a traceback in the log. Refused before the app sees it. Counted
+# on the structure (strings are skipped), so brackets inside text do not count. Applied to
+# bodies the middleware caps at no more than the evidence-verify allowance, except the
+# anonymous evidence verifier itself (_EVIDENCE_PATHS): it spends the caller's allowance
+# before it reads the body and analyses hostile nesting on purpose (tests pin both). The
+# scan reads bytes, so a JSON body must be UTF-8 (a UTF-16/32 body, which the stdlib parser
+# would still accept, is refused with 415). The larger recorded-trace allowance (32 MiB, an
+# authenticated caller) is too large to scan on the event loop: a RecursionError that escapes
+# the app for any /v1 write is answered with the same 422 (BodySizeLimitMiddleware._guarded).
+_DEPTH_ENV = "ASSURANCE_MAX_JSON_DEPTH"
+_DEFAULT_JSON_DEPTH = 100
+_DEPTH_SCAN_MAX_BYTES = 4 * 1024 * 1024
+_JSON_TOKEN = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"|[\[\]{}]')
+
+
+_log = logging.getLogger("assurance.api.deps")
+
+
+def max_json_depth() -> int:
+    return _env_bytes(_DEPTH_ENV, _DEFAULT_JSON_DEPTH)
+
+
+def json_nesting_exceeds(data: bytes, cap: int) -> bool:
+    """Whether ``data`` nests arrays/objects deeper than ``cap``. Linear; never recurses."""
+    depth = 0
+    for match in _JSON_TOKEN.finditer(data):
+        char = match.group()[0]
+        if char in b"[{":
+            depth += 1
+            if depth > cap:
+                return True
+        elif char in b"]}":
+            depth = max(depth - 1, 0)
+    return False
+
+
+def json_is_utf8(data: bytes) -> bool:
+    """Whether a JSON body is UTF-8 (RFC 8259), as opposed to the UTF-16/32 the stdlib sniffs.
+
+    ``json.loads(bytes)`` detects UTF-16 and UTF-32 from the first bytes, so a body in one of
+    them parses; but the nesting scan reads bytes, and in two-byte text an escaped quote
+    shifts its tokenizer so the brackets after it are read as string content. One encoding
+    is accepted, so what is scanned is what is parsed. A UTF-8 byte-order mark is fine.
+    """
+    return json.detect_encoding(data) in ("utf-8", "utf-8-sig")
+
 
 def _env_bytes(name: str, default: int) -> int:
     try:
@@ -936,6 +993,33 @@ def _key_resolves(presented: str) -> bool:
         return False
 
 
+async def _send_json_refusal(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]], status_code: int,
+    error: str, detail: str, **extra: Any,
+) -> None:
+    body = json.dumps({"detail": {"error": error, **extra, "detail": detail}}).encode()
+    await send({"type": "http.response.start", "status": status_code, "headers": [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+def too_deep_body() -> dict[str, Any]:
+    """The 422 answer for a JSON body nested past the cap (one shape, wherever it is produced)."""
+    cap = max_json_depth()
+    return {"detail": {
+        "error": "json_too_deeply_nested", "limit_depth": cap,
+        "detail": f"JSON bodies may nest arrays and objects at most {cap} deep."}}
+
+
+async def _send_too_deep(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]]
+) -> None:
+    detail = too_deep_body()["detail"]
+    await _send_json_refusal(
+        send, 422, detail["error"], detail["detail"], limit_depth=detail["limit_depth"])
+
+
 async def _send_413(
     send: Callable[[MutableMapping[str, Any]], Awaitable[None]], detail: dict[str, Any]
 ) -> None:
@@ -961,6 +1045,37 @@ class BodySizeLimitMiddleware:
 
     def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
         self.app = app
+
+    async def _guarded(
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        """Run the app; a body nested past the interpreter's recursion limit is a 422, not a 500.
+
+        The pre-scan covers bodies up to ``_DEPTH_SCAN_MAX_BYTES``. The recorded-trace
+        allowance is larger (scanning 32 MiB token by token would hold the event loop), so
+        for it, and as the net under every other way a deep body can reach a recursive
+        step (validation, error rendering, encoding), the failure is answered here with
+        the same 422. Nothing from the body or the stack is logged.
+        """
+        started = False
+
+        async def tracking_send(message: MutableMapping[str, Any]) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except RecursionError:
+            if started:
+                raise
+            _log.warning("recursion limit reached handling a request body: %s %s",
+                         scope.get("method"), scope.get("path"))
+            await _send_too_deep(send)
 
     async def __call__(
         self,
@@ -995,6 +1110,45 @@ class BodySizeLimitMiddleware:
                 await _send_413(send, detail)
                 return
 
+        content_type = headers.get(b"content-type", b"").lower()
+        if (limit <= _DEPTH_SCAN_MAX_BYTES and b"json" in content_type
+                and scope.get("path", "") not in _EVIDENCE_PATHS):
+            # Small JSON bodies are read here, in full, to check their nesting; the app
+            # then gets them back unchanged. The size cap still applies as they arrive.
+            messages: list[MutableMapping[str, Any]] = []
+            received = 0
+            while True:
+                message = await receive()
+                if message["type"] != "http.request":
+                    return          # the client went away
+                received += len(message.get("body", b""))
+                if received > limit:
+                    await _send_413(send, detail)
+                    return
+                messages.append(message)
+                if not message.get("more_body", False):
+                    break
+            data = b"".join(m.get("body", b"") for m in messages)
+            if not json_is_utf8(data):
+                await _send_json_refusal(
+                    send, 415, "json_not_utf8",
+                    "JSON bodies must be UTF-8 (RFC 8259); UTF-16 and UTF-32 are not accepted.")
+                return
+            if json_nesting_exceeds(data, max_json_depth()):
+                await _send_too_deep(send)
+                return
+            replayed = False
+
+            async def replay() -> MutableMapping[str, Any]:
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": data, "more_body": False}
+                return await receive()
+
+            await self._guarded(scope, replay, send)
+            return
+
         seen = 0
 
         async def limited_receive() -> MutableMapping[str, Any]:
@@ -1008,4 +1162,4 @@ class BodySizeLimitMiddleware:
                     raise HTTPException(status_code=413, detail=detail)
             return message
 
-        await self.app(scope, limited_receive, send)
+        await self._guarded(scope, limited_receive, send)

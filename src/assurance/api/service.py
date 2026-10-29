@@ -16,18 +16,22 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__
 from .attest_routes import attest_router
 from .billing_routes import billing_router
+from .cache_headers import NoStoreMiddleware
 from .capabilities_routes import capabilities_router
 from .change_routes import change_router
 from .check_routes import check_router
-from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode
+from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode, too_deep_body
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
+from .logging_filters import install as install_log_filters
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
 from .operator_routes import operator_router
@@ -103,6 +107,8 @@ def create_app(**kwargs: Any) -> FastAPI:
     # Added before CORS so it sits inside it: a 413 still carries CORS headers
     # and a browser caller sees "too large", not a CORS failure.
     application.add_middleware(BodySizeLimitMiddleware)
+    application.add_middleware(NoStoreMiddleware)
+    install_log_filters()
 
     # Bearer-token auth, never cookies — allow_credentials stays False so a
     # wide origin list can never be combined with credentialed requests.
@@ -143,6 +149,15 @@ def create_app(**kwargs: Any) -> FastAPI:
         return JSONResponse(
             status_code=422, content={"error": "invalid_value", "detail": str(exc)}
         )
+
+    @application.exception_handler(StarletteHTTPException)
+    async def _http_exception(request: Request, exc: StarletteHTTPException) -> Any:
+        # FastAPI answers a body its parser cannot read with 400 "error parsing the body",
+        # chaining the cause. When the cause is the interpreter's recursion limit the body is
+        # nested too deeply to be data: say that (422), the same on every Python version.
+        if isinstance(exc.__cause__, RecursionError):
+            return JSONResponse(status_code=422, content=too_deep_body())
+        return await http_exception_handler(request, exc)
 
     application.include_router(public_router)
     application.include_router(billing_router)

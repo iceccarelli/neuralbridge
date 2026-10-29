@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from assurance.core.api_url import LOOPBACK_HOSTS, api_url_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
@@ -74,7 +75,7 @@ ENDPOINT = "/v1/watch/report"
 DEFAULT_MAX_BODY_BYTES = 900_000
 MAX_MACHINES_PER_REQUEST = 200
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOOPBACK = LOOPBACK_HOSTS
 #: Reasons the server gives that are not a failure of this push: the hosted
 #: ledger already holds this observation, or holds a newer one.
 _BENIGN_REFUSALS = frozenset({"superseded_by_newer_observation"})
@@ -381,18 +382,9 @@ def build_plan(
 
 def check_url(api_url: str) -> str:
     """The base URL to post to, or a refusal. Loopback may be plain http; nothing else."""
-    parts = urlsplit(api_url.strip())
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise PushError("--api-url must be an http(s) URL, e.g. https://api.example.com")
-    if parts.username or parts.password:
-        raise PushError("--api-url must not contain credentials. The key comes from "
-                        "an environment variable.")
-    if parts.query or parts.fragment:
-        raise PushError("--api-url must be a base URL without a query or fragment.")
-    if parts.scheme == "http" and parts.hostname not in _LOOPBACK:
-        raise PushError(
-            "refusing to send a key over plain http to a non-loopback host. Use "
-            "https (plain http is accepted only for localhost).")
+    problem = api_url_problem(api_url)
+    if problem:
+        raise PushError(problem)
     return api_url.strip().rstrip("/")
 
 
@@ -439,14 +431,19 @@ def read_key(env_name: str) -> str:
 
 
 def make_client(timeout: float) -> Any:
-    """An httpx client that never follows a redirect. httpx is imported here, lazily."""
+    """An httpx client that never follows a redirect and never reads proxy settings.
+
+    ``trust_env=False``: the key goes to the host the operator named and to no other, which
+    an ``HTTP(S)_PROXY`` / ``ALL_PROXY`` in the environment would otherwise defeat (a plain-http
+    loopback push would travel, key and all, to the proxy). httpx is imported here, lazily.
+    """
     try:
         import httpx
     except ImportError as exc:
         raise PushError(
             "`assurance watch push` needs httpx (`pip install httpx`). The offline "
             "kit and `watch run` do not.") from exc
-    return httpx.Client(timeout=timeout, follow_redirects=False)
+    return httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False)
 
 
 @dataclass

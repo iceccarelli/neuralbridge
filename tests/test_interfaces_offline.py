@@ -41,6 +41,8 @@ NETWORKED_MODULES = {
     "assurance/billing/stripe_gateway.py",   # the hosted service talking to Stripe
     "assurance/mcp/server.py",           # the MCP relay to a deployment
     "assurance/kit/airgap.py",           # imports socket to REFUSE connections
+    "assurance/core/api_url.py",         # urllib.parse only: the rule for where a key may go;
+                                         # shared by `watch push` and the MCP relay, opens nothing
 }
 _NETWORK_ROOTS = {"httpx", "requests", "urllib3", "aiohttp", "http", "urllib", "socket",
                   "smtplib", "ftplib", "stripe", "websockets", "ssl", "xmlrpc", "telnetlib"}
