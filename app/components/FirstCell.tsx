@@ -30,6 +30,8 @@ type VerifyOut = {
   tier: string;
   sealed: boolean;
   may_claim_physical_behaviour: boolean;
+  provenance_basis?: string;
+  provenance_note?: string;
   evidence?: { content_hash?: string };
 };
 
@@ -132,8 +134,10 @@ export default function FirstCell({ apiBase, apiKey }: { apiBase: string; apiKey
           <p style={{ fontSize: '0.85rem' }}>
             Tier <strong>{result.data.tier}</strong>;{' '}
             {result.data.may_claim_physical_behaviour
-              ? 'this run may claim physical behaviour — field provenance against measured stop figures.'
+              ? 'this run may claim physical behaviour.'
               : 'this run may NOT claim physical behaviour — the verifier itself withheld that claim.'}{' '}
+            {result.data.provenance_basis === 'declared_by_filer' &&
+              'The trace\u2019s provenance is declared by whoever files it, and no recorder attestation was accepted under a trust list this service holds, so it does not lift the tier above community.'}{' '}
             {result.data.sealed
               ? 'Sealed to the hash-chained evidence ledger.'
               : 'Not sealed to the ledger (seal was not requested).'}

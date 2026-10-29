@@ -14,7 +14,8 @@ can re-check against the ledger it came from.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,15 +28,25 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import format_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machinery.divergence import Divergence
-from assurance.machinery.intervention import Intervention
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machine.recorder_attestation import RecorderTrust
+from assurance.machine.trace import MAX_FILE_BYTES
+from assurance.machinery.divergence import ChangeKind, Divergence, Severity, compare
+from assurance.machinery.intervention import (
+    IMPLIED_PREFIX,
+    UNREADABLE_PREFIX,
+    ImpliedIntervention,
+    Intervention,
+    InterventionKind,
+    UnreadableIntervention,
+)
+from assurance.machinery.manifest import ManifestSource, SafetyManifest, normalised_digest
 from assurance.machinery.staleness import (
     CoverageReport,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
 
 __all__ = [
@@ -44,9 +55,15 @@ __all__ = [
     "MANIFEST_KIND",
     "PASSPORT_KIND",
     "PASSPORT_SCHEMA",
+    "PASSPORT_SCHEMA_V2",
     "MachinePassport",
     "PassportError",
     "build_passport",
+    "InterventionRefusedError",
+    "UnknownFunctionError",
+    "UnknownMachineError",
+    "check_intervention",
+    "implied_interventions",
     "interventions_from_ledger",
     "manifests_from_ledger",
     "record_divergence",
@@ -60,6 +77,11 @@ INTERVENTION_KIND = "machinery.intervention"
 DIVERGENCE_KIND = "machinery.divergence"
 PASSPORT_KIND = "machinery.passport"
 PASSPORT_SCHEMA = "assurance.machinery.passport/1"
+#: The format of a passport whose verdict an older verifier cannot express: ``covered_at_community``
+#: and ``ledger_chain_not_verified``. An older verifier refuses it by name ("schema is ...,
+#: expected ...passport/1") instead of reporting that the verdict "implies covered".
+PASSPORT_SCHEMA_V2 = "assurance.machinery.passport/2"
+_NEWER_VERDICTS = ("covered_at_community", "ledger_chain_not_verified")
 
 
 class PassportError(AssuranceError):
@@ -116,10 +138,17 @@ def record_intervention(
 ) -> Evidence:
     """Seal an intervention record. Findings are carried, not suppressed.
 
+    Refused (:class:`UnknownMachineError`, :class:`UnknownFunctionError`) when it cannot
+    be about anything this ledger holds; see :func:`check_intervention`.
+
     An intervention with no authorisation and no revalidation is still recorded —
     and its own ``findings`` become the evidence object's ``checks_skipped``, so
     the gap travels with the record instead of being lost between systems.
     """
+    # The library is the single gate: a change filed under a key no manifest was sealed
+    # for, or against a function no manifest declares, is about nothing the coverage
+    # assessment reads. Raises UnknownMachineError / UnknownFunctionError; nothing is written.
+    intervention, _ = check_intervention(ledger, intervention)
     findings = intervention.findings
     evidence = Evidence(
         kind=INTERVENTION_KIND,
@@ -169,10 +198,13 @@ def record_divergence(
             method=f"baseline {divergence.baseline_id} compared against observed "
                    f"{divergence.observed_id}",
         ),
-        validation_state=(
-            ValidationState.VERIFIED if divergence.verdict == "matches"
-            else ValidationState.REFUTED
-        ),
+        # "unverifiable" is neither: nothing that could be seen moved, and some of
+        # it could not be seen. Sealing that as refuted would be as wrong as
+        # sealing it as verified.
+        validation_state={
+            "matches": ValidationState.VERIFIED,
+            "unverifiable": ValidationState.INDETERMINATE,
+        }.get(divergence.verdict, ValidationState.REFUTED),
         confidence=Confidence.HIGH if divergence.tier.may_claim_physical_behaviour
         else Confidence.MEDIUM,
         checks_skipped=divergence.checks_skipped,
@@ -203,17 +235,284 @@ def manifests_from_ledger(
     return out
 
 
-def interventions_from_ledger(
+#: What the watch writes into a manifest's notes when it could not read every item its plan
+#: names (``change.service.INCOMPLETE_COLLECTION_MARK``; a test pins the two together,
+#: because this module cannot import the change package). Such a look is not a
+#: configuration the machine was in.
+_PARTIAL_LOOK_MARK = "[collection incomplete"
+
+_READER = Actor(identifier="assurance.ledger-reader", role="derived, not recorded",
+                kind="automation")
+
+
+def _unreadable(
+    machine_key: str, *, seq: int, at: datetime, why: str, what: str = "change record",
+) -> UnreadableIntervention:
+    return UnreadableIntervention(
+        intervention_id=f"{UNREADABLE_PREFIX}{'manifest-' if what == 'manifest' else ''}"
+                        f"seq-{seq}",
+        machine_key=machine_key,
+        item_id="(unreadable manifest)" if what == "manifest" else "(unreadable)",
+        kind=InterventionKind.RECONSTRUCTED, occurred_at=at, performed_by=_READER,
+        reason=f"a {what} that cannot be read: {why}",
+        notes="derived by the reader; nobody sealed this", ledger_seq=seq, why=why,
+    )
+
+
+@dataclass(frozen=True)
+class _Filed:
+    """A readable intervention with where and when the ledger says it was filed."""
+
+    intervention: Intervention
+    filed: datetime
+    seq: int
+
+
+def _read_interventions(
     ledger: EvidenceLedger, machine_key: str,
-) -> list[Intervention]:
-    """Every sealed intervention for a machine, in the order they occurred."""
-    out: list[Intervention] = []
-    for entry in ledger.entries(kind=INTERVENTION_KIND, subject=machine_key):
-        evidence = entry.evidence()
-        if not evidence.verify():
+) -> tuple[list[_Filed], list[UnreadableIntervention]]:
+    """Every intervention filed under the key: the ones that read, and a stand-in for each
+    one that does not. A record is dropped only by being a different kind."""
+    entries, damaged, clock = ledger.read_subject(machine_key, INTERVENTION_KIND)
+    good: list[_Filed] = []
+    lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
+                        why=row.why) for row in damaged]
+    for entry in entries:
+        filed = clock.get(entry.seq) or utc_now()
+        try:
+            evidence = entry.evidence()
+            if not evidence.verify():
+                raise ValueError("it no longer matches its own seal; the body was edited")
+            found = Intervention.from_dict(evidence.body["intervention"])
+            if found.machine_key != entry.subject:
+                raise ValueError(f"it is filed under {entry.subject!r} but names "
+                                 f"{found.machine_key!r}")
+        except (AssuranceError, KeyError, ValueError, TypeError, AttributeError) as exc:
+            lost.append(_unreadable(machine_key, seq=entry.seq, at=filed, why=str(exc)[:200]))
             continue
-        out.append(Intervention.from_dict(evidence.body["intervention"]))
+        good.append(_Filed(found, filed, entry.seq))
+    return good, lost
+
+
+def _sealed_manifests(
+    ledger: EvidenceLedger, machine_key: str,
+) -> tuple[list[tuple[datetime, int, SafetyManifest]], list[UnreadableIntervention]]:
+    """Readable manifests for a machine with the ledger's filing time and position, oldest
+    first; and a stand-in for each one that cannot be read (assumed to have changed
+    everything, dated when it was filed)."""
+    entries, damaged, clock = ledger.read_subject(machine_key, MANIFEST_KIND)
+    good: list[tuple[datetime, int, SafetyManifest]] = []
+    lost = [_unreadable(machine_key, seq=row.seq, at=clock.get(row.seq) or utc_now(),
+                        why=row.why, what="manifest") for row in damaged]
+    for entry in entries:
+        filed = clock.get(entry.seq) or utc_now()
+        try:
+            evidence = entry.evidence()
+            if not evidence.verify():
+                raise ValueError("it no longer matches its own seal; the body was edited")
+            good.append((filed, entry.seq, SafetyManifest.from_dict(evidence.body["manifest"])))
+        except (AssuranceError, KeyError, ValueError, TypeError, AttributeError) as exc:
+            lost.append(_unreadable(machine_key, seq=entry.seq, at=filed,
+                                    why=str(exc)[:200], what="manifest"))
+    return good, lost
+
+
+def _explains(
+    i: Intervention, change: Any, *, was: str, found: str, after: datetime, until: datetime,
+) -> bool:
+    """Does recorded intervention ``i`` account for this manifest ``change``?
+
+    Same item; dated after the earlier look and no later than the filing of the manifest
+    that showed the change (a record cannot explain what had not been seen yet). A changed
+    hash is explained only by a record whose ``to_hash`` is the hash now found (and whose
+    ``from_hash``, when given, is the one before), so a record of some other update or of
+    an older one does not cover this. An item that appeared or vanished is explained by a
+    record of that kind of event; a version moving on an item with no hash, by any record
+    of the item.
+    """
+    if i.item_id != change.item_id or not after < i.occurred_at <= until:
+        return False
+    if change.kind is ChangeKind.CONTENT_CHANGED:
+        now_hash = normalised_digest(found)
+        return bool(now_hash) and normalised_digest(i.to_hash) == now_hash and (
+            not i.from_hash or normalised_digest(i.from_hash) == normalised_digest(was))
+    if change.kind is ChangeKind.ADDED:
+        return i.kind in (InterventionKind.INSTALL, InterventionKind.UPDATE,
+                          InterventionKind.RESTORE, InterventionKind.RECONSTRUCTED)
+    if change.kind is ChangeKind.REMOVED:
+        return i.kind in (InterventionKind.REMOVAL, InterventionKind.RECONSTRUCTED)
+    return True
+
+
+def implied_interventions(
+    ledger: EvidenceLedger, machine_key: str, recorded: list[_Filed],
+    *, manifests: tuple[list[tuple[datetime, int, SafetyManifest]],
+                        list[UnreadableIntervention]] | None = None,
+) -> list[Intervention]:
+    """Changes the ledger's own manifests show, and manifests it cannot read.
+
+    Walk the readable manifests in the order they were filed. Each ``as_found`` manifest
+    is compared with the latest earlier one that was a look or a declaration (a plan,
+    ``as_intended``, says nothing about the machine; a look the watch marked incomplete is
+    not a configuration, so it is never the earlier side and items it did not collect are
+    not read as removed). A safety-bearing item whose hash differs, or that appeared or
+    vanished, is a change; so is a version moving on a safety-bearing item that carries no
+    hash to compare (the only sign there is). A manifest that cannot be read at all is
+    assumed to have changed everything (see :class:`UnreadableIntervention`).
+
+    Every such change is an :class:`ImpliedIntervention`, dated when the manifest that
+    showed it was FILED (the ledger's filing clock, never the manifest's own ``taken_at``,
+    which is the filer's word). A recorded intervention for the same item, dated after the
+    earlier look and no later than that filing, whose ``to_hash`` is the hash now found,
+    *explains* it (see :func:`_explains`): the change is marked ``explained_by`` it and
+    dated no later than the explanation was FILED. It is never removed. An explanation
+    carries the filer's word about when the change happened, and a record that could be
+    back-dated to before the last verification would erase the change in one call; filed
+    time cannot be back-dated.
+
+    What counts is the smallest sound rule, not the whole truth: only items that
+    implement a declared safety function; only changes visible between two manifests of
+    the same unit (a first look has nothing to differ from); an item with no hash and an
+    unchanged version is invisible, as everywhere (see ``Manifest.uncomparable_items``).
+    The conservative direction is stale: a verification that began before the change was
+    filed is read as no longer describing the machine until one is run after it.
+    """
+    sealed, lost = manifests if manifests is not None else _sealed_manifests(ledger, machine_key)
+    explicit = recorded
+    out: list[Intervention] = list(lost)
+    prior: tuple[datetime, SafetyManifest] | None = None
+    for filed, seq, manifest in sealed:
+        if manifest.machine.key != machine_key:
+            continue
+        if manifest.source is ManifestSource.AS_INTENDED:
+            continue
+        partial = _PARTIAL_LOOK_MARK in manifest.notes
+        if prior is not None and manifest.source is ManifestSource.AS_FOUND:
+            _, before = prior
+            divergence = compare(before, manifest)
+            for change in divergence.changes:
+                if partial and change.kind is ChangeKind.REMOVED:
+                    continue    # not collected is not gone
+                moved = change.severity is Severity.SAFETY_RELEVANT or (
+                    change.kind is ChangeKind.VERSION_RELABELLED
+                    and change.severity is Severity.NOTABLE and bool(change.functions))
+                if not moved:
+                    continue
+                found = (change.after or {}).get("content_hash", "")
+                was = (change.before or {}).get("content_hash", "")
+                why = next((r for r in explicit
+                            if _explains(r.intervention, change, was=was, found=found,
+                                         after=before.taken_at, until=filed)), None)
+                when, order = filed, seq
+                if why is not None and (why.filed, why.seq) < (filed, seq):
+                    when, order = why.filed, why.seq
+                out.append(ImpliedIntervention(
+                    intervention_id=f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}@{seq}:"
+                                    f"{change.item_id}",
+                    machine_key=machine_key, item_id=change.item_id,
+                    kind=InterventionKind.RECONSTRUCTED, occurred_at=when,
+                    performed_by=_READER,
+                    reason=f"the ledger's manifests show {change.item_id} changed "
+                           f"({change.kind.value})"
+                           + (f"; recorded as {why.intervention.intervention_id}"
+                              if why else " and no intervention record explains it"),
+                    from_hash=was, ledger_seq=order, to_hash=found,
+                    affects_functions=tuple(change.functions),
+                    observed_configuration=manifest.configuration_hash(),
+                    explained_by=why.intervention.intervention_id if why else "",
+                    notes="derived by comparing sealed manifests; nobody recorded this "
+                          f"change as a change. {change.detail}",
+                ))
+        if not partial:
+            prior = (filed, manifest)
+    return out
+
+
+def interventions_from_ledger(
+    ledger: EvidenceLedger, machine_key: str, *, include_implied: bool = True,
+) -> list[Intervention]:
+    """Every change to a machine the ledger can account for, in the order they occurred.
+
+    The sealed interventions, plus the records nobody wrote and every consumer must treat
+    as changes:
+
+    * an :class:`UnreadableIntervention` for each record filed as an intervention that
+      cannot be used (its seal fails, it is not an intervention, or its row is not JSON).
+      The one input whose absence only ever makes evidence look *fresher* is never
+      silently dropped; and
+    * with ``include_implied`` (the default), an :class:`ImpliedIntervention` for each
+      safety-bearing change the ledger's own manifests show (see
+      :func:`implied_interventions`), and an :class:`UnreadableIntervention` for each
+      manifest that cannot be read.
+
+    ``include_implied=False`` is for a caller that wants only what was recorded.
+    """
+    good, lost = _read_interventions(ledger, machine_key)
+    out: list[Intervention] = [r.intervention for r in good] + list(lost)
+    if include_implied:
+        sealed = _sealed_manifests(ledger, machine_key)
+        if len(sealed[0]) + len(sealed[1]) > 1 or sealed[1]:
+            out.extend(implied_interventions(ledger, machine_key, good, manifests=sealed))
     return sorted(out, key=lambda i: i.occurred_at)
+
+
+class InterventionRefusedError(AssuranceError):
+    """An intervention that cannot be filed against what the ledger holds."""
+
+    #: Machine-readable reason: ``unknown_machine`` | ``unknown_function``.
+    code = "refused"
+    unknown: tuple[str, ...] = ()
+
+
+class UnknownMachineError(InterventionRefusedError):
+    code = "unknown_machine"
+
+
+class UnknownFunctionError(InterventionRefusedError):
+    code = "unknown_function"
+
+
+def check_intervention(
+    ledger: EvidenceLedger, intervention: Intervention,
+) -> tuple[Intervention, SafetyManifest]:
+    """Read an intervention against the manifest sealed for the unit it names.
+
+    Returns the intervention with its function ids written as the manifest spells them,
+    and that manifest. Raises :class:`UnknownMachineError` when no manifest is sealed
+    under exactly this unit key (a different case, a serial with a digit missing, another
+    unit of the same model, a product line: each is a different unit, and a change filed
+    under it would be about nothing the coverage assessment reads), and
+    :class:`UnknownFunctionError` when it names a safety function the manifest does not
+    declare. Nothing is written by this function.
+    """
+    sealed, _ = _sealed_manifests(ledger, intervention.machine_key)
+    if not sealed:
+        raise UnknownMachineError(
+            f"no manifest is sealed in this ledger under the unit key "
+            f"{intervention.machine_key!r}. A unit key is maker/model#serial, exactly as "
+            "sealed (a different case or serial is a different unit). Seal the unit's "
+            "manifest first, or correct the key.")
+    # What was found and declared, not what is planned: the functions of the newest look
+    # and the newest declaration together. A plan (`as_intended`) with fewer functions
+    # must not make a declared function unknown.
+    looks = [m for _, _, m in sealed if m.source is not ManifestSource.AS_INTENDED]
+    base = looks[-1] if looks else sealed[-1][2]
+    functions = {f.function_id: f for f in base.functions}
+    for source in (ManifestSource.AS_FOUND, ManifestSource.AS_DECLARED):
+        newest = next((m for m in reversed(looks) if m.source is source), None)
+        for f in (newest.functions if newest else ()):
+            functions.setdefault(f.function_id, f)
+    manifest = replace(base, functions=tuple(functions.values()))
+    resolved, unknown = manifest.resolve_function_ids(intervention.affects_functions)
+    if unknown:
+        declared = ", ".join(f.function_id for f in manifest.functions) or "none declared"
+        exc = UnknownFunctionError(
+            f"{', '.join(unknown)} matches no safety function declared by the manifest "
+            f"sealed for {intervention.machine_key!r} ({declared}). "
+            "A change filed against a function nobody declared disturbs nothing.")
+        exc.unknown = unknown
+        raise exc
+    return replace(intervention, affects_functions=resolved), manifest
 
 
 # -- the passport ----------------------------------------------------------
@@ -234,11 +533,17 @@ class MachinePassport:
 
     @property
     def verdict(self) -> str:
-        return self.coverage.verdict
+        """The coverage verdict, or ``ledger_chain_not_verified`` when the ledger it was read
+        from does not verify: nothing read from such a ledger is covered."""
+        return str(self.evidence.body.get("verdict", self.coverage.verdict))
+
+    @property
+    def schema(self) -> str:
+        return PASSPORT_SCHEMA_V2 if self.verdict in _NEWER_VERDICTS else PASSPORT_SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": PASSPORT_SCHEMA,
+            "schema": self.schema,
             "evidence": self.evidence.to_dict(),
             "manifest": self.manifest.to_dict(),
             "coverage": self.coverage.to_dict(),
@@ -252,7 +557,10 @@ class MachinePassport:
         return p
 
     def summary(self) -> str:
-        return (f"{self.coverage.summary()}\n"
+        warning = ("THE LEDGER CHAIN DOES NOT VERIFY — nothing below is covered: the verdict "
+                   "is ledger_chain_not_verified.\n"
+                   if self.verdict == "ledger_chain_not_verified" else "")
+        return (f"{warning}{self.coverage.summary()}\n"
                 f"  {len(self.interventions)} recorded intervention(s)\n"
                 f"  sealed as {self.content_hash[:16]}")
 
@@ -265,18 +573,25 @@ def build_passport(
     interventions: list[Intervention] | None = None,
     verifications: list[VerificationRecord] | None = None,
     seal: bool = True,
+    recorder_trust: RecorderTrust | None = None,
 ) -> MachinePassport:
     """Assemble and seal the machine's current evidence position.
 
     Interventions and verifications are read out of the ledger when not supplied,
     which is the normal path: the passport is a view over what has been recorded,
     not a document somebody assembles by hand.
+
+    ``recorder_trust`` is the reader's own recorder trust list, applied to the
+    verifications read from the ledger: a ``validated`` tier whose recorder key the
+    reader has revoked or removed is read as ``community``, and the passport's state and
+    confidence follow that tier floor. A hosted reader always passes one.
     """
     key = manifest.machine.key
     ivs = (interventions if interventions is not None
            else interventions_from_ledger(ledger, key))
     vfs = (verifications if verifications is not None
-           else VerificationRecord.from_ledger(ledger, subject=key))
+           else VerificationRecord.from_ledger(ledger, subject=key,
+                                               recorder_trust=recorder_trust))
 
     coverage = assess_coverage(manifest, vfs, ivs)
     chain_ok, chain_problems = ledger.verify_chain()
@@ -287,6 +602,23 @@ def build_passport(
                           + "; ".join(chain_problems[:3])
                           + ". Every statement below is drawn from a store whose "
                             "integrity is in question.")
+    floor = coverage.evidence_tier_floor
+    # ``covered`` already means demonstrated (evidence at 'validated' or better).
+    # A cover that rests on evidence under 'validated' is ``covered_at_community``: about a
+    # recorded file, not a demonstration on the machine, so the passport does not read
+    # VERIFIED / HIGH on it (see the engine's cap on declared provenance).
+    # A ledger whose chain does not verify vouches for nothing: no covered verdict is sealed.
+    covered = coverage.verdict == "covered" and chain_ok
+    capped = coverage.verdict == "covered_at_community" and chain_ok
+    verdict = coverage.verdict if chain_ok else "ledger_chain_not_verified"
+    if capped:
+        skipped.append(
+            f"every function reads current, but only on evidence at tier {floor!r}, below "
+            "'validated'. A trace's declared provenance is capped at 'community'; "
+            "'validated' needs a recorder attestation accepted under a recorder trust "
+            "list the verifier holds, so this passport is INDETERMINATE "
+            "with low confidence, not verified: the behaviour was not demonstrated on "
+            "the machine.")
     if not vfs:
         skipped.append(
             f"no machine verification in this ledger is filed under {key!r}. A "
@@ -296,12 +628,15 @@ def build_passport(
     evidence = Evidence(
         kind=PASSPORT_KIND,
         body={
-            "schema": PASSPORT_SCHEMA,
+            "schema": PASSPORT_SCHEMA_V2 if verdict in _NEWER_VERDICTS else PASSPORT_SCHEMA,
             "machine": manifest.machine.to_dict(),
             "manifest_id": manifest.manifest_id,
             "manifest_hash": manifest.content_hash(),
             "configuration_hash": manifest.configuration_hash(),
-            "verdict": coverage.verdict,
+            "verdict": verdict,
+            # what the coverage read, before the chain is taken into account
+            "coverage_verdict": coverage.verdict,
+            "evidence_tier_floor": floor,
             "functions": [f.to_dict() for f in coverage.functions],
             "intervention_ids": [i.intervention_id for i in ivs],
             "verification_hashes": [v.content_hash for v in vfs],
@@ -317,10 +652,10 @@ def build_passport(
                    "intervention records through declared safety functions",
         ),
         validation_state=(
-            ValidationState.VERIFIED if coverage.verdict == "covered"
+            ValidationState.VERIFIED if covered
             else ValidationState.INDETERMINATE
         ),
-        confidence=Confidence.HIGH if (chain_ok and coverage.verdict == "covered")
+        confidence=Confidence.HIGH if (chain_ok and covered)
         else Confidence.LOW,
         checks_skipped=tuple(dict.fromkeys(skipped)),
         relations=(
@@ -342,25 +677,194 @@ def build_passport(
     )
 
 
+_COVERAGE_STATES = ("current", "stale", "failing", "unchecked", "incomplete",
+                    "never_verified", "not_demonstrable")
+
+
+def _passport_coherence(
+    evidence: Evidence, raw: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Whether the passport hangs together without the ledger, and whether the
+    blocks printed beside the seal are the ones the seal covers.
+
+    As with a verification bundle, the seal is a content hash and covers the
+    evidence object only; the manifest, coverage and intervention list printed in
+    the same file are what a reader looks at, and each must repeat the sealed body.
+    Returns ``(problems, limitations)``.
+    """
+    problems: list[str] = []
+    limits: list[str] = []
+    body = evidence.body
+
+    if evidence.kind != PASSPORT_KIND:
+        problems.append(f"the sealed evidence is of kind {evidence.kind!r}, not "
+                        f"{PASSPORT_KIND!r}; this is not a machine passport.")
+
+    functions = body.get("functions")
+    if not isinstance(functions, list) or not all(isinstance(f, dict) for f in functions):
+        problems.append("the sealed function list is not a list of objects.")
+        functions = []
+    uncovered = 0
+    for f in functions:
+        state = f.get("coverage")
+        if state not in _COVERAGE_STATES:
+            problems.append(f"function {f.get('function_id')!r} has coverage {state!r}, "
+                            f"which is not one of {', '.join(_COVERAGE_STATES)}.")
+            uncovered += 1
+            continue
+        if state != "current":
+            uncovered += 1
+        elif not f.get("last_verified_hash"):
+            problems.append(f"function {f.get('function_id')!r} is recorded as current "
+                            "but names no verification that made it so.")
+        if state == "stale" and not f.get("invalidated_by"):
+            problems.append(f"function {f.get('function_id')!r} is recorded as stale "
+                            "but names no intervention that made it so.")
+    implied = ("no_functions_declared" if not functions
+               else "covered" if not uncovered else "gaps")
+    verdict = body.get("verdict")
+    if verdict in _NEWER_VERDICTS and raw.get("schema") != PASSPORT_SCHEMA_V2:
+        problems.append(
+            f"the passport records verdict {verdict!r}, which only the "
+            f"{PASSPORT_SCHEMA_V2!r} format can carry, under schema {raw.get('schema')!r}.")
+    if verdict == "ledger_chain_not_verified":
+        # Not a coverage claim: the coverage the passport read is kept beside it.
+        if body.get("ledger_chain_verified") is not False:
+            problems.append("the passport records verdict 'ledger_chain_not_verified' but "
+                            "does not record that the chain failed.")
+        verdict = body.get("coverage_verdict")
+        if verdict not in ("covered", "covered_at_community", "gaps", "no_functions_declared"):
+            problems.append(f"the passport records coverage_verdict {verdict!r}, which is "
+                            "not a coverage verdict.")
+        state_verdict = "ledger_chain_not_verified"
+    else:
+        state_verdict = verdict
+    # Cover at community is the same cover with a weaker floor; a passport filed before the
+    # state existed recorded it as plain 'covered' beside a floor under 'validated', and is
+    # still read as the cover it was (and as INDETERMINATE: see ``capped`` below).
+    if verdict != implied and not (implied == "covered"
+                                   and verdict == "covered_at_community"):
+        problems.append(
+            f"the passport records verdict {verdict!r} but its own "
+            f"function list implies {implied!r} ({uncovered} not current).")
+
+    floor = body.get("evidence_tier_floor")
+    covered_like = verdict in ("covered", "covered_at_community")
+    if floor is None:
+        if verdict == "covered":
+            limits.append(
+                "NOT CHECKED: the passport records no evidence tier floor (it predates "
+                "the cap on declared provenance), so whether its 'verified' state rests "
+                "on evidence below 'validated' cannot be told from the file.")
+        capped = verdict == "covered_at_community"
+    elif not isinstance(floor, str):
+        problems.append("the sealed evidence tier floor is not a string.")
+        capped = True
+    else:
+        capped = covered_like and not tier_reaches_validated(floor)
+        if verdict == "covered_at_community" and tier_reaches_validated(floor):
+            problems.append(
+                f"the passport records verdict 'covered_at_community' but an evidence "
+                f"tier floor of {floor!r}, which reaches 'validated'.")
+    want_state = ("verified" if state_verdict == "covered" and not capped
+                  else "indeterminate")
+    if evidence.validation_state.value != want_state:
+        problems.append(
+            f"the sealed validation state is {evidence.validation_state.value!r} but "
+            f"the verdict {verdict!r} requires {want_state!r}.")
+    if evidence.confidence.value in ("high", "established") and not (
+            verdict == "covered" and body.get("ledger_chain_verified") is True
+            and not capped):
+        problems.append(
+            f"the sealed confidence is {evidence.confidence.value!r}, which a passport "
+            "earns only when it is covered, the ledger chain verified and the evidence "
+            "it rests on reaches 'validated'.")
+
+    # -- the half of the file the seal does not cover -------------------------
+    printed_cov = raw.get("coverage")
+    if printed_cov is None:
+        limits.append("NOT CHECKED: the file carries no coverage block beside the seal.")
+    elif not isinstance(printed_cov, dict):
+        problems.append("the printed coverage block is not an object.")
+    else:
+        if printed_cov.get("verdict") != verdict:
+            problems.append(
+                f"the printed coverage says {printed_cov.get('verdict')!r}; the sealed "
+                f"evidence says {body.get('verdict')!r}. The coverage block was edited.")
+        if content_hash_of(printed_cov.get("functions")) != content_hash_of(functions):
+            problems.append("the printed coverage's functions differ from the sealed "
+                            "evidence's. The coverage block was edited.")
+
+    printed_man = raw.get("manifest")
+    if printed_man is None:
+        limits.append("NOT CHECKED: the file carries no manifest beside the seal.")
+    else:
+        try:
+            m = SafetyManifest.from_dict(printed_man)
+        except (AssuranceError, KeyError, TypeError, ValueError, AttributeError) as exc:
+            problems.append(f"the printed manifest cannot be read: {exc}")
+        else:
+            if m.content_hash() != body.get("manifest_hash") \
+                    or m.configuration_hash() != body.get("configuration_hash"):
+                problems.append(
+                    "the printed manifest is not the one the sealed evidence names "
+                    f"(printed {m.content_hash()[:12]}, sealed "
+                    f"{str(body.get('manifest_hash'))[:12]}). It was edited.")
+
+    printed_ivs = raw.get("interventions")
+    if printed_ivs is None:
+        limits.append("NOT CHECKED: the file carries no intervention list beside the "
+                      "seal.")
+    elif not isinstance(printed_ivs, list) or not all(
+            isinstance(i, dict) for i in printed_ivs):
+        problems.append("the printed intervention list is not a list of objects.")
+    else:
+        printed_ids = [i.get("intervention_id") for i in printed_ivs]
+        if printed_ids != list(body.get("intervention_ids") or []):
+            problems.append(
+                "the printed intervention list is not the one the sealed evidence "
+                f"names (printed {printed_ids}, sealed "
+                f"{list(body.get('intervention_ids') or [])}). An intervention was "
+                "added or removed.")
+    return problems, limits
+
+
 def verify_passport(
     passport_path: str | Path, *, ledger: EvidenceLedger | None = None,
 ) -> tuple[bool, list[str]]:
     """Re-check a passport without trusting whoever produced it.
 
-    Returns ``(ok, problems)``. As with a verification bundle, supplying nothing
-    to check against yields ``ok`` *with* a stated limitation rather than a clean
-    pass: the seal proves the file was not edited, not that the machine is safe.
+    Returns ``(ok, problems)``. As with a verification bundle, the seal proves the
+    file was not edited and a seal anyone can recompute proves nothing about
+    whether the claim hangs together, so the sealed claim is checked for coherence
+    and the manifest, coverage and intervention list printed beside it are checked
+    against the sealed body. Supplying nothing to check against yields ``ok``
+    *with* a stated limitation rather than a clean pass. A file that cannot be
+    read is a problem, not an exception.
     """
     problems: list[str] = []
-    raw = json.loads(Path(passport_path).read_text(encoding="utf-8"))
+    limitations: list[str] = []
+    path = Path(passport_path)
+    if path.stat().st_size > MAX_FILE_BYTES:
+        return False, [f"{path.name} is larger than the {MAX_FILE_BYTES} bytes this "
+                       "checker will read."]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        return False, [f"the file is not readable JSON: {exc}"]
+    if not isinstance(raw, dict):
+        return False, [f"the file holds a JSON {type(raw).__name__}, not a passport."]
 
-    if raw.get("schema") != PASSPORT_SCHEMA:
-        return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r}."]
+    if raw.get("schema") not in (PASSPORT_SCHEMA, PASSPORT_SCHEMA_V2):
+        return False, [f"schema is {raw.get('schema')!r}, expected {PASSPORT_SCHEMA!r} or "
+                       f"{PASSPORT_SCHEMA_V2!r}."]
 
     try:
         evidence = Evidence.from_dict(raw["evidence"])
     except Exception as exc:  # noqa: BLE001 - a verifier reports, it does not raise
-        return False, [f"the sealed evidence could not be read: {exc}"]
+        return False, [f"the sealed evidence could not be read: {exc!r}"]
+    if not isinstance(evidence.body, dict):
+        return False, ["the sealed evidence body is not an object."]
 
     if not evidence.verify():
         problems.append(
@@ -368,14 +872,9 @@ def verify_passport(
             f"({evidence.content_hash[:16]}). The passport was edited after sealing.")
 
     body = evidence.body
-    functions = body.get("functions") or []
-    uncovered = [f for f in functions if f.get("coverage") != "current"]
-    implied = "covered" if functions and not uncovered else (
-        "no_functions_declared" if not functions else "gaps")
-    if body.get("verdict") != implied:
-        problems.append(
-            f"the passport records verdict {body.get('verdict')!r} but its own "
-            f"function list implies {implied!r} ({len(uncovered)} not current).")
+    coherence, coherence_limits = _passport_coherence(evidence, raw)
+    problems.extend(coherence)
+    limitations.extend(coherence_limits)
 
     if body.get("ledger_chain_verified") is False:
         problems.append(
@@ -395,12 +894,11 @@ def verify_passport(
         for h in body.get("verification_hashes") or []:
             if ledger.get(h) is None:
                 problems.append(
-                    f"verification {h[:12]} is named by this passport and is not in "
-                    "the supplied ledger.")
-    elif not problems:
-        problems.append(
+                    f"verification {str(h)[:12]} is named by this passport and is not "
+                    "in the supplied ledger.")
+    else:
+        limitations.insert(0, (
             "NOT CHECKED: no ledger was supplied, so only the passport's internal "
-            "integrity was confirmed. Nothing here shows the records it names exist.")
-        return True, problems
+            "integrity was confirmed. Nothing here shows the records it names exist."))
 
-    return not problems, problems
+    return not problems, problems + limitations

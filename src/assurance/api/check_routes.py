@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Anyone, get_register, require_machine
+from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.billing.plans import PLANS
 from assurance.check import AssuranceVerdict, CheckError, run_ad_hoc_check, run_enrolled_check
@@ -204,7 +205,7 @@ async def services() -> dict[str, Any]:
     "/machine",
     summary="Machine Assurance Check — one manifest, one advisory, no account",
 )
-async def check_machine(
+def check_machine(
     body: MachineCheckIn,
     principal: Annotated[Principal, Anyone],
 ) -> dict[str, Any]:
@@ -228,7 +229,7 @@ async def check_machine(
     "/fleet-machine",
     summary="Machine Assurance Check — an enrolled machine, its ledger history",
 )
-async def check_fleet_machine(
+def check_fleet_machine(
     body: FleetMachineCheckIn,
     principal: Annotated[Principal, EntitledForFleetMachine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -242,7 +243,8 @@ async def check_fleet_machine(
     del principal
     advisory = _advisory(body.advisory) if body.advisory is not None else None
     try:
-        result = run_enrolled_check(register.ledger, body.machine_key, advisory)
+        result = run_enrolled_check(register.ledger, body.machine_key, advisory,
+                                    recorder_trust=reader_recorder_trust())
     except CheckError as exc:
         raise HTTPException(
             status_code=404,

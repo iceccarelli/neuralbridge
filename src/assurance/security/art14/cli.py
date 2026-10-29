@@ -16,7 +16,7 @@ outstanding, because the next question is always "and now what".
     assurance art14 case        CASE-001
     assurance art14 register
     assurance art14 verify
-    assurance art14 export      [--case CASE-001] [-o bundle.json]
+    assurance art14 export      [--case CASE-001 [--skeleton]] [-o bundle.json]
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ...core.errors import AssuranceError
 from ...core.evidence import Actor
 from ...core.identity import format_utc, parse_utc, utc_now
 from ...evidence.ledger import EvidenceLedger
@@ -265,11 +266,36 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def cmd_export(args: argparse.Namespace) -> int:
     register = _register(args)
-    bundle = register.ledger.export(subject=args.case_id)
+    anchor = None
+    try:
+        if args.attestations:
+            # Signing needs the Ed25519 dependency; exporting without an anchor does not.
+            from ...attest.attestation import AttestationLog
+            anchor = AttestationLog(args.attestations).require_anchor().to_dict()
+        bundle = register.ledger.export(
+            subject=args.case_id, anchor=anchor,
+            skeleton=args.skeleton and args.case_id is not None)
+    except AssuranceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not bundle["entries"]:
+        print(f"error: no case {args.case_id!r}.", file=sys.stderr)
+        return 2
     text = json.dumps(bundle, indent=2, ensure_ascii=False)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
         print(f"exported {len(bundle['entries'])} records to {args.output}")
+        if anchor:
+            from ...attest.attestation import describe_anchor
+            print(f"  {describe_anchor(anchor)}")
+        else:
+            print("  not anchored: nothing in this file shows nothing was removed. "
+                  "Export with --attestations <log> and verify with --public-key.")
+        if args.case_id is not None and not args.skeleton:
+            print("  no skeleton: a removed entry of this case cannot be seen and "
+                  "completeness cannot be checked. --skeleton adds one, and tells "
+                  "whoever receives the file the id, kind and time of every other "
+                  "entry in the ledger.")
     else:
         print(text)
     return 0
@@ -368,6 +394,15 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("export", help="export a verifiable bundle")
     e.add_argument("--case", dest="case_id", default=None)
     e.add_argument("-o", "--output")
+    e.add_argument("--attestations", type=Path, default=None, metavar="LOG",
+                   help="embed the newest signed head attestation in this log "
+                        "(`assurance attest sign`) as the bundle's anchor; refuses "
+                        "if it contradicts the ledger")
+    e.add_argument("--skeleton", action="store_true",
+                   help="with --case: also list the id, kind and time of every OTHER "
+                        "entry in the ledger (no evidence), so a verifier can see a "
+                        "removed entry and check completeness. Off by default: it "
+                        "tells whoever receives the file what else the ledger holds.")
     e.set_defaults(func=cmd_export)
 
     return parser

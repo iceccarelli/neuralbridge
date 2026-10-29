@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import { REPO } from '../lib/links';
 
 export const metadata: Metadata = {
-  title: 'Status | Industrial Autonomous Assurance',
-  description: 'The founder checklist between this build and a live, sellable deployment — checked at build time, not asserted.',
+  title: 'Deploy checklist | Industrial Autonomous Assurance',
+  description: 'A static founder checklist of the deploy steps between this build and a sellable deployment. It does not probe any live service; only the first item reflects the configuration of this build.',
   alternates: { canonical: '/status' },
   robots: { index: false, follow: true },
 };
@@ -36,7 +36,7 @@ const items: ChecklistItem[] = [
     label: 'Stripe webhook registered',
     done: false,
     detail: 'Cannot be checked from a static build.',
-    action: 'Create the endpoint at https://<your-fly-app>.fly.dev/v1/billing/webhook, subscribed to checkout.session.completed, customer.subscription.updated, customer.subscription.deleted. See DEPLOY_NOW.md §3.',
+    action: 'Create the endpoint at https://<your-fly-app>.fly.dev/v1/billing/webhook, subscribed to the events the handler reads: checkout.session.completed, checkout.session.async_payment_succeeded, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted (src/assurance/api/billing_routes.py:post_webhook). See DEPLOY_NOW.md §3.',
   },
   {
     label: 'GitHub Pages enabled (docs mirror)',
@@ -49,6 +49,12 @@ const items: ChecklistItem[] = [
     done: false,
     detail: 'Cannot be checked from a static build — this is a different Vercel project than the one that deploys this site.',
     action: 'In the Vercel dashboard, delete the old "v0 Human-like Neural Interface" project or redirect it to https://neuralbridge.io. See DEPLOY_NOW.md §5.',
+  },
+  {
+    label: 'Prices validated with paying customers',
+    done: false,
+    detail: 'The listed prices (€390/month Register, €1,290/month Cell) are launch hypotheses. No customer has paid them, and no copy on this site should read as if they had.',
+    action: 'Not something a build can confirm — it is complete only when a customer has actually paid through the live checkout.',
   },
   {
     label: 'Smoke test passed on the live site',

@@ -7,11 +7,11 @@ evidence of intervention in it.
     manifest      what is on the machine, with the provenance of every hash
     divergence    whether it still matches the configuration it was signed off with
     intervention  who changed what, who authorised it, what was re-run
-    staleness     which safety functions are still covered by valid evidence
+    staleness     which safety functions a recorded verification still stands for
     record        sealing all of it into the ledger, and the machine passport
 
-The join in :mod:`~assurance.machinery.staleness` is the part nobody else has:
-a firmware change recorded here invalidates, by name and by date, the
+The join in :mod:`~assurance.machinery.staleness` needs both halves: a firmware
+change recorded here invalidates, by name and by date, the
 :mod:`assurance.machine` verification that preceded it.
 """
 

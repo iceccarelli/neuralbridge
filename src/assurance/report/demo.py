@@ -47,6 +47,7 @@ from assurance.machine.envelope import (
 )
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machinery.intervention import Intervention, InterventionKind
+from assurance.machinery.manifest import HashSource
 from assurance.machinery.record import record_intervention, record_manifest
 
 __all__ = ["DEMO_NOTICE", "DemoFleet", "build_demo"]
@@ -236,7 +237,11 @@ def build_demo(workdir: str | Path) -> DemoFleet:
 
         result = collect(plan, root, serial=serial, taken_by=ENG, site=site,
                          country=country, year="2026", taken_at=sept,
-                         manifest_id=f"MAN-{serial}-2026-09")
+                         manifest_id=f"MAN-{serial}-2026-09",
+                         # The demo's scenario is a fleet whose collectors ran on the
+                         # machines; it is synthetic data and says so, and this is the
+                         # one place that asserts it.
+                         hash_source=HashSource.READ_FROM_MACHINE)
         record_manifest(ledger, result.manifest)
 
         declarations.append(DeclarationOfConformity.bind(

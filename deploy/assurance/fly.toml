@@ -2,17 +2,19 @@
 #
 #   fly launch --no-deploy --copy-config --config deploy/assurance/fly.toml
 #   fly volumes create assurance_data --size 1 --region fra
-#   fly secrets set \
-#       ASSURANCE_API_KEYS="$(openssl rand -hex 24)" \
-#       STRIPE_SECRET_KEY=sk_test_... \
-#       STRIPE_WEBHOOK_SECRET=whsec_... \
-#       ASSURANCE_PRICE_REGISTER=price_... \
-#       ASSURANCE_PRICE_CELL=price_...
+#   (secrets: never on a command line or in a heredoc; export them with `read -rs`, then
+#    env | grep -E '^(ASSURANCE_API_KEYS|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|ASSURANCE_PRICE_REGISTER|ASSURANCE_PRICE_CELL)=' | fly secrets import
+#    with sk_test_..., whsec_..., price_...; see DEPLOY_NOW.md section 2)
 #   fly deploy --config deploy/assurance/fly.toml --dockerfile deploy/assurance/Dockerfile
 #
 # Then point a Stripe webhook endpoint at https://<app>.fly.dev/v1/billing/webhook
-# for checkout.session.completed, customer.subscription.updated and
-# customer.subscription.deleted.
+# for the events api/billing_routes.py:post_webhook reads: checkout.session.completed,
+# checkout.session.async_payment_succeeded, customer.subscription.updated,
+# customer.subscription.deleted and invoice.payment_failed.
+#
+# This file names the app `assurance-register` and its public URL. For a rehearsal
+# use a copy with a staging app name (DEPLOY_NOW.md section 1); keep the Stripe keys
+# sk_test_ until a live deployment is the founder's explicit decision.
 
 app = "assurance-register"
 primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regulatory record
@@ -28,7 +30,15 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
   # One attestation log per account. On the volume: it is the one
   # artefact in this system that a ledger rewind cannot reach.
   ASSURANCE_ATTEST_LOGS = "/data/attestations"
+  # Hosted supplier feeds. Without this they land in the container filesystem
+  # and vanish on every deploy.
+  ASSURANCE_SUPPLIER_FEEDS = "/data/supplier-feeds"
   ASSURANCE_PUBLIC_URL = "https://assurance-register.fly.dev"
+  # Every request reaches this app through Fly's proxy, which sets Fly-Client-IP.
+  # Without this the free-tier quota is one shared bucket for the proxy's address.
+  # Never set this on a host that is reachable without Fly's proxy in front.
+  ASSURANCE_TRUST_FLY_PROXY = "1"
+  ASSURANCE_TENANT_LEDGERS = "/data/tenants"
 
 [[mounts]]
   source = "assurance_data"

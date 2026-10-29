@@ -40,10 +40,12 @@ def work(tmp_path) -> Path:
     (tmp_path / "watch.json").write_text(json.dumps({
         "watch_id": "WATCH-PLANT2", "max_age_hours": 168,
         "targets": [
+            # read_from_machine: the harness plays a watch running ON the machine; an
+            # export folder does not say so, and then an unchanged hash is not "quiet".
             {"serial": "0412", "plan": "plan.json", "root": "0412",
-             "site": "Plant 2", "country": "DE"},
+             "site": "Plant 2", "country": "DE", "read_from_machine": True},
             {"serial": "0501", "plan": "plan.json", "root": "0501",
-             "site": "Plant 7", "country": "IT"},
+             "site": "Plant 7", "country": "IT", "read_from_machine": True},
         ],
     }))
     return tmp_path
@@ -173,7 +175,6 @@ class TestNewVersusOutstanding:
             self, work, config, ledger, tmp_path):
         """Coverage returns when a verification lands between two runs."""
         from assurance.core.evidence import Actor
-        from assurance.machine.bundle import build_bundle
         from assurance.machine.envelope import (
             FigureBasis,
             SafetyEnvelope,
@@ -203,8 +204,11 @@ class TestNewVersusOutstanding:
                       samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                            tcp_speed=400.0, mode=OperatingMode.SSM,
                                            separation=2200.0) for i in range(10)))
-        build_bundle(env, trace, actor=Actor("eng", "engineer"), ledger=ledger,
-                     subject="Grimaldi/AR-7#0412")
+        # attested: a function is RECOVERED only on evidence at 'validated' or better (a declared
+        # provenance is recorded, not recovered; see test_assurance_round2_lows.py)
+        from .support_recorder import build_attested_bundle
+        build_attested_bundle(env, trace, actor=Actor("eng", "engineer"), ledger=ledger,
+                              subject="Grimaldi/AR-7#0412")
 
         reexport(work, "0412")
         reexport(work, "0501")

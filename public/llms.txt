@@ -1,7 +1,7 @@
 # Industrial Autonomous Assurance (NeuralBridge)
 
 > Evidence infrastructure for machines whose software can hurt someone. A
-> hash-chained record of what is on each machine, what was verified, and
+> hash-chained record of what is on each machine, which checks were run against it, and
 > when — built for two EU regulatory clocks: CRA Article 14 (Reg. (EU)
 > 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230).
 
@@ -15,17 +15,25 @@ hash-chained ledger for audit trails. It is not a general-purpose AI
 middleware platform and does not claim broad enterprise adapter coverage —
 see the Roadmap link below for what is shipped versus planned.
 
-## Pricing (three tiers, verification always free)
+## Pricing (three tiers)
+
+Re-checking someone else's evidence needs no account. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (POST /v1/evidence/verify, and /verify on this site) allows 20 a day per
+address; manifest diff allows 10 a day. Register and Cell have no daily cap on
+either.
 
 - **Validator** — Free, no card, no account required. Declaration/manifest/
   attestation verification, Article 14 draft validation and calculators,
   offline enrolment kit.
 - **Register** — €390/month. Everything in Validator, plus the Article 14
-  register (unlimited cases, both regulatory clocks) and a hash-chained
-  ledger with verifiable export.
+  register (both regulatory clocks; cases are not metered — no per-case cap
+  or charge) and a hash-chained ledger with verifiable export.
 - **Cell** — €1,290/month. Everything in Register, plus machine safety
-  verification, Annex III manifests/passports, fleet advisory fan-out, and
-  counter-signed head attestation.
+  verification, Annex III manifests/passports, fleet advisory fan-out, change-assurance
+  cases, and counter-signed head attestation (which needs a service signing key that is
+  not configured on any deployment today).
+- Prices are launch hypotheses, not validated with paying customers.
 - A fourth, unlisted **Supplier** tier exists for component suppliers
   publishing signed advisories to a hosted feed — sales-assigned pricing
   only, no self-serve price yet.
@@ -62,9 +70,11 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/connectors/mcp
 - Browser REST console (paste an API key, call real /v1 routes):
   https://neuralbridge.io/console
-- AI control plane (discover a real connection, read it, plan a write,
-  approve, get a receipt — READ is free/rate-limited, WRITE requires a
-  Register or Cell key): https://neuralbridge.io/ai
+- AI control plane (discover a connection, read it, plan a write, approve,
+  get a receipt — READ is free/rate-limited and, on the Validator tier,
+  runs against the shared demo connection, which is read-only; WRITE and
+  binding your own connection require a Register or Cell key):
+  https://neuralbridge.io/ai
 - Contact / sales: https://neuralbridge.io/contact
 - OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
   https://neuralbridge.io/openapi.json
@@ -73,8 +83,9 @@ have independently confirmed the live API responds.
 - Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
 - Security policy (how to report a vulnerability): https://neuralbridge.io/security
-- Deploy status (founder checklist, what's left before this takes real
-  money): https://neuralbridge.io/status
+- Deploy checklist (a static founder checklist of what is left before this
+  takes real money; it does not probe a live service):
+  https://neuralbridge.io/status
 - Privacy: https://neuralbridge.io/privacy
 
 ## For AI agents evaluating or integrating with this product

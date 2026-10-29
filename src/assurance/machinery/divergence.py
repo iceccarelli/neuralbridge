@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import Any
 
 from assurance.core.tiers import AssuranceTier
-from assurance.machinery.manifest import SafetyItem, SafetyManifest
+from assurance.machinery.manifest import SafetyItem, SafetyManifest, normalised_digest
 
 __all__ = ["Change", "ChangeKind", "Divergence", "Severity", "compare"]
 
@@ -79,10 +79,21 @@ class Change:
         }
 
 
+#: What stands behind each ``hash_source``. This software never sees where a hash was read:
+#: ``read_from_machine`` is a statement by whoever filed the manifest (``collect`` and ``kit``
+#: record it as the operator's assertion), so an exported case says so beside the label.
+_BASIS = {
+    "read_from_machine": "operator_assertion",
+    "supplied_by_vendor": "supplied_by_vendor",
+    "declared": "declared",
+}
+
+
 def _summary(item: SafetyItem) -> dict[str, Any]:
     return {
         "kind": item.kind.value, "name": item.name, "version": item.version,
         "content_hash": item.content_hash, "hash_source": item.hash_source.value,
+        "hash_source_basis": _BASIS[item.hash_source.value],
         "implements": list(item.implements),
     }
 
@@ -101,6 +112,17 @@ class Divergence:
     changes: tuple[Change, ...]
     checks_skipped: tuple[str, ...]
     tier: AssuranceTier
+    #: Items whose equality could not be established: no hash on one side, or an
+    #: observed hash that was not read off the machine. Nothing was compared, so
+    #: nothing is reported unchanged.
+    uncompared: tuple[str, ...] = ()
+    #: Whether the observed manifest is a record of looking at a machine.
+    observed_as_found: bool = True
+    #: Same configuration once digests are compared in normal form (case, ``sha256:``
+    #: prefix). ``identical`` stays the exact sealed-hash match, which a sealed record
+    #: re-verifies, so it cannot be loosened; this is what keeps a relabelled digest from
+    #: reading as drift.
+    equivalent: bool = False
 
     @property
     def identical(self) -> bool:
@@ -127,8 +149,18 @@ class Divergence:
 
     @property
     def verdict(self) -> str:
-        """``matches`` | ``drifted`` | ``safety_relevant_drift``."""
-        if self.identical and not self.changes:
+        """``matches`` | ``unverifiable`` | ``drifted`` | ``safety_relevant_drift``.
+
+        ``matches`` is a claim that every item was compared and none moved. It is
+        made only when every item carries a hash on both sides, every observed
+        hash was read off the machine, and the observed manifest is an
+        ``as_found`` one. Otherwise an unchanged-looking result is
+        ``unverifiable``: nothing was seen, which is not the same as nothing
+        changed.
+        """
+        if (self.identical or self.equivalent) and not self.changes:
+            if self.uncompared or not self.observed_as_found:
+                return "unverifiable"
             return "matches"
         if self.safety_relevant:
             return "safety_relevant_drift"
@@ -145,6 +177,7 @@ class Divergence:
                          "configuration": self.observed_configuration},
             "changes": [c.to_dict() for c in self.changes],
             "affected_functions": list(self.affected_functions),
+            "uncompared": list(self.uncompared),
             "tier": self.tier.value,
             "checks_skipped": list(self.checks_skipped),
         }
@@ -152,6 +185,8 @@ class Divergence:
     def summary(self) -> str:
         head = {
             "matches": "MATCHES — the configuration is the one that was signed off",
+            "unverifiable": "UNVERIFIABLE — nothing moved that could be seen, and "
+                            "some of it could not be seen",
             "drifted": "DRIFTED — changes found, none on a safety-bearing item",
             "safety_relevant_drift":
                 "SAFETY-RELEVANT DRIFT — a safety-bearing item has changed",
@@ -187,6 +222,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
 
     b_ids = {i.item_id for i in baseline.items}
     o_ids = {i.item_id for i in observed.items}
+    uncompared: list[str] = []
 
     for item_id in sorted(o_ids - b_ids):
         item = observed.item(item_id)
@@ -222,6 +258,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         functions = tuple(sorted(set(b.implements) | set(o.implements)))
 
         if not (b.is_comparable and o.is_comparable):
+            uncompared.append(item_id)
             caveats.append(
                 f"{item_id} carries no hash in one or both manifests "
                 f"({b.hash_source.value} / {o.hash_source.value}), so a change to it "
@@ -237,7 +274,15 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
                 ))
             continue
 
-        if b.content_hash != o.content_hash:
+        if not o.hash_source.describes_this_unit:
+            uncompared.append(item_id)
+            caveats.append(
+                f"{item_id}: the observed hash is {o.hash_source.value}, not read from "
+                "the machine, so an equal hash says what the file is, not what the "
+                "machine holds. It is NOT reported as unchanged."
+            )
+
+        if normalised_digest(b.content_hash) != normalised_digest(o.content_hash):
             changes.append(Change(
                 item_id=item_id, kind=ChangeKind.CONTENT_CHANGED,
                 severity=Severity.SAFETY_RELEVANT if safety else Severity.NOTABLE,
@@ -269,6 +314,14 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
                 before=_summary(b), after=_summary(o), functions=functions,
             ))
 
+    asserted = [i for i in observed.items if i.hash_source.describes_this_unit]
+    if asserted:
+        caveats.append(
+            f"{len(asserted)} of {len(observed.items)} observed items are labelled "
+            "read_from_machine. That label is the operator's assertion (collect/kit "
+            "--read-from-machine, or a watch target's read_from_machine): this software "
+            "cannot check that the files came off the machine, and a sealed record carrying "
+            "the label shows what was claimed, not that it was true.")
     if observed.uncomparable_items:
         caveats.append(
             f"{len(observed.uncomparable_items)} of {len(observed.items)} observed "
@@ -296,6 +349,11 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
 
     tier = min(baseline.tier_ceiling, observed.tier_ceiling)
 
+    def _shape(m: SafetyManifest) -> list[tuple[Any, ...]]:
+        return [(i.item_id, i.kind.value, i.name, i.version,
+                 normalised_digest(i.content_hash) or i.content_hash, tuple(sorted(i.implements)))
+                for i in sorted(m.items, key=lambda i: i.item_id)]
+
     return Divergence(
         machine_key=observed.machine.key,
         baseline_id=baseline.manifest_id,
@@ -307,4 +365,7 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         changes=tuple(changes),
         checks_skipped=tuple(dict.fromkeys(caveats)),
         tier=tier,
+        uncompared=tuple(dict.fromkeys(uncompared)),
+        observed_as_found=observed.source.value == "as_found",
+        equivalent=_shape(baseline) == _shape(observed),
     )

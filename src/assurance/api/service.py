@@ -22,13 +22,18 @@ from fastapi.responses import JSONResponse
 from .. import __version__
 from .attest_routes import attest_router
 from .billing_routes import billing_router
+from .change_routes import change_router
 from .check_routes import check_router
-from .deps import allowed_origins, auth_mode
+from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode
+from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
-from .routes import free_router, public_router, router
+from .operator_routes import operator_router
+from .routes import evidence_router, free_router, public_router, router
 from .supplier_routes import supplier_router
+from .value_routes import value_router
+from .watch_routes import watch_router
 
 __all__ = ["create_app", "app"]
 
@@ -77,8 +82,9 @@ def create_app(**kwargs: Any) -> FastAPI:
             {"name": "machinery", "description": "Machinery Regulation Annex III "
                                                  "1.1.9: safety software identity, "
                                                  "evidence of intervention, and which "
-                                                 "safety functions still have valid "
-                                                 "evidence."},
+                                                 "safety functions a recorded "
+                                                 "verification still stands for, "
+                                                 "at what tier."},
             {"name": "fleet", "description": "Every enrolled machine at once: "
                                              "component advisories fanned out to "
                                              "serial numbers, and Declarations of "
@@ -92,6 +98,10 @@ def create_app(**kwargs: Any) -> FastAPI:
         ],
         **kwargs,
     )
+
+    # Added before CORS so it sits inside it: a 413 still carries CORS headers
+    # and a browser caller sees "too large", not a CORS failure.
+    application.add_middleware(BodySizeLimitMiddleware)
 
     # Bearer-token auth, never cookies — allow_credentials stays False so a
     # wide origin list can never be combined with credentialed requests.
@@ -107,7 +117,21 @@ def create_app(**kwargs: Any) -> FastAPI:
         # deployment: the browser never even sends the key, so the API sees
         # an anonymous caller and returns 401/402 for a request that should
         # have succeeded. Found while building the Console guided flow.
-        allow_headers=["content-type", "authorization", "x-api-key"],
+        # idempotency-key: a browser client that retries a metered call must be
+        # allowed to send it, or the preflight refuses the request outright.
+        allow_headers=["content-type", "authorization", "x-api-key", "idempotency-key",
+                       "x-issuer-public-key"],
+        # A browser can read only the CORS-safelisted response headers unless the
+        # server lists the rest. app/lib/assuranceApi.ts reads retry-after, and the
+        # quota/usage headers are for the browser client too. Named, no wildcard;
+        # tests/test_assurance_cors_expose.py fails if a route emits an
+        # X-Assurance-* header that is not listed here.
+        expose_headers=[
+            "Retry-After", "WWW-Authenticate",
+            "X-Assurance-Tier", "X-Assurance-Quota-Limit", "X-Assurance-Quota-Remaining",
+            "X-Assurance-Usage-Event", "X-Assurance-Billable-Units",
+            "X-Assurance-Access", "X-Assurance-Submittable",
+        ],
         allow_credentials=False,
     )
 
@@ -124,11 +148,17 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(free_router)
     application.include_router(machine_router)
     application.include_router(machinery_router)
+    application.include_router(change_router)
+    application.include_router(operator_router)
+    application.include_router(value_router)
+    application.include_router(watch_router)
     application.include_router(fleet_router)
     application.include_router(check_router)
+    application.include_router(evidence_verify_router)
     application.include_router(attest_router)
     application.include_router(supplier_router)
     application.include_router(router)
+    application.include_router(evidence_router)
     return application
 
 

@@ -11,6 +11,13 @@ finding — a rewind, a fork, a bad signature — and 2 when the command could n
 run at all. A finding is not an error: it is the output this exists to produce,
 and it must not share an exit code with a missing file.
 
+Exit 3 (``TORN_TAIL_EXIT``) is a log that ends in an unterminated line: a write that
+did not finish, or one still in flight. For ``verify`` it means the newest attestation
+may be missing, so nothing is established and ``ok`` is false (text and ``--json``,
+where ``torn_tail`` is true); it is never reported as a pass. For ``sign`` it means
+nothing was appended. A real finding wins: a log that is torn *and* has a problem
+exits 1. Preserve the file, then have the operator repair it.
+
 The intended shape of a deployment is that ``sign`` runs somewhere the ledger's
 operator does not control, on a timer, with the private key held there:
 
@@ -27,8 +34,10 @@ import sys
 from pathlib import Path
 
 from assurance.attest.attestation import (
+    AttestationBasis,
     AttestationError,
     AttestationLog,
+    AttestationTornTailError,
     attest,
     verify_log,
 )
@@ -36,7 +45,15 @@ from assurance.attest.keys import SigningKey, VerifyingKey
 from assurance.core.errors import AssuranceError
 from assurance.evidence.ledger import EvidenceLedger
 
-__all__ = ["build_parser", "main"]
+__all__ = ["TORN_TAIL_EXIT", "build_parser", "main"]
+
+#: A log whose last line was not finished. Distinct from a finding (1) and a command
+#: that could not run (2): the log needs a person, and what it says is not established.
+TORN_TAIL_EXIT = 3
+
+_TORN_MESSAGE = ("the log ends in an unterminated line (a write that did not finish, or "
+                 "one in flight); the newest attestation may be missing, so this is not "
+                 "a pass")
 
 
 def _passphrase(args: argparse.Namespace) -> str:
@@ -87,6 +104,11 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--ledger", type=Path, default=None,
                    help="check the ledger against the attestations too; without it "
                         "only the log itself is checked")
+    v.add_argument("--basis", choices=[b.value for b in AttestationBasis], default=None,
+                   help="with --ledger and a log that mixes bases: which records "
+                        "describe that ledger. Default: the log's only basis, else "
+                        "read_from_ledger (a declared head describes the holder's own "
+                        "ledger, not the one the signer read)")
     v.add_argument("--json", action="store_true")
 
     ll = verbs.add_parser("log", help="print the attestations, checking nothing")
@@ -118,7 +140,7 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def _cmd_sign(args: argparse.Namespace) -> int:
-    ledger = EvidenceLedger(args.ledger)
+    ledger = EvidenceLedger.open_existing(args.ledger)
     key = SigningKey.load(args.key, passphrase=_passphrase(args))
     log = AttestationLog(args.log)
     record = attest(ledger, key, log, note=args.note, rotating=args.rotating)
@@ -141,35 +163,50 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     log = AttestationLog(args.log)
     key = VerifyingKey.from_file(args.public_key)
     ledger = EvidenceLedger(args.ledger) if args.ledger else None
-    verdict = verify_log(log.read(), key, ledger=ledger)
+    records, torn = log.scan()
+    basis = AttestationBasis(args.basis) if args.basis else None
+    verdict = verify_log(records, key, ledger=ledger, basis=basis)
+    ok = verdict.ok and not torn
+    problems = [*verdict.problems, *([_TORN_MESSAGE] if torn else [])]
 
     if args.json:
         print(json.dumps(
             {
-                "ok": verdict.ok,
+                "ok": ok,
                 "checked": verdict.checked,
                 "key_fingerprint": verdict.key_fingerprint,
-                "problems": verdict.problems,
+                "problems": problems,
                 "checks_skipped": verdict.checks_skipped,
+                "notes": verdict.notes,
+                "torn_tail": torn,
                 "latest": verdict.latest.to_dict() if verdict.latest else None,
             },
             indent=2, sort_keys=True))
     else:
-        print(verdict.summary())
+        print(verdict.summary() if not torn or verdict.problems
+              else f"{verdict.checked} attestation(s) read, 1 problem: the log is incomplete "
+                   "(not a pass)")
         if verdict.latest is not None:
             print(f"  latest: attestation {verdict.latest.sequence}, "
                   f"{verdict.latest.ledger_length} record(s), "
                   f"{verdict.latest.attested_at}")
         for problem in verdict.problems:
             print(f"  ! {problem}")
+        if torn:
+            print(f"  ! {_TORN_MESSAGE}")
         print("\n  not checked:")
         for skipped in verdict.checks_skipped:
             print(f"    - {skipped}")
-    return 0 if verdict.ok else 1
+    if not verdict.ok:
+        return 1
+    return TORN_TAIL_EXIT if torn else 0
 
 
 def _cmd_log(args: argparse.Namespace) -> int:
-    records = AttestationLog(args.log).read()
+    records, torn = AttestationLog(args.log).scan()
+    if torn:
+        print("note: the log ends in an unterminated line (a write that did not "
+              "finish); it was ignored", file=sys.stderr)
     if args.json:
         print(json.dumps([r.to_dict() for r in records], indent=2, sort_keys=True))
         return 0
@@ -179,7 +216,9 @@ def _cmd_log(args: argparse.Namespace) -> int:
     for r in records:
         print(f"{r.sequence:>4}  {r.attested_at}  len={r.ledger_length:<6} "
               f"head={r.head_seq:<6} {r.head_link_hash[:12]}  key={r.key_fingerprint}"
-              f"  {r.basis.value}" + (f"  {r.note}" if r.note else ""))
+              f"  {r.basis.value}"
+              + ((f"  note (requester's text, not the signer's): {r.note}"
+                  if r.note_is_tenant_supplied else f"  {r.note}") if r.note else ""))
     print("\n  Nothing here was verified. `assurance attest verify` does that.")
     return 0
 
@@ -194,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         return handlers[args.command](args)
+    except AttestationTornTailError as exc:
+        print(f"finding: {exc}", file=sys.stderr)
+        return TORN_TAIL_EXIT
     except AttestationError as exc:
         print(f"finding: {exc}", file=sys.stderr)
         return 1

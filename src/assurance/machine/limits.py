@@ -16,25 +16,42 @@ recorded rather than assumed.
 
 Transient contact limits are taken as a multiple of the quasi-static values;
 the multiplier is declared in the file rather than hardcoded, because it is
-exactly the kind of constant that changes between editions.
+exactly the kind of constant that changes between editions. No check currently
+uses it: ``verify`` holds every contact sample to the quasi-static limit, which
+is the conservative choice, and says so in the bundle.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 from assurance.core.tiers import AssuranceTier
+from assurance.machine.quantities import FORCE_MAX_N, PRESSURE_MAX_N_CM2, number
+
+if TYPE_CHECKING:
+    from assurance.machine.limits_review import LimitsReviewAssessment
 
 __all__ = ["BodyRegionLimit", "LimitsError", "LimitsTable", "SCHEMA"]
 
 
 class LimitsError(AssuranceError):
     """A limits table is malformed, or a region was asked for that it lacks."""
+
+
+def _num(value: Any, name: str, **kw: Any) -> float:
+    return number(value, name, exc=LimitsError, **kw)
+
+
+#: A plausibility rail on the declared multiplier, like those in
+#: :mod:`assurance.machine.quantities`: it is not taken from any standard. It only
+#: keeps a typo or a unit slip from reading as a limit.
+TRANSIENT_MULTIPLIER_MAX = 1000.0
 
 
 SCHEMA = """\
@@ -66,8 +83,10 @@ class BodyRegionLimit:
     max_force_n: float
 
     def __post_init__(self) -> None:
-        if self.max_pressure_n_cm2 <= 0 or self.max_force_n <= 0:
-            raise LimitsError(f"region {self.key!r} has a non-positive limit.")
+        _num(self.max_pressure_n_cm2, f"region {self.key!r} max_pressure_n_cm2",
+             maximum=PRESSURE_MAX_N_CM2, positive=True)
+        _num(self.max_force_n, f"region {self.key!r} max_force_n",
+             maximum=FORCE_MAX_N, positive=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,33 +115,97 @@ class LimitsTable:
                 "a limits table must name the edition it came from. 'ISO/TS 15066' "
                 "without a year is not an edition."
             )
-        if self.transient_multiplier <= 0:
-            raise LimitsError("transient_multiplier must be positive.")
+        _num(self.transient_multiplier, "transient_multiplier",
+             maximum=TRANSIENT_MULTIPLIER_MAX, positive=True)
+        if self.verified_on:
+            try:
+                when = date.fromisoformat(self.verified_on)
+            except ValueError as exc:
+                raise LimitsError(
+                    f"verified_on {self.verified_on!r} is not an ISO date (YYYY-MM-DD). "
+                    "A verification that cannot be dated cannot be told from none."
+                ) from exc
+            if when > datetime.now(UTC).date() + timedelta(days=1):
+                raise LimitsError(
+                    f"verified_on {self.verified_on} is in the future. A transcription "
+                    "cannot already have been checked on a day that has not happened."
+                )
 
     @property
-    def is_verified(self) -> bool:
+    def claims_verification(self) -> bool:
+        """Whether the file *says* somebody checked it. Free text, not evidence.
+
+        ``verified_by`` and ``verified_on`` are written by whoever wrote the table.
+        Nothing here can check that the person exists, that they held a licensed
+        copy, or that they compared anything. It is an unverified claim about a
+        verification, and it is recorded as one.
+        """
         return bool(self.verified_by and self.verified_on)
 
     @property
     def tier_ceiling(self) -> AssuranceTier:
-        """An unverified transcription cannot support a VALIDATED claim."""
-        return AssuranceTier.VALIDATED if self.is_verified else AssuranceTier.COMMUNITY
+        """What the table alone can support: never more than COMMUNITY.
 
-    @property
-    def provenance_caveat(self) -> str:
+        A free-text claim cannot lift a table to VALIDATED by itself. Use
+        :meth:`tier_for` with the hash the envelope pins to see the one
+        combination that can.
+        """
+        return AssuranceTier.COMMUNITY
+
+    def tier_for(
+        self, pinned_hash: str, assessment: LimitsReviewAssessment | None = None,
+    ) -> tuple[AssuranceTier, str]:
+        """The ceiling this table gives a verification, and the sentence explaining it.
+
+        VALIDATED needs two independent facts: the envelope pins exactly this
+        table's content hash, and an independent review (a signature by a key in
+        the verifier's own trust configuration, over this table's hash) was
+        accepted. The table's ``verified_by`` / ``verified_on`` text is the
+        author's own claim and never contributes: with a pin and no accepted
+        review the tier stays COMMUNITY.
+        """
+        pinned = bool(pinned_hash) and pinned_hash == self.content_hash()
+        if not pinned:
+            return AssuranceTier.COMMUNITY, (
+                "the envelope does not pin this table's hash, so nothing ties the "
+                "table to the declared product and the tier is capped at community."
+                + self._claim_note())
+        if (assessment is not None and assessment.table_hash == self.content_hash()
+                and assessment.validated):
+            return AssuranceTier.VALIDATED, assessment.explanation
+        why = (assessment.explanation if assessment is not None else
+               "no independent review of the limits table was supplied, so it is an "
+               "unreviewed transcription and caps the tier at community.")
+        return AssuranceTier.COMMUNITY, why + self._claim_note()
+
+    def _claim_note(self) -> str:
+        if not self.claims_verification:
+            return ""
+        return (
+            f" The table's own verified_by ({self.verified_by}) / verified_on "
+            f"({self.verified_on}) text is the author's claim, written by whoever "
+            "wrote the table; it was not used.")
+
+    def provenance_caveat(self, assessment: LimitsReviewAssessment | None = None) -> str:
         """The sentence that goes into the bundle's ``checks_skipped``."""
-        if self.is_verified:
+        unused = (
+            " The transient_multiplier in the file is not used by any check: every "
+            "contact sample is held to the quasi-static limits."
+        )
+        if assessment is not None and assessment.validated:
             return (
                 f"body-region limits are from {self.edition}, transcribed by "
-                f"{self.transcribed_by} and checked against a licensed copy by "
-                f"{self.verified_by} on {self.verified_on}. The transcription was "
-                "checked; the suitability of this edition for this product was not."
+                f"{self.transcribed_by or 'an unnamed party'}. An independent review "
+                "signature over this exact table was accepted (see the tier reason); "
+                "that attests to the table's bytes, not to the standard's values or "
+                "to the suitability of this edition for this product." + unused
             )
         return (
-            f"body-region limits are an UNVERIFIED transcription of {self.edition} by "
-            f"{self.transcribed_by or 'an unnamed party'}. Nobody has checked them "
-            "against a licensed copy of the standard. Every pass below rests on "
-            "numbers that have not been confirmed."
+            f"body-region limits are an UNREVIEWED transcription of {self.edition} by "
+            f"{self.transcribed_by or 'an unnamed party'}. No accepted independent "
+            "review covers them; the table's verified_by / verified_on text, if any, "
+            "is the author's own claim and was not used. Every pass below rests on "
+            "numbers that have not been independently confirmed." + unused
         )
 
     def limit_for(self, region: str) -> BodyRegionLimit:
@@ -166,21 +249,33 @@ class LimitsTable:
         raw = d.get("regions")
         if not isinstance(raw, dict):
             raise LimitsError(f"limits file has no 'regions' object. Schema:\n{SCHEMA}")
-        regions = {
-            str(k): BodyRegionLimit(
+        regions: dict[str, BodyRegionLimit] = {}
+        for k, v in raw.items():
+            if not isinstance(v, dict):
+                raise LimitsError(
+                    f"region {k!r} must be an object with max_pressure_n_cm2 and "
+                    f"max_force_n, got {type(v).__name__}."
+                )
+            for needed in ("max_pressure_n_cm2", "max_force_n"):
+                if needed not in v:
+                    raise LimitsError(f"region {k!r} is missing {needed}.")
+            regions[str(k)] = BodyRegionLimit(
                 key=str(k),
                 label=str(v.get("label", k)),
-                max_pressure_n_cm2=float(v["max_pressure_n_cm2"]),
-                max_force_n=float(v["max_force_n"]),
+                max_pressure_n_cm2=_num(v["max_pressure_n_cm2"],
+                                        f"region {k!r} max_pressure_n_cm2",
+                                        maximum=PRESSURE_MAX_N_CM2, positive=True),
+                max_force_n=_num(v["max_force_n"], f"region {k!r} max_force_n",
+                                 maximum=FORCE_MAX_N, positive=True),
             )
-            for k, v in raw.items()
-        }
         return cls(
             edition=str(d.get("edition", "")),
             transcribed_by=str(d.get("transcribed_by", "")),
             verified_by=str(d.get("verified_by", "")),
             verified_on=str(d.get("verified_on", "")),
-            transient_multiplier=float(d.get("transient_multiplier", 2.0)),
+            transient_multiplier=_num(d.get("transient_multiplier", 2.0),
+                                      "transient_multiplier",
+                                      maximum=TRANSIENT_MULTIPLIER_MAX, positive=True),
             regions=regions,
         )
 
@@ -193,4 +288,10 @@ class LimitsTable:
                 "values belong to the standards body and the edition that applies is "
                 f"a project decision. Write one in this schema:\n{SCHEMA}"
             )
-        return cls.from_dict(json.loads(p.read_text(encoding="utf-8")))
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise LimitsError(f"{p} is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise LimitsError(f"{p} must contain a JSON object.")
+        return cls.from_dict(raw)

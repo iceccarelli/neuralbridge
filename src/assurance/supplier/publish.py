@@ -46,7 +46,9 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Iterable
+import threading
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -57,6 +59,11 @@ from ..core.errors import AssuranceError
 from ..core.identity import canonical_json, content_hash_of, format_utc, utc_now
 from ..fleet.advisory import ComponentAdvisory
 
+try:  # POSIX only; where it is missing the process-level lock still holds
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+
 __all__ = [
     "FEED_FORMAT",
     "AdvisoryFeed",
@@ -64,6 +71,7 @@ __all__ = [
     "PublishError",
     "SignedAdvisory",
     "SupplierIdentity",
+    "fetch_feed",
     "publish",
     "verify_feed",
     "withdraw",
@@ -207,6 +215,45 @@ class SignedAdvisory:
         )
 
 
+def _parse_feed_text(text: str, *, source: str) -> list[SignedAdvisory]:
+    """One JSON record per line, shared by a local file and a downloaded body.
+
+    A parse failure here must name the source and the line: whichever of
+    "the file on disk" or "what the server sent back" turns out to be
+    damaged, the reader needs to know which one without guessing.
+    """
+    out: list[SignedAdvisory] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise PublishError(f"{source} line {number} is not JSON ({exc}).") from exc
+        out.append(SignedAdvisory.from_dict(data))
+    return out
+
+
+class _FeedLock:
+    """One re-entrant lock per feed path, plus the file lock held while it is owned."""
+
+    def __init__(self) -> None:
+        self.rlock = threading.RLock()
+        self.depth = 0
+        self.handle: Any = None
+
+
+_FEED_LOCKS: dict[str, _FeedLock] = {}
+_FEED_LOCKS_GUARD = threading.Lock()
+
+
+def _feed_lock_for(path: Path) -> _FeedLock:
+    key = str(path.resolve())
+    with _FEED_LOCKS_GUARD:
+        return _FEED_LOCKS.setdefault(key, _FeedLock())
+
+
 class AdvisoryFeed:
     """A supplier's append-only feed, one JSON record per line.
 
@@ -214,37 +261,59 @@ class AdvisoryFeed:
     server, an integrator must be able to copy it onto a USB stick and carry it
     into a plant with no network, and both must be able to read it without this
     software installed.
+
+    A feed is a hash chain and is never rewritten, so a fork cannot be repaired:
+    whoever reads the head and then appends must do both under :meth:`locked`.
+    The lock is a re-entrant in-process lock keyed by the file's real path, plus
+    ``flock`` on a ``<feed>.lock`` sidecar so a second process (a CLI publish
+    beside the API) is held off as well where ``fcntl`` exists.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold the feed's write lock; nested use by the same thread is fine."""
+        lock = _feed_lock_for(self.path)
+        with lock.rlock:
+            if lock.depth == 0 and fcntl is not None:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                lock.handle = open(  # noqa: SIM115 - closed in the finally below
+                    self.path.with_name(self.path.name + ".lock"), "a", encoding="utf-8")
+                try:
+                    fcntl.flock(lock.handle, fcntl.LOCK_EX)
+                except BaseException:
+                    lock.handle.close()
+                    lock.handle = None
+                    raise
+            lock.depth += 1
+            try:
+                yield
+            finally:
+                lock.depth -= 1
+                if lock.depth == 0 and lock.handle is not None:
+                    try:
+                        fcntl.flock(lock.handle, fcntl.LOCK_UN)
+                    finally:
+                        lock.handle.close()
+                        lock.handle = None
+
     def read(self) -> list[SignedAdvisory]:
         if not self.path.exists():
             return []
-        out: list[SignedAdvisory] = []
-        for number, line in enumerate(self.path.read_text("utf-8").splitlines(), 1):
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise PublishError(
-                    f"{self.path} line {number} is not JSON ({exc})."
-                ) from exc
-            out.append(SignedAdvisory.from_dict(data))
-        return out
+        return _parse_feed_text(self.path.read_text("utf-8"), source=str(self.path))
 
     def last(self) -> SignedAdvisory | None:
         records = self.read()
         return records[-1] if records else None
 
     def append(self, record: SignedAdvisory) -> SignedAdvisory:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.to_dict(), sort_keys=True,
-                                    separators=(",", ":")) + "\n")
+        with self.locked():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record.to_dict(), sort_keys=True,
+                                        separators=(",", ":")) + "\n")
         return record
 
     def __len__(self) -> int:
@@ -299,6 +368,18 @@ def publish(
     withdrawal of it — because an integrator who already acted on the first one
     needs both records to exist.
     """
+    with feed.locked():
+        return _publish_locked(advisory, identity, key, feed, rotating, now)
+
+
+def _publish_locked(
+    advisory: ComponentAdvisory,
+    identity: SupplierIdentity,
+    key: SigningKey,
+    feed: AdvisoryFeed,
+    rotating: bool,
+    now: datetime | None,
+) -> SignedAdvisory:
     sequence, previous, history = _next(feed, identity, key, rotating)
 
     for earlier in history:
@@ -309,6 +390,14 @@ def publish(
                 "an id silently changes what your customers think they read. Give "
                 "the correction a new id, and withdraw this one if it was wrong."
             )
+
+    if advisory.import_record is not None:
+        raise PublishError(
+            f"{advisory.advisory_id} is an unsigned import (a translation of a document "
+            f"{advisory.import_record.origin}). Signing it would put your signature on "
+            "content nobody here has authenticated, and customers would treat the "
+            "import marker inside it as noise. Check it against your own source, write the "
+            "advisory yourself (without the import_record) and publish that.")
 
     if advisory.issued_by != identity.supplier_id and \
             advisory.issued_by != identity.legal_name:
@@ -356,6 +445,19 @@ def withdraw(
             "because of the original; 'withdrawn' without a reason tells them "
             "nothing about whether to change it back."
         )
+    with feed.locked():
+        return _withdraw_locked(advisory_id, reason, identity, key, feed, rotating, now)
+
+
+def _withdraw_locked(
+    advisory_id: str,
+    reason: str,
+    identity: SupplierIdentity,
+    key: SigningKey,
+    feed: AdvisoryFeed,
+    rotating: bool,
+    now: datetime | None,
+) -> SignedAdvisory:
     sequence, previous, history = _next(feed, identity, key, rotating)
 
     target = next((r for r in history
@@ -384,6 +486,46 @@ def withdraw(
     ))
 
 
+def fetch_feed(url: str, *, timeout: float = 10.0) -> str:
+    """Download a hosted feed's raw body. Writes nothing, trusts nothing.
+
+    The feed watch (``assurance.watch``) reads a local file; this is the one
+    piece that was still outside the system for a feed hosted at
+    ``GET /v1/supplier/feed/{id}`` rather than copied by hand. A network
+    failure must read as *could not check*, never as *the supplier published
+    nothing* — those two are not the same fact, and collapsing them is exactly
+    the failure mode ``verify_feed`` already refuses for an empty file. So this
+    raises loudly instead of returning an empty string, and the caller decides
+    whether to persist what came back — typically only once it also verifies.
+    """
+    if not url.startswith(("http://", "https://")):
+        raise PublishError(
+            f"{url!r} is not an http(s) URL. `fetch` downloads a hosted feed; "
+            "a feed already on disk needs no downloading."
+        )
+    try:
+        import httpx
+    except ImportError as exc:
+        raise PublishError(
+            "fetching a hosted feed needs httpx (`pip install httpx`). A feed "
+            "copied by hand onto disk needs no dependency at all."
+        ) from exc
+    try:
+        response = httpx.get(url, timeout=timeout, follow_redirects=True)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise PublishError(
+            f"{url} returned HTTP {exc.response.status_code}. Treat this as "
+            "could-not-check, not as an empty feed."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise PublishError(
+            f"could not reach {url} ({exc}). Treat this as could-not-check, "
+            "not as an empty feed."
+        ) from exc
+    return response.text
+
+
 @dataclass(frozen=True)
 class FeedVerdict:
     """What a reader can say about a feed, and what they still cannot."""
@@ -396,6 +538,15 @@ class FeedVerdict:
     checks_skipped: list[str] = field(default_factory=list)
     live: tuple[SignedAdvisory, ...] = ()
     withdrawn: tuple[str, ...] = ()
+    #: Sequence numbers whose signature FAILED. These records never reach
+    #: ``live`` and a failed withdrawal never cancels anything, whether or not
+    #: the caller chooses to proceed on a feed that did not verify.
+    failed_signatures: tuple[int, ...] = ()
+    #: The newest record this verdict saw. A caller that stores these can pass them
+    #: back next time (``min_sequence`` / ``expect_head``) and so detect a feed that
+    #: was rolled back or had its newest records cut off.
+    head_sequence: int = 0
+    head_hash: str = ""
 
     def summary(self) -> str:
         if self.checked == 0:
@@ -415,6 +566,8 @@ def verify_feed(
     key: VerifyingKey,
     *,
     expect_supplier: str = "",
+    min_sequence: int = 0,
+    expect_head: str = "",
 ) -> FeedVerdict:
     """Check a supplier feed before anything acts on it.
 
@@ -422,6 +575,15 @@ def verify_feed(
     predecessor, one supplier throughout, no advisory id published twice. A
     feed that fails any of these must not drive a change to a safety system,
     which is what ``assurance fleet advisory`` enforces by refusing it.
+
+    The chain shows a record removed from the middle; it cannot show the newest
+    records cut off, or an older complete prefix served in place of the current
+    feed, because nothing after the last record says more should follow. That would
+    bring a withdrawn advisory back as standing. A caller that remembers what it saw
+    last passes ``min_sequence`` (the highest sequence seen) and, optionally,
+    ``expect_head`` (that record's content hash); a shorter feed, or one whose record
+    at that position differs, fails. Without them the verdict says this was not
+    checked.
     """
     items = list(records)
     problems: list[str] = []
@@ -446,6 +608,7 @@ def verify_feed(
     fingerprints: set[str] = set()
     live: dict[str, SignedAdvisory] = {}
     withdrawn: list[str] = []
+    failed: list[int] = []
 
     for record in items:
         where = f"record {record.sequence}"
@@ -469,7 +632,9 @@ def verify_feed(
                 f"{expected_previous[:12] or '(none)'} — a record was withdrawn "
                 "from the file rather than withdrawn in it"
             )
-        if not record.verified_by(key):
+        signature_ok = record.verified_by(key)
+        if not signature_ok:
+            failed.append(record.sequence)
             problems.append(
                 f"{where} ({record.advisory_id}): signature does not verify "
                 f"against key {key.fingerprint}. Do not act on this advisory."
@@ -477,7 +642,12 @@ def verify_feed(
         suppliers.add(record.supplier.supplier_id)
         fingerprints.add(record.key_fingerprint)
 
-        if record.is_withdrawal:
+        if not signature_ok:
+            # A record that failed its signature is evidence of nothing: it
+            # neither stands as an advisory nor cancels one. Proceeding past a
+            # failed feed (an explicit override) must not smuggle it back in.
+            pass
+        elif record.is_withdrawal:
             if record.withdraws not in live:
                 problems.append(
                     f"{where}: withdraws {record.withdraws}, which this feed "
@@ -517,6 +687,27 @@ def verify_feed(
             "over its own span; this check used one."
         )
 
+    if min_sequence and (not items or items[-1].sequence < min_sequence):
+        problems.append(
+            f"the feed ends at record {items[-1].sequence if items else 0} but record "
+            f"{min_sequence} was seen before. Newer records were removed, or an older "
+            "copy was served; a withdrawal may be missing."
+        )
+    if expect_head:
+        at_head = [r for r in items if r.sequence == min_sequence]
+        if min_sequence and (not at_head or at_head[0].content_hash() != expect_head):
+            problems.append(
+                f"record {min_sequence} is not the record seen before (expected hash "
+                f"{expect_head[:12]}); the feed was rewritten or replaced."
+            )
+    if not min_sequence:
+        skipped.append(
+            "Whether this is the supplier's NEWEST state was not checked. A feed with "
+            "its newest records removed, or an older copy served in its place, still "
+            "verifies, and a withdrawn advisory would read as standing. Remember the "
+            "highest sequence and head hash seen and pass them as min_sequence / "
+            "expect_head next time."
+        )
     skipped.append(
         f"Whether key {key.fingerprint} belongs to this supplier was not "
         "checked, and cannot be checked from inside the feed. Confirm the "
@@ -540,4 +731,7 @@ def verify_feed(
         checks_skipped=skipped,
         live=tuple(live.values()),
         withdrawn=tuple(withdrawn),
+        failed_signatures=tuple(failed),
+        head_sequence=items[-1].sequence if items else 0,
+        head_hash=items[-1].content_hash() if items else "",
     )

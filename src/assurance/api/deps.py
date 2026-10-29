@@ -16,7 +16,11 @@ elsewhere and reconciling later is how a metered product leaks.
 
 Configuration, all by environment variable:
 
-``ASSURANCE_LEDGER``    evidence ledger path (default ``art14-register.db``)
+``ASSURANCE_LEDGER``    evidence ledger path (default ``art14-register.db``). This is
+                        the OPERATOR ledger; see "Tenancy" below.
+``ASSURANCE_TENANT_LEDGERS``  directory holding one ledger file per customer
+                        account (default: ``tenants/`` beside the operator ledger,
+                        so ``/data/tenants`` on the Fly volume)
 ``ASSURANCE_ACCOUNTS``  account and key store path (default ``accounts.db``)
 ``ASSURANCE_API_KEYS``  comma-separated operator keys; full access, no quota
 ``ASSURANCE_ALLOW_UNAUTHENTICATED``  ``1`` to run open for local evaluation
@@ -25,30 +29,81 @@ Configuration, all by environment variable:
 ``ASSURANCE_ATTEST_KEY``   a path to that key instead
 ``ASSURANCE_ATTEST_PASSPHRASE``  passphrase for it, if encrypted
 ``ASSURANCE_ATTEST_LOGS``  directory holding one attestation log per account
+``ASSURANCE_TRUST_FLY_PROXY``  ``1`` to key the free-tier quota on the
+                        ``Fly-Client-IP`` header instead of the socket peer
+                        (set it ONLY when every request arrives through Fly's
+                        proxy, which overwrites that header)
+``ASSURANCE_MAX_BODY_BYTES``  request body cap for ``/v1`` POSTs (default 1 MiB)
+``ASSURANCE_MAX_TRACE_BODY_BYTES``  the cap for ``POST /v1/machine/verify``,
+                        whose recorded traces are legitimately large
+                        (default 32 MiB)
 ``STRIPE_SECRET_KEY`` / ``STRIPE_WEBHOOK_SECRET`` / ``ASSURANCE_PRICE_*``
+``ASSURANCE_PAYG_METER_EVENT`` / ``ASSURANCE_PAYG_METER_ID`` / ``ASSURANCE_PAYG_ALLOW_LIVE``
+                        pay-as-you-go, off unless ``ASSURANCE_PRICE_PAYG`` and
+                        ``ASSURANCE_PAYG_METER_EVENT`` are both set (see
+                        ``billing/plans.py:payg_available`` and the deploy README)
+
+**Tenancy.** Every ``/v1`` route reaches the ledger through
+:func:`get_register`, so tenant isolation is decided in exactly one place. A
+customer account gets its own SQLite ledger file under
+:func:`tenant_ledgers_dir`; the operator (``ASSURANCE_API_KEYS``, or open
+mode) keeps the shared ledger at :func:`ledger_path`; an anonymous caller gets
+no ledger at all. Isolation is by file, not by a column, so there is no query
+that can forget a ``WHERE account_id = ?``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import ipaddress
+import json
 import os
+import re
+import uuid
+from collections.abc import Awaitable, Callable, MutableMapping
+from dataclasses import dataclass
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Any
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 
-from ..billing.accounts import Account, AccountStore, Principal, QuotaExceededError
+from ..billing.accounts import (
+    Account,
+    AccountStore,
+    IdempotencyConflictError,
+    Principal,
+    QuotaExceededError,
+    SpendLimitError,
+)
+from ..billing.metering import allowance_for, payg_available, valid_idempotency_key
+from ..billing.plans import METERED_SCOPES
+from ..core.identity import format_utc, utc_now
 from ..evidence.ledger import EvidenceLedger
 from ..security.art14.engine import Art14Register
 
 __all__ = [
     "get_register",
+    "shared_register",
+    "tenant_ledger_path",
+    "tenant_ledgers_dir",
+    "BodySizeLimitMiddleware",
+    "max_body_bytes",
     "get_accounts",
     "current_principal",
+    "ENTITLEMENT_GATES",
+    "EvidenceReadout",
+    "MeterTicket",
+    "Metered",
+    "quota_refusal",
     "require_attestation",
+    "require_evidence_readout",
     "require_machine",
     "require_register",
     "require_supplier",
+    "seconds_until_reset",
     "spend",
     "auth_mode",
     "ledger_path",
@@ -63,6 +118,7 @@ _LEDGER_ENV = "ASSURANCE_LEDGER"
 _ACCOUNTS_ENV = "ASSURANCE_ACCOUNTS"
 _KEYS_ENV = "ASSURANCE_API_KEYS"
 _OPEN_ENV = "ASSURANCE_ALLOW_UNAUTHENTICATED"
+_FLY_ENV = "ASSURANCE_TRUST_FLY_PROXY"
 
 
 def ledger_path() -> str:
@@ -136,13 +192,77 @@ def _register_for(path: str) -> Art14Register:
     return Art14Register(EvidenceLedger(path))
 
 
+_TENANT_ENV = "ASSURANCE_TENANT_LEDGERS"
+# Account ids are minted by the server (``acc_`` + 16 hex digits), never taken
+# from a request. The shape is still checked before it becomes part of a file
+# name, so a corrupted or hostile value cannot become a path.
+_ACCOUNT_ID_RE = re.compile(r"acc_[0-9a-f]{16}")
+
+
+def tenant_ledgers_dir() -> Path:
+    """Where each customer account's ledger lives.
+
+    Defaults to ``tenants/`` beside the operator ledger, which on the Fly
+    deployment (``ASSURANCE_LEDGER=/data/art14-register.db``) is the persistent
+    volume.
+    """
+    raw = os.environ.get(_TENANT_ENV, "")
+    if raw:
+        return Path(raw)
+    return Path(ledger_path()).parent / "tenants"
+
+
+def tenant_ledger_path(account_id: str) -> Path:
+    """The ledger file for one account. ``ValueError`` for anything not an account id."""
+    if not isinstance(account_id, str) or not _ACCOUNT_ID_RE.fullmatch(account_id):
+        raise ValueError("not a valid account id")
+    base = tenant_ledgers_dir()
+    path = base / f"{account_id}.db"
+    # Belt and braces: the pattern already excludes every path separator.
+    if path.resolve().parent != base.resolve():
+        raise ValueError("not a valid account id")
+    return path
+
+
+# A ledger object holds no open connection (each operation connects and
+# closes), so a cache entry costs a path and a lock. The bound exists only to
+# stop an unbounded number of accounts pinning memory; it is generous so that
+# a busy deployment does not thrash, which would also replace the per-ledger
+# write lock while a request is using it.
+@lru_cache(maxsize=512)
+def _tenant_register_for(path: str) -> Art14Register:
+    return Art14Register(EvidenceLedger(path))
+
+
+def shared_register() -> Art14Register:
+    """The operator's ledger. Only the operator and in-process code get this."""
+    return _register_for(ledger_path())
+
+
+class _NoRegister:
+    """What an anonymous caller is handed instead of a ledger.
+
+    A route that accepts anonymous callers and also asks for the register may
+    only touch it for a caller who has an account. Anonymous callers share one
+    address-keyed quota bucket and have no tenant; letting them near the
+    operator's ledger would be a shared write path for the whole internet.
+    Touching this raises a 401 rather than quietly using some other ledger.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+
+_NO_REGISTER = _NoRegister()
+
+
 @lru_cache(maxsize=8)
 def _accounts_for(path: str) -> AccountStore:
     return AccountStore(path)
-
-
-def get_register() -> Art14Register:
-    return _register_for(ledger_path())
 
 
 def get_accounts() -> AccountStore:
@@ -158,9 +278,45 @@ _OPERATOR = Account(
 )
 
 
+def _client_address(request: Request, fly_client_ip: str | None) -> str:
+    """The address the free-tier quota is keyed on.
+
+    Behind Fly's proxy every socket peer is the proxy, so every anonymous
+    caller would share one bucket. ``Fly-Client-IP`` is set (overwritten) by
+    that proxy, but it is an ordinary header to anyone who can reach the
+    process directly, so it is honoured only when the operator says every
+    request arrives through the proxy.
+    """
+    if os.environ.get(_FLY_ENV) == "1" and fly_client_ip:
+        candidate = fly_client_ip.strip()
+        if 0 < len(candidate) <= 64 and re.fullmatch(r"[0-9A-Fa-f:.]+", candidate):
+            return _bucket(candidate)
+    return _bucket(request.client.host) if request.client else "unknown"
+
+
+def _bucket(address: str) -> str:
+    """One quota bucket per caller: an IPv6 /64, an IPv4 address.
+
+    A single IPv6 subscriber is routinely handed a whole /64, so keying on the
+    full address would give one person 2**64 daily allowances.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return address
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            # ::ffff:a.b.c.d is an IPv4 client seen through a dual-stack socket;
+            # as an IPv6 /64 they would all share the single bucket "::/64".
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 async def current_principal(
     request: Request,
     x_api_key: str | None = Header(default=None),
+    fly_client_ip: str | None = Header(default=None),
     accounts: AccountStore = Depends(get_accounts),
 ) -> Principal:
     """Resolve the caller. Never raises for an absent key.
@@ -172,11 +328,13 @@ async def current_principal(
     """
     presented = (x_api_key or "").strip()
     if not presented:
-        client = request.client.host if request.client else "unknown"
+        client = _client_address(request, fly_client_ip)
         return Principal(account=None, key_prefix="", anonymous_subject=f"ip:{client}")
 
     for key in _operator_keys():
-        if hmac.compare_digest(presented, key):
+        # Compare bytes: str comparison raises TypeError on non-ASCII input, and
+        # an unhandled 500 from a header anyone can send is not a failure mode.
+        if hmac.compare_digest(presented.encode(), key.encode()):
             return Principal(account=_OPERATOR, key_prefix="operator")
 
     principal = accounts.resolve_key(presented)
@@ -189,26 +347,344 @@ async def current_principal(
     return principal
 
 
+def get_register(
+    principal: Annotated[Principal | None, Depends(current_principal)] = None,
+) -> Art14Register:
+    """The ledger this caller may touch. The single choke point for tenancy.
+
+    * A customer account: its own ledger file.
+    * The operator (an ``ASSURANCE_API_KEYS`` key, or open mode): the shared
+      ledger.
+    * Anonymous, outside open mode: nothing (see :class:`_NoRegister`).
+    * ``None``: only in-process callers that invoke this function directly
+      with no request (tests, tooling); it is never what FastAPI passes.
+    """
+    if principal is None:
+        return shared_register()
+    account = principal.account
+    if account is None:
+        if auth_mode() == "open":
+            # require_* maps an anonymous caller to the operator in open mode;
+            # this must agree with it or open mode would split across ledgers.
+            return shared_register()
+        return _NO_REGISTER  # type: ignore[return-value]
+    if account.id == _OPERATOR.id:
+        return shared_register()
+    try:
+        path = tenant_ledger_path(account.id)
+    except ValueError as exc:
+        # Account ids are server-issued, so this is a corrupted store, not a
+        # client mistake. Refuse rather than fall back to a shared ledger.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "invalid_account_id"},
+        ) from exc
+    return _tenant_register_for(str(path))
+
+
+def seconds_until_reset() -> tuple[int, str]:
+    """Seconds until the UTC day rolls over, and that instant as an ISO time.
+
+    The daily allowance resets at UTC midnight for everyone (see
+    ``AccountStore.consume``), so a refused caller can be told exactly when to
+    come back instead of guessing.
+    """
+    now = utc_now()
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((midnight - now).total_seconds())), format_utc(midnight)
+
+
+def quota_refusal(
+    *, error: str, scope: str, limit: int, used: int, tier: str, remedy: str,
+    extra: dict[str, Any] | None = None,
+) -> HTTPException:
+    """A 429 that says what ran out, when it opens again and what to do about it."""
+    retry, resets_at = seconds_until_reset()
+    detail: dict[str, Any] = {
+        "error": error, "scope": scope, "limit": limit, "used": used, "tier": tier,
+        "remedy": remedy, "resets_at": resets_at, "retry_after_seconds": retry,
+    }
+    detail.update(extra or {})
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail,
+        headers={"Retry-After": str(retry)},
+    )
+
+
+def _quota_remedy(limit: int, *, tier: str = "free", scope: str = "validate") -> str:
+    """What to do about a spent daily allowance, true for this plan and this route.
+
+    Pay-as-you-go bills only the scopes in ``METERED_SCOPES``; a daily guard such
+    as ``evidence_verify`` is never billed, so it is not offered as a way past one,
+    and an account already on the ``payg`` plan is never told to choose it.
+    """
+    plans = "GET /v1/plans, then POST /v1/checkout"
+    if scope not in METERED_SCOPES:
+        text = (
+            f"This route is not billed per call, so pay-as-you-go does not extend it: "
+            f"its daily guard is {limit} calls per day, per caller, and it renews at "
+            f"resets_at. A Register or Cell plan has no daily cap on it ({plans})."
+        )
+        if tier == "payg":
+            text = ("Your account is on pay-as-you-go, and " + text[0].lower() + text[1:])
+        return text
+    if tier == "payg":
+        return (
+            f"Your account is on the pay-as-you-go plan, but billing is not active for it "
+            f"right now (it needs an active subscription bound to a Stripe customer, on a "
+            f"deployment where pay-as-you-go is configured), so the {limit} calls per day "
+            "are a hard cap. See GET /v1/usage; the allowance renews at resets_at."
+        )
+    text = (
+        f"The free allowance is {limit} calls per day, per caller. A paid plan removes "
+        f"the cap: see {plans}."
+    )
+    if payg_available():
+        text += (
+            " Pay-as-you-go (GET /v1/plans, tier payg) bills operations beyond the "
+            "allowance, up to a spend limit you set."
+        )
+    return text
+
+
 def spend(principal: Principal, scope: str, limit: int | None, accounts: AccountStore) -> None:
-    """Consume one unit of allowance, or refuse with a 429 that says what to do."""
+    """Consume one unit of allowance, or refuse with a 429 that says what to do.
+
+    For ``/ai`` reads, which are a daily guard and never billed: the unit is
+    taken before the read, so a read that then fails still counts. The billable
+    scopes use :func:`Metered`/``MeterTicket.commit``, which count only work
+    that succeeded.
+    """
     try:
         accounts.consume(principal.subject, scope, limit, principal.tier)
     except QuotaExceededError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "error": "quota_exceeded",
-                "scope": exc.scope,
-                "limit": exc.limit,
-                "used": exc.used,
-                "tier": exc.tier,
-                "remedy": (
-                    "The free validator allows "
-                    f"{exc.limit} calls per day. A paid plan removes the cap: see "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise quota_refusal(
+            error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# metered work: counted once, after it succeeded
+# ---------------------------------------------------------------------------
+def _metering_refusal(exc: Exception, principal: Principal) -> HTTPException:
+    """Map a store refusal onto the HTTP answer. Nothing was recorded."""
+    if isinstance(exc, SpendLimitError):
+        account = principal.account
+        zero = exc.limit_units == 0
+        return quota_refusal(
+            error="spend_limit_reached", scope=exc.scope, limit=exc.limit_units,
+            used=exc.used_units, tier=principal.tier,
+            remedy=(
+                "Pay-as-you-go is on for your account, but your monthly spend limit is 0, "
+                "so nothing past the free daily allowance is billed. "
+                if zero else
+                f"Your monthly spend limit of {exc.limit_units} billable units is reached "
+                f"({exc.used_units} used this UTC month), so this call was not run for "
+                "billing. "
+            ) + (
+                'Set a limit with POST /v1/usage/limits {"spend_limit_units": N}; see '
+                "GET /v1/usage. The free daily allowance renews at resets_at."
+            ),
+            extra={"spend_limit_units": exc.limit_units, "billable_units": exc.used_units,
+                   "account_id": account.id if account else ""},
+        )
+    if isinstance(exc, QuotaExceededError):
+        return quota_refusal(
+            error="quota_exceeded", scope=exc.scope, limit=exc.limit, used=exc.used,
+            tier=exc.tier, remedy=_quota_remedy(exc.limit, tier=exc.tier, scope=exc.scope),
+        )
+    assert isinstance(exc, IdempotencyConflictError)
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "idempotency_key_reused",
+            "detail": str(exc),
+            "remedy": "Use a new Idempotency-Key for different work; reuse one only to "
+                      "retry the identical call.",
+        },
+    )
+
+
+@dataclass
+class MeterTicket:
+    """A promise to count one unit of ``scope`` if, and only if, the work succeeds.
+
+    ``begin`` (the :func:`Metered` dependency) refuses an obviously over-limit
+    caller before any work is done. The route then computes its whole answer.
+    :meth:`commit`, called immediately before the route returns, counts the
+    unit in the same transaction as the authoritative quota check. A route that
+    raises (a 422 from the domain, a bug) never reaches ``commit``, so a failed
+    operation records and costs nothing. See ``billing/metering.py``.
+    """
+
+    principal: Principal
+    scope: str
+    accounts: AccountStore
+    key: str
+    #: True when the client supplied the key (so a retry can be deduplicated).
+    client_key: bool
+    #: Hash of the request this ticket was issued for. A client key is bound to
+    #: it: the same key on a different request is a 409, never a free replay.
+    fingerprint: str = ""
+
+    @property
+    def limit(self) -> int | None:
+        return allowance_for(self.principal.plan, self.scope)
+
+    def _account(self) -> Account | None:
+        account = self.principal.account
+        return account if account is not None and account.id != _OPERATOR.id else None
+
+    def precheck(self) -> None:
+        limit = self.limit
+        if limit is None:
+            return
+        try:
+            account = self._account()
+            if account is not None:
+                self.accounts.check_usage(
+                    account.id, self.scope, 1, self.key if self.client_key else None,
+                    fingerprint=self.fingerprint)
+            else:
+                self.accounts.check_quota(
+                    self.principal.subject, self.scope, limit, self.principal.tier)
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
+            raise _metering_refusal(exc, self.principal) from exc
+
+    def commit(self, response: Response | None = None) -> None:
+        """Count the unit. Raises the 429/409 if the authoritative check refuses."""
+        limit = self.limit
+        event_id = ""
+        billable = 0
+        try:
+            account = self._account()
+            if limit is None:
+                pass
+            elif account is not None:
+                record = self.accounts.record_usage(
+                    account.id, self.scope, 1, self.key, fingerprint=self.fingerprint)
+                event_id, billable = record.event_id, record.billable_quantity
+            else:
+                self.accounts.consume(
+                    self.principal.subject, self.scope, limit, self.principal.tier)
+        except (QuotaExceededError, SpendLimitError, IdempotencyConflictError) as exc:
+            raise _metering_refusal(exc, self.principal) from exc
+        if response is None:
+            return
+        response.headers["X-Assurance-Tier"] = self.principal.tier
+        if limit is not None:
+            used = self.accounts.usage_today(self.principal.subject).get(self.scope, 0)
+            response.headers["X-Assurance-Quota-Limit"] = str(limit)
+            response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
+        if event_id:
+            response.headers["X-Assurance-Usage-Event"] = event_id
+        if billable:
+            response.headers["X-Assurance-Billable-Units"] = str(billable)
+
+
+async def request_fingerprint(request: Request, scope: str) -> str:
+    """A hash of what a metered request asks for: scope, route, query, body.
+
+    The JSON body is canonicalised (sorted keys, no insignificant whitespace),
+    so a client that re-serialises the same document still replays; a body that
+    is not JSON is hashed as the bytes it is. The body is cached by Starlette,
+    so reading it here does not consume it for the route.
+    """
+    raw = await request.body()
+    try:
+        canonical = json.dumps(json.loads(raw), sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True).encode() if raw else b""
+    except ValueError:
+        canonical = raw
+    digest = hashlib.sha256()
+    for part in (scope, request.method, request.url.path,
+                 "&".join(sorted(f"{k}={v}" for k, v in request.query_params.multi_items()))):
+        digest.update(part.encode())
+        digest.update(b"\x00")
+    digest.update(canonical)
+    return digest.hexdigest()
+
+
+def Metered(scope: str) -> Any:  # noqa: N802 - used like ``Depends``/``Anyone``
+    """Dependency for a route that does metered work: ``Annotated[MeterTicket, Metered("x")]``.
+
+    Resolves the caller, validates the optional ``Idempotency-Key`` header
+    (a malformed one is a 400 that costs nothing), refuses a caller who is
+    certainly over their limit, and hands the route a :class:`MeterTicket`.
+    The route must call ``ticket.commit(response)`` once its answer is complete.
+    """
+    if scope not in METERED_SCOPES:
+        raise ValueError(f"{scope!r} is not a metered scope")
+
+    async def dependency(
+        principal: Annotated[Principal, Depends(current_principal)],
+        accounts: Annotated[AccountStore, Depends(get_accounts)],
+        request: Request,
+        idempotency_key: Annotated[str | None, Header()] = None,
+    ) -> MeterTicket:
+        if idempotency_key is not None and not valid_idempotency_key(idempotency_key):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_idempotency_key",
+                    "detail": "Idempotency-Key must be 1-255 characters of "
+                              "A-Z a-z 0-9 . _ : - (a UUID is ideal).",
+                },
+            )
+        ticket = MeterTicket(
+            principal=principal, scope=scope, accounts=accounts,
+            key=idempotency_key if idempotency_key is not None else f"auto:{uuid.uuid4().hex}",
+            client_key=idempotency_key is not None,
+            fingerprint=(await request_fingerprint(request, scope)
+                         if idempotency_key is not None else ""),
+        )
+        ticket.precheck()
+        return ticket
+
+    return Depends(dependency)
+
+
+_LAPSED_NOTE = (
+    " Your subscription has ended: new records and operational views are closed, "
+    "but your evidence is still yours - read, verify and export it with "
+    "GET /v1/cases, GET /v1/cases/{case_id}/export and GET /v1/ledger/verify."
+)
+
+
+def _payment_required(principal: Principal, error: str, remedy: str) -> HTTPException:
+    """The 402 for an authenticated caller whose plan lacks an entitlement.
+
+    A customer whose subscription ended is told what they can still do, so the
+    refusal never reads as "your records are gone".
+    """
+    account = principal.account
+    assert account is not None
+    note = _LAPSED_NOTE if account.ever_paid else ""
+    if account.is_manual_grant:
+        # Not the checkout/portal remedy: checkout would create a second account and a second
+        # ledger, splitting the evidence, and the portal has no Stripe customer to open.
+        # Whoever issued the pilot is who can change it.
+        remedy = (
+            "Your account is a pilot provisioned by an operator and invoiced outside Stripe; "
+            "its plan is changed by that operator, not by checkout (which would open a second "
+            "account and split your evidence). Ask whoever issued it.")
+        note = ""
+        if account.grant_lapsed:
+            remedy = (
+                f"Your pilot access, provisioned by an operator, ended on "
+                f"{account.grant_expires_on or 'a date this service cannot read'} (UTC). "
+                "Ask whoever issued it to extend it; checkout would open a second account and "
+                "split your evidence.")
+    return HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail={
+            "error": error,
+            "tier": principal.tier,
+            "account_status": account.status,
+            "remedy": remedy + note,
+        },
+    )
 
 
 async def require_register(
@@ -239,19 +715,37 @@ async def require_register(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.register:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_register",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "The register is included from the Register plan upward. "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_register",
+            "The register is included from the Register plan upward. "
+            "GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
+
+
+async def require_evidence_readout(
+    response: Response,
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The door for reading, verifying and exporting your own evidence.
+
+    Open to everyone :func:`require_register` admits, **and** to a customer whose
+    subscription has ended: records a manufacturer produced while paying are
+    theirs, and a payment lapse must not stand between them and an auditor.
+    A lapsed customer gets exactly the routes in
+    ``plans.EVIDENCE_READOUT_AFTER_LAPSE``, from their own ledger only
+    (:func:`get_register` still decides which file), and the response says so
+    in ``X-Assurance-Access``. Anyone who never paid still gets the 402.
+    """
+    try:
+        return await require_register(principal)
+    except HTTPException as exc:
+        account = principal.account
+        if exc.status_code != status.HTTP_402_PAYMENT_REQUIRED or account is None \
+                or not account.ever_paid:
+            raise
+        response.headers["X-Assurance-Access"] = "evidence-readout-only"
+        return principal
 
 
 async def require_machine(
@@ -271,20 +765,13 @@ async def require_machine(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.machine_verification:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_machine_verification",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Machine safety verification is included from the Cell plan "
-                    "upward. The separation calculator "
-                    "(POST /v1/machine/separation) and the bundle re-checker "
-                    "(POST /v1/machine/bundle/check) stay free. "
-                    "GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_machine_verification",
+            "Machine safety verification is included from the Cell plan "
+            "upward. The separation calculator "
+            "(POST /v1/machine/separation) and the bundle re-checker "
+            "(POST /v1/machine/bundle/check) stay free. "
+            "GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
 
@@ -309,21 +796,14 @@ async def require_attestation(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.signed_attestation:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_signed_attestation",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Counter-signed head attestation is included from the Cell "
-                    "plan upward. Verifying an attestation "
-                    "(POST /v1/ledger/attest/verify) and fetching the public key "
-                    "(GET /v1/ledger/attest/key) are free and always will be: an "
-                    "attestation only a paying customer can check is worth "
-                    "nothing. GET /v1/plans, then POST /v1/checkout."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_signed_attestation",
+            "Counter-signed head attestation is included from the Cell "
+            "plan upward. Verifying an attestation "
+            "(POST /v1/ledger/attest/verify) and fetching the public key "
+            "(GET /v1/ledger/attest/key) need no plan: an "
+            "attestation only a paying customer can check is worth "
+            "nothing. GET /v1/plans, then POST /v1/checkout.",
         )
     return principal
 
@@ -337,7 +817,7 @@ async def require_supplier(
     manufacturer. There is no self-serve Stripe price for this tier yet — see
     ADR-0001 — so today the only way in is a sales-assigned account tier.
     Reading a feed (GET /v1/supplier/feed/{id}) is deliberately outside this
-    gate and needs no account, same reasoning as every other free-forever
+    gate and needs no account, same reasoning as every other no-account
     verification route: the audience for a supplier's advisory is every
     integrator who might be affected, not a paying subscriber.
     """
@@ -354,19 +834,12 @@ async def require_supplier(
             headers={"WWW-Authenticate": "ApiKey"},
         )
     if not principal.plan.supplier_publish:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "error": "plan_does_not_include_supplier_publish",
-                "tier": principal.tier,
-                "account_status": principal.account.status,
-                "remedy": (
-                    "Publishing a signed advisory needs the Supplier tier, "
-                    "which is sales-assigned today (no self-serve price yet). "
-                    "Reading any supplier's feed stays free at "
-                    "GET /v1/supplier/feed/{supplier_id}. Contact sales."
-                ),
-            },
+        raise _payment_required(
+            principal, "plan_does_not_include_supplier_publish",
+            "Publishing a signed advisory needs the Supplier tier, "
+            "which is sales-assigned today (no self-serve price yet). "
+            "Reading any supplier's feed stays free at "
+            "GET /v1/supplier/feed/{supplier_id}. Contact sales.",
         )
     return principal
 
@@ -376,3 +849,163 @@ Machine = Depends(require_machine)
 Attesting = Depends(require_attestation)
 Supplying = Depends(require_supplier)
 Anyone = Depends(current_principal)
+EvidenceReadout = Depends(require_evidence_readout)
+
+#: Every entitlement gate, and what it consults. ``tests/test_assurance_entitlements.py``
+#: reads the live app and fails if a ``/v1`` route that touches tenant data
+#: carries none of these, or if a gating Plan flag (``plans.GATE_FLAGS``) is
+#: carried by no route.
+ENTITLEMENT_GATES: dict[Callable[..., Any], str] = {
+    require_register: "register",
+    require_machine: "machine_verification",
+    require_attestation: "signed_attestation",
+    require_supplier: "supplier_publish",
+    require_evidence_readout: "evidence_readout",
+}
+
+
+# ---------------------------------------------------------------------------
+# request body cap
+# ---------------------------------------------------------------------------
+_BODY_ENV = "ASSURANCE_MAX_BODY_BYTES"
+_TRACE_BODY_ENV = "ASSURANCE_MAX_TRACE_BODY_BYTES"
+_DEFAULT_BODY = 1024 * 1024
+_DEFAULT_TRACE_BODY = 32 * 1024 * 1024
+_TRACE_PATHS = frozenset({"/v1/machine/verify"})
+# The anonymous evidence verifier takes whole ledger exports. A 1 MiB cap would
+# refuse an export of a few thousand entries, and the point of the route is that
+# its caller has no account, so its cap cannot depend on a key: 4 MiB for
+# everyone, and only on this one path. An anonymous caller can therefore make the
+# server hold at most this much per request (the body is counted as it arrives,
+# not trusted from Content-Length), and each call costs a unit of the per-address
+# daily allowance before the body is read.
+_EVIDENCE_BODY_ENV = "ASSURANCE_MAX_EVIDENCE_BODY_BYTES"
+_DEFAULT_EVIDENCE_BODY = 4 * 1024 * 1024
+_EVIDENCE_PATHS = frozenset({"/v1/evidence/verify"})
+# Stripe events are a few KB. The webhook is read in full before its signature
+# is checked, so it gets a fixed small cap of its own: not the configurable one
+# (a mis-set value must never be why a payment event is lost) and not none (an
+# unsigned 256 MiB POST would otherwise be buffered before being refused).
+_WEBHOOK_PATH = "/v1/billing/webhook"
+_WEBHOOK_BODY = 1024 * 1024
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+def _env_bytes(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def max_body_bytes(path: str, *, authenticated: bool = False) -> int | None:
+    """The largest request body accepted at ``path``; ``None`` = not capped here.
+
+    The large allowance for recorded traces is only for a caller whose key
+    resolves: the body is parsed before the route's own auth runs, so granting
+    32 MiB to anyone would let an anonymous POST make the server hold it.
+    """
+    if not path.startswith("/v1/"):
+        return None
+    if path == _WEBHOOK_PATH:
+        return _WEBHOOK_BODY
+    if path in _TRACE_PATHS and authenticated:
+        return _env_bytes(_TRACE_BODY_ENV, _DEFAULT_TRACE_BODY)
+    if path in _EVIDENCE_PATHS:
+        return _env_bytes(_EVIDENCE_BODY_ENV, _DEFAULT_EVIDENCE_BODY)
+    return _env_bytes(_BODY_ENV, _DEFAULT_BODY)
+
+
+def _key_resolves(presented: str) -> bool:
+    """Whether ``presented`` may send a large recorded trace. Never raises.
+
+    True for an operator key, or a live account key whose plan includes machine
+    verification (the only route with the large allowance). Read-only: this runs
+    before authentication, so it must not take the write lock.
+    """
+    if not presented:
+        return False
+    try:
+        raw = presented.encode()
+        if any(hmac.compare_digest(raw, k.encode()) for k in _operator_keys()):
+            return True
+        principal = get_accounts().peek_key(presented)
+        return principal is not None and principal.plan.machine_verification
+    except Exception:  # noqa: BLE001 - an unresolvable key just gets the small cap
+        return False
+
+
+async def _send_413(
+    send: Callable[[MutableMapping[str, Any]], Awaitable[None]], detail: dict[str, Any]
+) -> None:
+    body = json.dumps({"detail": detail}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": 413,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+class BodySizeLimitMiddleware:
+    """Refuse an oversized ``/v1`` request body with a 413.
+
+    Checks ``Content-Length`` up front, and counts bytes as they arrive for a
+    chunked body that declares nothing, so neither a lying nor a silent client
+    makes the server buffer an arbitrary amount of JSON.
+    """
+
+    def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: MutableMapping[str, Any],
+        receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+        send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        if scope["type"] != "http" or scope.get("method") not in _WRITE_METHODS:
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        limit = max_body_bytes(
+            scope.get("path", ""),
+            authenticated=_key_resolves(headers.get(b"x-api-key", b"").decode("latin-1").strip()),
+        )
+        if limit is None:
+            await self.app(scope, receive, send)
+            return
+
+        detail = {
+            "error": "request_too_large",
+            "limit_bytes": limit,
+            "detail": f"Request bodies on this endpoint are limited to {limit} bytes.",
+        }
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > limit
+            except ValueError:
+                too_big = False
+            if too_big:
+                await _send_413(send, detail)
+                return
+
+        seen = 0
+
+        async def limited_receive() -> MutableMapping[str, Any]:
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    # An HTTPException raised from the body read is turned into
+                    # a response by the application's own exception handling.
+                    raise HTTPException(status_code=413, detail=detail)
+            return message
+
+        await self.app(scope, limited_receive, send)

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { REPO, SALES } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
+import ImageryNote from '../components/ImageryNote';
 
 export const metadata: Metadata = {
   title: 'Applications | Industrial Autonomous Assurance',
@@ -66,7 +67,7 @@ const APPLICATIONS: Application[] = [
     slug: 'oem-register',
     name: 'OEM Article 14 register',
     imageKey: 'card-plan-register',
-    summary: 'Unlimited cases, both deadline clocks computed correctly, hash-chained ledger with verifiable export — the register itself, not a spreadsheet.',
+    summary: 'Both deadline clocks computed correctly, hash-chained ledger with verifiable export — the register itself, not a spreadsheet. Cases are not metered — no per-case cap or charge.',
     routes: [
       { method: 'GET', path: '/v1/register' },
       { method: 'GET', path: '/v1/cases' },
@@ -83,7 +84,7 @@ const APPLICATIONS: Application[] = [
       { method: 'POST', path: '/v1/machine/bundle/check' },
       { method: 'POST', path: '/v1/ledger/attest/verify' },
     ],
-    plan: 'Free, forever',
+    plan: 'Free (not metered in code)',
     href: '/solutions/insurer-auditor',
   },
 ];
@@ -137,6 +138,7 @@ export default function ApplicationsPage() {
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

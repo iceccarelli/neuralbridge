@@ -36,13 +36,19 @@ from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import ComponentAdvisory, match_item
-from assurance.fleet.impact import ImpactReport, assess_impact
+from assurance.fleet.impact import ImpactReport, advisory_provenance, assess_impact
+from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
+from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import compare as compare_manifests
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import ManifestSource, SafetyManifest
 from assurance.machinery.record import manifests_from_ledger
-from assurance.machinery.staleness import Coverage, CoverageReport
+from assurance.machinery.staleness import (
+    Coverage,
+    CoverageReport,
+    tier_reaches_validated,
+)
 
 __all__ = [
     "AssuranceVerdict",
@@ -69,6 +75,11 @@ class AssuranceVerdict(StrEnum):
     POTENTIALLY_AFFECTED = "potentially_affected"
     CANNOT_DETERMINE = "cannot_determine"
     NO_IMPACT_FOUND = "no_impact_found"
+    #: Every declared safety function reads current, on evidence below ``validated``: a trace
+    #: whose provenance the filer only declared (capped at ``community``). The recorded
+    #: evidence still stands; it was not a demonstration on the machine, so it is not
+    #: ``verified``.
+    VERIFIED_AT_COMMUNITY = "verified_at_community"
     VERIFIED = "verified"
 
     @property
@@ -76,7 +87,8 @@ class AssuranceVerdict(StrEnum):
         return {
             "requires_human_review": 0, "requires_reverification": 1,
             "insufficient_evidence": 2, "potentially_affected": 3,
-            "cannot_determine": 4, "no_impact_found": 5, "verified": 6,
+            "cannot_determine": 4, "no_impact_found": 5,
+            "verified_at_community": 6, "verified": 7,
         }[self.value]
 
 
@@ -107,11 +119,23 @@ class MachineAssuranceCheck:
     #: against, which is a real, common state, not a bug.
     configuration_status: str = "unknown"
     configuration_changes: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    #: Functions that read current on evidence below ``validated``. They are NOT in
+    #: ``evidence_valid``: standing evidence is not demonstrated evidence.
+    evidence_valid_below_validated: int = 0
+    #: The weakest tier among the verifications the current functions rest on, or "".
+    evidence_tier_floor: str = ""
+    #: How far the advisory was trusted. An advisory handed over in a request is
+    #: unauthenticated; an unsigned import says so (and whether it is partial) here.
+    advisory_provenance: dict[str, Any] = field(default_factory=dict)
+    advisory_import: dict[str, Any] | None = None
+    #: True when the advisory is a partial translation: "no match" is then not "no impact".
+    incomplete: bool = False
 
     @property
     def affected(self) -> bool:
         return self.verdict not in (
             AssuranceVerdict.NO_IMPACT_FOUND, AssuranceVerdict.VERIFIED,
+            AssuranceVerdict.VERIFIED_AT_COMMUNITY,
         )
 
     @property
@@ -137,6 +161,8 @@ class MachineAssuranceCheck:
             "functions": list(self.functions),
             "evidence": {
                 "valid": self.evidence_valid,
+                "valid_below_validated": self.evidence_valid_below_validated,
+                "tier_floor": self.evidence_tier_floor,
                 "stale": self.evidence_stale,
                 "insufficient": self.evidence_insufficient,
                 "cannot_determine": self.evidence_cannot_determine,
@@ -155,6 +181,9 @@ class MachineAssuranceCheck:
             } if self.fleet_machines_analyzed is not None else None,
             "assessed_at": self.assessed_at,
             "checks_skipped": list(self.checks_skipped),
+            "advisory_provenance": dict(self.advisory_provenance),
+            "advisory_import": dict(self.advisory_import) if self.advisory_import else None,
+            "incomplete": self.incomplete,
         }
 
 
@@ -260,45 +289,72 @@ def _configuration_status(
 
 
 def _tally(coverage: CoverageReport | None) -> tuple[
-    list[dict[str, Any]], int, int, int, int, list[str],
+    list[dict[str, Any]], int, int, int, int, list[str], int,
 ]:
     """Fold a coverage report into the four evidence buckets a customer reads.
 
-    ``stale``/``failing`` are both work to do, so both land in
-    ``required_actions``; ``never_verified`` has no prior evidence to lose, so
-    it is reported as insufficient rather than as work a change caused.
+    ``stale``/``failing``/``unchecked``/``incomplete`` are all work to do, so all land in
+    ``required_actions``; ``never_verified`` has no prior evidence to lose, so it is
+    reported as insufficient rather than as work a change caused.
+
+    ``valid`` counts functions current on evidence at ``validated`` or better; those
+    current on weaker evidence are the last element, ``below_validated``.
     """
     functions: list[dict[str, Any]] = []
-    valid = stale = insufficient = cannot_determine = 0
+    valid = stale = insufficient = cannot_determine = below_validated = 0
     required: list[str] = []
     if coverage is None:
-        return functions, valid, stale, insufficient, cannot_determine, required
+        return (functions, valid, stale, insufficient, cannot_determine, required,
+                below_validated)
     for f in coverage.functions:
         functions.append(f.to_dict())
         if f.coverage is Coverage.CURRENT:
-            valid += 1
+            if tier_reaches_validated(f.evidence_tier):
+                valid += 1
+            else:
+                below_validated += 1
         elif f.coverage is Coverage.STALE:
             stale += 1
             required.append(f.function_id)
         elif f.coverage is Coverage.FAILING:
             insufficient += 1
             required.append(f.function_id)
+        elif f.coverage in (Coverage.UNCHECKED, Coverage.INCOMPLETE):
+            # A run happened and did not judge (all or part of) the function: nothing is
+            # shown, nothing failed, and it is work to do. a135c0e read these as `failing`
+            # (required work); they keep that severity, only the word changes.
+            insufficient += 1
+            required.append(f.function_id)
         elif f.coverage is Coverage.NEVER_VERIFIED:
             insufficient += 1
         elif f.coverage is Coverage.NOT_DEMONSTRABLE:
             cannot_determine += 1
-    return functions, valid, stale, insufficient, cannot_determine, required
+    return (functions, valid, stale, insufficient, cannot_determine, required,
+            below_validated)
 
 
 def _decide_verdict(
     *, advisory_evaluated: bool, matches: list[dict[str, Any]],
     human_review_required: bool, coverage: CoverageReport | None,
     required_actions: list[str], valid: int, insufficient: int,
-    cannot_determine: int,
+    cannot_determine: int, chain_verified: bool = True, below_validated: int = 0,
+    incomplete: bool = False,
 ) -> AssuranceVerdict:
+    """The customer's one answer.
+
+    Two things may never be said without having been seen. ``no_impact_found`` and
+    ``verified`` both rest on the ledger being whole, so when its chain does not
+    verify the answer is ``cannot_determine`` — unless something was found, in
+    which case what was found stands (a broken chain can hide a record, never
+    invent a match). And ``verified`` needs at least one declared function that is
+    current: a machine with no declared safety functions has nothing verified. When every
+    function is current but any rests on evidence below ``validated``, the answer is
+    ``verified_at_community``, never ``verified``.
+    """
     if advisory_evaluated:
         if not matches:
-            return AssuranceVerdict.NO_IMPACT_FOUND
+            return (AssuranceVerdict.NO_IMPACT_FOUND if chain_verified and not incomplete
+                    else AssuranceVerdict.CANNOT_DETERMINE)
         if required_actions:
             return AssuranceVerdict.REQUIRES_REVERIFICATION
         if human_review_required:
@@ -310,14 +366,44 @@ def _decide_verdict(
         return AssuranceVerdict.CANNOT_DETERMINE
     if required_actions:
         return AssuranceVerdict.REQUIRES_REVERIFICATION
-    if cannot_determine and not valid and not insufficient:
+    if not chain_verified or not coverage.functions:
+        return AssuranceVerdict.CANNOT_DETERMINE
+    if cannot_determine and not (valid + below_validated) and not insufficient:
         # every declared function is NOT_DEMONSTRABLE: there is no check that
         # could ever cover it, which is a structural gap, not a missing
         # verification — "insufficient evidence" would imply one is owed.
         return AssuranceVerdict.CANNOT_DETERMINE
     if insufficient or cannot_determine:
         return AssuranceVerdict.INSUFFICIENT_EVIDENCE
+    if below_validated:
+        return AssuranceVerdict.VERIFIED_AT_COMMUNITY
     return AssuranceVerdict.VERIFIED
+
+
+def _import_of(advisory: ComponentAdvisory | None) -> dict[str, Any] | None:
+    if advisory is None or advisory.import_record is None:
+        return None
+    return advisory.import_record.to_dict()
+
+
+def _is_incomplete(advisory: ComponentAdvisory | None) -> bool:
+    return bool(advisory is not None and advisory.import_record is not None
+                and advisory.import_record.partial)
+
+
+def _advisory_caveats(advisory: ComponentAdvisory | None) -> list[str]:
+    record = advisory.import_record if advisory is not None else None
+    if record is None:
+        return []
+    out = ["the advisory is an unsigned CSAF import (inspect only): nobody has "
+           "authenticated it, so this is a statement about the document, not about a "
+           "supplier's word."]
+    if record.partial:
+        out.append(
+            "the advisory is a PARTIAL translation of its source (not imported: "
+            + (", ".join(record.dropped_ids) or "; ".join(record.partial_reasons))
+            + "), so no match is not 'no impact'.")
+    return out
 
 
 def run_ad_hoc_check(
@@ -336,11 +422,14 @@ def run_ad_hoc_check(
         "manifest you provided. It cannot say whether standing safety evidence "
         "for this machine is still valid — that needs the machine enrolled, "
         "with its interventions and verifications sealed in the ledger.",
+        *_advisory_caveats(advisory),
     ]
+    incomplete = _is_incomplete(advisory)
     verdict = _decide_verdict(
         advisory_evaluated=True, matches=matches,
         human_review_required=human_review_required, coverage=None,
         required_actions=[], valid=0, insufficient=0, cannot_determine=0,
+        incomplete=incomplete,
     )
     return MachineAssuranceCheck(
         machine_key=manifest.machine.key, verdict=verdict, enrolled=False,
@@ -351,12 +440,15 @@ def run_ad_hoc_check(
         latest_intervention=None, fleet_machines_analyzed=None,
         fleet_machines_affected=None, assessed_at=format_utc(utc_now()),
         checks_skipped=tuple(checks_skipped),
+        advisory_provenance=advisory_provenance(advisory, bare_provenance("body")),
+        advisory_import=_import_of(advisory), incomplete=incomplete,
     )
 
 
 def run_enrolled_check(
     ledger: EvidenceLedger, machine_key: str,
     advisory: ComponentAdvisory | None = None,
+    *, recorder_trust: RecorderTrust | None = None,
 ) -> MachineAssuranceCheck:
     """The paid path: a machine already enrolled in the ledger.
 
@@ -364,7 +456,7 @@ def run_enrolled_check(
     coverage, interventions and verifications per machine — this composes
     those, it does not recompute them.
     """
-    fleet = Fleet.from_ledger(ledger)
+    fleet = Fleet.from_ledger(ledger, recorder_trust=recorder_trust)
     record = fleet.record(machine_key)
     if record is None:
         raise CheckError(
@@ -384,7 +476,8 @@ def run_enrolled_check(
     fleet_report: ImpactReport | None = None
     if advisory is not None:
         matches, human_review_required = _match_manifest(record.manifest, advisory)
-        fleet_report = assess_impact(advisory, fleet)
+        fleet_report = assess_impact(advisory, fleet, provenance=bare_provenance("body"))
+        checks_skipped.extend(_advisory_caveats(advisory))
         checks_skipped.extend(
             c for c in fleet_report.checks_skipped if c not in checks_skipped
         )
@@ -394,14 +487,15 @@ def run_enrolled_check(
     )
     checks_skipped.extend(c for c in config_caveats if c not in checks_skipped)
 
-    functions, valid, stale, insufficient, cannot_determine, required = _tally(
-        record.coverage
-    )
+    (functions, valid, stale, insufficient, cannot_determine, required,
+     below_validated) = _tally(record.coverage)
     verdict = _decide_verdict(
         advisory_evaluated=advisory is not None, matches=matches,
         human_review_required=human_review_required, coverage=record.coverage,
         required_actions=required, valid=valid, insufficient=insufficient,
-        cannot_determine=cannot_determine,
+        cannot_determine=cannot_determine, chain_verified=fleet.chain_verified,
+        below_validated=below_validated,
+        incomplete=_is_incomplete(advisory),
     )
     interventions = sorted(record.interventions, key=lambda i: i.occurred_at)
     latest = _intervention_summary(interventions[-1]) if interventions else None
@@ -424,4 +518,8 @@ def run_enrolled_check(
         checks_skipped=tuple(dict.fromkeys(checks_skipped)),
         configuration_status=configuration_status,
         configuration_changes=tuple(configuration_changes),
+        evidence_valid_below_validated=below_validated,
+        evidence_tier_floor=record.coverage.evidence_tier_floor,
+        advisory_provenance=(fleet_report.provenance if fleet_report is not None else {}),
+        advisory_import=_import_of(advisory), incomplete=_is_incomplete(advisory),
     )

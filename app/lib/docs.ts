@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
+import { firstParagraph } from './docDescription';
+
+export { firstParagraph };
 
 // The on-site /docs section renders the same markdown that ships in this
 // repository's docs/ (and, for the engine pages, deploy/assurance/ — mkdocs
@@ -108,18 +111,32 @@ export function resolveDocSource(slug: string[] | undefined): { file: string; ti
   return null;
 }
 
-export function loadDoc(slug: string[] | undefined): { title: string; html: string; editPath: string } | null {
+
+/**
+ * A page has one h1. Some engine guides concatenate several documents (WATCH.md has five `# `
+ * headings), so every h1 after the first is rendered as an h2 instead of a second page title.
+ */
+export function singleH1(html: string): string {
+  let opens = 0;
+  let closes = 0;
+  return html.replace(/<(\/?)h1\b/g, (match, slash: string) => {
+    if (slash) return ++closes === 1 ? match : '</h2';
+    return ++opens === 1 ? match : '<h2';
+  });
+}
+
+export function loadDoc(slug: string[] | undefined): { title: string; html: string; editPath: string; description: string } | null {
   const resolved = resolveDocSource(slug);
   if (!resolved) return null;
 
-  const abs = path.join(REPO_ROOT, resolved.file);
+  const abs = path.join(/*turbopackIgnore: true*/ REPO_ROOT, resolved.file);
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
   const title = resolved.title === 'Documentation' ? firstHeading(raw, 'Documentation') : resolved.title;
-  const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
+  const html = singleH1(marked.parse(rewriteLinks(raw), { async: false }) as string);
 
-  return { title, html, editPath: resolved.file };
+  return { title, html, editPath: resolved.file, description: firstParagraph(raw) };
 }
 
 // Root-level meta docs (ROADMAP.md, SECURITY.md) ported on-site the same
@@ -127,22 +144,30 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
 // drift. These aren't part of the /docs tree (no sidebar), just rendered
 // standalone with the same markdown pipeline.
 export function loadRootDoc(file: string, title: string): { title: string; html: string; editPath: string } | null {
-  const abs = path.join(REPO_ROOT, file);
+  const abs = path.join(/*turbopackIgnore: true*/ REPO_ROOT, file);
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
-  const html = marked.parse(rewriteLinks(raw), { async: false }) as string;
+  const html = singleH1(marked.parse(rewriteLinks(raw), { async: false }) as string);
 
   return { title, html, editPath: file };
 }
 
+/**
+ * Every docs page that can be rendered. A page whose source file is absent is not listed, so
+ * the static params and the sitemap never advertise a URL that would answer not-found.
+ */
 export function listDocSlugs(): { slug: string[] }[] {
-  return [
-    { slug: [] },
+  const all = [
+    { slug: [] as string[] },
     { slug: ['getting-started'] },
     { slug: ['pricing'] },
     { slug: ['platform'] },
     { slug: ['assurance'] },
     ...ENGINE_PAGES.map((p) => ({ slug: ['assurance', p.slug] })),
   ];
+  return all.filter(({ slug }) => {
+    const resolved = resolveDocSource(slug.length ? slug : undefined);
+    return resolved !== null && fs.existsSync(path.join(/*turbopackIgnore: true*/ REPO_ROOT, resolved.file));
+  });
 }

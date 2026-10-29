@@ -25,25 +25,38 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Anyone, Machine, get_accounts, get_register, spend
-from assurance.billing.accounts import AccountStore, Principal
+from assurance.api.declared_actor import sanitise_declared_role
+from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
+from assurance.api.recorder_trust import reader_recorder_trust
+from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.machinery.divergence import compare
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
+    UnknownFunctionError,
+    UnknownMachineError,
     build_passport,
+    check_intervention,
     interventions_from_ledger,
     record_intervention,
     record_manifest,
     verify_passport,
 )
-from assurance.machinery.staleness import VerificationRecord, assess_coverage
+from assurance.machinery.staleness import (
+    VerificationRecord,
+    affected_functions,
+    assess_coverage,
+)
 
 __all__ = ["machinery_router"]
 
 machinery_router = APIRouter(prefix="/v1/machinery", tags=["machinery"])
+
+# Every handler here is a plain ``def``: FastAPI runs it in a worker thread. They read and
+# verify a ledger, hash manifests and compare up to MAX_ITEMS items, which is CPU and disk
+# work that must not stop the event loop (see ``machine_routes.verify_run``).
 
 #: A manifest larger than this is a fleet export, not one machine.
 MAX_ITEMS = 5_000
@@ -93,6 +106,20 @@ class PassportCheckIn(BaseModel):
     passport: dict[str, Any]
 
 
+def _declared_actor(body: ManifestIn | InterventionIn) -> Actor | None:
+    """The person the caller names, with the role they declare, minus the server's grammar.
+
+    These routes add no attribution of their own, so the role is sealed as the caller's
+    words; ``;`` and ``=`` are removed (``declared_actor``) so it cannot imitate an
+    ``operator=``/``key=``/``attribution=`` token written by another route. An undeclared
+    role stays empty.
+    """
+    if not body.actor:
+        return None
+    return Actor(identifier=body.actor,
+                 role=sanitise_declared_role(body.role, default=""), kind="person")
+
+
 def _bad(exc: Exception, what: str) -> HTTPException:
     return HTTPException(
         # 422: unprocessable content.
@@ -121,45 +148,37 @@ def _manifest(raw: dict[str, Any], what: str = "manifest") -> SafetyManifest:
     "/diff",
     summary="Is the machine still the configuration you signed off?",
 )
-async def diff(
+def diff(
     body: DiffIn,
     response: Response,
-    principal: Annotated[Principal, Anyone],
-    accounts: Annotated[AccountStore, Depends(get_accounts)],
+    meter: Annotated[MeterTicket, Metered("machinery_diff")],
 ) -> dict[str, Any]:
     """Compare an as-declared baseline against what was found on the machine.
 
     A version string changing while the artefact stays byte-identical is graded
     administrative; a hash changing on an item that implements a safety function
     is the finding. An item carrying no hash is reported as uncomparable — never
-    as unchanged.
+    as unchanged. Counted once the answer is complete (``billing/metering.py``).
     """
-    limit = principal.plan.diffs_per_day
-    spend(principal, "machinery_diff", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("machinery_diff", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
-
     baseline = _manifest(body.baseline, "baseline")
     observed = _manifest(body.observed, "observed")
     try:
         divergence = compare(baseline, observed)
     except ValueError as exc:
         raise _bad(exc, "comparison") from exc
-    return divergence.to_dict()
+    result = divergence.to_dict()
+    meter.commit(response)
+    return result
 
 
 @machinery_router.post("/manifest", summary="Seal a safety software manifest")
-async def post_manifest(
+def post_manifest(
     body: ManifestIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     manifest = _manifest(body.manifest)
-    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
-             if body.actor else None)
+    actor = _declared_actor(body)
     evidence = record_manifest(register.ledger, manifest, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -175,8 +194,19 @@ async def post_manifest(
     }
 
 
-@machinery_router.post("/intervention", summary="Seal an intervention record")
-async def post_intervention(
+@machinery_router.post(
+    "/intervention",
+    summary="Seal an intervention record",
+    responses={
+        409: {"description": "`unknown_machine`: no manifest is sealed under exactly this "
+                             "unit key (another case, another serial, another unit, a "
+                             "product line). Nothing was written."},
+        422: {"description": "`invalid_intervention`, or `unknown_function`: the record names "
+                             "a safety function the sealed manifest does not declare "
+                             "(`unknown_functions` lists them). Nothing was written."},
+    },
+)
+def post_intervention(
     body: InterventionIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -186,13 +216,36 @@ async def post_intervention(
     A change with no authorisation and no re-validation is recorded, not
     refused — and its findings travel with it. Refusing would push the change
     back to where it lives now, which is nowhere.
+
+    What is refused is a change that could not be about anything the ledger holds:
+    ``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key
+    with another case or serial is a different unit), ``422 unknown_function`` naming any
+    safety function the sealed manifest does not declare. Function ids are written back
+    as the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the
+    functions the manifest says the changed item implements are disturbed regardless
+    (``effective_affects_functions``).
     """
     try:
         intervention = Intervention.from_dict(body.intervention)
     except (AssuranceError, KeyError, ValueError, TypeError) as exc:
         raise _bad(exc, "intervention") from exc
-    actor = (Actor(identifier=body.actor, role=body.role, kind="person")
-             if body.actor else None)
+    actor = _declared_actor(body)
+    try:
+        intervention, sealed_manifest = check_intervention(register.ledger, intervention)
+    except UnknownMachineError as exc:
+        # 409: the request conflicts with what the ledger holds. A key that differs by
+        # case or by a digit is a different unit; it is refused, never attributed.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "unknown_machine", "detail": str(exc),
+                    "machine": intervention.machine_key},
+        ) from exc
+    except UnknownFunctionError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "unknown_function", "detail": str(exc),
+                    "unknown_functions": list(exc.unknown)},
+        ) from exc
     evidence = record_intervention(register.ledger, intervention, actor=actor)
     return {
         "content_hash": evidence.content_hash,
@@ -200,16 +253,27 @@ async def post_intervention(
         "intervention_id": intervention.intervention_id,
         "authorised": intervention.is_authorised,
         "revalidated": intervention.is_revalidated,
+        # as the manifest spells them
         "affects_functions": list(intervention.affects_functions),
+        # what coverage will treat this change as disturbing: the functions it names plus
+        # those the manifest says the changed item implements
+        "effective_affects_functions": sorted(
+            affected_functions(sealed_manifest, intervention)),
         "findings": list(intervention.findings),
     }
 
 
 @machinery_router.post(
     "/coverage",
-    summary="Which safety functions still have valid evidence",
+    summary="Which safety functions a recorded verification still stands for, at what tier",
+    responses={
+        409: {"description": "`ledger_chain_unverified`: this account's ledger chain does not "
+                             "verify, so no function is assessed. A coverage read from a "
+                             "store whose records can be deleted or edited could be made to "
+                             "pass. Nothing is assessed."},
+    },
 )
-async def coverage(
+def coverage(
     body: CoverageIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -222,16 +286,26 @@ async def coverage(
     """
     manifest = _manifest(body.manifest)
     key = manifest.machine.key
+    chain_ok, chain_problems = register.ledger.verify_chain()
+    if not chain_ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ledger_chain_unverified",
+                    "detail": "the ledger chain does not verify, so coverage was not "
+                              "assessed: " + "; ".join(chain_problems[:3]),
+                    "problems": chain_problems[:5]},
+        )
     report = assess_coverage(
         manifest,
-        VerificationRecord.from_ledger(register.ledger, subject=key),
+        VerificationRecord.from_ledger(
+            register.ledger, subject=key, recorder_trust=reader_recorder_trust()),
         interventions_from_ledger(register.ledger, key),
     )
     return report.to_dict()
 
 
 @machinery_router.post("/passport", summary="Seal the machine's evidence position")
-async def passport(
+def passport(
     body: PassportIn,
     principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
@@ -239,8 +313,10 @@ async def passport(
     manifest = _manifest(body.manifest)
     built = build_passport(
         register.ledger, manifest,
-        actor=Actor(identifier=body.actor, role=body.role, kind="person"),
+        actor=Actor(identifier=body.actor,
+                    role=sanitise_declared_role(body.role), kind="person"),
         seal=body.seal,
+        recorder_trust=reader_recorder_trust(),
     )
     payload = built.to_dict()
     payload["sealed"] = bool(body.seal)
@@ -252,7 +328,7 @@ async def passport(
     "/passport/check",
     summary="Re-verify a machine passport. Free, permanently, for anyone.",
 )
-async def check_passport(
+def check_passport(
     body: PassportCheckIn,
     principal: Annotated[Principal, Anyone],
 ) -> dict[str, Any]:

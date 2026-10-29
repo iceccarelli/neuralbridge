@@ -22,9 +22,11 @@ Two regulations turned that from a quality problem into a legal one:
 | **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning naming the Member States where the product is available. Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
 | **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
 
-Neither is satisfiable from a spreadsheet. Both are satisfiable from a
-hash-chained record of what is on each machine, what was verified against it,
-and when.
+Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
+process. Software of ours satisfies neither for you. What a hash-chained record
+of what is on each machine, which checks were run against it, and when can do is let
+a manufacturer evidence its own process, and show a reviewer which records
+stopped describing the machine.
 
 That record is what this builds.
 
@@ -33,15 +35,25 @@ That record is what this builds.
 ## Start here: one command, inside your plant, nothing uploaded
 
 ```bash
-pip install -e '.[assurance-attest]'
+pip install cryptography                       # the one third-party package the offline kit imports
+export PYTHONPATH=src                          # run from this checkout; nothing else is installed
 python -m assurance kit init plant/            # a runnable kit
 python -m assurance kit check plant/kit.json   # what it would open. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
 You get `plant/out/report.html`, `plant/out/evidence.db` and
-`plant/out/attestation-request.json`. **Your ledger, your disk.** No account, no
-API key, no upload, nothing to procure.
+`plant/out/attestation-request.json`. **Your ledger, your disk.** For the kit:
+no account, no API key, no upload, nothing to procure. (That is true of the kit
+and of the other offline commands. It is not true of the hosted service below,
+which needs an account and a key.)
+
+`pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
+this project declares 22 core dependencies unconditionally (fastapi, sqlalchemy,
+asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
+platform, and the extra adds nothing to them: `cryptography` is already one of the 22 core
+dependencies, so the extra is a label, not a smaller install. The offline kit imports
+`cryptography` and nothing else outside the standard library.
 
 The run arms a guard over the process's socket layer, refuses every outbound
 connection — including name resolution, because resolving a name has already
@@ -56,14 +68,17 @@ See [`deploy/assurance/KIT.md`](deploy/assurance/KIT.md).
 
 ## What it does, and where each claim is enforced
 
-Every row below maps to code that runs. Nothing is listed here that the
-software does not do.
+Every row below maps to code that runs, offline, on your own files. The hosted
+counter-signature (`POST /v1/ledger/attest`) is a separate thing: it answers 503
+`no_attestation_key_configured` until the service has a signing key, and none is
+configured on any deployment today. Nothing is listed here that the software does
+not do; what it does not do is listed in each command's output.
 
 | | Command | What it establishes |
 |---|---|---|
 | **Collect** | `assurance collect run` | A sealed manifest of the safety-relevant software on one machine, with normalisation rules so a vendor export's own timestamps do not read as drift. `collect probe` finds those noisy rules for you before they produce a year of false alarms. |
 | **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
-| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine *as it is today*. |
+| **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change. |
 | **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
 | **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |
 | **Attest** | `assurance attest sign` | A signature over the ledger head by a key the ledger's operator does not hold. A hash chain detects editing; only this detects **deletion**. |
@@ -79,10 +94,11 @@ software does not do.
   day it happened.
 - **A Declaration of Conformity that stopped describing the machine.** Bound to
   a configuration hash, so the moment it stops matching is a date, not an
-  argument. Free to check, forever, because the person who most needs it is the
+  argument. Free to check (the route never calls the meter), because the person who most needs it is the
   buyer, not the seller.
 - **A ledger that was quietly shortened.** Caught by joining a counter-signature
-  back to the chain.
+  back to the chain: one you made yourself with a key held apart from the ledger
+  (`assurance attest sign`), since the hosted service has no signing key yet.
 
 ## Three rules this codebase is built on
 
@@ -101,13 +117,17 @@ software does not do.
 | | Price | Includes |
 |---|---|---|
 | **Validator** | free | Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, attestation verification, and the offline enrolment kit |
-| **Register** | €390 / month | The Article 14 register for one manufacturer: unlimited cases, both clocks, hash-chained ledger with verifiable export, 25 product families |
-| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, and counter-signed head attestation |
+| **Register** | €390 / month | The Article 14 register for one manufacturer: both clocks, hash-chained ledger with verifiable export; cases are not metered (no per-case cap or charge) |
+| **Cell** | €1,290 / month | Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, Declarations bound to a configuration hash, change-assurance cases over `/v1/change/*`, and counter-signed head attestation |
 
-Verification is free at every tier and always will be: the audience for a piece
-of evidence is a regulator, an insurer or a customer's customer, none of whom
-will ever hold an API key here. Evidence only a paying customer can check is
-worth nothing.
+Re-checking someone else's evidence needs no account and no key. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (`POST /v1/evidence/verify`, and `/verify` on this site) allows 20 a day
+per address; manifest diff allows 10 a day. Register and Cell have no daily cap
+on either. The file verifier has the same limit as the Article 14 validator, counted separately
+(it spends its own `evidence_verify` counter, not the validator's); the cap is an anti-abuse limit, not a price. The audience
+for a piece of evidence is a regulator, an insurer or a customer's customer, and
+evidence only a paying customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
@@ -142,11 +162,11 @@ src/assurance/        the product
   bridge/             supplier advisory -> Article 14 intake
   api/                FastAPI surface, billing, entitlements
 src/neuralbridge/     the integration platform this grew out of (below)
-src/dashboard/        Next.js dashboard
+src/dashboard/        Vite/React admin UI (not wired to the assurance API)
 ```
 
 ```bash
-pytest tests/ -q        # 671 tests
+python -m pytest tests/ -q --no-cov   # a green run has 0 skipped (see CLAUDE.md)
 ruff check src/
 ```
 
@@ -191,8 +211,8 @@ This README therefore focuses on the smaller product that the repository can gro
 | FastAPI backend | **Supported** |
 | Connection management model | **Supported as a core direction** |
 | MCP tool listing / invocation layer | **Supported** |
-| Dashboard foundation | **Supported** |
-| Basic audit trail | **Supported as a practical foundation** |
+| Dashboard foundation (separate Vite admin UI, not wired to the assurance API) | **Experimental / evolving** |
+| Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
 | Small set of working adapters | **Intended supported scope** |
 | Broad adapter ecosystem | **Experimental / evolving** |
 | Full enterprise compliance posture | **Not part of the core promise yet** |
@@ -200,9 +220,13 @@ This README therefore focuses on the smaller product that the repository can gro
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+
+No enterprise certification or compliance attestation is held.
+
 ## Product Direction
 The way to describe NeuralBridge today is this:
-> NeuralBridge is a lightweight integration hub that helps AI workflows interact with external systems through a clean backend, a gateway layer, and a small set of supported adapters.
+> NeuralBridge is a lightweight integration hub that helps AI workflows interact with external systems through a clean backend, a gateway layer, and a small set of adapters (supported scope intended, not yet claimed).
 
 That is a narrower claim than the original vision, but it is a stronger foundation. The current priority is not maximum breadth. It is a smaller platform that can be run, tested, and understood end-to-end.
 
@@ -324,7 +348,7 @@ The most valuable first-run checks are the following:
 | Open `/docs` | Confirms the backend starts |
 | Create a connection object | Confirms the core backend model works |
 | Use an MCP list call | Confirms the gateway path is alive |
-| Run one supported adapter flow | Confirms an actual integration path works |
+| Run one adapter flow | Confirms an actual integration path works |
 | Inspect audit output | Confirms actions are being recorded |
 
 ## Example Interaction Model
@@ -335,7 +359,7 @@ flowchart LR
     A[Start Backend] --> B[Open API Docs]
     B --> C[Create Connection]
     C --> D[Expose Tool via Gateway]
-    D --> E[Invoke Supported Adapter]
+    D --> E[Invoke Adapter]
     E --> F[Return Response]
     F --> G[Review Audit Entry]
 ```
@@ -391,7 +415,7 @@ The most valuable tests for the reduced-scope version of the project are:
 |---|---|
 | Backend startup | Ensures the project boots cleanly |
 | Connection creation | Protects the basic workflow |
-| Supported adapters | Proves real integration value |
+| Adapters (intended supported scope) | Proves an integration path works |
 | MCP tool listing and invocation | Proves the gateway path |
 | Audit trail behavior | Proves system actions are traceable |
 | Auth and access control | Protects the minimum secure boundary |
@@ -413,7 +437,7 @@ The long-term direction remains broader than the current public promise, but the
 
 ```mermaid
 flowchart LR
-    A[Stable Backend Runtime] --> B[Supported Adapter Set]
+    A[Stable Backend Runtime] --> B[Small Adapter Set]
     B --> C[Gateway and Audit Reliability]
     C --> D[Cleaner Dashboard Experience]
     D --> E[Stronger Security Boundaries]

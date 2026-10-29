@@ -36,21 +36,24 @@ reads on every request:
 
 ```bash
 export ASSURANCE_ACCOUNTS=./buyer-journey-accounts.db
-python3 - <<'PY'
-from assurance.billing.accounts import AccountStore
-store = AccountStore("buyer-journey-accounts.db")
-account = store.upsert_account(email="you@example.com", tier="cell", company="Your Company")
-key = store.issue_key(account.id, label="buyer-journey")
-print(key)
-PY
+python3 -m assurance billing grant --create --store "$ASSURANCE_ACCOUNTS" \
+    --email you@example.com --tier cell --company "Your Company" \
+    --note "buyer-journey walkthrough"
 ```
 
-Copy the printed key — it's shown once, only its hash is kept
-(`AccountStore.issue_key`'s own docstring). Export it:
+Copy the printed key — it's shown once, only its hash is kept. Export it:
 
 ```bash
 export BUYER_KEY=<the key printed above>
 ```
+
+`assurance billing grant` is the operator path for a pilot **invoiced outside Stripe**
+(the same command, against the hosted volume's `/data/accounts.db`, is the runbook in
+`deploy/assurance/README.md`). It works on the account file only: no network, no
+Stripe, no charge. The account it makes is marked `source: manual_grant` in
+`GET /v1/me` and is never mistaken for a Stripe-paid one; `--expires-on` ends it on a
+date, and a lapsed grant gets no evidence read-out (an open founder decision). **The
+founder decides who gets a grant.** Nothing here is evidence of a customer.
 
 ## 2. Start the assurance API and open your first Register case
 
@@ -99,6 +102,10 @@ curl -s http://127.0.0.1:8001/v1/cases -H "X-API-Key: $BUYER_KEY"
 
 ```bash
 export NEURALBRIDGE_AI_STORE=./buyer-journey-ai.db
+# This walkthrough writes the shared seeded demo database as a paid account.
+# That is read-only for paid accounts by default (tenant isolation), so the
+# LOCAL stack must opt in — a local-development switch, never set in production:
+export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1
 # (plus the NEURALBRIDGE_AI_PG_* vars from docs/ai-local-setup.md, and
 # ASSURANCE_ACCOUNTS from step 1 — /ai reads the same account store)
 uvicorn neuralbridge.main:app --port 8000 &

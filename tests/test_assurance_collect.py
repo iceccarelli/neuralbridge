@@ -287,10 +287,22 @@ class TestCollect:
         assert r.manifest.machine.key == "Grimaldi/AR-7#0412"
         assert len(r.manifest.items) == 4
 
-    def test_everything_is_read_from_the_machine_so_the_tier_is_validated(
+    def test_a_folder_of_exports_is_supplied_by_vendor_so_the_tier_ceiling_is_community(
             self, tmp_path):
+        """Changed deliberately (B6). This used to assert that every item of a folder of
+        exports was ``read_from_machine`` and the tier ``validated``; a folder cannot show
+        which machine it came off, so that label was the bug, and it is now an explicit
+        operator assertion (``hash_source=READ_FROM_MACHINE``, ``--read-from-machine``)."""
         root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
         r = collect(plan(), root, serial="0412", taken_by=ENG)
+        assert r.manifest.tier_ceiling is AssuranceTier.COMMUNITY
+        assert all(i.hash_source is HashSource.SUPPLIED_BY_VENDOR
+                   for i in r.manifest.items)
+
+    def test_the_operators_assertion_that_it_ran_on_the_machine_is_validated(self, tmp_path):
+        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
+        r = collect(plan(), root, serial="0412", taken_by=ENG,
+                    hash_source=HashSource.READ_FROM_MACHINE)
         assert r.manifest.tier_ceiling is AssuranceTier.VALIDATED
         assert all(i.hash_source is HashSource.READ_FROM_MACHINE
                    for i in r.manifest.items)
@@ -376,12 +388,27 @@ class TestEndToEnd:
         b = write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
                          operator="a.integrator", seq="4199")
         p = plan()
+        # The operator asserts the collector ran on the machine (B6): without that, two
+        # folders of exports compare as "unverifiable", never as "matches".
         m1 = collect(p, a, serial="0412", taken_by=ENG, manifest_id="M1",
-                     taken_at=datetime(2026, 9, 14, 8, tzinfo=UTC)).manifest
+                     taken_at=datetime(2026, 9, 14, 8, tzinfo=UTC),
+                     hash_source=HashSource.READ_FROM_MACHINE).manifest
         m2 = collect(p, b, serial="0412", taken_by=ENG, manifest_id="M2",
-                     taken_at=datetime(2026, 9, 15, 8, tzinfo=UTC)).manifest
+                     taken_at=datetime(2026, 9, 15, 8, tzinfo=UTC),
+                     hash_source=HashSource.READ_FROM_MACHINE).manifest
         assert m1.configuration_hash() == m2.configuration_hash()
         assert compare(m1, m2).verdict == "matches"
+
+    def test_two_unasserted_exports_with_the_same_hash_are_unverifiable_not_matching(
+            self, tmp_path):
+        a = write_export(tmp_path / "mon", stamp="2026-09-14T07:12:03Z",
+                         operator="m.tech", seq="4181")
+        b = write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
+                         operator="a.integrator", seq="4199")
+        m1 = collect(plan(), a, serial="0412", taken_by=ENG, manifest_id="M1").manifest
+        m2 = collect(plan(), b, serial="0412", taken_by=ENG, manifest_id="M2").manifest
+        assert m1.configuration_hash() == m2.configuration_hash()
+        assert compare(m1, m2).verdict == "unverifiable"
 
     def test_a_real_change_is_caught_and_carries_the_safety_function(self, tmp_path):
         a = write_export(tmp_path / "tue", stamp="2026-09-15T06:58:41Z",
@@ -430,8 +457,11 @@ class TestEndToEnd:
         p = plan()
         for serial in ("0412", "0418"):
             root = write_export(tmp_path / serial, stamp="s", operator="o", seq="1")
-            record_manifest(ledger, collect(p, root, serial=serial,
-                                            taken_by=ENG).manifest)
+            record_manifest(ledger, collect(
+                p, root, serial=serial, taken_by=ENG,
+                # B6: hash-confirmed matching needs hashes read off the machine, which
+                # an export folder does not say; the harness asserts it.
+                hash_source=HashSource.READ_FROM_MACHINE).manifest)
 
         fleet = Fleet.from_ledger(ledger)
         assert len(fleet) == 2

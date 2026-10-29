@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from ...core.errors import AssuranceError, EvidenceIncompleteError
+from ...core.errors import AssuranceError, EvidenceIncompleteError, LedgerConflictError
 from ...core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from ...core.identity import format_utc, parse_utc, utc_now
 from ...evidence.ledger import EvidenceLedger
@@ -181,6 +181,7 @@ class Art14Register:
         confidence: Confidence = Confidence.NONE,
         checks_skipped: tuple[str, ...] = (),
         origin: Origin | None = None,
+        expect_head: int | None = None,
     ) -> Evidence:
         evidence = Evidence(
             kind=kind,
@@ -191,7 +192,17 @@ class Art14Register:
             confidence=confidence,
             checks_skipped=checks_skipped,
         ).seal()
-        self.ledger.append(evidence, subject=case_id)
+        try:
+            # Compare-and-swap against the case entry the caller's decision was read
+            # from, checked inside the write transaction: two writers cannot both
+            # pass a "once" guard, and a clock-moving write cannot land on a case
+            # that changed under it.
+            self.ledger.append(evidence, subject=case_id, expect_subject_head=expect_head)
+        except LedgerConflictError as exc:
+            raise CaseError(
+                f"case {case_id} changed while this record was being prepared; re-read the "
+                f"case and decide again. Nothing was written. ({exc})"
+            ) from exc
         return evidence
 
     def record_signal(self, case_id: str, signal: Signal, actor: Actor) -> Evidence:
@@ -201,7 +212,8 @@ class Art14Register:
         from here to awareness is the number that gets asked about and it cannot
         be reconstructed later.
         """
-        if self._load(case_id).signal is not None:
+        case, head = self._load_at_head(case_id)
+        if case.signal is not None:
             raise CaseError(f"case {case_id} already has a signal; open a new case")
         return self._append(
             case_id,
@@ -214,13 +226,14 @@ class Art14Register:
                 method=f"intake via {signal.channel.value}",
             ),
             checks_skipped=("nothing has been assessed at intake; this records receipt only",),
+            expect_head=head,
         )
 
     def record_awareness(
         self, case_id: str, awareness: Awareness, track: Track, actor: Actor
     ) -> Evidence:
         """Fix the moment every deadline runs from."""
-        case = self._load(case_id)
+        case, head = self._load_at_head(case_id)
         if case.signal is None:
             raise CaseError(
                 f"case {case_id} has no signal. Record what was received before recording when "
@@ -231,6 +244,13 @@ class Art14Register:
                 f"case {case_id} already has an awareness record at "
                 f"{format_utc(case.awareness.established_at)}. Moving it would move a legal "
                 "deadline; supersede it explicitly if it was wrong."
+            )
+        if case.users_informed_at is not None and case.users_informed_at < awareness.established_at:
+            raise CaseError(
+                "users were recorded as informed at "
+                f"{format_utc(case.users_informed_at)}, before this awareness "
+                f"({format_utc(awareness.established_at)}). Users cannot be informed before "
+                "the manufacturer became aware; correct one of the two records."
             )
         if awareness.established_at < case.signal.received_at:
             raise CaseError(
@@ -257,6 +277,7 @@ class Art14Register:
                     "this record is the compensating control"
                 ),
             ),
+            expect_head=head,
         )
 
     def record_triage(
@@ -269,7 +290,7 @@ class Art14Register:
         reopen_trigger: str = "",
     ) -> tuple[Evidence, TriageResult]:
         """Work the decision path and record the outcome, whichever way it goes."""
-        case = self._load(case_id)
+        case, head = self._load_at_head(case_id)
         if case.track is None:
             raise CaseError(
                 f"case {case_id} has no track. Record awareness with a track first; the tests "
@@ -309,6 +330,7 @@ class Art14Register:
                 else ValidationState.VERIFIED
             ),
             checks_skipped=tuple(skipped),
+            expect_head=head,
         )
         return evidence, result
 
@@ -333,7 +355,7 @@ class Art14Register:
         A documented workaround starts it exactly as a patch does, which is why
         this is a separate act from shipping a release.
         """
-        case = self._load(case_id)
+        case, head = self._load_at_head(case_id)
         if case.awareness is None:
             raise CaseError(f"case {case_id} has no awareness record")
         return self._append(
@@ -345,9 +367,10 @@ class Art14Register:
             checks_skipped=(
                 (
                     "a mitigating measure starts the Art. 14(2)(c) clock as surely as a corrective "
-                    "one; confirm this is the earliest measure that became available"
+                    "one; the case clock runs from the earliest measure recorded"
                 ),
             ),
+            expect_head=head,
         )
 
     def record_filing(
@@ -360,7 +383,7 @@ class Art14Register:
         platform_reference: str = "",
     ) -> tuple[Evidence, PayloadValidation]:
         """Record a submission, with the payload validated against the field spec."""
-        case = self._load(case_id)
+        case, head = self._load_at_head(case_id)
         if case.awareness is None or case.track is None:
             raise CaseError(
                 f"case {case_id} has no awareness record, so no deadline is running and no "
@@ -377,6 +400,12 @@ class Art14Register:
             assert deadlines is not None
             deadlines.require_final()  # raises ClockError with the reason
 
+        if submitted_at < case.awareness.established_at:
+            raise CaseError(
+                "a filing cannot precede the awareness it answers "
+                f"({format_utc(submitted_at)} < {format_utc(case.awareness.established_at)}); "
+                "a submission time before awareness would make a late filing read as on time"
+            )
         validation = validate_payload(payload, case.track, stage)
         evidence = self._append(
             case_id,
@@ -391,6 +420,7 @@ class Art14Register:
             actor,
             state=ValidationState.VERIFIED if validation.submittable else ValidationState.INDETERMINATE,
             checks_skipped=validation.checks_skipped,
+            expect_head=head,
         )
         return evidence, validation
 
@@ -411,6 +441,12 @@ class Art14Register:
         be limited to the users concerned, particularly where publishing
         technical detail would itself increase risk.
         """
+        case, head = self._load_at_head(case_id)
+        if case.awareness is not None and at < case.awareness.established_at:
+            raise CaseError(
+                "users cannot be informed before the manufacturer became aware "
+                f"({format_utc(at)} < {format_utc(case.awareness.established_at)})"
+            )
         return self._append(
             case_id,
             CASE_KIND["user_notice"],
@@ -429,12 +465,21 @@ class Art14Register:
                     "(guidance §§219-221)"
                 ),
             ),
+            expect_head=head,
         )
 
     # -- reading ----------------------------------------------------------
     def _load(self, case_id: str) -> Case:
+        return self._load_at_head(case_id)[0]
+
+    def _load_at_head(self, case_id: str) -> tuple[Case, int]:
+        """The case and the seq of its newest entry (0 for none), read together."""
         case = Case(case_id=case_id)
+        head = 0
+        filings_valid: dict[str, datetime] = {}
+        filings_any: dict[str, datetime] = {}
         for entry in self.ledger.entries(subject=case_id):
+            head = entry.seq
             body = entry.payload.get("body", {})
             kind = entry.kind
             if kind == CASE_KIND["signal"]:
@@ -461,12 +506,27 @@ class Art14Register:
             elif kind == "art14.availability":
                 case.product = ProductVersion.from_dict(body["product"])
             elif kind == "art14.measure":
-                case.measure_available_at = parse_utc(body["available_at"])
+                # Earliest wins: a later record can never move a legal clock out.
+                at = parse_utc(body["available_at"])
+                if case.measure_available_at is None or at < case.measure_available_at:
+                    case.measure_available_at = at
             elif kind == CASE_KIND["filing"]:
-                case.filings[body["stage"]] = parse_utc(body["submitted_at"])
+                at = parse_utc(body["submitted_at"])
+                stage = body["stage"]
+                # Earliest wins, but a payload that failed validation must not shadow a
+                # later complete filing of the same stage. It still counts when nothing
+                # valid exists: it was recorded as submitted, and dropping it could hide
+                # a deadline that runs from it (the incident final report).
+                valid = (body.get("validation") or {}).get("submittable", True)
+                bucket = filings_valid if valid else filings_any
+                if stage not in bucket or at < bucket[stage]:
+                    bucket[stage] = at
             elif kind == CASE_KIND["user_notice"]:
-                case.users_informed_at = parse_utc(body["at"])
-        return case
+                at = parse_utc(body["at"])
+                if case.users_informed_at is None or at < case.users_informed_at:
+                    case.users_informed_at = at
+        case.filings = {**filings_any, **filings_valid}
+        return case, head
 
     def case(self, case_id: str) -> Case:
         return self._load(case_id)

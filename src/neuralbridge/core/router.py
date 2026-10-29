@@ -94,6 +94,7 @@ class RequestRouter:
         params: dict[str, Any],
         request_id: str | None = None,
         actor: str = "system",
+        owner: str | None = None,
     ) -> dict[str, Any]:
         """
         Dispatch a request to the named adapter.
@@ -115,6 +116,13 @@ class RequestRouter:
             not a design choice; see
             ``reports/NEURALBRIDGE-AI-DATA-MAP.md``. Callers that know who
             is calling (e.g. ``src/neuralbridge/ai``) must pass it.
+        owner : str | None
+            Tenant (account id) the call is made on behalf of, recorded as
+            ``details["owner"]`` on the audit event so a tenant's audit
+            trail can be filtered to its own entries. Derived by the caller
+            from the validated principal, never from client input. ``None``
+            (callers that predate tenancy) leaves the entry operator-visible
+            only.
 
         Returns
         -------
@@ -133,6 +141,7 @@ class RequestRouter:
                 f"Available: {self._registry.list_all()}"
             )
 
+        owner_detail = {"owner": owner} if owner else {}
         start = time.monotonic()
         logger.info(
             "routing_request",
@@ -155,6 +164,7 @@ class RequestRouter:
                 details={
                     "request_id": request_id,
                     "duration_ms": round(elapsed * 1000, 2),
+                    **owner_detail,
                 },
             )
 
@@ -184,6 +194,7 @@ class RequestRouter:
                     "request_id": request_id,
                     "error": str(exc),
                     "duration_ms": round(elapsed * 1000, 2),
+                    **owner_detail,
                 },
             )
             logger.exception("request_routing_failed", adapter_type=adapter_type)

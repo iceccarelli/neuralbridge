@@ -7,7 +7,7 @@ name = "neuralbridge-middleware"
 version = "0.1.1"
 description = "Universal Enterprise Middleware for Agentic AI Integration — securely connect ANY AI agent to ANY system with YAML configuration, CRA compliance, and zero-trust security."
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
     {name = "NeuralBridge Contributors"}
@@ -21,7 +21,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
@@ -57,9 +57,15 @@ dependencies = [
 # The assurance package has one runtime dependency and it is confined to
 # assurance.attest: signing needs a vetted Ed25519 implementation, and writing
 # one here would be the single worst decision in this repository. Everything
-# else works from the CLI and the library with nothing installed.
+# else works from the CLI and the library with nothing installed — the one
+# further exception is `assurance supplier fetch`, which needs an HTTP client
+# only for that one command and imports it lazily, with a clear error if it
+# is missing.
 assurance-attest = [
     "cryptography>=42.0.0",
+]
+assurance-supplier-fetch = [
+    "httpx>=0.27.0",
 ]
 assurance-api = [
     "fastapi>=0.110.0",
@@ -153,9 +159,15 @@ ignore = [
 "src/assurance/report/cli.py" = ["T20"]
 "src/assurance/bridge/cli.py" = ["T20"]
 "src/assurance/watch/cli.py" = ["T20"]
+"src/assurance/watch/push.py" = ["T20"]
 "src/assurance/attest/cli.py" = ["T20"]
 "src/assurance/kit/cli.py" = ["T20"]
+"src/assurance/billing/cli.py" = ["T20"]
 "src/assurance/supplier/cli.py" = ["T20"]
+"src/assurance/value/cli.py" = ["T20"]
+"src/assurance/change/cli.py" = ["T20"]
+"src/assurance/evidence/cli.py" = ["T20"]
+"src/assurance/evidence/restore_check.py" = ["T20"]
 "src/assurance/api/service.py" = ["T20"]
 
 [tool.pytest.ini_options]

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-// No backend exists to receive this yet — see Feedback.tsx and the pricing
+// No backend exists to receive this yet — see the pricing
 // section's honesty note about what is and isn't deployed. This form does
 // not claim to file into a CRM: it builds a mailto: link and hands off to
 // the visitor's own mail client, which is the honest version of "send" when

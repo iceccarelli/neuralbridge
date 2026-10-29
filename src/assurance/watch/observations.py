@@ -1,0 +1,413 @@
+"""What a ledger knows about whether anybody has been looking.
+
+The hosted workspace is a subscription for *continuous* assurance, so the first
+question a customer asks of it is not "what is the configuration" but "when was
+this machine last actually looked at, and did the last attempt work". The answer
+lives in the ``watch.observation`` records the Watch runner has always sealed
+(``assurance.watch.runner``); a hosted ledger holds the same records, written by
+``assurance.watch.ingest`` from a report the customer chose to send.
+
+This module only reads. It derives nothing about safety: it reports dates,
+statuses and a staleness comparison against the cadence the customer declared,
+and it names the cases that are open. A failed look is never a positive one:
+:func:`observation_succeeded` is the single definition of "a look that
+counts", shared with the runner's own staleness test.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from assurance.change.service import INCOMPLETE_COLLECTION_MARK
+from assurance.change.store import CaseStore
+from assurance.core.identity import format_utc, parse_utc, utc_now
+from assurance.evidence.ledger import EvidenceLedger
+from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.record import MANIFEST_KIND
+
+__all__ = [
+    "DEFAULT_CADENCE_HOURS",
+    "MAX_CADENCE_HOURS",
+    "MIN_CADENCE_HOURS",
+    "OBSERVATION_KIND",
+    "REPORT_KIND",
+    "FAILED_STATUSES",
+    "MANIFEST_STALE",
+    "NOT_A_LOOK_STATUSES",
+    "OBSERVATION_BASIS",
+    "OBSERVED_AT_SKEW_BOUND",
+    "REPLAY_LIMIT",
+    "fleet_observations",
+    "last_complete_manifest",
+    "observation_succeeded",
+    "observed_at_of",
+]
+
+OBSERVATION_KIND = "watch.observation"
+#: One record per accepted report: the run summary and the declared cadence.
+REPORT_KIND = "watch.report"
+#: Used when no report has declared a cadence. The same default the Watch
+#: configuration uses (``WatchConfig.max_age_hours``).
+DEFAULT_CADENCE_HOURS = 168.0
+#: The range a report may declare. A cadence is how long a machine may go
+#: unobserved before it reads stale, so a large one is a way to hide staleness:
+#: it is capped at 30 days, and floored at an hour.
+MIN_CADENCE_HOURS = 1.0
+MAX_CADENCE_HOURS = 720.0
+#: Statuses that mean the look did not happen, or did not finish.
+FAILED_STATUSES = frozenset({"uncollectable", "incomplete"})
+#: Recorded (never accepted as a reported status) when a positive look rests on a
+#: manifest older than the cadence window at the moment it claims to have been
+#: observed: a replay of old data is not a look at the machine.
+MANIFEST_STALE = "manifest_stale"
+#: Every recorded status that is not a successful look of the machine.
+NOT_A_LOOK_STATUSES = FAILED_STATUSES | {MANIFEST_STALE}
+#: What every observation served from this ledger is: a statement by the holder of
+#: the account's key. The service did not watch the machine.
+OBSERVATION_BASIS = "client_reported"
+#: Beyond this, the reporter's ``observed_at`` and the server's ``received_at``
+#: disagree by more than a delayed batch or a drifting plant clock explains. It is
+#: flagged (``observed_at_skew``), never trusted further and never refused: a Watch
+#: that was offline for two days and then pushed is honest and merely late.
+OBSERVED_AT_SKEW_BOUND = timedelta(hours=24)
+#: Said on every surface that shows an observation. It is the limit of this channel,
+#: not a defect that a later check removes.
+REPLAY_LIMIT = (
+    "Anyone holding this account's key, or a compromised Watch, can fabricate a "
+    "current-looking observation: send an old (or invented) manifest in one entry, "
+    "then relay it as current in the next. The service cannot tell that from the "
+    "honest watch push, which sends the same pair, and this channel does not prevent "
+    "it. What the service provides is a record: the time it received each report "
+    "(received_at), a flag where that differs from the reporter's date, the label "
+    "client_reported on everything, a relay_basis on each look saying how it became "
+    "current (planted_in_same_report marks a manifest first received in the same "
+    "report), and the refusal of a naive replay: an old manifest relayed with no "
+    "earlier or same-report entry holding it. None of that is proof that anyone looked."
+)
+
+
+def last_complete_manifest(history: Sequence[SafetyManifest]) -> SafetyManifest | None:
+    """The newest manifest that is a whole configuration, oldest-first ``history``.
+
+    A manifest the watch marked ``[collection incomplete: ...]`` lacks items its
+    plan names. It is a partial look, not a configuration the machine was in, so it
+    can never be the baseline a later look is compared with: judged against one, a
+    machine that merely came back whole reads as ``ITM-... added``.
+    """
+    for manifest in reversed(history):
+        if INCOMPLETE_COLLECTION_MARK not in manifest.notes:
+            return manifest
+    return None
+
+
+def observation_succeeded(body: dict[str, Any]) -> bool:
+    """Whether an observation record is a look that counts as having seen the machine.
+
+    ``uncollectable`` is an attempt, not an observation, and so is
+    ``manifest_stale`` (a manifest too old to describe the machine today). ``incomplete`` (or any
+    record that says ``complete: false``) saw only part of what the plan names:
+    it can describe a drift, but it cannot say the machine is current.
+    """
+    if str(body.get("status", "")) in NOT_A_LOOK_STATUSES:
+        return False
+    return body.get("complete", True) is not False
+
+
+def observed_at_of(body: dict[str, Any], fallback: str) -> datetime | None:
+    """When the look happened: the run's own clock, never later than the server's.
+
+    ``fallback`` is the ledger's append time. A record stamped later than the
+    moment it was written (a reporter's fast clock, or a lie) is read as written:
+    otherwise a success dated a minute ahead would outrank a real failure that
+    follows it. A hosted record also carries ``received_at``, the server's clock
+    when the report arrived, and the look is read as no later than that either.
+    The reporter's date can make a look look *older*, never fresher.
+    """
+    try:
+        stated = parse_utc(str(body.get("observed_at") or fallback))
+        written = parse_utc(str(fallback))
+    except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
+        return None
+    at = min(stated, written)
+    received = _received_at_of(body)
+    return min(at, received) if received is not None else at
+
+
+def _received_at_of(body: dict[str, Any]) -> datetime | None:
+    raw = body.get("received_at")
+    if not raw:
+        return None
+    try:
+        return parse_utc(str(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def observed_at_skewed(observed_at: datetime, received_at: datetime) -> bool:
+    """Whether the reporter's date and the server's receipt differ by more than the bound."""
+    return abs(received_at - observed_at) > OBSERVED_AT_SKEW_BOUND
+
+
+def _cadence_of(body: dict[str, Any]) -> float | None:
+    value = body.get("cadence_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if MIN_CADENCE_HOURS <= value <= MAX_CADENCE_HOURS else None
+
+
+def _manifest_age_of(body: dict[str, Any]) -> float | None:
+    value = body.get("manifest_age_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _receipt_age_of(body: dict[str, Any]) -> float | None:
+    value = body.get("manifest_age_at_receipt_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _relay_basis_of(body: dict[str, Any]) -> str:
+    """The recorded basis; ``relayed_basis_unrecorded`` for an older relayed record."""
+    value = body.get("relay_basis")
+    if isinstance(value, str) and value:
+        return value
+    return "relayed_basis_unrecorded" if body.get("manifest_relayed") is True else "unrelayed"
+
+
+def _machine_cadence(seen: list[_Seen]) -> tuple[float, bool]:
+    """The cadence that judges one machine, and whether any watch declared one.
+
+    Each watch's cadence is the one it declared with its own latest successful
+    look of this machine; when several watches have reported the machine the
+    shortest wins. A failed look declares nothing, so a report can never
+    lengthen the cadence of a machine it did not successfully observe.
+    """
+    latest: dict[str, _Seen] = {}
+    for s in seen:                       # oldest first
+        if s.succeeded:
+            latest[s.watch_id] = s
+    if not latest:
+        return DEFAULT_CADENCE_HOURS, False
+    declared = [s.cadence for s in latest.values() if s.cadence is not None]
+    values = [s.cadence if s.cadence is not None else DEFAULT_CADENCE_HOURS
+              for s in latest.values()]
+    return min(values), bool(declared)
+
+
+@dataclass(frozen=True)
+class _Seen:
+    at: datetime
+    status: str
+    complete: bool
+    detail: str
+    succeeded: bool
+    watch_id: str = ""
+    #: The cadence the reporting watch declared with this look, or None.
+    cadence: float | None = None
+    #: Hours between the manifest's ``taken_at`` and the look's ``observed_at``
+    #: (hosted reports only; None where the record does not carry it).
+    manifest_age_hours: float | None = None
+    manifest_relayed: bool = False
+    #: How the freshness was obtained (``ingest.RELAY_BASES``); empty on a record that
+    #: predates the field. And the manifest's age at the server's receipt.
+    relay_basis: str = ""
+    manifest_age_at_receipt_hours: float | None = None
+    manifest_age_exceeds_window_at_receipt: bool | None = None
+    #: The reporter's own ``observed_at`` text, and the server's receipt time.
+    declared_at: str = ""
+    received_at: str = ""
+    observed_at_skew: bool = False
+
+
+def fleet_observations(
+    ledger: EvidenceLedger, *, now: datetime | None = None,
+) -> dict[str, Any]:
+    """Per machine: last successful look, last attempt, staleness, open cases."""
+    as_of = now or utc_now()
+
+    by_machine: dict[str, list[_Seen]] = {}
+    for entry in ledger.entries(kind=OBSERVATION_KIND):
+        evidence = entry.evidence()
+        if not evidence.verify():
+            continue
+        body = evidence.body
+        key = str(body.get("machine") or entry.subject or body.get("serial") or "")
+        at = observed_at_of(body, entry.at)
+        if not key or at is None:
+            continue
+        by_machine.setdefault(key, []).append(_Seen(
+            at=at, status=str(body.get("status", "")),
+            complete=body.get("complete", True) is not False,
+            detail=str(body.get("detail", "")),
+            succeeded=observation_succeeded(body),
+            watch_id=str(body.get("watch_id", "")),
+            cadence=_cadence_of(body) if observation_succeeded(body) else None,
+            manifest_age_hours=_manifest_age_of(body),
+            manifest_relayed=body.get("manifest_relayed") is True,
+            relay_basis=_relay_basis_of(body),
+            manifest_age_at_receipt_hours=_receipt_age_of(body),
+            manifest_age_exceeds_window_at_receipt=(
+                body.get("manifest_age_exceeds_window_at_receipt")
+                if isinstance(body.get("manifest_age_exceeds_window_at_receipt"), bool)
+                else None),
+            declared_at=str(body.get("observed_at", "")),
+            received_at=str(body.get("received_at", "")),
+            observed_at_skew=body.get("observed_at_skew") is True,
+        ))
+
+    enrolled = {e.subject for e in ledger.entries(kind=MANIFEST_KIND) if e.subject}
+    store = CaseStore(ledger)
+    open_cases: dict[str, list[str]] = {}
+    for case in store.list():
+        if case.is_open:
+            for machine in case.machines:
+                open_cases.setdefault(machine, []).append(case.case_id)
+
+    machines: list[dict[str, Any]] = []
+    for key in sorted(set(by_machine) | enrolled):
+        # Ordered by when the look happened; ledger order breaks ties (sorted is
+        # stable), so the last element is the latest attempt.
+        seen = sorted(by_machine.get(key, []), key=lambda s: s.at)
+        last_attempt = seen[-1] if seen else None
+        last_ok = next((s for s in reversed(seen) if s.succeeded), None)
+        failed_run = 0
+        for s in reversed(seen):
+            if s.succeeded:
+                break
+            failed_run += 1
+
+        cadence, declared = _machine_cadence(seen)
+        age_hours = None
+        if last_ok is not None:
+            age_hours = round(max(0.0, (as_of - last_ok.at).total_seconds() / 3600), 2)
+        if not seen:
+            stale, reason = True, "never_reported"
+        elif last_ok is None:
+            stale, reason = True, "never_successfully_observed"
+        elif age_hours is not None and age_hours > cadence:
+            stale, reason = True, "older_than_cadence"
+        else:
+            stale, reason = False, ""
+
+        machines.append({
+            "machine": key,
+            "reported": bool(seen),
+            # Every field below is a statement by the holder of the account's key.
+            "basis": OBSERVATION_BASIS,
+            # Never later than the server's receipt (see observed_at_of); staleness
+            # is judged from this, not from the reporter's clock.
+            "last_successful_observation_at":
+                format_utc(last_ok.at) if last_ok else None,
+            "last_successful_observed_at_declared":
+                (last_ok.declared_at or None) if last_ok else None,
+            "last_successful_received_at":
+                (last_ok.received_at or None) if last_ok else None,
+            "last_successful_observed_at_skew":
+                last_ok.observed_at_skew if last_ok else None,
+            "last_attempt_observed_at_skew":
+                last_attempt.observed_at_skew if last_attempt else None,
+            "last_attempt_at": format_utc(last_attempt.at) if last_attempt else None,
+            "last_attempt_status": last_attempt.status if last_attempt else None,
+            "last_attempt_succeeded": last_attempt.succeeded if last_attempt else None,
+            "last_attempt_detail": last_attempt.detail if last_attempt else "",
+            # How old the manifest behind a look was at the moment of the look, as
+            # reported. A successful look is one inside the cadence window; the
+            # attempt's age is what shows a stale manifest was offered.
+            "last_successful_manifest_age_hours":
+                last_ok.manifest_age_hours if last_ok else None,
+            "last_successful_manifest_relayed":
+                last_ok.manifest_relayed if last_ok else None,
+            # How this look became current. `planted_in_same_report` is a manifest first
+            # received in the very report that relayed it; `same_configuration_held` is a
+            # different manifest of the configuration the ledger already holds; an old
+            # manifest (age at receipt past the window) is shown, not hidden.
+            "last_successful_relay_basis": last_ok.relay_basis if last_ok else None,
+            "last_successful_manifest_first_received_in_this_report":
+                (last_ok.relay_basis == "planted_in_same_report") if last_ok else None,
+            "last_successful_manifest_age_at_receipt_hours":
+                last_ok.manifest_age_at_receipt_hours if last_ok else None,
+            "last_successful_manifest_age_exceeds_window_at_receipt":
+                last_ok.manifest_age_exceeds_window_at_receipt if last_ok else None,
+            "last_attempt_manifest_age_hours":
+                last_attempt.manifest_age_hours if last_attempt else None,
+            "age_hours": age_hours,
+            "stale": stale,
+            "stale_reason": reason,
+            "cadence_hours": cadence,
+            "cadence_declared": declared,
+            "consecutive_failed_attempts": failed_run,
+            "open_case_ids": sorted(open_cases.get(key, [])),
+        })
+
+    recent_reports: list[dict[str, Any]] = []
+    for entry in list(ledger.entries(kind=REPORT_KIND))[-10:]:
+        ev = entry.evidence()
+        if not ev.verify():
+            continue
+        b = ev.body
+        recent_reports.append({
+            "watch_id": b.get("watch_id"), "run_started_at": b.get("run_started_at"),
+            "received_at": b.get("received_at"), "verdict": b.get("verdict"),
+            "report_digest": b.get("report_digest"),
+            "run_summary": b.get("run_summary"),
+            "source": "client_reported_watch_run" if b.get("run_summary") else "report",
+            "basis": OBSERVATION_BASIS,
+            "ledger_seq": entry.seq, "content_hash": entry.content_hash,
+        })
+    return {
+        "as_of": format_utc(as_of),
+        "basis": OBSERVATION_BASIS,
+        "recent_reports": recent_reports,
+        "default_cadence_hours": DEFAULT_CADENCE_HOURS,
+        "reporting": bool(by_machine),
+        "machines": machines,
+        "summary": {
+            "machines": len(machines),
+            "never_reported": sum(1 for m in machines if not m["reported"]),
+            "latest_attempt_failed": sum(
+                1 for m in machines if m["last_attempt_succeeded"] is False),
+            "stale": sum(1 for m in machines if m["stale"]),
+        },
+        "limitations": [
+            "Reported by the customer (basis: client_reported), not independently "
+            "observed: the hosted service cannot collect from a machine and did not "
+            "watch any of them. Both the dates and the cadence are declared by the "
+            "reporting client.",
+            REPLAY_LIMIT,
+            "A date here is when the customer's own Watch says it looked, as "
+            "reported, and never later than when this service received the report "
+            "(received_at, the server's clock). When the two differ by more than "
+            f"{int(OBSERVED_AT_SKEW_BOUND.total_seconds() // 3600)} h the look is "
+            "flagged observed_at_skew; it is still not independently verified.",
+            "A machine is stale when its last successful observation is older than "
+            "the cadence declared with it (the shortest, when more than one watch "
+            "reported it; 168 h when none declared one). A cadence is taken only "
+            "from a successful look of that machine. A machine never reported is "
+            "stale by definition.",
+            "A look whose manifest was taken longer before the look (observed_at "
+            "minus the manifest's taken_at) than that same cadence window is "
+            "recorded as manifest_stale and does not count, unless the reporter marks "
+            "it as relayed AND this account's ledger holds that exact manifest, or a "
+            "manifest of the same configuration as the machine's current baseline "
+            "(its age is then shown, not judged). The manifest's age at the server's "
+            "receipt is recorded (manifest_age_at_receipt_hours) and shown, but it "
+            "is recorded, not gating: an honest late delivery has an old manifest "
+            "at receipt. The manifest's own date is declared by the reporting "
+            "client, so this catches an old export sent as new, not a replayed or "
+            "fabricated one.",
+            "relay_basis says how a look became current: unrelayed; "
+            "held_from_earlier_report (the exact manifest was in this ledger before "
+            "the report); planted_in_same_report (it was first received earlier in "
+            "the same report, which is the shape of an honest first watch push and "
+            "of a fabricated one alike); same_configuration_held (a different "
+            "manifest of the configuration already held). A reader should treat "
+            "planted_in_same_report, and any relayed look whose manifest age at "
+            "receipt exceeds the window, as freshness the reporter asserted.",
+        ],
+    }

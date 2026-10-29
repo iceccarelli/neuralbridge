@@ -8,6 +8,7 @@ when its evidence has lapsed.
 
 from __future__ import annotations
 
+import html as htmllib
 import re
 from pathlib import Path
 
@@ -135,14 +136,15 @@ class TestReport:
         f = Fleet.from_ledger(EvidenceLedger(fleet.ledger_path))
         html = render_report(ReportInput(ledger=EvidenceLedger(fleet.ledger_path)))
         for caveat in f.records[0].coverage.checks_skipped:
-            assert caveat[:60] in html
+            # the page escapes quotes, and a limitation may quote a tier name
+            assert htmllib.escape(caveat[:60]) in html
 
     def test_a_stale_function_is_named_with_the_change_that_caused_it(self, page):
         assert "INT-0501-0007" in page
         assert "Stale" in page
 
     def test_it_says_how_many_days_a_function_has_been_uncovered(self, page):
-        assert re.search(r"Running \d+ day\(s\) without valid evidence", page)
+        assert re.search(r"Running \d+ day\(s\) without a standing verification", page)
 
     def test_a_not_demonstrable_function_is_never_shown_as_covered(self, page):
         assert "Not demonstrable" in page

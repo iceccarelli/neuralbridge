@@ -3,6 +3,7 @@ import { REPO, SRC } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import { CLI_DOMAINS, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
+import ImageryNote from '../components/ImageryNote';
 
 export const metadata: Metadata = {
   title: 'CLI | Industrial Autonomous Assurance',
@@ -49,7 +50,7 @@ export default function CliPage() {
             <p>No account, no upload — every domain reads and writes local files unless it explicitly names an API call below.</p>
           </div>
           <p className="code-panel-label">Install and check</p>
-          <pre className="code-panel">{`pip install -e '.[assurance-attest]'
+          <pre className="code-panel">{`pip install cryptography && export PYTHONPATH=src   # from a checkout; nothing else to install
 python -m assurance                     # lists every domain
 python -m assurance kit init plant/     # a runnable kit
 python -m assurance kit check plant/kit.json`}</pre>
@@ -63,7 +64,8 @@ python -m assurance kit check plant/kit.json`}</pre>
             <h2>Every domain, its verbs, and what it maps to</h2>
             <p>
               Checked against each domain's own <code>--help</code> output. Two domains — <code>kit</code> and{' '}
-              <code>watch</code> — are offline-first and have no API equivalent; the rest call the same tier of the
+              <code>watch</code> — are offline-first (<code>watch push</code> is the one opt-in command that reports to
+              your own hosted ledger); the rest call the same tier of the
               Assurance API listed on <a href="/developers">/developers</a>.
             </p>
           </div>
@@ -96,11 +98,10 @@ python -m assurance kit check plant/kit.json`}</pre>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Wiring an agent to this</span>
-            <h2>The CLI today, MCP tomorrow</h2>
+            <h2>The CLI, and the MCP server that wraps the same API</h2>
             <p>
-              Every CLI verb above maps 1:1 to a FastAPI route or a local file operation — the same surface an MCP
-              server would expose as tools. See <a href="/connectors/mcp">the MCP connector page</a> for the current
-              tool table and what ships today versus what a future <code>mcp/</code> package still needs.
+              The CLI and the installable <code>assurance-mcp</code> server both call the same FastAPI routes.{' '}
+              See <a href="/connectors/mcp">the MCP connector page</a> for the tool table and what it does not cover (it exposes a subset of the API, not every CLI verb).
             </p>
           </div>
         </div>
@@ -118,6 +119,7 @@ python -m assurance kit check plant/kit.json`}</pre>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

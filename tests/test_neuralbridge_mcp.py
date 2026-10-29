@@ -208,3 +208,113 @@ async def test_paid_plan_approve_loop_with_real_actor(paid_env: str) -> None:
     assert approve_result["status"] == 200
     assert approve_result["body"]["success"] is True
     assert approve_result["body"]["approved_by"] == "human_session:mcp-paid-tester"
+
+
+# ── tenant isolation: the MCP tools inherit the API's boundary, no bypass ──
+
+
+def _mint_two_account_keys() -> tuple[str, str]:
+    from assurance.billing.accounts import AccountStore
+
+    store = AccountStore(os.environ["ASSURANCE_ACCOUNTS"])
+    a = store.upsert_account(email="mcp-a@example.com", tier="register", company="MCP Account A")
+    b = store.upsert_account(email="mcp-b@example.com", tier="register", company="MCP Account B")
+    return store.issue_key(a.id, label="mcp-a"), store.issue_key(b.id, label="mcp-b")
+
+
+def _bind_over_http(base_url: str, key: str, name: str) -> str:
+    r = httpx.post(
+        f"{base_url}/ai/connections",
+        headers={"X-API-Key": key, "X-NB-Actor": "mcp-tenancy-binder"},
+        json={"name": name, "host": PG_HOST, "port": PG_PORT, "user": PG_USER,
+              "password": PG_PASSWORD, "database": PG_DATABASE},
+        timeout=10.0,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_cannot_cross_the_tenant_boundary(running_api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from neuralbridge.mcp.server import (
+        ai_approve,
+        ai_audit,
+        ai_capabilities,
+        ai_deny,
+        ai_list_connections,
+        ai_plan_write,
+        ai_read,
+    )
+
+    key_a, key_b = _mint_two_account_keys()
+    a_name = "MCP-A-PRIVATE-DB"
+    a_id = _bind_over_http(running_api, key_a, a_name)
+    monkeypatch.setenv("NEURALBRIDGE_API_URL", running_api)
+
+    # Account A, through MCP, uses its own connection and proposes a write.
+    monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_a)
+    monkeypatch.setenv("NEURALBRIDGE_AI_ACTOR", "mcp-tenant-a")
+    assert a_id in {c["id"] for c in (await ai_list_connections())["body"]}
+    assert (await ai_read(connection_id=a_id, operation="query", params={"sql": "SELECT 1 AS one"}))["status"] == 200
+    planned = await ai_plan_write(
+        connection_id=a_id, operation="execute_sql", params={"sql": "UPDATE mcp_test_customers SET name=name"}
+    )
+    assert planned["status"] == 200
+    plan_id = planned["body"]["plan"]["id"]
+
+    # Account B and an anonymous MCP client: A's connection and plan do not exist for them.
+    for key in (key_b, None):
+        if key:
+            monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key)
+        else:
+            monkeypatch.delenv("NEURALBRIDGE_AI_API_KEY", raising=False)
+        monkeypatch.setenv("NEURALBRIDGE_AI_ACTOR", "mcp-tenant-a")  # same actor label: grants nothing
+
+        listing = await ai_list_connections()
+        assert a_name not in str(listing) and a_id not in str(listing)
+        read_attempt = await ai_read(connection_id=a_id, operation="query", params={"sql": "SELECT current_user"})
+        assert read_attempt["status"] == 404
+        assert (await ai_capabilities(connection_id=a_id))["status"] == 404
+        assert a_id not in str(await ai_audit())
+        if key:
+            blocked = await ai_plan_write(
+                connection_id=a_id, operation="execute_sql", params={"sql": "DELETE FROM mcp_test_customers"}
+            )
+            assert blocked["status"] == 404
+            assert (await ai_approve(plan_id=plan_id))["status"] == 404
+            assert (await ai_deny(plan_id=plan_id))["status"] == 404
+        else:
+            assert (await ai_approve(plan_id=plan_id))["status"] == 402
+
+    # A tool argument cannot smuggle extra query parameters or rewrite the path.
+    monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_b)
+    odd = await ai_capabilities(connection_id=f"{a_id}&connection_id=x")
+    assert odd["status"] == 404 and "&connection_id=x" in odd["body"]["detail"]
+
+    # The owner's plan is still pending and still approvable by its owner.
+    monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_a)
+    approved = await ai_approve(plan_id=plan_id)
+    assert approved["status"] == 200 and approved["body"]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_plan_id_cannot_rewrite_the_request_path(running_api: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without percent-encoding, ``plan_id = "<id>/deny?"`` turns an ``ai_approve``
+    call into ``POST /ai/plan/<id>/deny`` — an action the caller did not ask for."""
+    from neuralbridge.mcp.server import ai_approve, ai_plan_write
+
+    key_a, _ = _mint_two_account_keys()
+    a_id = _bind_over_http(running_api, key_a, "MCP-QUOTE-DB")
+    monkeypatch.setenv("NEURALBRIDGE_API_URL", running_api)
+    monkeypatch.setenv("NEURALBRIDGE_AI_API_KEY", key_a)
+    monkeypatch.setenv("NEURALBRIDGE_AI_ACTOR", "mcp-quote")
+    planned = await ai_plan_write(
+        connection_id=a_id, operation="execute_sql", params={"sql": "UPDATE mcp_test_customers SET name=name"}
+    )
+    plan_id = planned["body"]["plan"]["id"]
+
+    result = await ai_approve(plan_id=f"{plan_id}/deny?")
+    assert result["status"] == 404
+
+    status = httpx.get(f"{running_api}/ai/plan/{plan_id}", headers={"X-API-Key": key_a}, timeout=10.0).json()
+    assert status["status"] == "pending_approval"

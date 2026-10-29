@@ -18,10 +18,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import structlog
+
 from neuralbridge.adapters.databases.postgres import PostgresAdapter
 from neuralbridge.ai.schemas import ConnectionSummary
 from neuralbridge.ai.store import AiStore, ConnectionRecord, new_id
+from neuralbridge.ai.tenancy import Scope, can_delete_connection, can_read_connection
 from neuralbridge.core.router import AdapterRegistry
+
+logger = structlog.get_logger(__name__)
 
 ENV_PREFIX = "NEURALBRIDGE_AI_PG_"
 SEEDED_REGISTRY_KEY = "postgres"
@@ -86,6 +91,7 @@ def create_connection(
     registry: AdapterRegistry,
     store: AiStore,
     *,
+    owner: str,
     name: str,
     host: str,
     port: int,
@@ -94,9 +100,13 @@ def create_connection(
     database: str,
     ssl_mode: str = "prefer",
 ) -> ConnectionRecord:
-    """Bind an additional Postgres connection. Paid-gated at the route
-    layer (``require_ai_control_plane``) — this function itself does not
-    check entitlement, callers must."""
+    """Bind an additional Postgres connection, owned by ``owner`` — the
+    account id from the validated principal (``entitlements.scope_for``),
+    never a caller-supplied field. Paid-gated at the route layer
+    (``require_ai_control_plane``) — this function itself does not check
+    entitlement, callers must."""
+    if not owner:
+        raise ValueError("a bound connection must have an owner")
     connection_id = new_id()
     registry_key = f"postgres:{connection_id}"
     adapter_config = {
@@ -117,13 +127,17 @@ def create_connection(
         config={"host": host, "port": port, "database": database},
         source="bound_by_operator",
         status="created",
+        owner=owner,
     )
     store.create_connection(record)
     return record
 
 
-def list_connections(registry: AdapterRegistry, store: AiStore) -> list[ConnectionSummary]:
-    """Real connections only — reads the durable store, seeding postgres if configured."""
+def list_connections(registry: AdapterRegistry, store: AiStore, scope: Scope) -> list[ConnectionSummary]:
+    """Connections ``scope`` may see — its own plus the shared seeded demo
+    (operator: all). Reads the durable store, seeding postgres if configured.
+    Never returns anything but id/name/type/status/source: no config, no
+    credential, no registry key, no owner."""
     ensure_seeded_connection(registry, store)
     return [
         ConnectionSummary(
@@ -134,8 +148,33 @@ def list_connections(registry: AdapterRegistry, store: AiStore) -> list[Connecti
             source=r.source,
         )
         for r in store.list_connections()
+        if can_read_connection(scope, r)
     ]
 
 
-def get_connection(store: AiStore, connection_id: str) -> ConnectionRecord | None:
-    return store.get_connection(connection_id)
+def get_connection(store: AiStore, scope: Scope, connection_id: str) -> ConnectionRecord | None:
+    """The connection if ``scope`` may see it; ``None`` otherwise — a
+    connection someone else owns is indistinguishable from a missing one."""
+    record = store.get_connection(connection_id)
+    if record is None or not can_read_connection(scope, record):
+        return None
+    return record
+
+
+async def delete_connection(registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str) -> bool:
+    """Unbind a connection ``scope`` owns (the seeded demo: operator only).
+    ``False`` means not found *or* not yours — callers answer 404 either way.
+    Closes and unregisters the live adapter so the credential leaves memory."""
+    record = store.get_connection(connection_id)
+    if record is None or not can_delete_connection(scope, record):
+        return False
+    if not store.delete_connection(connection_id):
+        return False
+    adapter = registry.get(record.registry_key)
+    registry.unregister(record.registry_key)
+    if adapter is not None:
+        try:
+            await adapter.disconnect()
+        except Exception:  # best effort: the record is gone either way
+            logger.warning("ai_connection_disconnect_failed", connection_id=connection_id)
+    return True

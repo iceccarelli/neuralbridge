@@ -21,9 +21,9 @@ export const SOLUTIONS: SolutionPage[] = [
     slug: 'manufacturer',
     role: 'Manufacturer',
     kicker: 'For manufacturers placing machines on the EU market',
-    headline: 'Your Declaration of Conformity is only true the day you sign it.',
+    headline: 'Your Declaration of Conformity describes the machine only as it was the day you signed it.',
     lead:
-      'You shipped a machine with a Declaration of Conformity, a risk assessment, and a CE mark. Every firmware patch, scanner re-zone, or PLC change since then is a day that Declaration has been quietly less true — and nothing in your process says so.',
+      'You shipped a machine with a Declaration of Conformity, a risk assessment, and a CE mark. Every firmware patch, scanner re-zone, or PLC change since then is a day that Declaration may have stopped describing the machine — and nothing in your process says so.',
     clockAngle:
       'CRA Art. 14 puts a 24-hour clock on you the moment a vulnerability in a product you placed on the market is actively exploited — even for products sold before 11 Dec 2027 (Art. 69(3)). Machinery Reg. Annex III 1.1.9 requires you to identify the safety-relevant software on the machine and record evidence of intervention, applying 20 Jan 2027.',
     painPoints: [
@@ -47,15 +47,15 @@ export const SOLUTIONS: SolutionPage[] = [
     lead:
       'A safety controller update, a re-zoned scanner, a PLC project patch — often pushed by an integrator or a remote service call you were not in the room for. When something goes wrong, the plant is where the questions land first.',
     clockAngle:
-      'Machinery Reg. Annex III 1.1.9 requires the machine to identify its safety-relevant software and record evidence of intervention — applying 20 Jan 2027. If your integrator or OEM can’t produce that evidence, you are the one standing in front of the inspector.',
+      'Machinery Reg. Annex III 1.1.9 requires the machine to identify its safety-relevant software and record evidence of intervention — applying 20 Jan 2027. If your integrator or OEM can’t produce that evidence, you may be the one asked to explain it.',
     painPoints: [
       { title: 'You inherit somebody else’s change', body: 'Interventions on safety-bearing items happen without your sign-off, and nothing re-runs the verification that used to cover them.' },
-      { title: '"It still works" is not evidence', body: 'A machine running fine today says nothing about whether its safety functions still have valid evidence behind them.' },
+      { title: '"It still works" is not evidence', body: 'A machine running fine today says nothing about whether a recorded verification still stands behind each of its safety functions.' },
       { title: 'You need your own record, independent of the OEM', body: 'The offline enrolment kit runs on your machine, into your own ledger — you do not have to trust anyone else’s bookkeeping.' },
     ],
     proof: [
       { title: 'The staleness join', body: 'A sign-off from February, a firmware change in March, and the named safety functions whose evidence stopped applying — dated, not argued.', href: `/docs/assurance/machinery` },
-      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that proves nothing left your network.', href: `/docs/assurance/kit` },
+      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that refuses every outbound socket during a run.', href: `/docs/assurance/kit` },
     ],
     primaryCta: { label: 'Run the offline kit', href: QUICKSTART },
     secondaryCta: { label: 'See pricing', href: '/#pricing' },
@@ -72,11 +72,11 @@ export const SOLUTIONS: SolutionPage[] = [
       'Two clocks, both load-bearing: the 24-hour early warning under Art. 14, and the final-report clock — 14 days from a corrective or mitigating measure for a vulnerability, one calendar month from submission of the 72-hour notification for an incident. Getting either wrong is not a rounding error.',
     painPoints: [
       { title: 'Awareness is a fact, not a feeling', body: 'The reporting platform does not independently capture the awareness timestamp for vulnerabilities — everything downstream runs from a date only you can defend.' },
-      { title: 'The 39-field spec has traps', body: 'A listed territory that is not an EU Member State, a field that exceeds a character limit, a required field silently absent at your stage — the free Validator catches these before you open the platform.' },
+      { title: 'The 39-field spec has traps', body: 'A listed territory that is not an EU Member State, a field that exceeds a character limit, a required field silently absent at your stage — the free Validator flags these before you open the platform.' },
       { title: 'A hash-chained register, not a folder of PDFs', body: 'Every case, every clock, every piece of triage reasoning, in one append-only ledger that refuses to export if it does not verify.' },
     ],
     proof: [
-      { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — free, no account, forever.', href: '/#products' },
+      { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — free, no account.', href: '/#products' },
       { title: 'Both deadline clocks, computed correctly', href: `/docs/assurance/deploy`, body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
@@ -89,16 +89,16 @@ export const SOLUTIONS: SolutionPage[] = [
     kicker: 'For the person who has to check someone else’s evidence',
     headline: 'You should never need an account to verify a claim.',
     lead:
-      'A manufacturer hands you a Declaration of Conformity, an attestation, or a safety verification bundle. Your job is to check whether it is real, current, and internally consistent — and you should not need to buy anything to do it.',
+      'A manufacturer hands you a Declaration of Conformity, an attestation, or a safety verification bundle. Your job is to check whether it is internally consistent and still matches the machine it describes — and you should not need to buy anything to do it. A check like this shows consistency, not that the people who produced it were right.',
     clockAngle:
-      'The regulations create the paper trail you are checking: CRA Art. 14 records (applies since 11 Sep 2026) and Machinery Reg. Annex III 1.1.9 evidence of intervention (applies 20 Jan 2027). Verification of that evidence is engineered to be free at every tier, permanently — the audience for a piece of evidence is a regulator or an insurer, never an account holder.',
+      'The regulations create the paper trail you are checking: CRA Art. 14 records (applies since 11 Sep 2026) and Machinery Reg. Annex III 1.1.9 evidence of intervention (applies 20 Jan 2027). Re-checking someone else’s evidence needs no account, because the audience for a piece of evidence is a regulator or an insurer, not an account holder. Declaration, evidence-bundle, passport and attestation checks are not metered. The file verifier (POST /v1/evidence/verify, and /verify on this site) allows 20 a day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either.',
     painPoints: [
       { title: 'A hash chain only proves editing was caught', body: 'A chain rebuilt from genesis after deleting inconvenient records still verifies. Counter-signed head attestation is the part that catches deletion, and you can verify a signature without an account.' },
       { title: 'A label can lie about the bytes', body: 'The firmware says 3.9.0; the supplier’s published hash for 3.9.0 does not match what is on the machine. That mismatch is a first-class, reportable finding — not silently ignored.' },
-      { title: 'You need to check, not take their word for it', body: 'Every verification route — Declaration check, manifest diff, bundle re-check, attestation verify — runs with no account, by design.' },
+      { title: 'You need to check, not take their word for it', body: 'Declaration check, manifest diff, bundle re-check, passport check, attestation verify and the file verifier all run with no account, by design. Only the file verifier and manifest diff carry a daily allowance; the others are not metered.' },
     ],
     proof: [
-      { title: 'Free forever, by design', body: 'Declaration check, bundle re-verification, and attestation verification are engineered as always-free — the buyer or auditor is never the paying customer.', href: '/#pricing' },
+      { title: 'Free to re-check, by design', body: 'Declaration check, bundle re-verification, passport check and attestation verification are not metered in code, so the buyer or auditor is never the paying customer. The file verifier and manifest diff carry small daily allowances.', href: '/#pricing' },
       { title: 'Counter-signed head attestation', body: 'A signature over the ledger head by a key the operator does not hold — the one thing that catches a ledger that was quietly shortened.', href: `/docs/assurance/attest` },
     ],
     primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
@@ -109,18 +109,18 @@ export const SOLUTIONS: SolutionPage[] = [
     slug: 'ai-ops',
     role: 'AI / ops platform team',
     kicker: 'For teams building on top of the platform layer',
-    headline: 'The assurance product sits on a real integration layer — not a demo.',
+    headline: 'The assurance product is built on an integration layer you can run from source.',
     lead:
       'NeuralBridge is the FastAPI backend, MCP gateway, and connection model the assurance product is built on. If your team is exposing tools to AI agents or wiring up connection state, this is the layer underneath, not a separate pitch.',
     clockAngle:
       'The compliance clocks (CRA Art. 14 since 11 Sep 2026; Machinery Reg. Annex III 1.1.9 from 20 Jan 2027) are what the assurance layer answers to. The platform layer underneath is judged by a narrower, honest standard: what is actually supported today, not the roadmap.',
     painPoints: [
-      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small supported adapter set (PostgreSQL, REST) — not a universal enterprise middleware claim.' },
-      { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard exists as a Next.js console but is not integrated with the assurance product — said plainly, not glossed over.' },
+      { title: 'The platform is intentionally narrow right now', body: 'A FastAPI backend, MCP tool listing and invocation, and a small adapter set (PostgreSQL, REST) whose supported scope is intended, not yet claimed — not a universal enterprise middleware claim.' },
+      { title: 'The dashboard is not yet wired to assurance', body: 'src/dashboard is a separate Vite/React admin UI that makes no calls to the assurance API — it is not integrated with the assurance product. The working surfaces are /console and /ai on this site. Said plainly, not glossed over.' },
       { title: 'Broad adapter coverage is evolving, not shipped', body: 'Treat anything not marked Supported in the README as evolving. That is the honest line, and it is the one this page holds too.' },
     ],
     proof: [
-      { title: 'The platform status table', body: 'What is Supported vs Evolving today, generated from the same README the rest of this site is checked against.', href: '/#platform' },
+      { title: 'The platform status table', body: 'The README’s status table, word for word — a test compares the site’s rows with it.', href: '/#platform' },
       { title: 'MCP gateway', body: 'Tool listing and invocation for AI agents, sitting underneath the assurance API.', href: '/#platform' },
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },

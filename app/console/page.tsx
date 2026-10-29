@@ -24,7 +24,8 @@ export default function ConsolePage() {
             Every route from <a href="/developers">the route table</a>, filterable like a command palette. Paste an
             API key and it calls the real deployment over <code>fetch()</code> — there is no server-side process,
             no websocket, no PTY sandbox behind this. If no API URL is configured, the call panel says so and stays
-            disabled rather than faking a response.
+            disabled rather than faking a response. For fleet and case views instead of raw calls, use the{' '}
+            <a href="/assurance">assurance workspace</a> (Cell plan).
           </p>
         </div>
       </section>

@@ -1,10 +1,13 @@
 import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import structuredOffers from './lib/structured-offers.json';
+import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
 import { IMAGES } from './lib/images';
 import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import RotatingImage from './components/RotatingImage';
+import ImageryNote from './components/ImageryNote';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
@@ -49,7 +52,7 @@ const products = [
     badge: '€390/mo',
     badgeClass: 'paid',
     name: 'Article 14 Register',
-    body: 'The CRA register for one manufacturer: unlimited cases, both deadline clocks computed correctly, hash-chained ledger with verifiable export, 25 product families.',
+    body: 'The CRA register for one manufacturer: both deadline clocks computed correctly, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-register',
@@ -58,7 +61,7 @@ const products = [
     badge: '€1,290/mo',
     badgeClass: 'paid',
     name: 'Cell',
-    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, and counter-signed head attestation.',
+    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-cell',
@@ -76,7 +79,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Machinery Annex III',
-    body: 'What safety software is on the machine, who changed it, and which safety functions still have evidence that describes the machine as it is today.',
+    body: 'What safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change.',
     href: `/docs/assurance/machinery`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-annex-iii',
@@ -94,7 +97,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Watch',
-    body: 'The component that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved".',
+    body: 'Scheduled drift checks. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved". Runs in your kit or cron; the hosted API does not run it.',
     href: `/docs/assurance/watch`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-watch',
@@ -121,37 +124,43 @@ const products = [
     badge: 'API',
     badgeClass: 'source',
     name: 'Assurance API',
-    body: 'FastAPI surface for billing and entitlements. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
+    body: 'FastAPI surface: plans and entitlements, the Article 14 register, machine verification, fleet and change assurance, Watch reports and hosted supplier feeds. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
     href: `${SRC}/api`,
     cta: 'View source',
     imageKey: 'card-api-assurance',
   },
 ] as const;
 
-const platformStatus = [
-  { area: 'FastAPI backend', status: 'Supported' },
-  { area: 'Connection management model', status: 'Supported' },
-  { area: 'MCP tool listing / invocation', status: 'Supported' },
-  { area: 'Dashboard foundation', status: 'Supported' },
-  { area: 'Basic audit trail', status: 'Supported' },
-  { area: 'Small set of working adapters (PostgreSQL, REST)', status: 'Supported' },
-  { area: 'Broad adapter ecosystem', status: 'Evolving' },
-  { area: 'Full enterprise compliance posture', status: 'Evolving' },
+// Offers and Products are emitted on the home page only (where the prices are shown), not on every
+// route: /checkout/success, /assurance and /status are noindex and should carry no price markup.
+// Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
+// pins the numbers and the period to billing/plans.py.
+const structuredDataBlocks = [
+  structuredOffers.softwareApplication,
+  ...structuredOffers.products,
 ];
 
 export default function IndustrialAutonomousAssuranceSite() {
   return (
     <main id="top">
+      {structuredDataBlocks.map((block) => (
+        <script
+          key={`${block['@type']}-${'name' in block ? block.name : ''}`}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(block) }}
+        />
+      ))}
       {/* HERO */}
       <section className="hero">
         <div className="shell hero-grid">
           <div>
             <span className="kicker">Evidence infrastructure for machines whose software can hurt someone</span>
-            <h1>A hash-chained record of what is on each machine, what was verified, and when.</h1>
+            <h1>A hash-chained record of what is on each machine, which checks were run against it, and when.</h1>
             <p className="hero-lead">
               CRA Article 14 gives you 24 hours to file after an actively exploited vulnerability. Machinery
-              Regulation Annex III 1.1.9 requires you to identify safety-relevant software and record evidence of
-              intervention. Neither is satisfiable from a spreadsheet. This is built from the record instead.
+              Regulation Annex III 1.1.9 requires the machine to identify safety-relevant software and record
+              evidence of intervention. Software does not satisfy either for you. What a hash-chained record can do
+              is let you evidence your own process, and show a reviewer which records stopped describing the machine.
             </p>
             <div className="hero-actions">
               <a className="btn btn-primary" href="#advisory-check">A change or advisory just landed — check it free</a>
@@ -183,7 +192,7 @@ export default function IndustrialAutonomousAssuranceSite() {
             </div>
             <div className="hero-panel">
               <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-              <div className="hero-code">{`pip install -e '.[assurance-attest]'
+              <div className="hero-code">{`pip install cryptography && export PYTHONPATH=src
 python -m assurance kit init plant/
 python -m assurance kit check plant/kit.json
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
@@ -273,8 +282,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Start here</span>
-            <h2>Find your proof in one click.</h2>
-            <p>Every answer below is a real terminal capture from this exact codebase &mdash; not a mockup.</p>
+            <h2>Find your answer in one click.</h2>
+            <p>
+              Each output below is an excerpt of what the shipped command printed on this repository&apos;s synthetic
+              example files (machine names and hashes are fixtures, not a customer&apos;s); a line shown as &hellip;
+              was left out. <code>tests/test_site_honesty.py</code> re-runs each command and fails if a line shown is
+              not in its output. Re-run the command shown to reproduce it.
+            </p>
           </div>
           <IntentModule />
         </div>
@@ -304,6 +318,11 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               intervention history, its evidence staleness, and the fleet-wide fan-out across every other enrolled
               machine &mdash; the Cell plan.
             </p>
+            <p className="hero-panel-note">
+              Handed an evidence export, a machine verification bundle or a signed attestation log?{' '}
+              <a href="/verify">Check what can and cannot be established from the file</a> &mdash; free, no account,
+              nothing stored.
+            </p>
           </div>
 
           <div className="section-head">
@@ -319,10 +338,10 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <div className="hero-panel-title">The free CRA Article 14 validator &mdash; try it right here</div>
             <ValidatorPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/spec/validate</code> endpoint. A prior run against this exact
-              service flagged five missing required fields and that <strong>Switzerland is not an EU Member
-              State</strong> &mdash; a live regulatory check, not a mockup. See the pricing section for whether this
-              route is hosted publicly right now.
+              This calls the real <code>POST /v1/spec/validate</code> endpoint: it reports missing required fields and
+              listed territories that are not EU Member States (<strong>Switzerland is not an EU Member State</strong>)
+              &mdash; a live regulatory check, not a mockup. See the pricing section for whether this route is hosted
+              publicly right now.
             </p>
           </div>
 
@@ -382,11 +401,14 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Pricing</span>
-            <h2>Three tiers. Verification is free at every one, always.</h2>
+            <h2>Three tiers. Re-checking someone else&apos;s evidence needs no account.</h2>
             <p>
-              Assurance tiers are computed from the weakest input, never passed in. If it is not gated in code, it is
-              not on this page — <code>GET /v1/plans</code> returns this same table, generated from the
-              entitlements the software enforces.
+              If it is not gated in code, it is not on this page — <code>GET /v1/plans</code> returns this same
+              table, generated from the entitlements the software enforces. Re-checking someone else&apos;s evidence
+              needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered.
+              The file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site)
+              allows 20 a day per address; manifest diff allows 10 a day.
+              Register and Cell have no daily cap on either.
             </p>
           </div>
 
@@ -437,13 +459,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>/ai control plane — propose-and-approve writes, bind connections, full audit</td>
+                  <td>/ai control plane — propose-and-approve writes, bind connections, an in-memory audit log for your account</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>Article 14 register (unlimited cases, both clocks)</td>
+                  <td>Article 14 register (both clocks; cases are not metered)</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>
@@ -473,6 +495,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
+                  <td>Change-assurance cases (<code>/v1/change/*</code>; closure is a named human decision; a validated verification needs a recorder attestation accepted under a trust list the operator configures, none is configured in a default deployment, so a required re-verification is closed in practice by a named person&apos;s waiver)</td>
+                  <td>—</td>
+                  <td>—</td>
+                  <td className="check">✓</td>
+                </tr>
+                <tr>
                   <td>Counter-signed head attestation</td>
                   <td>—</td>
                   <td>—</td>
@@ -493,6 +521,11 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             and <a href="/docs/assurance/deploy">the deploy guide</a> for the exact
             remaining steps.
           </p>
+          <p className="pricing-note">
+            The prices (&euro;390 and &euro;1,290 a month) are launch hypotheses. They have not been validated
+            with paying customers, and nothing on this page claims otherwise. Watch (the scheduled drift check)
+            runs in your own kit or cron &mdash; the hosted API serves cases, it does not run a scheduler for you.
+          </p>
         </div>
       </section>
 
@@ -504,7 +537,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>NeuralBridge: the integration layer the assurance product is built on.</h2>
             <p>
               A lightweight integration hub: a FastAPI backend, an MCP gateway for AI tool exposure, a small set of
-              supported adapters, and a dashboard. It is intentionally narrower than it once claimed to be.
+              adapters (supported scope intended, see the table), and a dashboard. It is intentionally narrower than
+              it once claimed to be. The rows below are the README&apos;s own table, word for word.
             </p>
           </div>
           <RotatingImage
@@ -522,13 +556,14 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                 </tr>
               </thead>
               <tbody>
-                {platformStatus.map((row) => (
+                {PLATFORM_STATUS.map((row) => (
                   <tr key={row.area}>
-                    <td>{row.area}</td>
                     <td>
-                      <span className={`status-pill ${row.status === 'Supported' ? 'supported' : 'evolving'}`}>
-                        {row.status}
-                      </span>
+                      {row.area}
+                      {row.note ? <span className="status-note">{row.note}</span> : null}
+                    </td>
+                    <td>
+                      <span className={`status-pill ${row.pill}`}>{row.status}</span>
                     </td>
                   </tr>
                 ))}
@@ -548,12 +583,18 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       <section className="final-cta" id="connect">
         <div className="shell final-cta-inner">
           <div>
-            <h2>Verify one Declaration for free. See what your paperwork stopped describing.</h2>
-            <p>No account, no upload, no procurement cycle to start. The Validator tier runs on your machine today.</p>
+            <h2>Re-check one Declaration for free. See what your paperwork stopped describing.</h2>
+            <p>
+              The free checks need no account. The offline kit needs no account, key or upload and opens no sockets.
+              The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.
+            </p>
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href={QUICKSTART}>
               Get the quickstart
+            </a>
+            <a className="btn btn-outline" href="/verify">
+              Check an evidence file
             </a>
             <a className="btn btn-outline" href={SALES}>
               Talk to sales
@@ -561,6 +602,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

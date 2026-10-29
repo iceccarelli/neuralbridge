@@ -387,10 +387,17 @@ class TestDeclaration:
                 issued_at=datetime(2026, 1, 1, tzinfo=UTC),
                 configuration_hash="a" * 64, legislation=())
 
-    def test_an_unchanged_machine_is_still_described(self):
+    def test_an_unchanged_machine_with_no_coverage_assessment_is_not_yet_described(self):
+        # This test used to assert DESCRIBES_THE_MACHINE here, with the statement "every
+        # declared safety function has evidence that still stands", for a check that was
+        # never given any evidence to look at. That was the bug (unassessed read as pass);
+        # the passing case is pinned in test_assurance_unassessed_is_not_pass.py.
         man = manifest()
         status = check_declaration(self._doc(man), man)
-        assert status.verdict is DeclarationVerdict.DESCRIBES_THE_MACHINE
+        assert status.verdict is \
+            DeclarationVerdict.CONFIGURATION_MATCHES_COVERAGE_NOT_ASSESSED
+        assert status.evidence_assessed is False
+        assert status.is_sound is False
 
     def test_a_changed_configuration_is_the_finding(self):
         man = manifest()
@@ -472,15 +479,27 @@ def store(client):
     return deps.get_accounts()
 
 
-@pytest.fixture
-def api_ledger(client):
-    from assurance.api import deps
-    return deps.get_register().ledger
+# One account per (store, tier). Accounts are no longer merged by email, and
+# every account has its own ledger, so a test that seeds a ledger and then
+# calls as an account must seed THAT account's ledger.
+_KEYED: dict = {}
 
 
 def keyed(store, tier):
-    account = store.upsert_account(email=f"{tier}-fleet@example.de", tier=tier)
-    return {"X-API-Key": store.issue_key(account.id)}
+    slot = (str(store.path), tier)
+    if slot not in _KEYED:
+        account = store.upsert_account(email=f"{tier}-fleet@example.de", tier=tier)
+        _KEYED[slot] = (account, store.issue_key(account.id))
+    return {"X-API-Key": _KEYED[slot][1]}
+
+
+@pytest.fixture
+def api_ledger(client, store):
+    """The cell account's own ledger (the one ``keyed(store, "cell")`` reads)."""
+    from assurance.api import deps
+    keyed(store, "cell")
+    account = _KEYED[(str(store.path), "cell")][0]
+    return deps._tenant_register_for(str(deps.tenant_ledger_path(account.id))).ledger
 
 
 class TestHttp:

@@ -73,6 +73,7 @@ type Verdict =
   | 'requires_human_review'
   | 'insufficient_evidence'
   | 'cannot_determine'
+  | 'verified_at_community'
   | 'verified';
 
 type CheckResponse = {
@@ -83,7 +84,15 @@ type CheckResponse = {
   affected: boolean;
   configuration: { status: 'matched' | 'changed' | 'unknown'; changes: unknown[] };
   matches: Match[];
-  evidence: { valid: number; stale: number; insufficient: number; cannot_determine: number };
+  evidence: {
+    valid: number;
+    // Current on evidence below validated (a declared provenance): standing, not demonstrated.
+    valid_below_validated?: number;
+    tier_floor?: string;
+    stale: number;
+    insufficient: number;
+    cannot_determine: number;
+  };
   required_actions: string[];
   human_review_required: boolean;
   checks_skipped: string[];
@@ -120,12 +129,14 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   requires_human_review: 'REQUIRES HUMAN REVIEW',
   insufficient_evidence: 'INSUFFICIENT EVIDENCE',
   cannot_determine: 'CANNOT DETERMINE',
+  verified_at_community: 'VERIFIED AT COMMUNITY ONLY (below validated)',
   verified: 'VERIFIED',
 };
 
 const VERDICT_CLASS: Record<Verdict, string> = {
   no_impact_found: 'ok',
   verified: 'ok',
+  verified_at_community: 'blocked',
   potentially_affected: 'blocked',
   requires_reverification: 'blocked',
   requires_human_review: 'blocked',

@@ -27,7 +27,7 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machinery.manifest import ManifestSource
+from assurance.machinery.manifest import HashSource, ManifestSource
 from assurance.machinery.record import record_manifest
 
 __all__ = ["build_parser", "main"]
@@ -70,9 +70,22 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--taken-at", default="", help="ISO timestamp; defaults to now")
     rn.add_argument("--as-declared", action="store_true",
                     help="this is a baseline built from a release, not a machine")
+    rn.add_argument("--read-from-machine", action="store_true",
+                    help="assert that this collector ran ON the machine, so the hashes "
+                         "describe the unit and not an export of it. Without this the "
+                         "items are labelled supplied_by_vendor (community ceiling): a "
+                         "folder of exported files cannot show which machine it came "
+                         "from. The assertion is yours, it is recorded in the manifest "
+                         "as such, and the software cannot check it")
     rn.add_argument("--out", type=Path, default=None)
     rn.add_argument("--ledger", type=Path, default=None,
                     help="seal the manifest into this evidence ledger")
+    rn.add_argument("--seal-incomplete", action="store_true",
+                    help="seal even when a required item could not be read. The "
+                         "manifest then becomes the machine's current one with those "
+                         "items absent, and an advisory about them will not match "
+                         "this machine; by default an incomplete collection is not "
+                         "sealed")
     rn.add_argument("--json", action="store_true")
 
     return p
@@ -132,6 +145,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     plan = CollectionPlan.from_json(args.plan)
+    if args.read_from_machine and args.as_declared:
+        raise AssuranceError(
+            "--as-declared and --read-from-machine contradict each other: an "
+            "as-declared baseline is built from a release, not read off a machine.")
     result = collect(
         plan, args.root, serial=args.serial,
         taken_by=Actor(identifier=args.actor, role=args.role, kind="person"),
@@ -140,6 +157,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         source=ManifestSource.AS_DECLARED if args.as_declared
         else ManifestSource.AS_FOUND,
         taken_at=parse_utc(args.taken_at) if args.taken_at else None,
+        hash_source=HashSource.READ_FROM_MACHINE if args.read_from_machine
+        else HashSource.SUPPLIED_BY_VENDOR,
     )
 
     if args.out:
@@ -148,7 +167,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             encoding="utf-8")
 
     sealed = ""
-    if args.ledger:
+    refused = ""
+    if args.ledger and not result.complete and not args.seal_incomplete:
+        refused = ("not sealed: the collection is incomplete, and a sealed manifest "
+                   "becomes the machine's current one with the missing items absent "
+                   "from every later comparison. Fix the export, or pass "
+                   "--seal-incomplete to seal what was read.")
+    elif args.ledger:
         ledger = EvidenceLedger(args.ledger)
         evidence = record_manifest(ledger, result.manifest)
         sealed = f"{evidence.content_hash[:16]} as entry {len(ledger)}"
@@ -156,6 +181,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.json:
         payload = result.to_dict()
         payload["sealed"] = sealed
+        payload["not_sealed"] = refused
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(result.summary())
@@ -163,6 +189,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"\n  manifest written to {args.out}")
         if sealed:
             print(f"  sealed {sealed}")
+        if refused:
+            print(f"  {refused}")
         if not result.complete:
             print("\n  This collection is INCOMPLETE. The missing items are absent "
                   "from the manifest, so nothing derived from it says anything "

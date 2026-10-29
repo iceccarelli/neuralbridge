@@ -23,20 +23,25 @@ wrong, and no room for a curve or a padding mode to be selected badly.
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from cryptography.exceptions import InvalidSignature
+    from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
 except ImportError as _exc:  # pragma: no cover - environment, not logic
     raise ImportError(
         "assurance.attest needs the `cryptography` package for Ed25519. Install "
-        "it with `pip install 'neuralbridge[assurance-attest]'` or "
-        "`pip install cryptography`. This is the one runtime dependency in the "
-        "assurance package, and it is here because writing a signature scheme by "
-        "hand would be the worst decision in this repository."
+        "it with `pip install cryptography`, and run from the checkout with "
+        "`PYTHONPATH=src`. It is the one third-party package the offline "
+        "kit imports, and it is here because writing a signature scheme by hand "
+        "would be the worst decision in this repository. (Installing the project "
+        "instead, `pip install -e '.[assurance-attest]'` from the checkout, also "
+        "works but installs all 22 core dependencies of the NeuralBridge "
+        "middleware, `neuralbridge-middleware`: the extra adds nothing, because "
+        "`cryptography` is already one of the 22 core dependencies.)"
     ) from _exc
 
 from assurance.core.errors import AssuranceError
@@ -70,7 +75,11 @@ class VerifyingKey:
         data = text.encode("utf-8") if isinstance(text, str) else text
         try:
             key = serialization.load_pem_public_key(data)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
+            # ``UnsupportedAlgorithm`` is what ``cryptography`` raises for a well-formed
+            # key of an algorithm it does not know (an unknown OID). It is not a
+            # ``ValueError``, and a caller-supplied trust list must never be able to
+            # raise it past the route that read it.
             raise SigningKeyError(f"not a readable PEM public key: {exc}") from exc
         if not isinstance(key, ed25519.Ed25519PublicKey):
             raise SigningKeyError(
@@ -140,7 +149,7 @@ class SigningKey:
             raise SigningKeyError(
                 f"{where} is encrypted and no passphrase was given."
             ) from exc
-        except ValueError as exc:
+        except (ValueError, UnsupportedAlgorithm) as exc:
             raise SigningKeyError(
                 f"{where} could not be read: {exc}. If it is encrypted, the "
                 "passphrase is wrong."
@@ -150,11 +159,16 @@ class SigningKey:
         return cls(private=key)
 
     @classmethod
-    def load(cls, path: str | Path, *, passphrase: str = "") -> SigningKey:
+    def load(
+        cls, path: str | Path, *, passphrase: str = "", label: str | None = None,
+    ) -> SigningKey:
+        """Load a key file. *label* names it in errors: a server passes one so that
+        no message it sends to a client contains a filesystem path."""
         p = Path(path)
+        name = label or str(p)
         if not p.exists():
-            raise SigningKeyError(f"{p} does not exist.")
-        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=str(p))
+            raise SigningKeyError(f"{name} does not exist.")
+        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=name)
 
     def save(
         self, path: str | Path, *, passphrase: str = "", ledger: str | Path | None = None,
@@ -192,13 +206,30 @@ class SigningKey:
             encryption = serialization.BestAvailableEncryption(
                 passphrase.encode("utf-8"))
 
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(self.private.private_bytes(
+        pem = self.private.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=encryption,
-        ))
-        p.chmod(0o600)
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Created 0600 and exclusively, in one step: write_bytes-then-chmod leaves the
+        # key readable under the process umask (0644 by default) for an instant, and a
+        # file that appeared after the exists() check above would be written into.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(p, flags, 0o600)
+        except FileExistsError as exc:
+            raise SigningKeyError(
+                f"{p} already exists. Refusing to overwrite a signing key: every "
+                "attestation ever made with the old one becomes unverifiable, and "
+                "that is indistinguishable from the old one being repudiated."
+            ) from exc
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(pem)
+        except BaseException:
+            p.unlink(missing_ok=True)       # never leave half a key behind
+            raise
         return p
 
     @property

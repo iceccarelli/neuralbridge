@@ -32,8 +32,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Not `pip install -e '.[assurance-attest]'`: this project declares 22 core
+      # dependencies unconditionally, so that would install the whole middleware
+      # beside the one package the offline kit imports and this job would stop
+      # testing a bare machine. The README's minimal path is cryptography plus the
+      # checkout on PYTHONPATH.
       - name: Install exactly as the README says
-        run: pip install -e '.[assurance-attest]'
+        run: |
+          pip install cryptography
+          echo "PYTHONPATH=src" >> "$GITHUB_ENV"
 
       - name: Every CLI domain answers
         run: |
@@ -61,6 +68,8 @@ jobs:
           plan = json.loads((base / "plans" / "cell.json").read_text())
           plan["manufacturer"] = "CI"
           plan["model"] = "AR-7"
+          for item in plan["items"]:
+              item["supplier"] = "CI Supplier"
           (base / "plans" / "cell.json").write_text(json.dumps(plan))
 
           cfg = json.loads((base / "kit.json").read_text())

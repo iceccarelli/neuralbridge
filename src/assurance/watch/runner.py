@@ -32,10 +32,20 @@ than the cadence the watch declared.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
+from assurance.change.model import ChangeAssuranceCase, TriggerType
+from assurance.change.service import (
+    INCOMPLETE_COLLECTION_MARK,
+    assess_advisory,
+    assess_drift,
+    assess_intervention,
+    case_id_for,
+    note_advisory_withdrawn,
+)
+from assurance.change.store import CaseStore
 from assurance.collect.collector import CollectionError, collect
 from assurance.collect.plan import CollectionPlan
 from assurance.core.evidence import (
@@ -45,11 +55,12 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import format_utc, parse_utc, utc_now
+from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
-from assurance.machinery.manifest import ManifestSource
+from assurance.machinery.intervention import ImpliedIntervention
+from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -60,10 +71,18 @@ from assurance.machinery.staleness import (
     Coverage,
     VerificationRecord,
     assess_coverage,
+    tier_reaches_validated,
 )
+from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
+from assurance.watch.observations import (
+    OBSERVATION_KIND,
+    last_complete_manifest,
+    observation_succeeded,
+    observed_at_of,
+)
 
 __all__ = [
     "OBSERVATION_KIND",
@@ -74,7 +93,6 @@ __all__ = [
     "run_watch",
 ]
 
-OBSERVATION_KIND = "watch.observation"
 RUN_KIND = "watch.run"
 RUN_SCHEMA = "assurance.watch.run/1"
 
@@ -101,6 +119,26 @@ class MachineOutcome:
     affected_functions: tuple[str, ...] = ()
     detail: str = ""
     warnings: tuple[str, ...] = ()
+    #: False when the plan named items the collection did not find or read. An
+    #: incomplete look can open a case (the drift it shows is real) but it is
+    #: never a configuration the machine was in: it cannot reopen, advance or
+    #: close anything.
+    collection_complete: bool = True
+    #: The change-assurance case this run opened or updated for the drift, or
+    #: ``""`` when there was none (no drift, a drift that is not safety-relevant,
+    #: or a dry run, which writes nothing).
+    case_id: str = ""
+    case_status: str = ""
+    #: Cases opened for recorded interventions this run found unreferenced.
+    intervention_case_ids: tuple[str, ...] = ()
+    #: Open cases already concerning this machine. Listed on an uncollectable
+    #: machine so it is plain that they were left exactly where they were.
+    open_case_ids: tuple[str, ...] = ()
+    #: Why the collected manifest is not a record of looking at the machine ("" when it is):
+    #: the rule hosted ingest applies (``machinery.manifest.not_a_look``), so the local
+    #: verdict and the hosted one cannot disagree about the same data. An export folder
+    #: whose target does not assert ``read_from_machine`` is exactly this.
+    not_a_look: str = ""
 
     @property
     def is_finding(self) -> bool:
@@ -122,6 +160,12 @@ class MachineOutcome:
             "affected_functions": list(self.affected_functions),
             "detail": self.detail,
             "warnings": list(self.warnings),
+            "collection_complete": self.collection_complete,
+            "case_id": self.case_id,
+            "case_status": self.case_status,
+            "intervention_case_ids": list(self.intervention_case_ids),
+            "open_case_ids": list(self.open_case_ids),
+            "not_a_look": self.not_a_look,
         }
 
 
@@ -157,6 +201,12 @@ class WatchRun:
         return tuple(o for o in self.outcomes if o.status == "uncollectable")
 
     @property
+    def unwitnessed(self) -> tuple[MachineOutcome, ...]:
+        """Machines whose hash did not move, but over an export folder nobody asserted came
+        off the machine. "Nothing moved" is not something the watch can say about those."""
+        return tuple(o for o in self.outcomes if o.status == "observed" and o.not_a_look)
+
+    @property
     def verdict(self) -> str:
         """``quiet`` | ``findings`` | ``degraded``.
 
@@ -166,7 +216,7 @@ class WatchRun:
         otherwise a sync that quietly stopped reads as a quiet month.
         """
         if self.uncollectable or self.stale_observations \
-                or self.advisories.degraded:
+                or self.advisories.degraded or self.unwitnessed:
             return "degraded"
         if self.findings or self.advisories.is_finding or self.filings.is_finding:
             return "findings"
@@ -201,9 +251,15 @@ class WatchRun:
                  f"{len(self.outcomes)} machine(s)"]
         mark = {"changed": "DRIFT", "uncollectable": "BLIND", "first_seen": "NEW  ",
                 "observed": "ok   "}
+        if self.unwitnessed:
+            lines.append(
+                "  Nobody asserted that these exports came off the machines "
+                "(`read_from_machine`), so an unchanged hash is not reported as quiet: "
+                + ", ".join(o.serial for o in self.unwitnessed))
         order = {"uncollectable": 0, "changed": 1, "first_seen": 2, "observed": 3}
         for o in sorted(self.outcomes, key=lambda o: (order[o.status], o.serial)):
-            lines.append(f"  [{mark[o.status]}] {o.serial}  {o.detail}")
+            tag = "EXP  " if (o.status == "observed" and o.not_a_look) else mark[o.status]
+            lines.append(f"  [{tag}] {o.serial}  {o.detail}")
             if o.newly_uncovered:
                 lines.append("           NEWLY UNCOVERED: "
                              + ", ".join(o.newly_uncovered))
@@ -212,6 +268,10 @@ class WatchRun:
             if o.still_uncovered:
                 lines.append("           still uncovered (reported before): "
                              + ", ".join(o.still_uncovered))
+            if o.case_id:
+                lines.append(f"           case {o.case_id} [{o.case_status}]")
+            for cid in o.intervention_case_ids:
+                lines.append(f"           intervention case {cid}")
             for w in o.warnings:
                 lines.append(f"           ! {w}")
         if self.stale_observations:
@@ -226,6 +286,8 @@ class WatchRun:
 def _seal_observation(
     ledger: EvidenceLedger, target: WatchTarget, machine_key: str,
     configuration_hash: str, status: str, actor: Actor, detail: str,
+    observed_at: datetime,
+    complete: bool = True, missing: tuple[str, ...] = (),
 ) -> Evidence:
     """Record that this machine was looked at, whatever the look found.
 
@@ -239,10 +301,13 @@ def _seal_observation(
             "serial": target.serial,
             "machine": machine_key,
             "status": status,
+            "observed_at": format_utc(observed_at),
             "configuration_hash": configuration_hash,
             "plan": target.plan,
             "root": target.root,
             "detail": detail,
+            "complete": complete and status != "uncollectable",
+            "missing": list(missing),
         },
         actor=actor,
         origin=Origin(system="assurance.watch", reference=machine_key,
@@ -288,19 +353,26 @@ def _advisories_by_id(
 
     out: list[tuple[Any, Any]] = []
     wanted = {f.advisory_id for f in advisories.findings}
+    trusted_ids = {f.advisory_id for f in advisories.findings if not f.inspect_only}
     for sub in config.feeds:
         try:
             records = AdvisoryFeed(sub.feed).read()
+        except (AssuranceError, OSError):
+            continue  # the advisory pass already reported why this feed was unusable
+        try:
             verdict = verify_feed(records, VerifyingKey.from_file(sub.public_key),
                                   expect_supplier=sub.supplier_id)
+            live = list(verdict.live) if verdict.ok else []
         except (AssuranceError, OSError):
-            # The advisory pass has already read this feed and reported exactly
-            # why it could not be used, and that report is what degrades the
-            # run. Reporting it a second time here would double every message.
-            continue
-        if not verdict.ok:
-            continue
-        for record in verdict.live:
+            live = []
+        if not live:
+            # Trusted under the account's pinned key (a rotated key, or no config key
+            # file): the advisory pass already evaluated trust and kept only advisories
+            # the policy accepted, so take the intake's advisory from those records.
+            live = [r for r in records
+                    if r.advisory_id in trusted_ids and not r.withdraws
+                    and r.supplier.supplier_id == sub.supplier_id]
+        for record in live:
             if record.advisory_id in wanted:
                 finding = next(f for f in advisories.findings
                                if f.advisory_id == record.advisory_id)
@@ -385,6 +457,7 @@ def run_watch(
     previous = last_run(ledger, config.watch_id)
     prior = _previous_state(previous)
 
+    store = CaseStore(ledger)
     outcomes: list[MachineOutcome] = []
     sealed: list[str] = []
     caveats: list[str] = []
@@ -398,26 +471,46 @@ def run_watch(
                 plan, target.root, serial=target.serial, taken_by=actor,
                 site=target.site, country=target.country, year=target.year,
                 source=ManifestSource.AS_FOUND, taken_at=started,
+                hash_source=HashSource.READ_FROM_MACHINE if target.read_from_machine
+                else HashSource.SUPPLIED_BY_VENDOR,
             )
         except (CollectionError, FileNotFoundError, OSError) as exc:
             detail = f"could not be collected: {exc}"
+            # Failing to observe is a finding, never progress. No case is
+            # advanced, closed or touched on the strength of a machine nobody
+            # could see; the ones already open are named so that is visible.
+            held = _open_cases_for(store, machine_key or target.serial)
             outcomes.append(MachineOutcome(
                 serial=target.serial, machine_key=machine_key or target.serial,
                 status="uncollectable", detail=detail,
                 still_uncovered=tuple(
                     prior.get(target.serial, {}).get("still_uncovered", ())
                 ),
-                warnings=("an absent export is not an unchanged machine.",),
+                warnings=("an absent export is not an unchanged machine.",
+                          *(f"case {c.case_id} stays {c.status.value}: a machine "
+                            "that could not be observed cannot advance or close "
+                            "a case." for c in held)),
+                open_case_ids=tuple(c.case_id for c in held),
             ))
             if seal and machine_key:
                 _seal_observation(ledger, target, machine_key, "", "uncollectable",
-                                  actor, detail)
+                                  actor, detail, started)
             continue
 
         manifest = result.manifest
+        missing_items = tuple(o.item_id for o in (*result.missing, *result.unreadable))
+        if not result.complete:
+            # Persisted on the manifest record itself, because a case judging
+            # "did this machine leave that configuration" reads manifests and
+            # must be able to tell a partial look from a configuration.
+            manifest = replace(
+                manifest,
+                notes=(manifest.notes + " " if manifest.notes else "")
+                + f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]")
         observed = manifest.configuration_hash()
+        why_not_a_look = not_a_look(manifest)
         history = manifests_from_ledger(ledger, machine_key)
-        baseline = history[-1] if history else None
+        baseline = last_complete_manifest(history)
 
         status = "first_seen" if baseline is None else (
             "changed" if baseline.configuration_hash() != observed else "observed")
@@ -426,10 +519,19 @@ def run_watch(
         drift_items: tuple[str, ...] = ()
         affected: tuple[str, ...] = ()
         detail = ""
+        case: ChangeAssuranceCase | None = None
 
-        if status == "first_seen":
+        if status == "first_seen" and not result.complete:
+            detail = (f"first look is incomplete ({', '.join(missing_items)} not "
+                      "collected); no baseline was set, because a partial look is "
+                      "not a configuration the machine was in")
+        elif status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
                       f"{len(manifest.items)} item(s)")
+        elif status == "observed" and why_not_a_look:
+            detail = (f"same configuration hash {observed[:12]}; this is an export folder, "
+                      "not a look at the machine, so it is not reported as unchanged "
+                      "(assert `read_from_machine` for a watch that runs on the machine)")
         elif status == "observed":
             detail = f"unchanged at {observed[:12]}"
         else:
@@ -442,6 +544,19 @@ def run_watch(
                       f"{observed[:12]}: " + ", ".join(
                           f"{c.item_id} {c.kind.value}" for c in divergence.changes))
             if seal:
+                # The case comes first, before the new manifest becomes the
+                # baseline. If this run dies between the two, the next run
+                # still sees the old baseline, finds the same drift, and
+                # lands on the same case (assess_drift writes nothing the
+                # second time). Sealing the manifest first would make the
+                # drift undetectable after a crash and the case would never
+                # have existed.
+                case = assess_drift(
+                    store, divergence, manifest,
+                    VerificationRecord.from_ledger(ledger, subject=machine_key),
+                    interventions_from_ledger(ledger, machine_key), actor=actor)
+                if case is not None:
+                    sealed.append(f"case {case.case_id}")
                 record_divergence(ledger, divergence, actor=actor)
                 sealed.append(f"divergence {divergence.observed_id}")
             if worst is Severity.SAFETY_RELEVANT:
@@ -450,7 +565,10 @@ def run_watch(
                     "evidence for " + ", ".join(affected) + " is in doubt until it "
                     "is re-run; the watch cannot re-run it.")
 
-        if seal and status in ("first_seen", "changed"):
+        # An incomplete first look is not sealed: with no complete configuration
+        # before it there is nothing for it to differ from, and as the first
+        # manifest held it would become the baseline every later look is judged by.
+        if seal and (status == "changed" or (status == "first_seen" and result.complete)):
             record_manifest(ledger, manifest, actor=actor)
             sealed.append(f"manifest {manifest.manifest_id}")
 
@@ -461,13 +579,19 @@ def run_watch(
         )
         uncovered_now = {f.function_id for f in coverage.functions
                          if f.coverage is not Coverage.CURRENT}
+        # Current on evidence below 'validated' (a declared provenance) is recorded, not
+        # recovered: a function that was uncovered stays outstanding, and one that was not
+        # is not newly uncovered either.
+        weak_now = {f.function_id for f in coverage.functions
+                    if f.coverage is Coverage.CURRENT
+                    and not tier_reaches_validated(f.evidence_tier)}
         before = prior.get(target.serial, {})
         uncovered_before = set(before.get("still_uncovered", [])) | set(
             before.get("newly_uncovered", []))
 
         newly = tuple(sorted(uncovered_now - uncovered_before))
-        still = tuple(sorted(uncovered_now & uncovered_before))
-        recovered = tuple(sorted(uncovered_before - uncovered_now))
+        still = tuple(sorted((uncovered_now | weak_now) & uncovered_before))
+        recovered = tuple(sorted(uncovered_before - uncovered_now - weak_now))
 
         warnings: list[str] = []
         if not result.complete:
@@ -479,6 +603,12 @@ def run_watch(
                 "no country recorded: this unit cannot be named in a CRA Article "
                 "14 filing's Member State list.")
 
+        intervention_cases: tuple[str, ...] = ()
+        if seal:
+            intervention_cases = _assess_interventions(
+                store, ledger, manifest, machine_key, actor)
+            sealed.extend(f"case {c}" for c in intervention_cases)
+
         outcomes.append(MachineOutcome(
             serial=target.serial, machine_key=machine_key, status=status,
             configuration_hash=observed,
@@ -486,11 +616,17 @@ def run_watch(
             newly_uncovered=newly, still_uncovered=still, recovered=recovered,
             drift_severity=drift_severity, drift_items=drift_items,
             affected_functions=affected, detail=detail, warnings=tuple(warnings),
+            collection_complete=result.complete,
+            case_id=case.case_id if case else "",
+            case_status=case.status.value if case else "",
+            intervention_case_ids=intervention_cases,
+            not_a_look=why_not_a_look,
         ))
 
         if seal:
             _seal_observation(ledger, target, machine_key, observed, status,
-                              actor, detail)
+                              actor, detail, started, complete=result.complete,
+                              missing=missing_items)
 
     # A machine whose last look is older than the declared cadence.
     cutoff = started - timedelta(hours=config.max_age_hours)
@@ -515,8 +651,13 @@ def run_watch(
             Fleet.from_ledger(ledger),
             previously_seen=_previously_reported(previous),
             now=started,
+            trust_store=SupplierTrustStore(ledger),
         )
         caveats.extend(advisories.checks_skipped)
+        if seal:
+            advisories = _open_advisory_cases(store, advisories, actor)
+            sealed.extend(f"case {f.case_id}" for f in advisories.findings
+                          if f.case_id)
 
     # Intakes are drafted from the advisories this run just established, and
     # only when the operator has declared the duty. See watch.filings.
@@ -580,6 +721,73 @@ def run_watch(
     return run
 
 
+def _open_cases_for(store: CaseStore, machine_key: str) -> list[ChangeAssuranceCase]:
+    return [c for c in store.list() if c.is_open and machine_key in c.machines]
+
+
+def _assess_interventions(
+    store: CaseStore, ledger: EvidenceLedger, manifest: Any, machine_key: str,
+    actor: Actor,
+) -> tuple[str, ...]:
+    """Open a case for each recorded intervention nobody has a case for yet.
+
+    "Unreferenced" means no case exists for that intervention. One whose
+    functions an open case on this machine already covers is skipped — the
+    drift case that prompted the paperwork already owns that work, and a
+    second case for the same change would be forty-one rows where there is one
+    job. It is looked at again next run, so it is not lost if that case is
+    rejected.
+    """
+    interventions = interventions_from_ledger(ledger, machine_key)
+    if not interventions:
+        return ()
+    verifications = VerificationRecord.from_ledger(ledger, subject=machine_key)
+    open_cases = _open_cases_for(store, machine_key)
+    opened: list[str] = []
+    for intervention in interventions:
+        cid = case_id_for(TriggerType.INTERVENTION, intervention.intervention_id)
+        if store.get(cid) is not None:
+            continue
+        if isinstance(intervention, ImpliedIntervention) and intervention.observed_configuration \
+                and store.get(case_id_for(TriggerType.MACHINE_DRIFT,
+                                          intervention.observed_configuration)) is not None:
+            # The drift case for this very change exists, whatever has become of it (open,
+            # closed, waived, rejected). It owns the change; a person's ruling on it stands
+            # and is not answered with a second case the next run.
+            continue
+        declared = set(intervention.affects_functions)
+        if declared and any(declared <= set(c.affected_functions) for c in open_cases):
+            continue
+        case = assess_intervention(store, intervention, manifest, verifications,
+                                   interventions, actor=actor)
+        if case is not None:
+            opened.append(case.case_id)
+    return tuple(opened)
+
+
+def _open_advisory_cases(
+    store: CaseStore, advisories: AdvisoryPass, actor: Actor,
+) -> AdvisoryPass:
+    """Open or fold into a case for each advisory this fleet is exposed to.
+
+    ``new`` and ``outstanding`` are both handled, and each run's call for a
+    standing advisory writes nothing unless the exposure actually grew (a
+    machine joined the fleet, a question appeared) — see
+    :func:`assurance.change.service._open_or_update`. A withdrawal does not
+    close anything: it puts a question to the person who owns the case.
+    """
+    findings: list[Any] = []
+    for finding in advisories.findings:
+        case = None
+        if finding.state in ("new", "outstanding") and finding.report is not None:
+            case = assess_advisory(store, finding.report, actor=actor)
+        elif finding.state == "withdrawn":
+            case = note_advisory_withdrawn(
+                store, finding.advisory_id, finding.withdrawal_reason, actor=actor)
+        findings.append(replace(finding, case_id=case.case_id) if case else finding)
+    return replace(advisories, findings=tuple(findings))
+
+
 def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None:
     for entry in reversed(ledger.entries(kind=OBSERVATION_KIND)):
         evidence = entry.evidence()
@@ -587,10 +795,14 @@ def _last_observation_at(ledger: EvidenceLedger, serial: str) -> datetime | None
             continue
         if evidence.body.get("serial") != serial:
             continue
-        if evidence.body.get("status") == "uncollectable":
+        # An attempt that failed, or saw only part of the plan, is not a look at
+        # the machine (observations.observation_succeeded, shared with the
+        # hosted workspace so the two cannot disagree about what counts).
+        if not observation_succeeded(evidence.body):
             continue
-        try:
-            return parse_utc(entry.at)
-        except (ValueError, TypeError):  # pragma: no cover - ledger writes UTC
-            return None
+        # The run's own clock when it recorded one: the ledger stamps append
+        # time, which differs from the observation time whenever a run is given
+        # an explicit `now` (a replay, a backfill, a test). Records sealed before
+        # this field existed fall back to the append time.
+        return observed_at_of(evidence.body, entry.at)
     return None

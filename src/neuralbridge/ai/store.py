@@ -25,7 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+from assurance.core.sqlite import enable_wal, retry_locked
+
+#: v2 (tenant isolation): ``owner`` added to ``connections`` and ``plans``.
+#: A v1 file is migrated additively in place — existing rows get owner ``''``
+#: (legacy: operator-visible only; see ``neuralbridge.ai.tenancy``).
+SCHEMA_VERSION = 2
+_READABLE_VERSIONS = (1, 2)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -42,7 +48,8 @@ CREATE TABLE IF NOT EXISTS connections (
     source        TEXT NOT NULL,
     status        TEXT NOT NULL DEFAULT 'created',
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    owner         TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS plans (
     id              TEXT PRIMARY KEY,
@@ -56,9 +63,17 @@ CREATE TABLE IF NOT EXISTS plans (
     created_at      TEXT NOT NULL,
     decided_by      TEXT,
     decided_at      TEXT,
-    deny_reason     TEXT
+    deny_reason     TEXT,
+    owner           TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS plans_by_connection ON plans (connection_id);
+"""
+
+#: Created after the additive column migration so a v1 file (no ``owner``
+#: column yet) does not fail on index creation.
+_OWNER_INDEXES = """
+CREATE INDEX IF NOT EXISTS connections_by_owner ON connections (owner);
+CREATE INDEX IF NOT EXISTS plans_by_owner ON plans (owner);
 """
 
 
@@ -78,6 +93,9 @@ class ConnectionRecord:
     config: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    #: Account id of the creator, from the validated principal. ``''`` is a
+    #: legacy row written before owners existed (operator-visible only).
+    owner: str = ""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> ConnectionRecord:
@@ -92,6 +110,7 @@ class ConnectionRecord:
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            owner=row["owner"],
         )
 
 
@@ -109,6 +128,8 @@ class PlanRecord:
     decided_by: str | None = None
     decided_at: str | None = None
     deny_reason: str | None = None
+    #: Account that proposed the plan — the only account that may approve it.
+    owner: str = ""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> PlanRecord:
@@ -125,6 +146,7 @@ class PlanRecord:
             decided_by=row["decided_by"],
             decided_at=row["decided_at"],
             deny_reason=row["deny_reason"],
+            owner=row["owner"],
         )
 
 
@@ -138,24 +160,55 @@ class AiStore:
         self._lock = threading.Lock()
         db = self._connect()
         try:
-            db.executescript(_SCHEMA)
-            row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if row is None:
-                db.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
-                db.commit()
-            elif int(row[0]) != SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"{self.path} was written by ai-store schema {row[0]}; this build speaks "
-                    f"{SCHEMA_VERSION}. Refusing rather than guessing."
-                )
+            has_meta = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+            ).fetchone()
+            if has_meta:
+                row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+                if row is not None and int(row[0]) not in _READABLE_VERSIONS:
+                    raise RuntimeError(
+                        f"{self.path} was written by ai-store schema {row[0]}; this build speaks "
+                        f"{SCHEMA_VERSION}. Refusing rather than guessing."
+                    )
+            retry_locked(lambda: db.executescript(_SCHEMA), db=db)
+            retry_locked(lambda: self._migrate(db), db=db)
+            retry_locked(lambda: db.executescript(_OWNER_INDEXES), db=db)
         finally:
             db.close()
+
+    @staticmethod
+    def _migrate(db: sqlite3.Connection) -> None:
+        """Additive v1 -> v2: add ``owner`` (default ``''`` = legacy) to
+        connections and plans, then stamp the version. Idempotent and safe
+        to race (``BEGIN IMMEDIATE``). An up-to-date file takes no write lock."""
+        current = db.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        if current is not None and int(current[0]) == SCHEMA_VERSION and all(
+            "owner" in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+            for table in ("connections", "plans")
+        ):
+            return
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            for table in ("connections", "plans"):
+                columns = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+                if "owner" not in columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            db.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(SCHEMA_VERSION),),
+            )
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         if str(self.path) != ":memory:":
-            db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(db)
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
@@ -179,13 +232,28 @@ class AiStore:
         with self._txn() as db:
             db.execute(
                 "INSERT INTO connections (id, name, description, adapter_type, registry_key, "
-                "config_json, source, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "config_json, source, status, created_at, updated_at, owner) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record.id, record.name, record.description, record.adapter_type,
                     record.registry_key, json.dumps(record.config), record.source,
-                    record.status, record.created_at, record.updated_at,
+                    record.status, record.created_at, record.updated_at, record.owner,
                 ),
             )
+
+    def delete_connection(self, connection_id: str) -> bool:
+        """Remove a connection record. Plans still pending against it are
+        denied (nothing may execute against an unbound connection); decided
+        plans are kept as history. Returns whether a row was removed."""
+        with self._txn() as db:
+            db.execute(
+                "UPDATE plans SET status='denied', decided_by='system:connection-deleted', "
+                "decided_at=?, deny_reason='connection deleted' "
+                "WHERE connection_id=? AND status='pending_approval'",
+                (_now(), connection_id),
+            )
+            cur = db.execute("DELETE FROM connections WHERE id=?", (connection_id,))
+            return cur.rowcount > 0
 
     def list_connections(self) -> list[ConnectionRecord]:
         db = self._connect()
@@ -219,13 +287,13 @@ class AiStore:
         with self._txn() as db:
             db.execute(
                 "INSERT INTO plans (id, connection_id, adapter_type, operation, operation_class, "
-                "params_json, proposed_by, status, created_at, decided_by, decided_at, deny_reason) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "params_json, proposed_by, status, created_at, decided_by, decided_at, deny_reason, owner) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     record.id, record.connection_id, record.adapter_type, record.operation,
                     record.operation_class, json.dumps(record.params), record.proposed_by,
                     record.status, record.created_at, record.decided_by, record.decided_at,
-                    record.deny_reason,
+                    record.deny_reason, record.owner,
                 ),
             )
 
@@ -237,12 +305,20 @@ class AiStore:
         finally:
             db.close()
 
-    def list_plans(self, *, limit: int = 50) -> list[PlanRecord]:
+    def list_plans(self, *, limit: int = 50, owner: str | None = None) -> list[PlanRecord]:
+        """``owner=None`` lists every plan (operator); otherwise only that
+        account's."""
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT * FROM plans ORDER BY created_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if owner is None:
+                rows = db.execute(
+                    "SELECT * FROM plans ORDER BY created_at DESC LIMIT ?", (limit,)
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM plans WHERE owner=? ORDER BY created_at DESC LIMIT ?",
+                    (owner, limit),
+                ).fetchall()
             return [PlanRecord.from_row(r) for r in rows]
         finally:
             db.close()

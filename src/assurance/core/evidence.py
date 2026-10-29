@@ -21,13 +21,14 @@ Two disciplines are enforced here rather than left to callers:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from .errors import EvidenceIncompleteError, SealedObjectError
-from .identity import content_hash_of, format_utc, utc_now
+from .identity import HASH_PRECISION, content_hash_of, format_utc, utc_now
 
 __all__ = [
     "Actor",
@@ -36,8 +37,64 @@ __all__ = [
     "EvidenceObject",
     "EvidenceRef",
     "Origin",
+    "SEAL_EXACT_INT",
     "ValidationState",
+    "indistinguishable_numbers",
 ]
+
+#: Integers up to this magnitude survive the hash's ``float(v)`` exactly. Beyond it,
+#: ``n`` and ``n + 1`` hash to the same bytes.
+SEAL_EXACT_INT = 2**53
+
+_MAX_NUMBER_FINDINGS = 1000
+
+
+#: Arithmetic noise is not a finding. ``400.0 - 342.9`` is 157.10000000000002: it differs
+#: from its 6-decimal rounding by 3e-14, far below anything a person could mean, and every
+#: derived margin in a verification looks like this. A number is "finer than the hash
+#: keeps" only when rounding moves it by more than this tolerance (or by a few ULPs for
+#: large magnitudes, where the float cannot hold 6 decimals anyway). 4e-07 (rounds to 0.0)
+#: and 0.1234567 are still findings. Differences below the tolerance are NOT distinguished.
+FLOAT_NOISE_TOLERANCE = 1e-9
+
+
+def _hash_keeps(value: float) -> bool:
+    """True when rounding to the hash precision moves *value* by no more than noise."""
+    return abs(value - round(value, HASH_PRECISION)) <= max(FLOAT_NOISE_TOLERANCE,
+                                                            4 * math.ulp(value))
+
+
+def indistinguishable_numbers(value: Any) -> list[str]:
+    """Numbers in *value* the seal cannot tell from a different number.
+
+    The content hash encodes every number as ``round(float(v), 6)``. An integer beyond
+    2^53, or a fraction finer than 6 decimal places, therefore hashes to the same bytes
+    as its neighbour: an edit to it changes no hash and no link, so a seal that holds one
+    does not protect it. This does not change the hash (existing seals keep verifying);
+    it names the numbers so a new seal can refuse them and a verifier can say so rather
+    than call the entry unedited. Iterative, so a hostile document cannot recurse it.
+    """
+    found: list[str] = []
+    stack: list[tuple[str, Any]] = [("", value)]
+    while stack and len(found) < _MAX_NUMBER_FINDINGS:
+        path, node = stack.pop()
+        where = path or "(the object itself)"
+        if isinstance(node, bool):
+            continue
+        if isinstance(node, int):
+            if abs(node) > SEAL_EXACT_INT:
+                shown = str(node) if node.bit_length() < 200 else "a very large integer"
+                found.append(f"{where} = {shown} is an integer beyond 2^53")
+        elif isinstance(node, float):
+            if not math.isfinite(node) or not _hash_keeps(node):
+                found.append(f"{where} = {node!r} is a number finer than "
+                             f"{HASH_PRECISION} decimal places")
+        elif isinstance(node, dict):
+            stack.extend((f"{path}.{k}" if path else str(k), v)
+                         for k, v in reversed(list(node.items())))
+        elif isinstance(node, (list, tuple)):
+            stack.extend((f"{path}[{i}]", v) for i, v in reversed(list(enumerate(node))))
+    return found
 
 
 class ValidationState(StrEnum):
@@ -243,6 +300,15 @@ class Evidence:
         if not self.origin.system:
             raise EvidenceIncompleteError(
                 f"{self.kind} evidence has no origin. A fact with no source is hearsay."
+            )
+        lost = indistinguishable_numbers(self.hashable_payload())
+        if lost:
+            raise EvidenceIncompleteError(
+                f"{self.kind} evidence holds a number the seal cannot distinguish from "
+                f"its neighbour: {'; '.join(lost[:3])}. Numbers are hashed to "
+                f"{HASH_PRECISION} decimal places and integers beyond 2^53 lose "
+                "precision, so an edit to it would not change the hash. Record it as "
+                "text, or round it to a number the hash keeps."
             )
         return replace(self, content_hash=self.compute_hash())
 

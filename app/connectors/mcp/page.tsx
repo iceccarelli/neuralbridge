@@ -1,11 +1,45 @@
 import type { Metadata } from 'next';
 import { SRC } from '../../lib/links';
 import { IMAGES } from '../../lib/images';
-import { ROUTES, TIER_LABEL } from '../../lib/routes';
+import { ROUTES, TIER_LABEL, type Tier } from '../../lib/routes';
 import RotatingImage from '../../components/RotatingImage';
+import ImageryNote from '../../components/ImageryNote';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
-const MCP_TOOLS = new Set(['GET /v1/plans', 'POST /v1/spec/validate', 'POST /v1/machine/verify', 'GET /v1/cases']);
+
+type McpTool = { name: string; route: string; tier: Tier; agentWrite: boolean };
+
+// The one list this page counts and renders from. tests/test_site_mcp_parity.py
+// pins the names and routes to the @mcp.tool() functions in src/assurance/mcp/server.py.
+const MCP_TOOLS: McpTool[] = [
+  { name: 'plans', route: 'GET /v1/plans', tier: 'free', agentWrite: false },
+  { name: 'spec_validate', route: 'POST /v1/spec/validate', tier: 'free', agentWrite: false },
+  { name: 'machine_verify', route: 'POST /v1/machine/verify', tier: 'cell', agentWrite: false },
+  { name: 'register_cases', route: 'GET /v1/cases', tier: 'register', agentWrite: false },
+  { name: 'services', route: 'GET /v1/check/services', tier: 'free', agentWrite: false },
+  { name: 'machine_assurance_check', route: 'POST /v1/check/machine', tier: 'free', agentWrite: false },
+  { name: 'fleet_machine_assurance', route: 'POST /v1/check/fleet-machine', tier: 'cell', agentWrite: false },
+  { name: 'change_cases', route: 'GET /v1/change/cases', tier: 'cell', agentWrite: false },
+  { name: 'change_case', route: 'GET /v1/change/cases/{case_id}', tier: 'cell', agentWrite: false },
+  { name: 'change_export', route: 'GET /v1/change/cases/{case_id}/export', tier: 'cell', agentWrite: false },
+  { name: 'change_claim', route: 'POST /v1/change/cases/{case_id}/claim', tier: 'cell', agentWrite: true },
+  { name: 'change_advance', route: 'POST /v1/change/cases/{case_id}/advance', tier: 'cell', agentWrite: true },
+  { name: 'change_reverify', route: 'POST /v1/change/cases/{case_id}/reverification', tier: 'cell', agentWrite: true },
+  { name: 'change_assess_drift', route: 'POST /v1/change/assess/drift', tier: 'cell', agentWrite: true },
+  { name: 'change_assess_intervention', route: 'POST /v1/change/assess/intervention', tier: 'cell', agentWrite: true },
+];
+const TOOL_BY_ROUTE = new Map(MCP_TOOLS.map((t) => [t.route, t]));
+const TOOL_COUNT = MCP_TOOLS.length;
+const FREE_COUNT = MCP_TOOLS.filter((t) => t.tier === 'free').length;
+const WRITE_TOOLS = MCP_TOOLS.filter((t) => t.agentWrite);
+
+// Decisions only a named person makes. There is deliberately no MCP tool for any of these.
+const HUMAN_ONLY = new Set([
+  'POST /v1/change/cases/{case_id}/decision',
+  'POST /v1/change/cases/{case_id}/resume',
+  'POST /v1/change/cases/{case_id}/resolve-decision',
+  'POST /v1/change/cases/{case_id}/waive-reverification',
+]);
 
 export const metadata: Metadata = {
   title: 'MCP connector | Industrial Autonomous Assurance',
@@ -27,7 +61,7 @@ export default function McpConnectorPage() {
           <span className="kicker">FOR AGENTS THAT SPEAK MCP, NOT JUST HTTP</span>
           <h1 style={{ maxWidth: '22ch' }}>An installable MCP server for the Assurance API</h1>
           <p className="hero-lead" style={{ maxWidth: '68ch' }}>
-            <code>assurance-mcp</code> ships in this repository — four tools, each a real <code>httpx</code> call to
+            <code>assurance-mcp</code> ships in this repository — {TOOL_COUNT} tools, each a real <code>httpx</code> call to
             a running deployment, no local simulation. With no API URL configured, every tool returns the same
             honest "not configured" error this whole site uses, never a faked response.
           </p>
@@ -135,14 +169,31 @@ neuralbridge-ai-mcp`}</pre>
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Assurance MCP tool set</span>
-            <h2>Four tools — two free, two paid on purpose</h2>
+            <h2>
+              {TOOL_COUNT} tools — {FREE_COUNT} need no key, {TOOL_COUNT - FREE_COUNT} need one on the right plan
+            </h2>
             <p>
               Deliberately small rather than one tool per route: <code>plans</code> and{' '}
-              <code>spec_validate</code> need no key at all, and <code>machine_verify</code> /{' '}
-              <code>register_cases</code> exist specifically to prove the fail-closed behavior — called on the
-              wrong plan, they return the API's real structured 401/402, not an error from this server. The full
-              route table below is what a future, larger tool set would cover; the four highlighted rows are what
-              ships in <code>assurance-mcp</code> today.
+              <code>spec_validate</code> need no key at all. The others (<code>register_cases</code> on Register; the
+              machine and change tools on Cell) called on the wrong plan return the API&apos;s real structured
+              401/402, not an error from this server. The full route table below is what a larger tool set could
+              cover; the highlighted rows are what ships in <code>assurance-mcp</code> today.
+            </p>
+            <p>
+              <strong>What an agent may write.</strong> Of the change-queue tools, {WRITE_TOOLS.length} write:{' '}
+              {WRITE_TOOLS.map((t, i) => (
+                <span key={t.name}>
+                  {i > 0 ? (i === WRITE_TOOLS.length - 1 ? ', and ' : ', ') : ''}
+                  <code>{t.name}</code>
+                </span>
+              ))}{' '}
+              — open a case from a machine's own manifests (drift, or a sealed intervention), claim it, move it to the
+              next stop its own required work names, and submit a re-verification for the engine to judge. Assessing
+              an <strong>advisory</strong> is not a tool either: it is third-party content, and a case opened from an
+              unsigned one is the attack the signed feed exists to stop. Closing, waiving, rejecting or deferring a case, resuming it and resolving its open
+              decisions are <strong>human-only</strong>: they have no MCP tool, by design, and stay on the CLI and the
+              HTTP API. Each write takes an <code>actor</code> name; it is asserted by the caller and recorded, not
+              proven — the API refuses a blank one but does not check who is behind the key.
             </p>
           </div>
           <div className="status-table-wrap">
@@ -157,12 +208,20 @@ neuralbridge-ai-mcp`}</pre>
               <tbody>
                 {ROUTES.map((r) => {
                   const key = `${r.method} ${r.path}`;
-                  const shipped = MCP_TOOLS.has(key);
+                  const tool = TOOL_BY_ROUTE.get(key);
                   return (
-                    <tr key={key} style={shipped ? { background: '#fff7ed' } : undefined}>
+                    <tr key={key} style={tool ? { background: '#fff7ed' } : undefined}>
                       <td><code>{r.method} {r.path}</code></td>
                       <td><span className={`status-pill ${r.tier}`}>{TIER_LABEL[r.tier]}</span></td>
-                      <td>{shipped ? <span className="status-pill supported">Shipped</span> : <span className="status-pill">Not yet a tool</span>}</td>
+                      <td>
+                        {tool ? (
+                          <span className="status-pill supported">Tool: {tool.name}{tool.agentWrite ? ' (agent write)' : ''}</span>
+                        ) : HUMAN_ONLY.has(key) ? (
+                          <span className="status-pill">Human-only, no tool by design</span>
+                        ) : (
+                          <span className="status-pill">Not yet a tool</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -179,8 +238,8 @@ neuralbridge-ai-mcp`}</pre>
             <h2>Growing the tool set</h2>
           </div>
           <p>
-            Adding a route as a tool is mechanical — <code>src/assurance/mcp/server.py</code> is under 150 lines,
-            one <code>@mcp.tool()</code> function per route calling the same <code>_call()</code> helper. The
+            Adding a route as a tool is mechanical — in <code>src/assurance/mcp/server.py</code> it is one
+            <code>@mcp.tool()</code> function per route calling the same <code>_call()</code> helper. The
             remaining free-tier routes (separation, bundle/manifest/declaration checks, attestation key/verify)
             are the natural next additions, since they need no key either. Read the source or open a PR.
           </p>
@@ -204,6 +263,7 @@ neuralbridge-ai-mcp`}</pre>
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

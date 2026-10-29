@@ -3,13 +3,18 @@ import { notFound } from 'next/navigation';
 import { SOLUTIONS, getSolution } from '../../lib/solutions';
 import { IMAGES } from '../../lib/images';
 import RotatingImage from '../../components/RotatingImage';
+import ImageryNote from '../../components/ImageryNote';
 
 export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
 }
 
-export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
-  const solution = getSolution(params.slug);
+// Next 15+ passes route params as a Promise (Next 16 removed synchronous access): await them.
+type SolutionParams = Promise<{ slug: string }>;
+
+export async function generateMetadata({ params }: { params: SolutionParams }): Promise<Metadata> {
+  const { slug } = await params;
+  const solution = getSolution(slug);
   if (!solution) return {};
   const title = `${solution.role} | Industrial Autonomous Assurance`;
   const url = `/solutions/${solution.slug}`;
@@ -31,8 +36,9 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   };
 }
 
-export default function SolutionPage({ params }: { params: { slug: string } }) {
-  const solution = getSolution(params.slug);
+export default async function SolutionPage({ params }: { params: SolutionParams }) {
+  const { slug } = await params;
+  const solution = getSolution(slug);
   if (!solution) notFound();
 
   return (
@@ -141,7 +147,7 @@ export default function SolutionPage({ params }: { params: { slug: string } }) {
         <div className="shell final-cta-inner">
           <div>
             <h2>{solution.headline}</h2>
-            <p>Verification stays free, forever, at every tier. Start there.</p>
+            <p>Re-checking someone else&apos;s evidence needs no account. Declaration, evidence-bundle, passport and attestation checks are not metered. The file verifier (<code>POST /v1/evidence/verify</code>, and <code>/verify</code> on this site) allows 20 a day per address; manifest diff allows 10 a day. Register and Cell have no daily cap on either.</p>
           </div>
           <div className="hero-actions">
             <a
@@ -163,6 +169,7 @@ export default function SolutionPage({ params }: { params: { slug: string } }) {
           </div>
         </div>
       </section>
+      <ImageryNote />
     </main>
   );
 }

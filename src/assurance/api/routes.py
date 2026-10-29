@@ -12,13 +12,14 @@ is actionable.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from ..billing.accounts import AccountStore, Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
 from ..core.evidence import Actor
+from ..evidence.ledger import AnchorContradictsLedgerError
 from ..security.art14.engine import Art14Register, CaseError
 from ..security.art14.model import (
     Awareness,
@@ -30,14 +31,17 @@ from ..security.art14.model import (
 )
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
+from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
+from .declared_actor import sanitise_declared_role
 from .deps import (
+    Metered,
+    MeterTicket,
     auth_mode,
-    current_principal,
     get_accounts,
     get_register,
-    ledger_path,
+    require_evidence_readout,
     require_register,
-    spend,
+    shared_register,
 )
 from .schemas import (
     ActorIn,
@@ -55,10 +59,18 @@ from .schemas import (
     ValidationOut,
 )
 
-__all__ = ["router", "public_router"]
+__all__ = ["router", "evidence_router", "free_router", "public_router"]
 
 #: The register. Every route here needs a plan that includes it.
 router = APIRouter(prefix="/v1", tags=["article 14"], dependencies=[Depends(require_register)])
+
+#: Reading, verifying and exporting your own evidence. The same door as the
+#: register for a customer who is paying, and still open to one whose
+#: subscription has ended (``plans.EVIDENCE_READOUT_AFTER_LAPSE``): evidence is
+#: not held hostage to a payment, while every write above stays closed.
+evidence_router = APIRouter(
+    prefix="/v1", tags=["article 14"], dependencies=[Depends(require_evidence_readout)]
+)
 
 #: The free surface: the field specification and the dry-run validator. A
 #: prospect must be able to get value here without signing up for anything,
@@ -69,7 +81,15 @@ public_router = APIRouter(tags=["service"])
 
 
 def _actor(payload: ActorIn) -> Actor:
-    return Actor(identifier=payload.identifier, role=payload.role, kind=payload.kind)
+    """The recorded actor, exactly as the caller declared it, minus the server's grammar.
+
+    This register builds no attribution of its own, so the declared role is sealed as the
+    caller's own words: ``;`` and ``=`` are removed (``declared_actor``) so it cannot
+    imitate the ``operator=``/``key=``/``attribution=`` tokens other routes write.
+    An undeclared role stays empty.
+    """
+    return Actor(identifier=payload.identifier,
+                 role=sanitise_declared_role(payload.role, default=""), kind=payload.kind)
 
 
 def _recorded(register: Art14Register, case_id: str, evidence) -> RecordedOut:
@@ -311,12 +331,12 @@ def post_user_notification(
 # =====================================================================
 # reading
 # =====================================================================
-@router.get("/cases", response_model=list[str], summary="List case ids")
+@evidence_router.get("/cases", response_model=list[str], summary="List case ids")
 def get_cases(register: Art14Register = Depends(get_register)) -> list[str]:
     return register.case_ids()
 
 
-@router.get("/cases/{case_id}", response_model=CaseOut, summary="One case, with deadlines")
+@evidence_router.get("/cases/{case_id}", response_model=CaseOut, summary="One case, with deadlines")
 def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> CaseOut:
     case = register.case(case_id)
     if case.signal is None and case.awareness is None:
@@ -326,20 +346,92 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     return CaseOut(**case.to_dict())
 
 
-@router.get(
+@evidence_router.get(
     "/cases/{case_id}/export",
     response_model=dict,
     summary="A verifiable evidence bundle for one case",
+    responses=EXPORT_RESPONSES,
 )
-def get_case_export(case_id: str, register: Art14Register = Depends(get_register)) -> dict[str, Any]:
+def get_case_export(
+    case_id: str,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_evidence_readout),
+    anchor: bool = Query(
+        True,
+        description="embed the newest signed attestation from this account's own "
+                    "attestation log as the bundle's `anchor`, so a verifier holding "
+                    "the signer's public key can check the bundle is complete up to "
+                    "it. Set false to export without one."),
+    skeleton: bool = Query(
+        False,
+        description="true to also carry `skeleton`: the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry and check completeness. Off by default because it discloses the id, kind and time of this account's other cases and incidents to whoever receives the file."),
+) -> dict[str, Any]:
     """Refuses if the chain does not verify.
 
+    ``?skeleton=true`` adds a ``skeleton`` of the account's other entries
+    (positions, kinds, subjects, times and hashes; no evidence) so removed entries
+    are visible. It is **off by default**: the link hash covers the plain subject,
+    so the skeleton cannot be anonymised and names every other case and incident of
+    the account. Without it the bundle is internally consistent but its
+    completeness cannot be checked. The bundle carries the account's newest
+    *server-read* signed attestation as ``anchor`` when it has one (409
+    ``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed
+    heads the customer declared are never embedded). Records after the anchor are
+    covered by no signature; for a hosted ledger the service holds the signing key
+    too, so the anchor helps only a customer who kept their own copy of a signed
+    attestation.
+
     An export is the moment records leave the system and start being relied on.
+    For a paying account it is gated on the plan's ``export`` entitlement as
+    well as on the register itself, so the ``verifiable_export`` limit on
+    ``GET /v1/plans`` is a statement about code that runs. A customer whose
+    subscription has ended still gets it (``require_evidence_readout``): their
+    evidence is not held hostage to a payment.
+
+    **Completeness.** Without ``skeleton`` a bundle is internally consistent but a
+    removed entry of the case cannot be seen, and a verifier reports completeness as
+    *not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the
+    signer's public key can show nothing was removed up to the anchor; records after
+    it are covered by no signature.
+
+    **Anchor.** ``anchor`` is the newest attestation the service *read from this
+    account's own ledger* (``read_from_ledger``). No customer route creates one: the
+    operator runs ``assurance attest sign`` against the hosted ledger
+    (``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and
+    its completeness is not checked. Counter-signed heads you declared about your own
+    ledger (``POST /v1/ledger/attest``) are never embedded. If the embedded
+    attestation does not match this ledger the answer is 409
+    ``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged
+    attestation log is 500 ``attestation_log_damaged``, never a silently unanchored
+    export; ``?anchor=false`` is the explicit way to export without one.
     """
+    if principal.plan.register and not principal.plan.export:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "plan_does_not_include_export",
+                "tier": principal.tier,
+                "account_status": principal.account.status if principal.account else "",
+                "remedy": "Verifiable export is included with the Register plan "
+                          "and above. GET /v1/plans, then POST /v1/checkout.",
+            },
+        )
+    signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        return register.ledger.export(subject=case_id)
+        bundle = register.ledger.export(
+            subject=case_id, anchor=signed_anchor, skeleton=skeleton)
+    except AnchorContradictsLedgerError as exc:
+        raise anchor_contradiction(exc) from exc
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
+    if not bundle["entries"]:
+        # A well-formed, chain-verified bundle with nothing in it is what an id that
+        # names nothing exports. It would read as a clean record of a case.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "case_not_found", "case_id": case_id},
+        )
+    return bundle
 
 
 @router.get("/register", response_model=dict, summary="Readiness across every case")
@@ -352,7 +444,7 @@ def get_breaches(register: Art14Register = Depends(get_register)) -> list[dict[s
     return register.breaches()
 
 
-@router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
+@evidence_router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
 def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
     ok, problems = register.ledger.verify_chain()
     return {
@@ -387,24 +479,20 @@ def get_fields(
 def post_validate(
     body: ValidateIn,
     response: Response,
-    principal: Principal = Depends(current_principal),
-    accounts: AccountStore = Depends(get_accounts),
+    meter: Annotated[MeterTicket, Metered("validate")],
 ) -> ValidationOut:
     """The free tier, and the demo that sells the register behind it.
 
-    Nothing is recorded. A prospect can paste a draft filing and immediately
-    see which of the 39 fields are missing, which exceed a character limit,
-    and which listed territories are not EU Member States.
+    Nothing is recorded about the filing. A prospect can paste a draft filing
+    and immediately see which of the 39 fields are missing, which exceed a
+    character limit, and which listed territories are not EU Member States.
+    The call is counted (see ``billing/metering.py``) once the answer is
+    complete; a draft that is not submittable is a successful answer.
     """
-    limit = principal.plan.validations_per_day
-    spend(principal, "validate", limit, accounts)
-    response.headers["X-Assurance-Tier"] = principal.tier
-    if limit is not None:
-        used = accounts.usage_today(principal.subject).get("validate", 0)
-        response.headers["X-Assurance-Quota-Limit"] = str(limit)
-        response.headers["X-Assurance-Quota-Remaining"] = str(max(0, limit - used))
     validation = validate_payload(body.payload, Track(body.track), Stage(body.stage))
-    return ValidationOut(**validation.to_dict())
+    out = ValidationOut(**validation.to_dict())
+    meter.commit(response)
+    return out
 
 
 # =====================================================================
@@ -462,16 +550,34 @@ def root() -> dict[str, Any]:
 
 
 @public_router.get("/healthz", response_model=dict, summary="Liveness and configuration")
-def healthz(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
-    """Reports what is actually true, including an unauthenticated deployment."""
-    ok, _ = register.ledger.verify_chain()
+def healthz(
+    response: Response, accounts: AccountStore = Depends(get_accounts)
+) -> dict[str, Any]:
+    """Reports what is actually true, including an unauthenticated deployment.
+
+    Unauthenticated and polled every few seconds, so it is cheap and says
+    nothing about the host: no filesystem path, and no chain verification
+    (that is O(n) in the ledger and lives at the authenticated
+    ``GET /v1/ledger/verify``). It does confirm that both stores open, which
+    exercises their schema-version checks, and reports the operator ledger's
+    entry count.
+    """
     mode = auth_mode()
-    payload: dict[str, Any] = {
-        "status": "ok",
-        "auth_mode": mode,
-        "ledger": ledger_path(),
-        "ledger_records": len(register.ledger),
-        "chain_verified": ok,
+    payload: dict[str, Any] = {"status": "ok", "auth_mode": mode}
+    try:
+        payload["ledger_records"] = len(shared_register().ledger)
+        payload["ledger_ok"] = True
+    except Exception:  # noqa: BLE001 - reported as a state, never echoed
+        payload["ledger_ok"] = False
+    try:
+        accounts.usage_today("healthz")
+        payload["accounts_ok"] = True
+    except Exception:  # noqa: BLE001
+        payload["accounts_ok"] = False
+    if not (payload["ledger_ok"] and payload["accounts_ok"]):
+        payload["status"] = "unavailable"
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    payload |= {
         "field_spec": {"source": "ENISA CRA SRP Glossary", "version": GLOSSARY_VERSION,
                        "dated": GLOSSARY_DATE},
         "regulation": "Regulation (EU) 2024/2847, Article 14",
@@ -483,7 +589,8 @@ def healthz(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
             "Configure ASSURANCE_API_KEYS before this holds anything real."
         )
     if mode == "unconfigured":
-        payload["status"] = "degraded"
+        if payload["status"] == "ok":
+            payload["status"] = "degraded"
         payload["warning"] = (
             "No API keys configured; register routes return 503. Set ASSURANCE_API_KEYS."
         )

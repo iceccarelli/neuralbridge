@@ -2,10 +2,10 @@
 
 Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
 1.1.9 requires a machine to identify its safety-relevant software and to record
-evidence of intervention in it. Almost nobody can do either today: the safety
-PLC program lives on a laptop, the scanner zones live in a vendor tool, the
-robot's safety parameters live in the controller, and the only record that a
-technician changed any of them is that technician's memory.
+evidence of intervention in it. Doing either by hand is hard: the safety
+PLC program may live on a laptop, the scanner zones in a vendor tool, the
+robot's safety parameters in the controller, and the only record that a
+technician changed any of them may be that technician's memory.
 
 A manifest is the answer to "what is running on this machine right now", in a
 form two manifests can be compared with. The whole product turns on one field
@@ -16,12 +16,13 @@ one that was read from the machine is the one that is true.
 A safety function is declared with the checks that exercise it. That is not
 bureaucracy — it is the link that lets an intervention invalidate the
 verification that preceded it, which is what :mod:`assurance.machinery.staleness`
-computes and what nobody else can currently produce.
+computes.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -43,6 +44,23 @@ __all__ = [
     "SafetyItem",
     "SafetyManifest",
 ]
+
+
+_HEX64 = frozenset("0123456789abcdef")
+
+
+def normalised_digest(text: str) -> str:
+    """The SHA-256 digest in ``text`` in comparison form, or ``""`` if it is not one.
+
+    Trimmed, lower-cased, a leading ``sha256:`` dropped. Anything that is not exactly 64
+    hex digits afterwards (``n/a``, ``unknown``, ``0``, whitespace, a truncated digest)
+    is not a hash and returns ``""``: two manifests that both say ``n/a`` must never
+    compare as an unchanged artefact.
+    """
+    h = text.strip().lower()
+    if h.startswith("sha256:"):
+        h = h[len("sha256:"):].strip()
+    return h if len(h) == 64 and set(h) <= _HEX64 else ""
 
 
 class ManifestError(AssuranceError):
@@ -245,8 +263,20 @@ class SafetyItem:
 
     @property
     def is_comparable(self) -> bool:
-        """Whether a change to this item would be detectable at all."""
-        return bool(self.content_hash)
+        """Whether a change to this item would be detectable at all.
+
+        Only a real SHA-256 digest counts. A placeholder is not evidence that nothing
+        changed, so it makes the item invisible to comparison, which the report says.
+        """
+        return bool(normalised_digest(self.content_hash))
+
+    @property
+    def effective_hash_source(self) -> HashSource:
+        """What the item's identity is actually worth: ``declared`` without a real digest.
+
+        An item that says ``read_from_machine`` beside ``n/a`` was not read from anything.
+        """
+        return self.hash_source if self.is_comparable else HashSource.DECLARED
 
     @property
     def is_safety_bearing(self) -> bool:
@@ -370,7 +400,7 @@ class SafetyManifest:
         manifest down, and that is correct: the manifest is a statement about
         the machine's configuration as a whole.
         """
-        return min((i.hash_source.tier_ceiling for i in self.items),
+        return min((i.effective_hash_source.tier_ceiling for i in self.items),
                    default=AssuranceTier.PROFILE)
 
     @property
@@ -391,6 +421,34 @@ class SafetyManifest:
 
     def functions_of(self, item: SafetyItem) -> tuple[SafetyFunction, ...]:
         return tuple(f for f in self.functions if f.function_id in item.implements)
+
+    def resolve_function_ids(
+        self, ids: Iterable[str],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Read hand-typed function ids against the functions this manifest declares.
+
+        Returns ``(resolved, unknown)``. An id is resolved to the declared spelling: an
+        exact match, else the one that differs only by case or surrounding spaces
+        (``sf-1`` for ``SF-1``). Two declared ids that differ only by case are both
+        kept for such an id, because choosing between them would be a guess and the
+        conservative reading is that the change disturbed either. An id that matches
+        nothing is ``unknown`` -- never silently dropped by the caller.
+        """
+        declared = [f.function_id for f in self.functions]
+        resolved: list[str] = []
+        unknown: list[str] = []
+        for raw in ids:
+            if raw in declared:
+                hits = [raw]
+            else:
+                folded = raw.strip().casefold()
+                hits = [d for d in declared if d.strip().casefold() == folded]
+            if not hits:
+                if raw not in unknown:
+                    unknown.append(raw)
+                continue
+            resolved.extend(h for h in hits if h not in resolved)
+        return tuple(resolved), tuple(unknown)
 
     def checks_for(self, function_ids: set[str]) -> set[str]:
         """Every verification check that exercises any of these functions."""
@@ -456,3 +514,27 @@ class SafetyManifest:
     @classmethod
     def from_json(cls, path: str | Path) -> SafetyManifest:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def not_a_look(manifest: SafetyManifest) -> str:
+    """Why this manifest cannot be a positive observation of the machine; "" if it can.
+
+    A look is an ``as_found`` manifest whose every item was hashed off the unit
+    (:attr:`HashSource.describes_this_unit`). ``configuration_hash`` deliberately
+    ignores both ``source`` and ``hash_source``, so equal hashes say nothing about
+    either: a *declared* manifest carrying the old baseline hash has the same
+    configuration hash as the machine really reverting.
+    """
+    reasons: list[str] = []
+    if manifest.source is not ManifestSource.AS_FOUND:
+        reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
+    not_read = sorted(i.item_id for i in manifest.items
+                      if not i.hash_source.describes_this_unit)
+    if not_read:
+        reasons.append(
+            "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
+            "(supplied by a vendor, or declared)")
+    if not reasons:
+        return ""
+    return ("the manifest is not a record of looking at this machine: "
+            + "; ".join(reasons) + ". Equal hashes do not say what the unit holds.")

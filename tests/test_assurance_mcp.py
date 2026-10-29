@@ -86,10 +86,23 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {
-        "plans", "spec_validate", "machine_verify", "register_cases",
-        "services", "machine_assurance_check", "fleet_machine_assurance",
-    }
+    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
+                         "services", "machine_assurance_check", "fleet_machine_assurance",
+                         "change_cases", "change_case", "change_export", "change_claim",
+                         "change_advance", "change_reverify", "change_assess_drift",
+                         "change_assess_intervention"}
+
+
+@pytest.mark.asyncio
+async def test_no_tool_lets_an_agent_decide_a_case() -> None:
+    """Closing, rejecting, deferring, resuming and resolving need a named person.
+    This server is the surface an agent drives, so none of them is a tool."""
+    from assurance.mcp import server as mcp_server
+
+    names = {t.name for t in await mcp_server.mcp.list_tools()}
+    assert not {n for n in names if any(w in n for w in
+                                        ("decide", "close", "reject", "defer",
+                                         "resume", "resolve"))}
 
 
 @pytest.mark.asyncio
@@ -180,6 +193,48 @@ async def test_fleet_machine_assurance_surfaces_a_structured_401(
     detail = result["body"]["detail"]
     assert detail["status"] == "authentication_required"
     assert detail["service"] == "fleet_machine_assurance"
+
+
+@pytest.mark.asyncio
+async def test_change_cases_calls_the_real_api(mcp_env: str) -> None:
+    """``ASSURANCE_API_KEYS`` above is an operator key (full access), so this
+    is a real 200 over an empty queue — proving the tool calls the live
+    route rather than faking a shape."""
+    from assurance.mcp.server import change_cases
+
+    result = await change_cases()
+    assert result["status"] == 200
+    assert result["body"]["cases"] == []
+    assert result["body"]["summary"]["open"] == 0
+
+
+@pytest.mark.asyncio
+async def test_change_case_surfaces_a_real_404_not_a_fake_success(mcp_env: str) -> None:
+    from assurance.mcp.server import change_case
+
+    result = await change_case("case-doesnotexist")
+    assert result["status"] == 404
+
+
+@pytest.mark.asyncio
+async def test_change_write_tools_relay_the_real_api_refusals(mcp_env: str) -> None:
+    """Each write tool is one real POST. An unknown case is the API's own 404 —
+    the same one the read tools get for the same id."""
+    from assurance.mcp.server import change_advance, change_claim, change_reverify
+
+    claimed = await change_claim("case-doesnotexist", owner="v.grimaldi", actor="v.grimaldi")
+    assert claimed["status"] == 404
+    assert claimed["body"]["detail"] == {"error": "case_not_found",
+                                         "case_id": "case-doesnotexist"}
+
+    advanced = await change_advance("case-doesnotexist", actor="v.grimaldi")
+    assert advanced["status"] == 404
+
+    bad = await change_reverify("case-doesnotexist", manifest={"nonsense": True},
+                                verification_content_hash="a" * 64, actor="v.grimaldi")
+    assert bad["status"] == 422                      # the manifest is rejected first
+    blank = await change_advance("case-doesnotexist", actor="")
+    assert blank["status"] == 422                    # an actor is required
 
 
 @pytest.mark.asyncio

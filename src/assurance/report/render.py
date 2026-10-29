@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import Any
 
 from assurance.core.identity import format_utc, utc_now
+from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.declaration import (
     DeclarationOfConformity,
@@ -42,6 +43,7 @@ from assurance.fleet.declaration import (
 )
 from assurance.fleet.impact import ImpactReport, assess_impact
 from assurance.fleet.registry import Fleet
+from assurance.machine.recorder_attestation import RecorderTrust
 
 __all__ = ["ReportInput", "render_report"]
 
@@ -70,6 +72,16 @@ class ReportInput:
     #: cannot. They join the numbered list verbatim, like every other limit.
     extra_limits: tuple[str, ...] = ()
     generated_at: datetime | None = None
+    #: The reader's own recorder trust list, applied to the verifications the report
+    #: counts. The hosted route always sets one; without it the sealing verifier's own
+    #: tier is believed (right for a report on one's own ledger, offline).
+    recorder_trust: RecorderTrust | None = None
+    #: The signed head attestations made for this ledger (``assurance attest``),
+    #: and the public key to check them against. The key must have reached the
+    #: reader by a route other than the attestation log; without it signatures are
+    #: reported as not checked, never as valid.
+    attestations: tuple[Any, ...] = ()
+    attestation_key: Any = None
 
 
 _CSS = """
@@ -136,6 +148,7 @@ tbody tr:hover{background:var(--panel)}
 .pill.current{background:var(--good-soft);color:var(--good)}
 .pill.stale{background:var(--bad-soft);color:var(--bad)}
 .pill.failing{background:var(--bad);color:#fff}
+.pill.unchecked,.pill.incomplete{background:var(--warn);color:#fff}
 .pill.never_verified{background:var(--warn-soft);color:var(--warn)}
 .pill.not_demonstrable{background:var(--panel);color:var(--muted);
   box-shadow:inset 0 0 0 1px var(--rule-firm)}
@@ -190,6 +203,8 @@ _COVERAGE_WORDS = {
     "current": "Current",
     "stale": "Stale",
     "failing": "Failing",
+    "unchecked": "Unchecked",
+    "incomplete": "Incomplete",
     "never_verified": "Never verified",
     "not_demonstrable": "Not demonstrable",
 }
@@ -235,7 +250,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
         f"<span class='site'>{e(m.machine.manufacturer)} {e(m.machine.model)}"
         + (f" · {e(m.machine.site)}" if m.machine.site else "") + "</span>",
         f"<span class='cfg'>config {e(m.configuration_hash()[:16])} · "
-        f"{len(m.items)} item(s) · tier {e(m.tier_ceiling.value)}</span>",
+        f"{len(m.items)} item(s) · tier ceiling {e(m.tier_ceiling.value)}</span>",
         "</header><div class='body'>",
     ]
     for f in sorted(record.coverage.functions,
@@ -250,7 +265,7 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             + f"<span class='pill {e(f.coverage.value)}'>"
               f"{e(_COVERAGE_WORDS[f.coverage.value])}</span></div>"
             f"<div class='why'>{e(f.detail)}</div>"
-            + (f"<div class='days'>Running {days} day(s) without valid evidence "
+            + (f"<div class='days'>Running {days} day(s) without a standing verification "
                "for this function.</div>" if days is not None else "")
             + "</div>")
 
@@ -270,12 +285,42 @@ def _machine_block(record: Any, status: DeclarationStatus | None) -> str:
             "<th>Re-run</th></tr></thead><tbody>" + rows + "</tbody></table></div>")
 
     if status is not None:
-        tone = "" if status.is_sound else "bad"
+        tone = ("" if status.is_sound
+                else "warn" if status.verdict.is_unassessed else "bad")
         out.append(f"<div class='note {tone}'><b>{e(status.doc_id)}</b> — "
                    f"{e(status.verdict.value.replace('_', ' '))}. "
                    f"{e(status.statement)}</div>")
     out.append("</div></article>")
     return "".join(out)
+
+
+def _import_banner(impact: ImpactReport) -> str:
+    """The marker an unsigned import carries onto the page, as text and as attributes."""
+    record = impact.advisory_import
+    if not record:
+        return ""
+    partial = "true" if impact.incomplete else "false"
+    text = [
+        "<b>Unsigned import, inspect only.</b> This advisory was translated from a CSAF "
+        "document. Nobody has authenticated it, and the severity "
+        f"({e(impact.severity.value.replace('_', ' '))}) was "
+        + ("defaulted by the importer"
+           if record.get("severity_source") == "defaulted_by_importer"
+           else "chosen by the operator")
+        + ", not stated by the publisher."]
+    if record.get("tlp"):
+        text.append(f" Marked <b>TLP:{e(record['tlp'])}</b>: do not forward this page "
+                    "beyond the people the publisher named.")
+    if impact.incomplete:
+        gone = ", ".join(e(i) for i in impact.dropped_products)
+        text.append(" <b>Partial translation</b>"
+                    + (f": not imported: {gone}" if gone else "")
+                    + ". A machine running what was left out is not in this report, so "
+                    "'no match' below is never 'clear'.")
+    return ('<div class="banner bad" '
+            f'data-advisory-trust="{e(record.get("trust"))}" '
+            f'data-advisory-tlp="{e(record.get("tlp") or "")}" '
+            f'data-advisory-partial="{partial}">{"".join(text)}</div>')
 
 
 def _impact_block(impact: ImpactReport) -> str:
@@ -284,7 +329,13 @@ def _impact_block(impact: ImpactReport) -> str:
         "exposed": ("bad", "Standing safety evidence is now in question."),
         "needs_review": ("warn", "Matches found; none had standing evidence."),
     }[impact.verdict]
+    if impact.verdict == "needs_review" and not impact.exposures:
+        head = ("warn", "No match was found, but the advisory is an incomplete translation "
+                        "of its source. That is not a statement that nothing is affected."
+                if impact.incomplete else
+                "No match was found, but the ledger chain does not verify.")
     out = [
+        _import_banner(impact),
         f"<div class='banner {head[0]}'><b>{e(impact.advisory_id)}</b> "
         f"({e(impact.issued_by)}, {e(impact.severity.value.replace('_', ' '))}) — "
         f"{e(head[1])}<br>{e(impact.title)}<br>"
@@ -316,9 +367,67 @@ def _impact_block(impact: ImpactReport) -> str:
     return "".join(out)
 
 
+def _attestation_block(data: ReportInput, chain_ok: bool) -> str:
+    """What, if anything, a signature says about this ledger's head.
+
+    Kept apart from the chain statement on purpose: a chain that verifies is
+    internally consistent, and whoever holds the ledger could have rewritten it
+    whole. Only a signature made with a key the holder does not control, over a
+    head the signer or the holder named earlier, says otherwise.
+    """
+    atts = list(data.attestations)
+    if not atts:
+        return (
+            "<div class='banner warn'><b>No head attestation supplied.</b> The chain "
+            "above is internally consistent; it is <b>not independently attested</b>. "
+            "Whoever holds this ledger could have rewritten it end to end and produced "
+            "a chain that verifies. A signature over the head, made with a key the "
+            "ledger's holder does not control, is what closes that "
+            "(<code>assurance attest</code>).</div>")
+    key = data.attestation_key
+    if key is None:
+        return (
+            f"<div class='banner warn'><b>{len(atts)} attestation(s) supplied; "
+            "signatures NOT checked.</b> No public key was given, and a key that "
+            "arrives with the attestations proves nothing about who signed. Obtain the "
+            "signer's fingerprint by another route and re-run with the key. Until then "
+            "this ledger is not independently attested.</div>")
+    from assurance.attest.attestation import AttestationBasis, verify_log
+
+    verdict = verify_log(atts, key, ledger=data.ledger)
+    latest = verdict.latest
+    covered_to = latest.head_seq if latest else 0
+    unsigned_tail = max(0, len(data.ledger) - (latest.ledger_length if latest else 0))
+    basis = ("a head the holder declared to the signer (the signer did not read the "
+             "ledger)" if latest and latest.basis is AttestationBasis.DECLARED_BY_HOLDER
+             else "a head the signer read from the ledger and verified")
+    if verdict.ok and chain_ok:
+        cls, head = "", "<b>Head attestation verifies.</b>"
+    else:
+        cls, head = "bad", "<b>HEAD ATTESTATION DOES NOT VERIFY.</b>"
+    body = [
+        f"<div class='banner {cls}'>{head} {verdict.checked} attestation(s) checked "
+        f"against key <span class='mono'>{e(key.fingerprint)}</span>, which the reader "
+        "supplied. Latest: "
+        + (f"#{latest.sequence} at {e(latest.attested_at)}, covering records 1–"
+           f"{e(str(latest.ledger_length))} (head seq {covered_to}); basis: {e(basis)}. "
+           if latest else "")
+        + (f"{unsigned_tail} record(s) were appended after it and are covered by no "
+           "signature. " if unsigned_tail else "")
+        + ("Problems: " + e("; ".join(verdict.problems[:4])) if verdict.problems else "")
+        + "</div>",
+        "<div class='note'><b>What a valid attestation establishes:</b> that the holder "
+        "of that key signed that head at that time, so a later rewind contradicts a "
+        "signed statement. <b>What it does not:</b> that the key belongs to whom you "
+        "think, that the underlying machines or records are true, or anything about the "
+        "physical behaviour of any machine.</div>",
+    ]
+    return "".join(body)
+
+
 def render_report(data: ReportInput) -> str:
     """Produce one self-contained HTML page. No network, no scripts."""
-    fleet = Fleet.from_ledger(data.ledger)
+    fleet = Fleet.from_ledger(data.ledger, recorder_trust=data.recorder_trust)
     generated = data.generated_at or utc_now()
     declarations = {d.machine_key: d for d in data.declarations}
 
@@ -339,8 +448,13 @@ def render_report(data: ReportInput) -> str:
     unsound = sum(1 for s in statuses.values() if not s.is_sound)
 
     parts: list[str] = [
+        # A complete document that names its encoding: the page carries typographic
+        # quotes and is forwarded, saved and printed by readers that would
+        # otherwise guess.
+        "<!doctype html><html lang='en'><head><meta charset=\"utf-8\">"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>Machine safety evidence report</title>",
-        f"<style>{_CSS}</style>",
+        f"<style>{_CSS}</style></head><body>",
         "<div class='sheet'>",
         "<header class='masthead'><div>",
         "<h1>Machine safety evidence report</h1>",
@@ -373,16 +487,29 @@ def render_report(data: ReportInput) -> str:
             "is in question. "
             + e("; ".join(fleet.chain_problems[:3])) + "</div>")
 
+    parts.append(_attestation_block(data, fleet.chain_verified))
+
     parts.append("<div class='tiles'>")
     parts.append(_tile(len(fleet), "machines"))
-    parts.append(_tile(functions - uncovered, "functions covered",
-                       "good" if uncovered == 0 else ""))
+    # The count is of functions with a verification recorded and no recorded change
+    # since. How much that verification is worth is its tier, so the tile shows the
+    # weakest tier among them and is coloured good only when that tier is validated.
+    floors = [AssuranceTier(r.coverage.evidence_tier_floor) for r in fleet.records
+              if r.coverage.evidence_tier_floor in {t.value for t in AssuranceTier}]
+    weakest = min(floors, key=lambda t: t.rank) if floors else None
+    floor = weakest.value if weakest else ""
+    strong = weakest is not None and weakest.may_claim_physical_behaviour
+    parts.append(_tile(
+        functions - uncovered,
+        "functions with a recorded verification" + (f" (tier {floor})" if floor else ""),
+        ("good" if strong else "warn") if uncovered == 0 and floor else ""))
     parts.append(_tile(stale, "stale", "bad" if stale else ""))
     parts.append(_tile(uncovered - stale, "otherwise uncovered",
                        "warn" if uncovered - stale else ""))
     if impact is not None:
         parts.append(_tile(len(impact.machines_affected), "advisory matches",
-                           "bad" if impact.machines_affected else "good"))
+                           "bad" if impact.machines_affected else
+                           "warn" if impact.incomplete else "good"))
     if statuses:
         parts.append(_tile(unsound, "declarations in doubt",
                            "bad" if unsound else "good"))
@@ -390,8 +517,11 @@ def render_report(data: ReportInput) -> str:
 
     if impact is not None:
         parts.append("<section><h2>1 · Component advisory</h2>")
-        parts.append("<p class='lede'>A supplier has published an advisory. This is "
-                     "every machine in the ledger it touches, and the safety "
+        parts.append("<p class='lede'>"
+                     + ("An advisory that nobody has authenticated (see the marker below) "
+                        "names these components. " if impact.advisory_import else
+                        "A supplier has published an advisory. ")
+                     + "This is every machine in the ledger it touches, and the safety "
                      "functions whose evidence it unsettles.</p>")
         parts.append(_impact_block(impact))
         parts.append("</section>")
@@ -435,6 +565,15 @@ def render_report(data: ReportInput) -> str:
             limits.append(c)
 
     parts.append(f"<section><h2>{n + 2} · What this report does not establish</h2>")
+    parts.append(
+        "<p class='lede'><b>Checkable offline from the ledger and this page:</b> that "
+        "every record hashes to its recorded value and links to its predecessor; that "
+        "each finding reproduces when the engines are re-run on the same records "
+        "(<code>assurance machinery check</code>); and, given a signer's key obtained "
+        "independently, that the signed head matches. <b>Not establishable from this "
+        "artefact:</b> that the records describe the machines as they physically are, "
+        "that evidence was produced on the machine it is filed under, that a missing "
+        "record never existed, or the correctness of any supplier statement.</p>")
     parts.append("<p class='lede'>Carried verbatim from the engines that produced "
                  "the findings above. A report that hides its own limits is worth "
                  "less than no report, because somebody will rely on it.</p>")
@@ -457,6 +596,12 @@ def render_report(data: ReportInput) -> str:
         "amounts to a substantial modification requiring a new conformity assessment "
         "is a question for the manufacturer and, where one is involved, the notified "
         "body.</p>"
-        "</footer></div>")
+        "<p class='disclaimer'>This report is a record of what was collected, sealed and "
+        "verified, and of what that evidence no longer supports. It is not a declaration "
+        "of conformity and not a certification, and it does not say that any machine is "
+        "safe. Where it shows evidence as current, that means no change has been recorded "
+        "since the verification run was recorded; the run is not bound to the "
+        "configuration found, and nothing more is claimed.</p>"
+        "</footer></div></body></html>")
 
     return "".join(parts)

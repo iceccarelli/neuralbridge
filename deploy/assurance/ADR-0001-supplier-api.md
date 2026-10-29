@@ -59,7 +59,7 @@ the kind of drift the rest of this codebase refuses to allow.
 - `GET /v1/supplier/feed/{account_id}` — free, no account, forever. Serves
   the raw NDJSON feed. The audience for a supplier's advisory is every
   integrator who might be affected, not a paying subscriber — same reasoning
-  as every other free-forever verification route in this product.
+  as every other no-account verification route in this product.
 
 Feeds are keyed by the server-issued account id, not the supplier-chosen
 `supplier_id` string inside the advisory — the account id is already a safe
@@ -71,12 +71,21 @@ URL path segment.
 - **Discovery.** An integrator still has to know an account id to subscribe
   to a feed. A directory (something like `GET /v1/supplier/directory`) is
   future work, not shipped here.
-- **Feed sync into the watch engine.** `assurance.watch` still reads a local
-  file; wiring it to poll a hosted feed via HTTP is a separate, real piece of
-  work (HANDOFF.md P1 item 5, "feed sync").
 - **A real price.** Someone has to decide what a supplier tier costs, sell
   it, and only then does a Stripe price and a self-serve checkout path make
   sense. This ADR unblocks that decision; it does not make it.
+
+**Feed sync (HANDOFF.md P1 item 5) is now closed**, in a follow-up to this
+ADR: `assurance supplier fetch <url> --out <path> [--public-key <key>]`
+downloads a hosted feed's raw body and writes it to the local path a
+`watch` config's `feed:` field names — `assurance.watch` itself still only
+ever reads a local file, deliberately unchanged, since that is also what
+lets a feed be carried into an air-gapped plant on a USB stick with nothing
+installed. `fetch` is the piece that used to be "outside this system": a
+network failure or bad HTTP status raises loudly rather than reading as an
+empty feed, and a feed that fails `verify_feed` is refused rather than
+overwriting the last good copy on disk. See `src/assurance/supplier/publish.py`
+(`fetch_feed`) and `src/assurance/supplier/cli.py` (`fetch`).
 
 ## Tests
 

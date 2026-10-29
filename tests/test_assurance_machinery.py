@@ -55,6 +55,8 @@ from assurance.machinery.staleness import (
     assess_coverage,
 )
 
+from .support_recorder import build_attested_bundle
+
 ENG = Actor(identifier="a.integrator", role="safety engineer")
 TECH = Actor(identifier="m.tech", role="service technician")
 
@@ -458,7 +460,7 @@ def ledger(tmp_path):
     return EvidenceLedger(tmp_path / "machinery.db")
 
 
-def seal_a_real_verification(ledger, *, when, speed=400.0, separation=2200.0):
+def seal_a_real_verification(ledger, *, when, speed=400.0, separation=2200.0, attested=False):
     env = SafetyEnvelope(
         envelope_id="ENV-1", product="AR-7", product_version="2.4.1",
         workspace=Workspace((-1200.0, -1200.0, 0.0), (1200.0, 1200.0, 2100.0)),
@@ -473,7 +475,8 @@ def seal_a_real_verification(ledger, *, when, speed=400.0, separation=2200.0):
                 samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                      tcp_speed=speed, mode=OperatingMode.SSM,
                                      separation=separation) for i in range(10)))
-    return build_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
+    seal = build_attested_bundle if attested else build_bundle
+    return seal(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
 
 
 class TestLedgerIntegration:
@@ -482,16 +485,19 @@ class TestLedgerIntegration:
         assert ledger.entries(subject=MACHINE.key)[0].kind == "machinery.safety_manifest"
 
     def test_an_intervention_round_trips_through_the_ledger(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         record_intervention(ledger, intervention())
         back = interventions_from_ledger(ledger, MACHINE.key)
         assert [i.intervention_id for i in back] == ["INT-0007"]
 
     def test_an_unrevalidated_change_is_sealed_as_indeterminate_not_verified(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         e = record_intervention(ledger, intervention())
         assert e.validation_state is ValidationState.INDETERMINATE
         assert e.checks_skipped
 
     def test_the_findings_travel_with_the_sealed_record(self, ledger):
+        record_manifest(ledger, manifest())      # a change is filed for a unit whose manifest is sealed
         e = record_intervention(ledger, intervention())
         assert any("nothing was re-run" in c for c in e.checks_skipped)
 
