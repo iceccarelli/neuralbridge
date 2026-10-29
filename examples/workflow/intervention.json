@@ -1,0 +1,22 @@
+{
+  "intervention_id": "INT-DEMO-1",
+  "machine_key": "DemoCo/AR-7#DEMO-0001",
+  "item_id": "ITM-FW",
+  "kind": "update",
+  "occurred_at": "2026-03-14T09:30:00Z",
+  "performed_by": {
+    "identifier": "m.tech",
+    "role": "service technician",
+    "kind": "person"
+  },
+  "reason": "SYNTHETIC: vendor advisory text invented for the demonstration.",
+  "from_hash": "fe21623f37fada0422f8405c6f920036a8bdd84af16ece4f71dad17d6ec19f69",
+  "to_hash": "6ffe145cf6db3e43729768c065c3373c08b2c39dd72f15ee8e487aa8c6e5226e",
+  "affects_functions": [
+    "SF-01",
+    "SF-02"
+  ],
+  "authorization": null,
+  "revalidation": null,
+  "notes": "Nothing was re-run afterwards, until the second verification."
+}

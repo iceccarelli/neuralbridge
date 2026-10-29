@@ -8,9 +8,30 @@ so, because a handoff that flatters the work is worse than no handoff.
 below were observed on 2026-10-21, not carried forward from older text.
 
 **Verified 2026-10-29** at `bdfd2db`: `python -m pytest tests/ -q --no-cov` with the Postgres env
-from `ci.yml` — 6535 passed, 0 skipped; `ruff check src/ tests/` clean. `npx tsc` / `npm run build` were not run.
+from `ci.yml` — 6535 passed, 0 skipped; `ruff check src/ tests/` clean. `npx tsc --noEmit` and
+`npm run build` (Next 16.4.3, TypeScript 5.9.3) exit 0. Re-run on `5eb0a51` after the workflow pack: 6550 passed, 0 skipped.
+Sandbox gotcha: pip and npm bypass the egress proxy because `NO_PROXY`/`no_proxy`/`npm_config_noproxy` list the
+registries, and fail with a DNS error that npm reports as "Exit handler never called". Clear all three **in the same
+command** (`NO_PROXY= no_proxy= npm_config_noproxy=x npm ci`); a Postgres started with `service postgresql start`
+does not survive across tool calls, and `NEURALBRIDGE_REQUIRE_POSTGRES=1` turns that into errors, not skips.
 
 ---
+
+## 0.000 Changes on 2026-10-29 — a workflow a buyer can run
+
+- **`examples/workflow/`** is one synthetic machine (`DemoCo/AR-7#DEMO-0001`, every figure invented, throwaway
+  recorder key generated per run) taken through: seal manifest, attested verification at `validated`, firmware
+  intervention, coverage turns stale (exit 1), re-verification, coverage covered again, passport, and the
+  outsider checks (`machinery check --ledger`, `machine check` under the checker's own trust list).
+  `python examples/workflow/run.py [--json]` exits 0 only if all 12 steps give the documented result; each step
+  prints what it does not show. `tests/test_assurance_example_workflow.py` runs it and also edits the passport and
+  the bundle, swaps the trace and drops the trust list; each is rejected or downgraded. The pack's first draft was
+  rejected by the engine for dating a calibration after the run it supported — that is the `input_dates` check working.
+  Not in the pack: the emergency-stop function (no trace check can demonstrate it).
+- **`evidence verify` on a machine bundle or passport** still exits 2 (it checks ledger exports only) but names
+  `machine check` / `machinery check` instead of "no `entries` list". The hosted `/v1/evidence/verify` is still the one
+  verifier that dispatches on kind; the offline CLI is not unified.
+- Independent oracle for the engine's core rule lives in `neuralbridge-stress-test` (`tests/test_attack_machine_verify_cli.py`).
 
 ## 0.00 Changes on 2026-10-28 — trust hardening (branch `claude/trust-hardening`, merged: PR #59)
 
