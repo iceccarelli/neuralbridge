@@ -1255,6 +1255,22 @@ class TestMcp:
         params = set(inspect.signature(server.machine_verify).parameters)
         assert not [p for p in params if "trust" in p or "key" in p or "basis" in p]
 
+    async def test_the_verify_tool_can_file_a_verification_under_a_unit_like_the_cli_and_api(
+            self, monkeypatch):
+        """CLI ``--subject`` and API ``subject`` file a bundle under maker/model#serial; the
+        MCP tool had no such parameter, so what it sealed never counted for a unit."""
+        from assurance.mcp import server
+
+        seen: dict = {}
+
+        async def record(method, path, *, json_body=None, params=None):
+            seen["body"] = json_body
+            return {"status": 200, "body": {}}
+
+        monkeypatch.setattr(server, "_call", record)
+        await server.machine_verify({}, {}, "a.b", subject="Acme/AR-7#0412")
+        assert seen["body"]["subject"] == "Acme/AR-7#0412"
+
 
 # ---------------------------------------------------------------------------
 # no test double reaches production
