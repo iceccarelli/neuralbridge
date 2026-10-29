@@ -140,6 +140,18 @@ async def plans() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def capabilities() -> dict[str, Any]:
+    """GET /v1/capabilities — every capability of this service and which surface offers it.
+
+    Free, no key. Lists what the command line, the HTTP API and this MCP server each offer, the plan
+    flag that gates each API route, and every surface that is missing together with whether that is
+    by design (a human decision, an offline step, key custody) or a known gap. Use it to find out
+    what you can do before you try. ``present`` means it exists, not that the surfaces behave alike.
+    """
+    return await _call("GET", "/v1/capabilities")
+
+
+@mcp.tool()
 async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
     """POST /v1/spec/validate — validate an Article 14 draft submission without recording it. Free, no key.
 

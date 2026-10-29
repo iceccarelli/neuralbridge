@@ -34,6 +34,7 @@ DOC = ROOT / "deploy" / "assurance" / "CHANGE.md"
 _ID = r"[^/]+"
 ALLOWED = [
     ("GET", r"/v1/plans"),
+    ("GET", r"/v1/capabilities"),
     ("POST", r"/v1/spec/validate"),
     ("POST", r"/v1/machine/verify"),
     ("GET", r"/v1/check/services"),

@@ -13,6 +13,7 @@ type McpTool = { name: string; route: string; tier: Tier; agentWrite: boolean };
 // pins the names and routes to the @mcp.tool() functions in src/assurance/mcp/server.py.
 const MCP_TOOLS: McpTool[] = [
   { name: 'plans', route: 'GET /v1/plans', tier: 'free', agentWrite: false },
+  { name: 'capabilities', route: 'GET /v1/capabilities', tier: 'free', agentWrite: false },
   { name: 'spec_validate', route: 'POST /v1/spec/validate', tier: 'free', agentWrite: false },
   { name: 'machine_verify', route: 'POST /v1/machine/verify', tier: 'cell', agentWrite: false },
   { name: 'machine_check', route: 'POST /v1/machine/bundle/check', tier: 'free', agentWrite: false },

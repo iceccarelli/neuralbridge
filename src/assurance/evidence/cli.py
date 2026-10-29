@@ -38,10 +38,10 @@ from pathlib import Path
 from assurance.core.errors import AssuranceError
 from assurance.evidence.verify_export import ANCHORED, ExportVerification, verify_export_file
 
-__all__ = ["main"]
+__all__ = ["build_parser", "main"]
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="assurance evidence", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -59,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
                         "(`assurance attest sign`); the newest record the signer READ from a ledger "
                         "(else the newest declared one) is checked against the bundle as well. "
                         "Needs --public-key.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.attestations and not args.public_key:

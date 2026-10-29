@@ -86,7 +86,7 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"plans", "spec_validate", "machine_verify", "machine_check",
+    assert tool_names == {"plans", "capabilities", "spec_validate", "machine_verify", "machine_check",
                          "evidence_verify", "machinery_coverage", "machinery_passport_check",
                          "fleet_report", "register_cases",
                          "services", "machine_assurance_check", "fleet_machine_assurance",
