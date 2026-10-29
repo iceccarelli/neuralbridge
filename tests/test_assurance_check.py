@@ -252,6 +252,36 @@ class TestFleetFanOut:
 
 
 # =====================================================================
+# Configuration status: is the machine still the declared baseline?
+# =====================================================================
+
+class TestConfigurationStatus:
+    def test_no_declared_baseline_is_unknown_not_a_guess(self, ledger):
+        enrol(ledger, "0412")  # AS_FOUND only, never declared
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "unknown"
+        assert any("no as-declared baseline" in c for c in result.checks_skipped)
+
+    def test_an_unchanged_configuration_matches(self, ledger):
+        baseline = manifest("0412", fw(), zones(), source=ManifestSource.AS_DECLARED,
+                            manifest_id="MAN-0412-DECLARED")
+        record_manifest(ledger, baseline)
+        enrol(ledger, "0412")  # a later, identical AS_FOUND manifest
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "matched"
+        assert result.configuration_changes == ()
+
+    def test_a_changed_firmware_is_reported_as_changed(self, ledger):
+        baseline = manifest("0412", fw(), zones(), source=ManifestSource.AS_DECLARED,
+                            manifest_id="MAN-0412-DECLARED")
+        record_manifest(ledger, baseline)
+        record_manifest(ledger, manifest("0412", fw("9" * 64, "9.9.9"), zones()))
+        result = run_enrolled_check(ledger, "Grimaldi/AR-7#0412")
+        assert result.configuration_status == "changed"
+        assert any(c["item_id"] == "ITM-FW" for c in result.configuration_changes)
+
+
+# =====================================================================
 # HTTP — free vs paid entitlement (Cases G, H, I)
 # =====================================================================
 
@@ -346,3 +376,57 @@ class TestHttp:
                         json={"machine_key": "Grimaldi/AR-7#0000"},
                         headers=keyed(store, "cell"))
         assert r.status_code == 404
+
+    def test_the_402_is_structured_for_an_agent(self, client, store):
+        r = client.post("/v1/check/fleet-machine",
+                        json={"machine_key": "Grimaldi/AR-7#0412"},
+                        headers=keyed(store, "register"))
+        d = r.json()["detail"]
+        assert d["status"] == "payment_required"
+        assert d["required_plan"] == "cell"
+        assert d["service"] == "fleet_machine_assurance"
+        assert d["next_step"] == "checkout"
+
+    def test_the_401_is_structured_for_an_agent(self, client):
+        r = client.post("/v1/check/fleet-machine",
+                        json={"machine_key": "Grimaldi/AR-7#0412"})
+        d = r.json()["detail"]
+        assert d["status"] == "authentication_required"
+        assert d["service"] == "fleet_machine_assurance"
+
+    def test_the_service_catalogue_is_free_and_real(self, client):
+        r = client.get("/v1/check/services")
+        assert r.status_code == 200
+        ids = {s["service_id"] for s in r.json()["services"]}
+        assert ids == {"machine_assurance_check", "fleet_machine_assurance"}
+        cell_service = next(s for s in r.json()["services"]
+                            if s["service_id"] == "fleet_machine_assurance")
+        assert cell_service["required_plan"] == "cell"
+        assert cell_service["free_or_paid"] == "paid"
+        assert "manifest" in cell_service["input_schema"] or \
+               "machine_key" in cell_service["input_schema"]["properties"]
+
+    def test_the_free_check_names_the_real_next_action(self, client):
+        r = client.post("/v1/check/machine", json={
+            "manifest": manifest().to_dict(), "advisory": advisory().to_dict()})
+        action = r.json()["commercial_next_action"]
+        assert action["action"] == "enroll_machine"
+        assert action["endpoint"] == "POST /v1/machinery/manifest"
+
+
+class TestEveryVerdictNamesANextAction:
+    """A verdict the next-action table forgot was a KeyError at the customer's request."""
+
+    @pytest.mark.parametrize("enrolled", [False, True])
+    def test_no_verdict_is_missing_from_the_table(self, enrolled):
+        from assurance.check.pipeline import AssuranceVerdict, _next_action
+
+        for verdict in AssuranceVerdict:
+            action, endpoint = _next_action(verdict, enrolled)
+            assert action, verdict
+            assert endpoint is None or endpoint.startswith(("GET ", "POST ", "/")), (verdict, endpoint)
+
+    def test_cover_at_community_is_not_told_there_is_nothing_further_to_do(self):
+        from assurance.check.pipeline import AssuranceVerdict, _next_action
+
+        assert _next_action(AssuranceVerdict.VERIFIED_AT_COMMUNITY, True)[0] != "none"

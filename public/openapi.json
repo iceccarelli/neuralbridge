@@ -2457,6 +2457,30 @@
         ]
       }
     },
+    "/v1/capabilities": {
+      "get": {
+        "description": "The catalogue, computed from the running service and cached for its lifetime.\n\n``present`` means the command, route or tool exists in this build; it does not prove they\nbehave identically. ``planned`` marks a known gap and ``by_design`` a deliberate absence,\neach with its reason.",
+        "operationId": "capabilities_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capabilities V1 Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Everything this service can do, and on which surface",
+        "tags": [
+          "free"
+        ]
+      }
+    },
     "/v1/cases": {
       "get": {
         "operationId": "get_cases_v1_cases_get",
@@ -4647,6 +4671,30 @@
           }
         },
         "summary": "Machine Assurance Check \u2014 one manifest, one advisory, no account",
+        "tags": [
+          "check"
+        ]
+      }
+    },
+    "/v1/check/services": {
+      "get": {
+        "description": "A machine-readable catalogue an agent can discover before calling anything.\n\nGenerated from the same models and the same ``PLANS`` table every other\nroute enforces \u2014 nothing here is a price or a capability this deployment\ncannot actually execute. See ``GET /v1/plans`` for the full pricing table\nthis catalogue's ``required_plan``/``price`` fields are drawn from.",
+        "operationId": "services_v1_check_services_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Services V1 Check Services Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "What NeuralBridge can execute for a machine right now",
         "tags": [
           "check"
         ]

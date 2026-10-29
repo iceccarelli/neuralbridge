@@ -16,17 +16,21 @@ from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.value.position import assess_position, render_text
 
-__all__ = ["main"]
+__all__ = ["build_parser", "main"]
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="assurance value", description=__doc__)
     verbs = p.add_subparsers(dest="verb", required=True)
     r = verbs.add_parser("report", help="derive the assurance position from a ledger")
     r.add_argument("--ledger", required=True, type=Path)
     r.add_argument("--now", default="", help="ISO time to measure freshness against")
     r.add_argument("--json", action="store_true")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         if not args.ledger.exists():
             print(f"{args.ledger} does not exist.", file=sys.stderr)

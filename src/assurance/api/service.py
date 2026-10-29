@@ -25,6 +25,7 @@ from .. import __version__
 from .attest_routes import attest_router
 from .billing_routes import billing_router
 from .cache_headers import NoStoreMiddleware
+from .capabilities_routes import capabilities_router
 from .change_routes import change_router
 from .check_routes import check_router
 from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode, too_deep_body
@@ -161,6 +162,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(public_router)
     application.include_router(billing_router)
     application.include_router(free_router)
+    application.include_router(capabilities_router)
     application.include_router(machine_router)
     application.include_router(machinery_router)
     application.include_router(change_router)

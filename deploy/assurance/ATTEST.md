@@ -252,6 +252,24 @@ assurance attest sign \
   declared by the holder and not read from the ledger. A declared head over zero
   records anchors nothing and is refused.
 
+## Checking an export without our software
+
+An auditor who does not want to install or trust this package can check a whole-ledger export with one
+file, `scripts/verify_export_standalone.py`: Python standard library only, readable end to end, no network.
+
+```bash
+python verify_export_standalone.py export.json                         # internal consistency; exit 3
+python verify_export_standalone.py export.json --public-key signer.pub # + completeness; needs `cryptography`
+```
+
+Exit 0 only with a trusted public key and a signed head the signer *read from the ledger*. Without a key it
+says "completeness not checked" (exit 3): anyone holding the file can rebuild a consistent chain with entries
+left out, and the exporter's own head record can be rewritten to match. It is deliberately narrower than the
+product's verifier (whole-ledger exports of schema 1 only; anything else is exit 3, never a pass). The
+independent test suite (`neuralbridge-stress-test`, `tests/test_standalone_verifier.py`) checks that it is
+never more lenient than the product's verifier across the tamper matrix, including a forgery in which every
+hash is recomputed and only the signed head exposes it.
+
 ## Deploying the counter-signer
 
 ```bash

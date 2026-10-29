@@ -130,6 +130,8 @@ def _gates(route: APIRoute) -> set[str]:
 #: with a reason a reviewer can disagree with.
 FREE_ROUTES = {
     ("GET", "/v1/plans"): "the catalogue",
+    ("GET", "/v1/check/services"): "the Machine Assurance Check service catalogue, no account data",
+    ("GET", "/v1/capabilities"): "the service catalogue: what exists and where, no account data",
     ("GET", "/v1/spec/fields"): "the public specification",
     ("POST", "/v1/spec/validate"): "free validator, daily allowance via metering",
     ("POST", "/v1/machine/separation"): "stateless calculator, daily allowance via metering",

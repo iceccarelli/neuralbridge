@@ -86,7 +86,10 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
 
     tools = await mcp_server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"plans", "spec_validate", "machine_verify", "register_cases",
+    assert tool_names == {"plans", "capabilities", "spec_validate", "machine_verify", "machine_check",
+                         "evidence_verify", "machinery_coverage", "machinery_passport_check",
+                         "fleet_report", "register_cases",
+                         "services", "machine_assurance_check", "fleet_machine_assurance",
                          "change_cases", "change_case", "change_export", "change_claim",
                          "change_advance", "change_reverify", "change_assess_drift",
                          "change_assess_intervention"}
@@ -141,6 +144,60 @@ async def test_machine_verify_surfaces_a_real_402_not_a_fake_success(mcp_env: st
 
 
 @pytest.mark.asyncio
+async def test_services_calls_the_real_api(mcp_env: str) -> None:
+    from assurance.mcp.server import services
+
+    result = await services()
+    assert result["status"] == 200
+    ids = {s["service_id"] for s in result["body"]["services"]}
+    assert ids == {"machine_assurance_check", "fleet_machine_assurance"}
+
+
+@pytest.mark.asyncio
+async def test_machine_assurance_check_calls_the_real_api(mcp_env: str) -> None:
+    from assurance.mcp.server import machine_assurance_check
+
+    advisory = {
+        "advisory_id": "CTRL-2026-11", "issued_by": "ControlCo",
+        "issued_at": "2026-09-12T08:00:00Z", "title": "t", "summary": "s",
+        "severity": "safety_relevant",
+        "affected": [{"supplier": "ControlCo", "name": "Safety controller firmware",
+                     "versions": ["3.8.2"]}],
+        "reference": "https://controlco.example/advisories/CTRL-2026-11",
+    }
+    manifest = {
+        "manifest_id": "MAN-0412",
+        "machine": {"manufacturer": "Grimaldi", "model": "AR-7", "serial": "0412"},
+        "source": "as_found", "taken_at": "2026-09-01T00:00:00Z",
+        "taken_by": {"identifier": "a.integrator", "role": "safety engineer"},
+        "items": [{"item_id": "ITM-FW", "kind": "firmware",
+                  "name": "Safety controller firmware", "version": "3.8.2",
+                  "content_hash": "", "hash_source": "declared",
+                  "supplier": "ControlCo"}],
+    }
+    result = await machine_assurance_check(manifest=manifest, advisory=advisory)
+    assert result["status"] == 200
+    assert result["body"]["verdict"] in {"potentially_affected", "requires_human_review"}
+    assert result["body"]["enrolled"] is False
+
+
+@pytest.mark.asyncio
+async def test_fleet_machine_assurance_surfaces_a_structured_401(
+    running_api: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no key at all, this must be the API's real structured 401."""
+    monkeypatch.setenv("ASSURANCE_API_URL", running_api)
+    monkeypatch.delenv("ASSURANCE_API_KEY", raising=False)
+    from assurance.mcp.server import fleet_machine_assurance
+
+    result = await fleet_machine_assurance(machine_key="Grimaldi/AR-7#0412")
+    assert result["status"] == 401
+    detail = result["body"]["detail"]
+    assert detail["status"] == "authentication_required"
+    assert detail["service"] == "fleet_machine_assurance"
+
+
+@pytest.mark.asyncio
 async def test_change_cases_calls_the_real_api(mcp_env: str) -> None:
     """``ASSURANCE_API_KEYS`` above is an operator key (full access), so this
     is a real 200 over an empty queue — proving the tool calls the live
@@ -191,3 +248,72 @@ async def test_no_api_url_fails_closed_honestly() -> None:
     result = await plans()
     assert result["error"] == "assurance_api_url_not_configured"
     assert "remedy" in result
+
+
+# ---------------------------------------------------------------------------
+# the verify/read tools agree with the CLI on the same artefacts (examples/workflow)
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def pack(tmp_path_factory):
+    """The shipped synthetic workflow, run for real once; its sealed outputs are the inputs."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    work = tmp_path_factory.mktemp("pack")
+    script = Path(__file__).resolve().parents[1] / "examples" / "workflow" / "run.py"
+    run = subprocess.run([sys.executable, str(script), "--keep", str(work)],  # noqa: S603
+                         capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stdout[-500:]
+    load = lambda n: json.loads((work / n).read_text("utf-8"))  # noqa: E731
+    return {n: load(f"{n}.json") for n in ("bundle-after", "envelope", "trace-after", "passport",
+                                           "manifest")}
+
+
+@pytest.mark.asyncio
+async def test_machine_check_reproduces_a_real_bundle_and_rejects_an_edited_one(
+        mcp_env: str, pack) -> None:
+    import copy
+
+    from assurance.mcp.server import machine_check
+
+    ok = await machine_check(pack["bundle-after"], pack["envelope"], pack["trace-after"])
+    assert ok["status"] == 200, ok
+    assert "REJECTED" not in str(ok["body"])
+    # The server holds no recorder trust list here, so it will not believe `validated`.
+    assert "validated" not in str(ok["body"].get("tier_believed", ""))
+
+    edited = copy.deepcopy(pack["bundle-after"])
+    edited["result"]["verdict"] = "fail" if edited["result"]["verdict"] != "fail" else "pass"
+    bad = await machine_check(edited, pack["envelope"], pack["trace-after"])
+    assert bad["status"] == 200 and (bad["body"].get("ok") is False
+                                     or "REJECTED" in str(bad["body"]).upper()), bad
+
+
+@pytest.mark.asyncio
+async def test_passport_check_accepts_the_real_passport_and_rejects_an_edited_one(
+        mcp_env: str, pack) -> None:
+    import copy
+
+    from assurance.mcp.server import machinery_passport_check
+
+    ok = await machinery_passport_check(pack["passport"])
+    assert ok["status"] == 200 and ok["body"].get("ok") is True, ok
+    edited = copy.deepcopy(pack["passport"])
+    edited["coverage"] = {**edited["coverage"], "verdict": "gaps"}
+    bad = await machinery_passport_check(edited)
+    assert bad["status"] == 200 and bad["body"].get("ok") is False, bad
+
+
+@pytest.mark.asyncio
+async def test_evidence_verify_and_the_read_tools_make_real_calls(mcp_env: str, pack) -> None:
+    from assurance.mcp.server import evidence_verify, fleet_report, machinery_coverage
+
+    # A non-export is refused by the real verifier, never reported as a pass.
+    refused = await evidence_verify({"not": "an export"})
+    assert refused["status"] in (200, 422) and refused["body"].get("ok") is not True, refused
+    cov = await machinery_coverage(pack["manifest"])
+    assert cov["status"] in (200, 402, 404, 422) and "body" in cov, cov
+    report = await fleet_report(organisation="Synthetic Org", prepared_by="test")
+    assert report["status"] in (200, 402) and "body" in report, report

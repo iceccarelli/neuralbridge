@@ -221,6 +221,30 @@ def _short(link: Any) -> str:
     return str(link)[:12]
 
 
+#: Artefacts this package seals that are checked by another command, not by ``evidence verify``.
+_OTHER_ARTEFACTS = (
+    ("assurance.machinery.passport/", "a machine passport",
+     "assurance machinery check PASSPORT --ledger LEDGER"),
+    ("assurance.machine.bundle/", "a machine verification bundle",
+     "assurance machine check BUNDLE --envelope ENVELOPE --trace TRACE --recorder-trust TRUST"),
+)
+
+
+def _not_a_ledger_export(document: object) -> str:
+    """The refusal for a document with no ``entries`` list, naming the right command if known.
+
+    ``evidence verify`` checks ledger exports only. It does not check what it was not given,
+    so this changes the message, never the outcome.
+    """
+    schema = document.get("schema") if isinstance(document, dict) else None
+    if isinstance(schema, str):
+        for prefix, what, command in _OTHER_ARTEFACTS:
+            if schema.startswith(prefix):
+                return (f"not a ledger export: this is {what} ({schema}). `evidence verify` "
+                        f"does not check it; use `{command}`")
+    return "not an evidence bundle: no `entries` list"
+
+
 def verify_export(
     bundle: Any, *, trusted_key: VerifyingKey | None = None,
     anchors: Sequence[Mapping[str, Any] | Any] = (),
@@ -265,7 +289,7 @@ def verify_export(
     ]
     if not isinstance(bundle, dict) or not isinstance(bundle.get("entries"), list):
         return ExportVerification(False, 0, "unknown",
-                                  ("not an evidence bundle: no `entries` list",),
+                                  (_not_a_ledger_export(bundle),),
                                   tuple(skipped), (), ASSUMPTIONS)
 
     subject = bundle.get("subject", "")
