@@ -25,7 +25,7 @@ CORE_DEPENDENCIES = len(PROJECT["dependencies"])
 
 #: Everywhere a stranger is told how to install the offline kit.
 INSTALL_INSTRUCTIONS = [
-    "README.md", "docs/getting-started.md", "docs/index.md",
+    "README.md", "docs/getting-started.md",
     "app/page.tsx", "app/cli/page.tsx", "app/verify/page.tsx",
     ".github/workflows/assurance.yml",
 ]

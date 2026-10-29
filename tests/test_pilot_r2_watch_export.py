@@ -198,14 +198,11 @@ class TestPublicCopyIsConsistent:
                     "public/openapi.json"):
             assert phrase in (ROOT / rel).read_text(encoding="utf-8"), rel
 
-    def test_handoff_records_what_this_work_changed(self):
-        text = " ".join((ROOT / "HANDOFF.md").read_text(encoding="utf-8").split())
-        for needle in ("billing grant", "read_from_machine", "exit 3", "supplied_by_vendor"):
-            assert needle in text, needle
-
-    def test_the_pilot_programme_says_the_change_needs_the_assertion(self):
-        text = " ".join((ROOT / "docs" / "pmf" / "PILOT-PROGRAMME.md").read_text().split())
+    def test_the_kit_guide_says_the_change_needs_the_assertion(self):
+        # Was asserted of the pilot-programme page and of HANDOFF.md; both were removed from main.
+        text = " ".join((ROOT / "deploy" / "assurance" / "KIT.md").read_text().split())
         assert "--read-from-machine" in text
+        assert "supplied_by_vendor" in text
 
 
 class TestTheLeftovers:

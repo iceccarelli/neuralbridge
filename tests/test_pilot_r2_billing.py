@@ -202,10 +202,6 @@ class TestTheOperatorCanEndAGrantAtOnce:
         assert _cli("end", "--store", store_path, "--email", "nobody@x.example") == 2
         assert AccountStore(store_path).account(stripe.id).status == "active"
 
-    def test_the_runbook_names_end(self):
-        text = " ".join((ROOT / "deploy/assurance/README.md").read_text().split())
-        assert "billing end" in text and "do not roll back" in text.lower()
-
 
 # =====================================================================
 class TestAPilotIsNotSentToADeadEnd:
@@ -245,10 +241,6 @@ class TestAPilotIsNotSentToADeadEnd:
         c = client.post("/v1/checkout", headers=headers(key),
                         json={"tier": "cell", "email": "p@x.example"})
         assert c.status_code == 409 and c.json()["detail"]["error"] == "already_subscribed"
-
-    def test_the_conversion_path_is_documented(self):
-        text = " ".join((ROOT / "deploy/assurance/README.md").read_text().split())
-        assert "converting a pilot" in text.lower() and "second account" in text
 
 
 # =====================================================================

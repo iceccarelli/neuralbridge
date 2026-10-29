@@ -411,10 +411,9 @@ class TestListIsAnHonestInventory:
 
 
 def test_the_operator_docs_carry_the_command_and_its_limits():
-    for rel in ("deploy/assurance/README.md", "docs/buyer-journey.md"):
+    # The deploy README that also carried this (and the fly ssh steps) was removed from main.
+    for rel in ("docs/buyer-journey.md",):
         text = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
         assert "assurance billing grant" in text, rel
         assert "outside Stripe" in text, rel
         assert "founder" in text, rel
-    readme = " ".join((ROOT / "deploy/assurance/README.md").read_text(encoding="utf-8").split())
-    assert "fly ssh console" in readme and "/data/accounts.db" in readme
