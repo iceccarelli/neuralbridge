@@ -257,7 +257,7 @@ def _intact(store: CaseStore) -> CaseStore:
 
 
 @change_router.post("/assess/drift", summary="Turn a manifest divergence into a case")
-async def assess_drift_route(
+def assess_drift_route(
     body: DriftIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -314,7 +314,7 @@ def _sealed_baseline(ledger: Any, observed: SafetyManifest) -> SafetyManifest | 
 
 
 @change_router.post("/assess/advisory", summary="Turn a fleet impact report into a case")
-async def assess_advisory_route(
+def assess_advisory_route(
     body: AdvisoryIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -334,7 +334,7 @@ async def assess_advisory_route(
 
 
 @change_router.post("/assess/intervention", summary="Did a recorded intervention invalidate evidence?")
-async def assess_intervention_route(
+def assess_intervention_route(
     body: InterventionAssessIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -362,7 +362,7 @@ async def assess_intervention_route(
 
 
 @change_router.get("/cases", summary="The Active Assurance Cases queue")
-async def list_cases(
+def list_cases(
     principal: Annotated[Principal, Machine], status: str = "",
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -376,7 +376,7 @@ async def list_cases(
 
 
 @change_router.get("/cases/{case_id}", summary="One case in full")
-async def get_case(
+def get_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -387,7 +387,7 @@ async def get_case(
 
 
 @change_router.post("/cases/{case_id}/claim", summary="OPEN -> IN_REVIEW")
-async def claim_case_route(
+def claim_case_route(
     case_id: str, body: ClaimIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -400,7 +400,7 @@ async def claim_case_route(
 
 
 @change_router.post("/cases/{case_id}/advance", summary="Move to the next required stop")
-async def advance_case_route(
+def advance_case_route(
     case_id: str, body: AdvanceIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -413,7 +413,7 @@ async def advance_case_route(
 
 
 @change_router.post("/cases/{case_id}/reverification", summary="Supply fresh verification evidence; blocked_reason says why a case still waits")
-async def reverify_case_route(
+def reverify_case_route(
     case_id: str, body: ReverificationIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -454,7 +454,7 @@ async def reverify_case_route(
 
 
 @change_router.post("/cases/{case_id}/decision", summary="Close, reject or defer — a human decision")
-async def decide_case_route(
+def decide_case_route(
     case_id: str, body: DecisionIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -468,7 +468,7 @@ async def decide_case_route(
 
 
 @change_router.post("/cases/{case_id}/resume", summary="DEFERRED -> IN_REVIEW — a human decision")
-async def resume_case_route(
+def resume_case_route(
     case_id: str, body: ResumeIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -482,7 +482,7 @@ async def resume_case_route(
 
 @change_router.post("/cases/{case_id}/resolve-decision",
                     summary="Answer one of the case's open human questions — a human decision")
-async def resolve_decision_route(
+def resolve_decision_route(
     case_id: str, body: ResolveDecisionIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -497,7 +497,7 @@ async def resolve_decision_route(
 
 @change_router.post("/cases/{case_id}/waive-reverification",
                     summary="Close one re-verification entry WITHOUT evidence — a human decision")
-async def waive_reverification_route(
+def waive_reverification_route(
     case_id: str, body: WaiveIn, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
@@ -516,7 +516,7 @@ async def waive_reverification_route(
 @change_router.get("/cases/{case_id}/export",
                    summary="A verifiable evidence bundle for one case",
                    responses=EXPORT_RESPONSES)
-async def export_case(
+def export_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
     anchor: Annotated[bool, Query(
@@ -568,7 +568,7 @@ async def export_case(
 
 @change_router.get("/cases/{case_id}/replay",
                    summary="Rebuild the case from the ledger alone and check every step")
-async def replay_case(
+def replay_case(
     case_id: str, principal: Annotated[Principal, Machine],
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:

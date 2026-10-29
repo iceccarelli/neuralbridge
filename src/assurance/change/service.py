@@ -34,7 +34,7 @@ from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import Divergence, Severity
-from assurance.machinery.intervention import Intervention
+from assurance.machinery.intervention import IMPLIED_PREFIX, Intervention
 from assurance.machinery.manifest import SafetyManifest, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
@@ -569,6 +569,12 @@ def assess_drift(
     if divergence.verdict != "safety_relevant_drift":
         return None
 
+    # The drift under assessment is this case's finding, not evidence for it. Once the
+    # observed manifest is sealed the ledger derives an implied change from it; leaving
+    # that in would make a re-assessment after sealing read differently from the first,
+    # which ran before the manifest was sealed (so a crash between the two is a no-op).
+    own = f"{IMPLIED_PREFIX}{manifest.content_hash()[:12]}@"
+    interventions = [i for i in interventions if not i.intervention_id.startswith(own)]
     coverage = assess_coverage(manifest, verifications, interventions)
     affected = divergence.affected_functions
     evidence_current = {f.function_id: f.coverage.value

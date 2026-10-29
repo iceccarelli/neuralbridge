@@ -6303,6 +6303,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "`too_many_verifications`: this account already has 2 runs in flight. `Retry-After` says when."
+          },
+          "503": {
+            "description": "`verification_queue_full`: the service is running its limit and its queue is full. `Retry-After` says when."
           }
         },
         "summary": "Verify a recorded run against a declared safety envelope",
@@ -6371,6 +6377,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "`ledger_chain_unverified`: this account's ledger chain does not verify, so no function is assessed. A coverage read from a store whose records can be deleted or edited could be made to pass. Nothing is assessed."
           },
           "422": {
             "content": {
@@ -6485,7 +6494,7 @@
     },
     "/v1/machinery/intervention": {
       "post": {
-        "description": "Record a change to safety-relevant software.\n\nA change with no authorisation and no re-validation is recorded, not\nrefused \u2014 and its findings travel with it. Refusing would push the change\nback to where it lives now, which is nowhere.",
+        "description": "Record a change to safety-relevant software.\n\nA change with no authorisation and no re-validation is recorded, not\nrefused \u2014 and its findings travel with it. Refusing would push the change\nback to where it lives now, which is nowhere.\n\nWhat is refused is a change that could not be about anything the ledger holds:\n``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key\nwith another case or serial is a different unit), ``422 unknown_function`` naming any\nsafety function the sealed manifest does not declare. Function ids are written back\nas the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the\nfunctions the manifest says the changed item implements are disturbed regardless\n(``effective_affects_functions``).",
         "operationId": "post_intervention_v1_machinery_intervention_post",
         "parameters": [
           {
@@ -6544,15 +6553,11 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "description": "`unknown_machine`: no manifest is sealed under exactly this unit key (another case, another serial, another unit, a product line). Nothing was written."
+          },
           "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
+            "description": "`invalid_intervention`, or `unknown_function`: the record names a safety function the sealed manifest does not declare (`unknown_functions` lists them). Nothing was written."
           }
         },
         "summary": "Seal an intervention record",
