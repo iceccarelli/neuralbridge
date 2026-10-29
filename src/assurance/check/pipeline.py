@@ -201,6 +201,10 @@ _DEFAULT_NEXT_ACTION: dict[AssuranceVerdict, tuple[str, str | None]] = {
     AssuranceVerdict.REQUIRES_HUMAN_REVIEW: ("contact_sales", "/contact"),
     AssuranceVerdict.CANNOT_DETERMINE: ("provide_more_evidence", None),
     AssuranceVerdict.VERIFIED: ("none", None),
+    # The evidence stands but was never demonstrated on the machine: its provenance is only
+    # declared by whoever filed it. The one step that can raise it is a verification attested
+    # by a recorder the server trusts; "none" would claim more than the verdict does.
+    AssuranceVerdict.VERIFIED_AT_COMMUNITY: ("verify_machine", "POST /v1/machine/verify"),
 }
 
 # Overrides for a machine that is already enrolled: the free "go enrol it"

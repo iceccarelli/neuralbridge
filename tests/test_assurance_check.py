@@ -412,3 +412,21 @@ class TestHttp:
         action = r.json()["commercial_next_action"]
         assert action["action"] == "enroll_machine"
         assert action["endpoint"] == "POST /v1/machinery/manifest"
+
+
+class TestEveryVerdictNamesANextAction:
+    """A verdict the next-action table forgot was a KeyError at the customer's request."""
+
+    @pytest.mark.parametrize("enrolled", [False, True])
+    def test_no_verdict_is_missing_from_the_table(self, enrolled):
+        from assurance.check.pipeline import AssuranceVerdict, _next_action
+
+        for verdict in AssuranceVerdict:
+            action, endpoint = _next_action(verdict, enrolled)
+            assert action, verdict
+            assert endpoint is None or endpoint.startswith(("GET ", "POST ", "/")), (verdict, endpoint)
+
+    def test_cover_at_community_is_not_told_there_is_nothing_further_to_do(self):
+        from assurance.check.pipeline import AssuranceVerdict, _next_action
+
+        assert _next_action(AssuranceVerdict.VERIFIED_AT_COMMUNITY, True)[0] != "none"

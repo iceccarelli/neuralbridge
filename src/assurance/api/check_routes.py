@@ -19,7 +19,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Anyone, get_register, require_machine
+from assurance.api.deps import ENTITLEMENT_GATES, Anyone, get_register, require_machine
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.billing.plans import PLANS
@@ -71,6 +71,11 @@ async def _entitled_for_fleet_machine(
             ) from exc
         raise
 
+
+# This wrapper IS the Cell gate (it calls require_machine and only reshapes the refusal), so the
+# entitlement registry must know it. Left out, the route reads as ungated to every audit of the
+# live app, which is exactly what tests/test_assurance_entitlements.py exists to catch.
+ENTITLEMENT_GATES[_entitled_for_fleet_machine] = ENTITLEMENT_GATES[require_machine]
 
 EntitledForFleetMachine = Depends(_entitled_for_fleet_machine)
 
