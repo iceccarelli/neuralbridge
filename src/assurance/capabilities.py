@@ -79,6 +79,8 @@ _HUMAN = ("a named person's act, so no agent surface (the Article 14 track, a ca
 _WRITE = "writes the ledger of record; an agent is not offered a way to seal records"
 _OFFLINE = "runs on the customer's own machine and opens no socket; there is no hosted equivalent"
 _ACCOUNT = "the account plane (billing, keys, operators); not an assurance capability to automate"
+_OPERATOR = ("operator tooling that works on the local account store file on the host; it opens no "
+             "socket and is not an HTTP route")
 _KEYS = "key custody: the private key is made and held on the operator's own machine"
 _HTTP = "served over HTTP to callers who hold no checkout; the CLI works on local files"
 _NO_MCP_YET = "no MCP tool yet; a read or verify that an agent could use"
@@ -121,7 +123,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("evidence.ledger_verify", "Verify the evidence chain",
        "art14 verify", "GET /v1/ledger/verify", gaps={"mcp": _p(_NO_MCP_YET)}),
     _c("evidence.verify", "Check an evidence file you were handed; stores nothing",
-       "evidence verify", "POST /v1/evidence/verify", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "evidence verify", "POST /v1/evidence/verify", "evidence_verify"),
     _c("attest.keygen", "Make an Ed25519 key pair", "attest keygen",
        gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
     _c("attest.sign", "Attest the current head of a ledger",
@@ -141,18 +143,20 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("machine.verify", "Verify a recorded run against a declared safety envelope",
        "machine verify", "POST /v1/machine/verify", "machine_verify"),
     _c("machine.check", "Re-verify a verification bundle somebody else sealed",
-       "machine check", "POST /v1/machine/bundle/check", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "machine check", "POST /v1/machine/bundle/check", "machine_check"),
     _c("machine.recorder_sign", "Sign a trace as a recorder attestation",
        "machine recorder-sign", gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
     _c("machine.recorder_trust", "Add a recorder's PUBLIC key to your own trust file",
        "machine recorder-trust",
        gaps={"api": _d("trust is the verifier's own configuration; a request cannot supply it"),
              "mcp": _d("trust is the verifier's own configuration; a tool cannot supply it")}),
+    _c("check.services", "The Machine Assurance Check service catalogue, machine-readable",
+       (), "GET /v1/check/services", "services", gaps={"cli": _p("no CLI verb")}),
     _c("check.machine", "Ad-hoc check: one manifest, one advisory, no account",
-       (), "POST /v1/check/machine", gaps={"cli": _p("no CLI verb"), "mcp": _p(_NO_MCP_YET)}),
+       (), "POST /v1/check/machine", "machine_assurance_check", gaps={"cli": _p("no CLI verb")}),
     _c("check.fleet_machine", "Check an enrolled machine against its own ledger history",
-       (), "POST /v1/check/fleet-machine",
-       gaps={"cli": _p("no CLI verb"), "mcp": _p(_NO_MCP_YET)}),
+       (), "POST /v1/check/fleet-machine", "fleet_machine_assurance",
+       gaps={"cli": _p("no CLI verb")}),
 
     # --- machinery: the machine's software identity and its change history ------------------
     _c("machinery.manifest", "Seal a safety software manifest",
@@ -162,17 +166,17 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("machinery.diff", "Is the machine still the configuration you signed off?",
        "machinery diff", "POST /v1/machinery/diff", gaps={"mcp": _p(_NO_MCP_YET)}),
     _c("machinery.coverage", "Which safety functions a recorded verification still stands for",
-       "machinery coverage", "POST /v1/machinery/coverage", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "machinery coverage", "POST /v1/machinery/coverage", "machinery_coverage"),
     _c("machinery.passport", "Seal the machine's whole evidence position",
        "machinery passport", "POST /v1/machinery/passport", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.passport_check", "Re-verify a passport you did not produce",
-       "machinery check", "POST /v1/machinery/passport/check", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "machinery check", "POST /v1/machinery/passport/check", "machinery_passport_check"),
 
     # --- fleet: every machine at once, and what a supplier advisory means for them ------------
     _c("fleet.machines", "Every enrolled machine, worst coverage first",
        "fleet list", "GET /v1/fleet/machines", gaps={"mcp": _p(_NO_MCP_YET)}),
     _c("fleet.report", "The whole fleet on one page a plant manager can read",
-       "report build", "GET /v1/fleet/report", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "report build", "GET /v1/fleet/report", "fleet_report"),
     _c("fleet.observations", "When each machine was last looked at, and did it work",
        (), "GET /v1/fleet/observations",
        gaps={"cli": _d("`watch status` shows the local run; the hosted view of pushed runs is HTTP"),
@@ -277,6 +281,20 @@ CAPABILITIES: tuple[Capability, ...] = (
        gaps={"api": _d("the hosted view is `GET /v1/fleet/observations`"), "mcp": _d(_OFFLINE)}),
     _c("watch.push", "Report the latest sealed run to your own hosted ledger (opt-in)",
        "watch push", "POST /v1/watch/report", gaps={"mcp": _d(_WRITE)}),
+
+    # --- billing: operator tooling for accounts provisioned outside Stripe ---------------------
+    _c("billing.grant", "Create a manual-pilot account and print its API key once",
+       "billing grant", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
+    _c("billing.issue_key", "Print another key for an existing manual grant, once",
+       "billing issue-key", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
+    _c("billing.revoke_key", "Stop one key of a manual grant at once",
+       "billing revoke-key", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
+    _c("billing.extend", "Move a manual grant's last day",
+       "billing extend", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
+    _c("billing.end", "End a manual grant now: revoke every key",
+       "billing end", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
+    _c("billing.list", "Every account in the store: source, expiry, no secrets",
+       "billing list", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
 
     # --- collect, kit, report: the offline pipeline -----------------------------------------------
     _c("collect.check_plan", "What a collection plan would catch, and miss", "collect check-plan",
