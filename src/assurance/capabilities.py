@@ -345,9 +345,10 @@ CAPABILITIES: tuple[Capability, ...] = (
 # --------------------------------------------------------------------------------------------
 _CLI_DOMAINS_MODULE = "assurance.cli"
 _MCP_SOURCE = Path(__file__).resolve().parent / "mcp" / "server.py"
-_MCP_TOOL = re.compile(
-    r"@mcp\.tool\(\)\s*async def (\w+)\([^)]*\)[^:]*:\s*\"\"\"\s*"
-    r"((?:GET|POST|PUT|PATCH|DELETE) \S+)", re.S)
+_MCP_ROUTE = re.compile(r"\s*((?:GET|POST|PUT|PATCH|DELETE) \S+)")
+#: CLI domains that really are one command with no sub-commands. Any other domain that exposes no
+#: ``build_parser`` cannot be looked inside, which ``problems`` reports rather than hides.
+_SINGLE_COMMAND_DOMAINS: frozenset[str] = frozenset()
 #: CLI verbs that are not domain commands: the catalogue's own entry point.
 _TOP_LEVEL_CLI = {"capabilities": "assurance.capabilities_cli"}
 
@@ -373,7 +374,7 @@ def discover_cli() -> list[str]:
         mod = importlib.import_module(module)
         build = getattr(mod, "build_parser", None)
         if build is None:
-            found.append(domain)            # a domain we cannot look inside is one opaque command
+            found.append(domain)            # opaque: reported by opaque_cli_domains()
             continue
         found += [" ".join((domain, *leaf)) for leaf in _leaves(build(), ())]
     return sorted(found)
@@ -393,9 +394,69 @@ def discover_api(app: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
+def opaque_cli_domains() -> list[str]:
+    """CLI domains whose commands cannot be enumerated: no ``build_parser`` and not declared
+    single-command. Each is a hole in the catalogue's view of the CLI."""
+    domains = importlib.import_module(_CLI_DOMAINS_MODULE)._DOMAINS
+    return sorted(d for d, module in domains.items()
+                  if d not in _TOP_LEVEL_CLI and d not in _SINGLE_COMMAND_DOMAINS
+                  and getattr(importlib.import_module(module), "build_parser", None) is None)
+
+
+def _route_of(description: str) -> str:
+    m = _MCP_ROUTE.match(description or "")
+    return m.group(1) if m else ""
+
+
+def _mcp_registered() -> dict[str, str]:
+    """``{tool name: description}`` as the live server object lists them."""
+    import asyncio
+    import concurrent.futures
+
+    from assurance.mcp import server
+
+    def run() -> list[Any]:
+        return asyncio.run(server.mcp.list_tools())
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        tools = run()
+    else:                                    # called from inside a loop: use a worker thread
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            tools = pool.submit(run).result()
+    return {t.name: (t.description or "") for t in tools}
+
+
+def _mcp_from_source() -> dict[str, str]:
+    """Fallback when the optional ``mcp`` package is not installed: every function the source
+    decorates with ``@mcp.tool(...)``, whatever its docstring says."""
+    import ast
+
+    tree = ast.parse(_MCP_SOURCE.read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if (isinstance(target, ast.Attribute) and target.attr == "tool"
+                    and isinstance(target.value, ast.Name) and target.value.id == "mcp"):
+                out[node.name] = ast.get_docstring(node) or ""
+    return out
+
+
 def discover_mcp() -> dict[str, str]:
-    """``{tool name: "METHOD /path"}``, read from the server source (no MCP install needed)."""
-    return dict(_MCP_TOOL.findall(_MCP_SOURCE.read_text(encoding="utf-8")))
+    """``{tool name: "METHOD /path" or ""}`` for every tool the MCP server really registers.
+
+    The registry is authoritative, so a tool is seen however its docstring is written; the route is
+    ``""`` when the description does not open with one. Falls back to the decorated functions in
+    the source only when the ``mcp`` package cannot be imported."""
+    try:
+        registered = _mcp_registered()
+    except ImportError:
+        registered = _mcp_from_source()
+    return {name: _route_of(desc) for name, desc in sorted(registered.items())}
 
 
 def discover(app: Any) -> dict[str, Any]:
@@ -438,11 +499,16 @@ def problems(app: Any) -> list[str]:
             out.append(f"uncatalogued {surface}: {name!r} exists and belongs to no capability")
 
     # An MCP tool must wrap the API route its capability claims for the API.
-    tool_route = discover_mcp()
+    out += [f"opaque cli: domain {d!r} has no build_parser and is not declared single-command, "
+            "so its commands cannot be catalogued" for d in opaque_cli_domains()]
+    tool_route = found["mcp"]
     for cap in CAPABILITIES:
         for tool in cap.mcp:
             route = tool_route.get(tool)
-            if route and cap.api and route not in cap.api:
+            if route == "" and cap.api:
+                out.append(f"{cap.id}: MCP tool {tool!r} names no 'METHOD /path' in its "
+                           "description, so it cannot be checked against the API route")
+            elif route and cap.api and route not in cap.api:
                 out.append(f"{cap.id}: MCP tool {tool!r} wraps {route}, not the API route claimed")
     return out
 
