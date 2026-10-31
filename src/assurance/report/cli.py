@@ -101,7 +101,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     attestations = tuple(AttestationLog(args.attestations).read()) if args.attestations else ()
     key = VerifyingKey.from_file(args.attest_key) if args.attest_key else None
     html = render_report(ReportInput(
-        ledger=EvidenceLedger(args.ledger),
+        ledger=EvidenceLedger.open_existing(args.ledger),
         organisation=args.organisation,
         prepared_by=args.prepared_by,
         advisory=advisory,

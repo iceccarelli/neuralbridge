@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_art14(args: argparse.Namespace) -> int:
+    EvidenceLedger.open_existing(args.ledger)       # a missing ledger is an error before anything else
     advisory = ComponentAdvisory.from_json(args.advisory)
     who = args.actor or args.received_by
     if args.open and advisory.import_record is not None:
@@ -88,7 +89,7 @@ def _cmd_art14(args: argparse.Namespace) -> int:
             raise BridgeError(
                 "opening an unsigned import in the Article 14 register needs "
                 + ", ".join(missing) + ". Nothing was recorded.")
-    fleet = Fleet.from_ledger(EvidenceLedger(args.ledger))
+    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
     impact = assess_impact(advisory, fleet)
     draft = draft_from_advisory(
         advisory, impact, fleet, case_id=args.case_id,

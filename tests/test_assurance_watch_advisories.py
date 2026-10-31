@@ -292,3 +292,79 @@ class TestCli:
         out = capsys.readouterr().out
         assert "WITHDRAWN" in out
         assert "rests on a retracted advisory" in out
+
+
+# =====================================================================
+class TestAnEmptyFleetClearsNothing:
+    """``clear`` against zero machines is vacuous: nothing was assessed."""
+
+    def _empty_pass(self, plant, **kw):
+        publish(_advisory(), IDENTITY, plant["key"], plant["feed"])
+        config = WatchConfig.from_json(plant["dir"] / "watch.json")
+        from assurance.fleet.registry import Fleet
+
+        empty = EvidenceLedger(plant["dir"] / "empty.db")
+        return check_feeds(list(config.feeds), Fleet.from_ledger(empty), **kw)
+
+    def test_it_is_not_assessed_not_silently_dropped(self, plant):
+        result = self._empty_pass(plant)
+        assert [f.state for f in result.findings] == ["not_assessed"]
+        finding = result.findings[0]
+        assert finding.impact == "not_assessed"
+        assert finding.machines == () and finding.report is None
+        assert not finding.stops_use
+        assert result.not_assessed == result.findings
+        outcome = result.feeds[0]
+        assert outcome.cleared == 0
+        assert outcome.not_assessed == ("CTRL-2026-11",)
+        assert not result.new          # nobody was told anything
+        assert "NOT ASSESSED" in result.summary()
+        assert result.to_dict()["findings"][0]["state"] == "not_assessed"
+        assert result.to_dict()["feeds"][0]["not_assessed"] == ["CTRL-2026-11"]
+
+    def test_it_is_not_remembered_as_seen(self, plant):
+        first = self._empty_pass(plant)
+        seen = {f.advisory_id: f.state for f in first.findings}
+        _run(plant)                                   # enrol the fleet
+        from assurance.fleet.registry import Fleet
+
+        config = WatchConfig.from_json(plant["dir"] / "watch.json")
+        again = check_feeds(list(config.feeds), Fleet.from_ledger(plant["ledger"]),
+                            previously_seen=seen)
+        # once the fleet is enrolled the advisory is assessed afresh, as new
+        assert [f.state for f in again.findings] == ["new"]
+
+    def test_a_watch_with_feeds_and_nothing_to_assess_is_never_quiet(
+            self, plant, monkeypatch):
+        from assurance.fleet.registry import Fleet
+        from assurance.watch import runner
+
+        _run(plant)
+        publish(_advisory("OTHER-1", affected=(AffectedArtefact(
+            supplier="SomebodyElse", name="Unrelated part",
+            versions=("1.0",)),)), IDENTITY, plant["key"], plant["feed"])
+        nothing = Fleet.from_ledger(EvidenceLedger(plant["dir"] / "empty.db"))
+        monkeypatch.setattr(runner.Fleet, "from_ledger",
+                            classmethod(lambda cls, ledger, **kw: nothing))
+        run = _run(plant)
+        assert run.verdict == "degraded"
+        assert run.to_dict()["verdict"] == "degraded"
+        assert run.to_dict()["advisories"]["findings"][0]["state"] == "not_assessed"
+        assert "NOT ASSESSED" in run.advisories.summary()
+        assert "DEGRADED" in run.summary()
+
+    def test_exit_code_is_two_not_zero(self):
+        from assurance.watch.cli import _exit_code
+
+        assert _exit_code("degraded") == 2
+
+    def test_a_non_empty_fleet_clear_is_still_a_counted_clear(self, plant):
+        _run(plant)
+        publish(_advisory("OTHER-1", affected=(AffectedArtefact(
+            supplier="SomebodyElse", name="Unrelated part",
+            versions=("1.0",)),)), IDENTITY, plant["key"], plant["feed"])
+        run = _run(plant)
+        assert run.verdict == "quiet"
+        assert run.advisories.findings == ()
+        assert run.advisories.feeds[0].cleared == 1
+        assert run.advisories.feeds[0].not_assessed == ()

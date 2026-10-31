@@ -1,0 +1,70 @@
+{
+ "_fixture": {
+  "kind": "contract fixture (not live integration)",
+  "provenance": "SYNTHETIC hand-written payload in the real schema; names no real product"
+ },
+ "format": "NVD_CVE",
+ "resultsPerPage": 1,
+ "startIndex": 0,
+ "timestamp": "2026-10-31T00:00:00.000",
+ "totalResults": 1,
+ "version": "2.0",
+ "vulnerabilities": [
+  {
+   "cve": {
+    "configurations": [
+     {
+      "nodes": [
+       {
+        "cpeMatch": [
+         {
+          "criteria": "cpe:2.3:o:example_controls:ex-100_firmware:v2.001:*:*:*:*:*:*:*",
+          "matchCriteriaId": "SYN-1",
+          "vulnerable": true
+         },
+         {
+          "criteria": "cpe:2.3:o:example_controls:ex-100_firmware:v2.002:*:*:*:*:*:*:*",
+          "matchCriteriaId": "SYN-2",
+          "vulnerable": true
+         },
+         {
+          "criteria": "cpe:2.3:o:example_controls:ex-50_firmware:*:*:*:*:*:*:*:*",
+          "matchCriteriaId": "SYN-3",
+          "versionEndExcluding": "V1.009",
+          "vulnerable": true
+         }
+        ],
+        "negate": false,
+        "operator": "OR"
+       }
+      ]
+     }
+    ],
+    "descriptions": [
+     {
+      "lang": "en",
+      "value": "SYNTHETIC: crafted packet halts the module."
+     }
+    ],
+    "id": "CVE-2026-0001",
+    "lastModified": "2026-10-03T00:00:00.000",
+    "metrics": {
+     "cvssMetricV31": [
+      {
+       "cvssData": {
+        "baseScore": 7.5,
+        "baseSeverity": "HIGH",
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "version": "3.1"
+       },
+       "source": "nvd@nist.gov",
+       "type": "Primary"
+      }
+     ]
+    },
+    "published": "2026-10-02T00:00:00.000",
+    "vulnStatus": "Analyzed"
+   }
+  }
+ ]
+}

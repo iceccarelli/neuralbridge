@@ -38,6 +38,8 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 NETWORKED_MODULES = {
     "assurance/watch/push.py",           # `watch push`, opt-in, lazy import
     "assurance/supplier/publish.py",     # `supplier publish --api-url`, lazy import
+    "assurance/intel/transport_urllib.py",   # `intel refresh --live`, lazy import; exact-host
+                                         # allow-list, https only, same-host redirects
     "assurance/billing/stripe_gateway.py",   # the hosted service talking to Stripe
     "assurance/mcp/server.py",           # the MCP relay to a deployment
     "assurance/kit/airgap.py",           # imports socket to REFUSE connections

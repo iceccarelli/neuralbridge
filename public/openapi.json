@@ -1779,6 +1779,64 @@
         "title": "SignedAdvisoryIn",
         "type": "object"
       },
+      "SignedAssessIn": {
+        "additionalProperties": false,
+        "description": "A signed supplier feed, and the one advisory in it to open a case from.",
+        "properties": {
+          "accept_unsigned": {
+            "default": false,
+            "title": "Accept Unsigned",
+            "type": "boolean"
+          },
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "advisory_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Advisory Id",
+            "type": "string"
+          },
+          "candidate_public_key_pem": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Candidate Public Key Pem",
+            "type": "string"
+          },
+          "expect_supplier": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expect Supplier",
+            "type": "string"
+          },
+          "feed": {
+            "default": "",
+            "maxLength": 4194304,
+            "title": "Feed",
+            "type": "string"
+          },
+          "hosted_feed_id": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Hosted Feed Id",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advisory_id"
+        ],
+        "title": "SignedAssessIn",
+        "type": "object"
+      },
       "TriageIn": {
         "additionalProperties": false,
         "description": "Answers to the reportability decision path.\n\nUnanswered questions default to *undetermined*; an undetermined answer is\nnever treated as a negative.",
@@ -3408,6 +3466,84 @@
           }
         },
         "summary": "Turn a fleet impact report into a case",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/assess/advisory/signed": {
+      "post": {
+        "description": "Same case as ``/assess/advisory``, but the advisory arrives with its signature.\n\nThe feed is judged by the same function as ``/v1/fleet/advisory/signed``, under the\naccount's own pinned keys. Only an advisory whose policy is satisfied by a *pinned*\nkey and valid signatures opens without a named person, and the case records that\nbasis. Anything else (unknown key, bad signature, unreadable, a translation) is\nhandled exactly as the bare route handles it: a named person is required. Nothing\nhere closes a case; closing stays a named decider's act.",
+        "operationId": "assess_advisory_signed_route_v1_change_assess_advisory_signed_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignedAssessIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Advisory Signed Route V1 Change Assess Advisory Signed Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Turn one advisory of a signed supplier feed into a case, with its trust",
         "tags": [
           "change"
         ]

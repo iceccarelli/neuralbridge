@@ -1,0 +1,90 @@
+{
+ "_fixture": {
+  "kind": "contract fixture (not live integration)",
+  "provenance": "SYNTHETIC hand-written payload in the real schema; names no real product"
+ },
+ "document": {
+  "category": "csaf_security_advisory",
+  "csaf_version": "2.0",
+  "notes": [
+   {
+    "category": "summary",
+    "text": "A crafted packet halts the module."
+   }
+  ],
+  "publisher": {
+   "category": "vendor",
+   "name": "Example Controls GmbH",
+   "namespace": "https://example.invalid"
+  },
+  "references": [
+   {
+    "category": "self",
+    "summary": "advisory",
+    "url": "https://example.invalid/EX-2026-001"
+   }
+  ],
+  "title": "SYNTHETIC: Example module memory-safety issue",
+  "tracking": {
+   "current_release_date": "2026-10-02T08:30:00+02:00",
+   "id": "EX-2026-001",
+   "initial_release_date": "2026-10-01T00:00:00Z",
+   "status": "final",
+   "version": "1"
+  }
+ },
+ "product_tree": {
+  "branches": [
+   {
+    "branches": [
+     {
+      "branches": [
+       {
+        "category": "product_version",
+        "name": "V2.001",
+        "product": {
+         "name": "EX-100 V2.001",
+         "product_id": "P1"
+        }
+       },
+       {
+        "category": "product_version",
+        "name": "V2.002",
+        "product": {
+         "name": "EX-100 V2.002",
+         "product_id": "P3"
+        }
+       }
+      ],
+      "category": "product_name",
+      "name": "EX-100"
+     }
+    ],
+    "category": "vendor",
+    "name": "Example Controls GmbH"
+   }
+  ]
+ },
+ "vulnerabilities": [
+  {
+   "cve": "CVE-2026-0001",
+   "product_status": {
+    "fixed": [
+     "P3"
+    ],
+    "known_affected": [
+     "P1"
+    ]
+   },
+   "remediations": [
+    {
+     "category": "vendor_fix",
+     "details": "Update to V2.002.",
+     "product_ids": [
+      "P1"
+     ]
+    }
+   ]
+  }
+ ]
+}

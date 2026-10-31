@@ -305,8 +305,9 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
         print("  provenance:")
         for note in notes:
             print(f"    - {neutralise(note)}")
-    if all(r.verdict == "clear" for r in reports):
+    if all(r.verdict == "clear" and r.machines_in_fleet > 0 for r in reports):
         return 0
+    # An advisory assessed against an EMPTY fleet is not "clear": nothing was assessed.
     if all(r.verdict == "clear" or (r.incomplete and not r.exposures and r.chain_verified)
            for r in reports):
         return 3      # nothing matched, but the translation was partial: not clear
@@ -383,7 +384,7 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
     coverage = None
     chain_ok = True
     if args.ledger:
-        ledger = EvidenceLedger(args.ledger)
+        ledger = EvidenceLedger.open_existing(args.ledger)
         chain_ok = ledger.verify_chain()[0]
         key = manifest.machine.key
         coverage = assess_coverage(

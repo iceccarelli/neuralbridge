@@ -203,7 +203,14 @@ class CaseStore:
         # while it still names work that has not been done or a question
         # nobody has answered, and nothing is appended to a chain that no
         # longer verifies.
-        self.require_intact(full=kind == DECISION_KIND)
+        # A human decision, and any write that records the case as ready to close
+        # or closed (reverify, advance, an update that leaves it there), walks the
+        # WHOLE chain: the cached check can be blind for up to
+        # ASSURANCE_CHAIN_RECHECK_SECONDS to a deleted or edited old record, and
+        # that is not a window in which automation may clear a case. Writes that
+        # cannot clear a case keep the cheap incremental check.
+        self.require_intact(full=kind == DECISION_KIND or case.status in (
+            CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED))
         if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):
             outstanding = [*(f"re-verification of {f}" for f in case.required_reverifications),
                            *(f"decision: {d}" for d in case.human_decisions_required)]

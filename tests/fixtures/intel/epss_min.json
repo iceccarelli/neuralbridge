@@ -1,0 +1,24 @@
+{
+ "_fixture": {
+  "kind": "contract fixture (not live integration)",
+  "minimization": "unmodified single row",
+  "provenance": "minimized from public source, retrieved 2026-10-31",
+  "sha256_of_full_original": "955f5ff7d4cf67df904bdc7842c9e76f2fd48347f0522bc890ade63e4b178380",
+  "source_url": "https://api.first.org/data/v1/epss?cve=CVE-2021-44228"
+ },
+ "access": "public",
+ "data": [
+  {
+   "cve": "CVE-2021-44228",
+   "date": "2026-10-31",
+   "epss": "0.999990000",
+   "percentile": "1.000000000"
+  }
+ ],
+ "limit": 100,
+ "offset": 0,
+ "status": "OK",
+ "status-code": 200,
+ "total": 1,
+ "version": "1.0"
+}
