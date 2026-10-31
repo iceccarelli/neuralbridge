@@ -160,9 +160,9 @@ def _cmd_sign(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
+    ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     log = AttestationLog(args.log)
     key = VerifyingKey.from_file(args.public_key)
-    ledger = EvidenceLedger(args.ledger) if args.ledger else None
     records, torn = log.scan()
     basis = AttestationBasis(args.basis) if args.basis else None
     verdict = verify_log(records, key, ledger=ledger, basis=basis)

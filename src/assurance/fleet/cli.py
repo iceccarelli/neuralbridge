@@ -383,7 +383,7 @@ def _cmd_declaration(args: argparse.Namespace) -> int:
     coverage = None
     chain_ok = True
     if args.ledger:
-        ledger = EvidenceLedger(args.ledger)
+        ledger = EvidenceLedger.open_existing(args.ledger)
         chain_ok = ledger.verify_chain()[0]
         key = manifest.machine.key
         coverage = assess_coverage(

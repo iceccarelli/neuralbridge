@@ -466,6 +466,7 @@ class TestCli:
 
     def test_a_clean_diff_opens_no_case_and_says_so(self, tmp_path, capsys):
         ledger_path = tmp_path / "l.db"
+        EvidenceLedger(ledger_path)      # the ledger must already exist (a typo is not a new ledger)
         base_path = tmp_path / "base.json"
         base_path.write_text(json.dumps(manifest(manifest_id="BASE").to_dict()))
         capsys.readouterr()
@@ -482,6 +483,7 @@ class TestCli:
 
     def test_closing_before_ready_is_refused(self, tmp_path, capsys):
         ledger_path = tmp_path / "l.db"
+        EvidenceLedger(ledger_path)      # the ledger must already exist
         base_path = tmp_path / "base.json"
         base_path.write_text(json.dumps(manifest(manifest_id="BASE").to_dict()))
         after_path = tmp_path / "after.json"

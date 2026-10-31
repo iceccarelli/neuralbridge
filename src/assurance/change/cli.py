@@ -91,7 +91,9 @@ def _actor(name: str, role: str) -> Actor:
 
 
 def _store(path: Path) -> CaseStore:
-    return CaseStore(EvidenceLedger(path))
+    # A case is a record about machine evidence already in a ledger. A mistyped path must be an
+    # error, never a new empty ledger that reads as "no open cases".
+    return CaseStore(EvidenceLedger.open_existing(path))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -226,9 +228,9 @@ def _manifest(path: Path) -> SafetyManifest:
 
 
 def _cmd_assess_drift(args: argparse.Namespace) -> int:
+    ledger = EvidenceLedger.open_existing(args.ledger)
     baseline = _manifest(args.baseline)
     observed = _manifest(args.observed)
-    ledger = EvidenceLedger(args.ledger)
     divergence = compare(baseline, observed)
     verifications = VerificationRecord.from_ledger(ledger, subject=observed.machine.key)
     interventions = interventions_from_ledger(ledger, observed.machine.key)
@@ -245,6 +247,7 @@ def _cmd_assess_drift(args: argparse.Namespace) -> int:
 def _cmd_assess_advisory(args: argparse.Namespace) -> int:
     from assurance.fleet.advisory import ComponentAdvisory
 
+    EvidenceLedger.open_existing(args.ledger)       # a missing ledger is an error before anything else
     raw = json.loads(args.advisory.read_text(encoding="utf-8"))
     if "advisory" in raw and "signature" in raw:
         raise AssuranceError(
@@ -252,7 +255,7 @@ def _cmd_assess_advisory(args: argparse.Namespace) -> int:
             "it with `assurance supplier verify` first, then pass the "
             "`advisory` field's contents.")
     advisory = ComponentAdvisory.from_dict(raw)
-    ledger = EvidenceLedger(args.ledger)
+    ledger = EvidenceLedger.open_existing(args.ledger)
     fleet = Fleet.from_ledger(ledger)
     report = assess_impact(advisory, fleet, provenance=bare_provenance("file"))
     case = assess_advisory(_store(args.ledger), report, actor=_actor(args.actor, "fleet"),
@@ -341,8 +344,8 @@ def _cmd_advance(args: argparse.Namespace) -> int:
 
 
 def _cmd_reverify(args: argparse.Namespace) -> int:
+    ledger = EvidenceLedger.open_existing(args.ledger)
     manifest = _manifest(args.manifest)
-    ledger = EvidenceLedger(args.ledger)
     verifications = VerificationRecord.from_ledger(ledger, subject=manifest.machine.key)
     interventions: list[Intervention] = interventions_from_ledger(ledger, manifest.machine.key)
     case = reverify(_store(args.ledger), args.case_id, manifest, verifications, interventions,

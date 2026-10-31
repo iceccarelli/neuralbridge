@@ -185,8 +185,8 @@ def _exit_for(verdict: str) -> int:
 
 
 def _cmd_passport(args: argparse.Namespace) -> int:
+    ledger = EvidenceLedger.open_existing(args.ledger)   # a typo must not seal against a new empty ledger
     manifest = SafetyManifest.from_json(args.manifest)
-    ledger = EvidenceLedger(args.ledger)
     passport = build_passport(ledger, manifest, actor=_actor(args),
                               seal=not args.no_seal)
     if args.out:
@@ -205,7 +205,7 @@ def _cmd_passport(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    ledger = EvidenceLedger(args.ledger) if args.ledger else None
+    ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     ok, problems = verify_passport(args.passport, ledger=ledger)
     if args.json:
         print(json.dumps({"ok": ok, "problems": problems}, indent=2))
