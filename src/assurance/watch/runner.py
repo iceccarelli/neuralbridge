@@ -676,7 +676,7 @@ def run_watch(
             advisories = merge_passes(advisories, check_intel(
                 list(config.intel), Fleet.from_ledger(ledger),
                 previously_seen=_previously_reported(previous),
-                previous_hashes=_previous_hashes(previous)))
+                previous_hashes=_previous_hashes(previous), now=started))
         caveats.extend(advisories.checks_skipped)
         if seal:
             advisories = _open_advisory_cases(store, advisories, actor)

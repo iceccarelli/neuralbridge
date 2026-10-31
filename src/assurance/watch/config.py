@@ -16,6 +16,7 @@ that ambiguity into an alarm.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -143,10 +144,22 @@ class IntelSubscription:
     #: Label under which findings from this store are reported.
     supplier_id: str = "public-intel"
     notes: str = ""
+    #: How old the newest ACCEPTED observation of each selected source may be, measured from
+    #: its recorded ``retrieved_at`` against the run's clock. Absent = staleness is NOT
+    #: checked (and the run says so). A refresh job that silently stopped otherwise looks
+    #: exactly like a quiet week.
+    max_age_hours: float | None = None
 
     def __post_init__(self) -> None:
         if not self.store.strip():
             raise WatchError("an intel subscription needs a store path.")
+        if self.max_age_hours is not None and (
+                isinstance(self.max_age_hours, bool)
+                or not isinstance(self.max_age_hours, (int, float))
+                or not math.isfinite(self.max_age_hours) or self.max_age_hours <= 0):
+            raise WatchError(
+                "an intel subscription's max_age_hours must be a positive number "
+                f"(got {self.max_age_hours!r}); leave it out to say staleness is not checked.")
         if not self.supplier_id.strip():
             raise WatchError("an intel subscription needs a supplier_id label.")
         unknown = [s for s in self.sources if s not in INTEL_SOURCES]
@@ -165,20 +178,29 @@ class IntelSubscription:
         return tuple(INTEL_SOURCES[s] for s in self.sources)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": "intel_store", "store": self.store, "sources": list(self.sources),
-                "supplier_id": self.supplier_id, "notes": self.notes}
+        d: dict[str, Any] = {
+            "kind": "intel_store", "store": self.store, "sources": list(self.sources),
+            "supplier_id": self.supplier_id, "notes": self.notes}
+        if self.max_age_hours is not None:      # absent when unused: existing hashes hold
+            d["max_age_hours"] = self.max_age_hours
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> IntelSubscription:
         if d.get("kind", "intel_store") != "intel_store":
             raise WatchError(f"unknown advisory source kind {d.get('kind')!r}.")
         raw = d.get("sources")
+        age = d.get("max_age_hours")
+        if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float))):
+            raise WatchError(
+                f"an intel subscription's max_age_hours must be a positive number (got {age!r}).")
         return cls(
             store=str(d.get("store", "")),
             sources=tuple(str(s) for s in raw) if raw is not None
             else ("nvd", "csaf", "kev", "epss"),
             supplier_id=str(d.get("supplier_id", "public-intel")),
-            notes=str(d.get("notes", "")))
+            notes=str(d.get("notes", "")),
+            max_age_hours=float(age) if age is not None else None)
 
 
 @dataclass(frozen=True)
