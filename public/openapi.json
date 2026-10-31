@@ -705,6 +705,58 @@
         "title": "DriftIn",
         "type": "object"
       },
+      "EnrolIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          }
+        },
+        "required": [
+          "manifest",
+          "actor"
+        ],
+        "title": "EnrolIn",
+        "type": "object"
+      },
       "EvaluateIn": {
         "additionalProperties": false,
         "properties": {
@@ -6682,6 +6734,80 @@
           }
         },
         "summary": "Is the machine still the configuration you signed off?",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
+    "/v1/machinery/enrol": {
+      "post": {
+        "description": "The front door of the lifecycle: one call that makes a machine an enrolled machine.\n\nIdempotent: the same key with the same configuration is ``already_enrolled`` and\nwrites nothing. The receipt lists what enrolment does **not** establish (not verified\nsafe, no verification run yet, manifest completeness not shown, identity as declared and\nnot authenticated to a physical unit). Gated exactly like ``POST /v1/machinery/manifest``.",
+        "operationId": "post_enrol_v1_machinery_enrol_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Enrol V1 Machinery Enrol Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "`configuration_differs`: this key is already enrolled with a different configuration (that is drift, not an enrolment: see `POST /v1/machinery/diff`); `identity_conflict`: it is enrolled with different declared attributes; `ledger_chain_unverified`. Nothing was written. The body carries the receipt."
+          },
+          "422": {
+            "description": "`invalid_manifest`, or `invalid_enrolment`: the actor is not a named person, or the declared site contradicts the manifest."
+          }
+        },
+        "summary": "Enrol a machine: declare its identity, seal its baseline, get a receipt",
         "tags": [
           "machinery"
         ]
