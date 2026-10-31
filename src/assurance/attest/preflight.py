@@ -25,7 +25,8 @@ from assurance.attest.keys import SigningKey, SigningKeyError
 from assurance.attest.trustlist import summarise, trust_file_problems
 from assurance.machine.recorder_attestation import RecorderTrust
 
-__all__ = ["NOT_CHECKED", "Check", "PreflightReport", "run_preflight"]
+__all__ = ["ANCHOR_PREFLIGHT_NOT_CHECKED", "NOT_CHECKED", "Check", "PreflightReport",
+           "run_preflight"]
 
 KEY_PEM_ENV = "ASSURANCE_ATTEST_KEY_PEM"
 KEY_PATH_ENV = "ASSURANCE_ATTEST_KEY"
@@ -51,6 +52,15 @@ NOT_CHECKED = (
     "That the clock of this host is right, which attestation dates and expiry depend on.",
 )
 
+#: Added to the report when ``--anchors`` was given.
+ANCHOR_PREFLIGHT_NOT_CHECKED = (
+    "Custody of the key that signed the anchors, and that it is the key customers were told.",
+    "That the anchor job actually runs on a schedule: this reads the anchors that exist, so a "
+    "job that stopped yesterday looks fine until the newest anchor passes --max-age.",
+    "An operator who controls the deployment can rewrite a ledger and its attestation log "
+    "together; an anchor is as independent of the operator as the key's custody is.",
+)
+
 
 @dataclass(frozen=True)
 class Check:
@@ -71,6 +81,7 @@ class PreflightReport:
     trust: list[dict[str, Any]] = field(default_factory=list)
     key_source: str = "none"
     trust_status: str = "unset"
+    anchors_checked: bool = False
 
     def add(self, name: str, status: str, detail: str) -> None:
         self.checks.append(Check(name, status, detail))
@@ -101,7 +112,8 @@ class PreflightReport:
                 "without_it": "hosted evidence stays 'community' (declared by its filer)",
             },
             "checks": [c.to_dict() for c in self.checks],
-            "not_checked": list(NOT_CHECKED),
+            "not_checked": [*NOT_CHECKED,
+                            *(ANCHOR_PREFLIGHT_NOT_CHECKED if self.anchors_checked else ())],
         }
 
 
@@ -148,6 +160,10 @@ def run_preflight(
     expect_fingerprint: str = "",
     must_be_revoked: tuple[str, ...] = (),
     today: date | None = None,
+    anchors: str | Path | None = None,
+    anchor_max_age_hours: float | None = None,
+    anchor_tenants_dir: str | Path | None = None,
+    anchor_logs_dir: str | Path | None = None,
 ) -> PreflightReport:
     """Inspect an environment. ``key_file`` / ``trust_file`` stand in for the path variables."""
     e = os.environ if env is None else env
@@ -267,4 +283,59 @@ def run_preflight(
                 "judged against it")
         rep.validated_verification = bool(live) and not any(
             c.status == "fail" and c.name.startswith("trust.") for c in rep.checks)
+    if anchors is not None:
+        _check_anchors(rep, key, anchors, anchor_max_age_hours, anchor_tenants_dir,
+                       anchor_logs_dir)
     return rep
+
+
+def _check_anchors(rep: PreflightReport, key: SigningKey | None, data_dir: str | Path,
+                   max_age_hours: float | None, tenants_dir: str | Path | None,
+                   logs_dir: str | Path | None) -> None:
+    """Every tenant ledger needs a verified, young anchor. Read-only: nothing is signed."""
+    from datetime import timedelta
+
+    from assurance.attest.anchor_all import (
+        DEFAULT_MAX_AGE_HOURS,
+        _enumerate,
+        anchor_status,
+        layout,
+    )
+    from assurance.attest.attestation import AttestationLog
+    from assurance.core.identity import utc_now
+    from assurance.evidence.ledger import EvidenceLedger
+
+    rep.anchors_checked = True
+    if key is None:
+        rep.add("anchors.key", "fail", "no usable service key, so no anchor can be verified; "
+                "anchors are not read on trust")
+        return
+    hours = DEFAULT_MAX_AGE_HOURS if max_age_hours is None else max_age_hours
+    try:
+        tenants, logs = layout(data_dir, tenants_dir, logs_dir)
+    except (OSError, ValueError) as exc:
+        rep.add("anchors.layout", "fail", f"{exc}")
+        return
+    found, skipped = _enumerate(tenants)
+    now = utc_now()
+    ok = 0
+    for account, path in found:
+        try:
+            state, reason, _ = anchor_status(
+                EvidenceLedger(path, mint_id=False), AttestationLog(logs / f"{account}.jsonl"),
+                key, max_age=timedelta(hours=hours), now=now)
+        except Exception as exc:  # noqa: BLE001 - a broken ledger or log is a finding, not a crash
+            rep.add(f"anchors.{account}", "fail", f"cannot be assessed ({type(exc).__name__})")
+            continue
+        if state in ("fresh", "grown"):
+            ok += 1
+            rep.add(f"anchors.{account}", "ok" if state == "fresh" else "info",
+                    reason + ("" if state == "fresh" else "; completeness holds up to that anchor"))
+        else:
+            rep.add(f"anchors.{account}", "fail",
+                    ("no verified anchor: " if state == "none" else "stale anchor: ") + reason
+                    + "; GET /v1/ledger/verify cannot state completeness past it")
+    for o in skipped:
+        rep.add(f"anchors.skipped.{o.name}", "fail" if o.anomaly else "info", o.detail)
+    rep.add("anchors.summary", "info", f"{ok} of {len(found)} tenant ledger(s) have a verified "
+            f"anchor within {hours:g}h")

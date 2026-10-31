@@ -140,6 +140,8 @@ CAPABILITIES: tuple[Capability, ...] = (
        gaps={"cli": _d(_HTTP)}),
     _c("attest.preflight", "Would counter-signing and validated verification work here?",
        "attest preflight", gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
+    _c("attest.anchor_all", "Counter-sign the head of every hosted tenant ledger (timer job)",
+       "attest anchor-all", gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
     _c("attest.trust_list_create", "Start the recorder trust file the service loads",
        "attest trust-list create", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
     _c("attest.trust_list_add", "Trust a recorder's PUBLIC key, pinned to a fingerprint",
