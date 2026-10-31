@@ -13,6 +13,11 @@ Without the first, every attestation route answers 503. Without the second, no a
 accepted, every trace stays "declared by whoever filed it", and every result is capped at
 `community`. That is the safe default, not a fault.
 
+The step-by-step operator workflow, with the verbs that create, rotate, revoke and check both
+(`attest keygen`, `attest trust-list …`, `attest preflight`), the custody options, backup and
+restore drill, the staging rehearsal and what a customer-facing statement may say, is
+[`KEY-CEREMONY.md`](KEY-CEREMONY.md). This file explains what the two variables mean.
+
 ## What each one proves — and does not
 
 - **Service key.** A signature by this key over a ledger's length and head, at a stated time, shows

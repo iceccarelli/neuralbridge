@@ -82,6 +82,8 @@ _ACCOUNT = "the account plane (billing, keys, operators); not an assurance capab
 _OPERATOR = ("operator tooling that works on the local account store file on the host; it opens no "
              "socket and is not an HTTP route")
 _KEYS = "key custody: the private key is made and held on the operator's own machine"
+_TRUST = ("trust is the verifier's own configuration, edited on the operator's machine; a "
+          "request or a tool cannot supply or change it")
 _HTTP = "served over HTTP to callers who hold no checkout; the CLI works on local files"
 _NO_MCP_YET = "no MCP tool yet; a read or verify that an agent could use"
 
@@ -136,6 +138,18 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("attest.service_key", "The public key the hosted service counter-signs with",
        (), "GET /v1/ledger/attest/key",
        gaps={"cli": _d(_HTTP), "mcp": _p(_NO_MCP_YET)}),
+    _c("attest.preflight", "Would counter-signing and validated verification work here?",
+       "attest preflight", gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
+    _c("attest.trust_list_create", "Start the recorder trust file the service loads",
+       "attest trust-list create", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.trust_list_add", "Trust a recorder's PUBLIC key, pinned to a fingerprint",
+       "attest trust-list add", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.trust_list_revoke", "Revoke a recorder key, with an explicit date",
+       "attest trust-list revoke", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.trust_list_list", "Print the trusted recorders",
+       "attest trust-list list", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.trust_list_verify", "Check the trust file loads as the service loads it",
+       "attest trust-list verify-file", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
 
     # --- machine: verifying a recorded run against a declared envelope ----------------------
     _c("machine.separation", "The protective separation distance, term by term",
