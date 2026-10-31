@@ -18,8 +18,13 @@ them on the wrong plan or with no key surfaces the API's real, structured 401/40
 an agent needs to see to route a human to checkout, not a summary of it), and the change queue:
 three reads (``change_cases``, ``change_case``, ``change_export``), three writes an agent may make
 (``change_claim``, ``change_advance``, ``change_reverify``) and two that open a case from a
-machine's own manifests (``change_assess_drift``, ``change_assess_intervention``). Everything
-beyond the case work reads or verifies and never decides or records, and none of it can supply a
+machine's own manifests (``change_assess_drift``, ``change_assess_intervention``). Eighteen further
+read-only tools (``spec_fields``, ``art14_case``, ``art14_register``, ``art14_breaches``,
+``art14_export``, ``ledger_verify``, ``attest_log``, ``attest_verify``, ``attest_service_key``,
+``machine_separation``, ``machinery_diff``, ``fleet_machines``, ``fleet_observations``,
+``fleet_declaration_check``, ``value_position``, ``change_replay``, ``supplier_trust_list``,
+``supplier_trust_check``) wrap a GET or a POST that answers a question and records nothing.
+Everything beyond the case work reads or verifies and never decides or records, and none of it can supply a
 trust list or a public key, so what an agent asks the server to check is judged under the server's
 own configuration. There is no tool that assesses an advisory, and no tool that closes, rejects,
 defers or resumes a case, answers its open questions or waives a re-verification: those are a
@@ -496,6 +501,244 @@ async def change_assess_intervention(
     return await _call("POST", "/v1/change/assess/intervention",
                        json_body={"manifest": manifest, "intervention_id": intervention_id,
                                   "actor": actor})
+
+
+# Read-only parity — reads of the account's own ledger and pure computations. Every tool
+# below wraps a GET, or a POST that answers a question and records nothing. None supplies a
+# trust list, a public key or a signing key (``attest_verify`` is judged under the server's
+# own key; ``supplier_trust_check`` under the account's own pins), none seals, closes or
+# decides, and none can name a route other than its own: a caller's id is checked before it
+# is put in a path. tests/test_interfaces_mcp.py proves it from the outside.
+
+def _id_path(template: str, ident: str) -> str | None:
+    """``template`` with ``ident`` filled in, or ``None`` if it is not one segment of an id."""
+    return template.format(ident) if _CASE_ID.fullmatch(ident) else None
+
+
+@mcp.tool()
+async def spec_fields(track: str, stage: str) -> dict[str, Any]:
+    """GET /v1/spec/fields — the platform field specification for an Article 14 track and stage.
+
+    Free, no key. ``track`` is actively_exploited_vulnerability or severe_incident; ``stage`` is
+    early_warning, notification, final or intermediate. Anything else is the API's own 422.
+    """
+    return await _call("GET", "/v1/spec/fields", params={"track": track, "stage": stage})
+
+
+@mcp.tool()
+async def art14_case(case_id: str) -> dict[str, Any]:
+    """GET /v1/cases/{case_id} — one Article 14 case with its deadlines. Read-only.
+
+    Register-tier only; a real 401/402 comes back as is. Awareness and every filing are human
+    decisions already on the record; this tool only reads them.
+    """
+    path = _id_path("/v1/cases/{}", case_id)
+    return await _call("GET", path) if path else _invalid_case_id(case_id)
+
+
+@mcp.tool()
+async def art14_register() -> dict[str, Any]:
+    """GET /v1/register — readiness across every Article 14 case, worst first. Read-only.
+
+    Register-tier only.
+    """
+    return await _call("GET", "/v1/register")
+
+
+@mcp.tool()
+async def art14_breaches() -> dict[str, Any]:
+    """GET /v1/register/breaches — Article 14 deadlines missed or overdue. Read-only.
+
+    Register-tier only. An empty list means none were found in the records, not that none exist.
+    """
+    return await _call("GET", "/v1/register/breaches")
+
+
+@mcp.tool()
+async def art14_export(case_id: str, skeleton: bool = False, anchor: bool = True) -> dict[str, Any]:
+    """GET /v1/cases/{case_id}/export — one Article 14 case's verifiable evidence bundle,
+    hash-chained. Read-only.
+
+    Register-tier or above; a lapsed subscription still reads its own evidence. The same rules
+    as ``change_export`` apply: ``skeleton=True`` also lists the id, kind and time of every other
+    entry in the account's ledger, so leave it off unless the person who receives the file may
+    see those. ``anchor=False`` exports without the operator's signed anchor and says so in the
+    bundle; a 409 ``anchor_contradicts_ledger`` is a finding, not a fault.
+    """
+    path = _id_path("/v1/cases/{}/export", case_id)
+    if not path:
+        return _invalid_case_id(case_id)
+    params = {k: v for k, v in (("skeleton", "true" if skeleton else ""),
+                                ("anchor", "" if anchor else "false")) if v}
+    return await _call("GET", path, params=params or None)
+
+
+@mcp.tool()
+async def ledger_verify() -> dict[str, Any]:
+    """GET /v1/ledger/verify — verify the account's evidence chain. Read-only.
+
+    ``verified`` is the chain's self-consistency only; completeness (nothing removed from the
+    end) is NOT established without a signed anchor and ``not_checked`` says so.
+    """
+    return await _call("GET", "/v1/ledger/verify")
+
+
+@mcp.tool()
+async def attest_log() -> dict[str, Any]:
+    """GET /v1/ledger/attest/log — every attestation the service has made for the account,
+    checking nothing. Read-only. Use ``attest_verify`` to check them.
+    """
+    return await _call("GET", "/v1/ledger/attest/log")
+
+
+@mcp.tool()
+async def attest_verify(attestations: list[dict[str, Any]]) -> dict[str, Any]:
+    """POST /v1/ledger/attest/verify — check an attestation log's signatures and consistency.
+    Free, no key. Stores nothing.
+
+    This tool cannot supply a public key: the log is checked against the service's own key. A
+    key that arrived over the same connection as the signatures proves only that one party was
+    consistent, and this check cannot see the ledger, so it does not show the ledger still holds
+    what was signed for.
+    """
+    return await _call("POST", "/v1/ledger/attest/verify", json_body={"attestations": attestations})
+
+
+@mcp.tool()
+async def attest_service_key() -> dict[str, Any]:
+    """GET /v1/ledger/attest/key — the public key the hosted service counter-signs with. No account.
+
+    Read the fingerprint against one published somewhere this service does not control; a key
+    fetched over the connection that carries the signature is weak evidence of who holds it.
+    """
+    return await _call("GET", "/v1/ledger/attest/key")
+
+
+@mcp.tool()
+async def machine_separation(
+    robot_speed_mm_s: float, reaction_time_s: float, stop_time_s: float, stop_distance_mm: float,
+    measured_at_speed_mm_s: float, intrusion_distance_mm: float,
+    human_position_uncertainty_mm: float = 0.0, robot_position_uncertainty_mm: float = 0.0,
+    human_speed_mm_s: float | None = None,
+) -> dict[str, Any]:
+    """POST /v1/machine/separation — the protective separation distance, term by term. Records nothing.
+
+    A calculation over figures the caller supplies and labels as estimated; it is not a measurement
+    of any machine, and the result says where a figure is outside what it was measured at.
+    """
+    body: dict[str, Any] = {
+        "robot_speed_mm_s": robot_speed_mm_s, "reaction_time_s": reaction_time_s,
+        "stop_time_s": stop_time_s, "stop_distance_mm": stop_distance_mm,
+        "measured_at_speed_mm_s": measured_at_speed_mm_s,
+        "intrusion_distance_mm": intrusion_distance_mm,
+        "human_position_uncertainty_mm": human_position_uncertainty_mm,
+        "robot_position_uncertainty_mm": robot_position_uncertainty_mm,
+    }
+    if human_speed_mm_s is not None:
+        body["human_speed_mm_s"] = human_speed_mm_s
+    return await _call("POST", "/v1/machine/separation", json_body=body)
+
+
+@mcp.tool()
+async def machinery_diff(baseline: dict[str, Any], observed: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/machinery/diff — is the machine still the configuration that was signed off?
+
+    Compares two manifests the caller supplies; records nothing and opens no case (use
+    ``change_assess_drift`` for that). An item with no hash is reported uncomparable, never
+    unchanged. Both manifests are the caller's claim about the machine.
+    """
+    return await _call("POST", "/v1/machinery/diff",
+                       json_body={"baseline": baseline, "observed": observed})
+
+
+@mcp.tool()
+async def fleet_machines() -> dict[str, Any]:
+    """GET /v1/fleet/machines — every enrolled machine, worst coverage first, from the account's
+    own ledger. Read-only. Cell-tier only.
+    """
+    return await _call("GET", "/v1/fleet/machines")
+
+
+@mcp.tool()
+async def fleet_observations() -> dict[str, Any]:
+    """GET /v1/fleet/observations — when each machine was last looked at, and did the last attempt
+    work. Read-only. Cell-tier only.
+
+    Reads only what the account holder reported (``watch push``); a failed attempt is never a
+    positive one, and a machine nobody reported on is unchecked, not fine.
+    """
+    return await _call("GET", "/v1/fleet/observations")
+
+
+@mcp.tool()
+async def fleet_declaration_check(
+    declaration: dict[str, Any], manifest: dict[str, Any], with_coverage: bool = False,
+) -> dict[str, Any]:
+    """POST /v1/fleet/declaration/check — does this Declaration of Conformity still describe the
+    machine? Free; records nothing.
+
+    ``with_coverage=True`` also assesses the evidence in the account's own ledger (needs a plan
+    that reads it). Without it the answer is ``configuration_matches_coverage_not_assessed``,
+    which is not a pass. Whether a change is a substantial modification is for the manufacturer
+    and their notified body.
+    """
+    return await _call("POST", "/v1/fleet/declaration/check",
+                       json_body={"declaration": declaration, "manifest": manifest,
+                                  "with_coverage": with_coverage})
+
+
+@mcp.tool()
+async def value_position() -> dict[str, Any]:
+    """GET /v1/value — the account's assurance position, derived from its own ledger. Read-only.
+
+    Cell-tier only. Derived, not asserted: nothing here is a market or customer claim.
+    """
+    return await _call("GET", "/v1/value")
+
+
+@mcp.tool()
+async def change_replay(case_id: str) -> dict[str, Any]:
+    """GET /v1/change/cases/{case_id}/replay — rebuild a case from the ledger alone and check
+    every step. Read-only. Cell-tier only.
+
+    ``ok`` false lists ``violations``: report them, do not repair around them.
+    """
+    path = _case_path(case_id, "/replay")
+    return await _call("GET", path) if path else _invalid_case_id(case_id)
+
+
+@mcp.tool()
+async def supplier_trust_list() -> dict[str, Any]:
+    """GET /v1/supplier/trust — the supplier keys this account has pinned and every trust
+    decision on record. Read-only. Cell-tier only.
+
+    Pinning, rotating, revoking and overriding are a named person's decisions and have no tool.
+    """
+    return await _call("GET", "/v1/supplier/trust")
+
+
+@mcp.tool()
+async def supplier_trust_check(
+    feed: str = "", hosted_feed_id: str = "", expect_supplier: str = "",
+) -> dict[str, Any]:
+    """POST /v1/supplier/trust/evaluate — what is this signed supplier feed, state by state,
+    under the account's own pinned keys? Records nothing. Cell-tier only.
+
+    Give the feed text (one JSON record per line) or the id of a feed hosted here. An untrusted
+    feed is a result, not an error. This tool cannot supply a key to trust (not even as a
+    candidate), and it does not open a case from an advisory: that is a named person's act.
+    """
+    body: dict[str, Any] = {}
+    if feed:
+        body["feed"] = feed
+    if hosted_feed_id:
+        if not _CASE_ID.fullmatch(hosted_feed_id):
+            return {"error": "invalid_feed_id",
+                    "detail": f"{hosted_feed_id[:80]!r} is not a feed id; nothing was sent."}
+        body["hosted_feed_id"] = hosted_feed_id
+    if expect_supplier:
+        body["expect_supplier"] = expect_supplier
+    return await _call("POST", "/v1/supplier/trust/evaluate", json_body=body)
 
 
 def main() -> None:

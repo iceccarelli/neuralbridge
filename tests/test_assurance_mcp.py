@@ -92,7 +92,14 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
                          "services", "machine_assurance_check", "fleet_machine_assurance",
                          "change_cases", "change_case", "change_export", "change_claim",
                          "change_advance", "change_reverify", "change_assess_drift",
-                         "change_assess_intervention"}
+                         "change_assess_intervention",
+                         # read-only parity (tests/test_interfaces_mcp_reads.py)
+                         "spec_fields", "art14_case", "art14_register", "art14_breaches",
+                         "art14_export", "ledger_verify", "attest_log", "attest_verify",
+                         "attest_service_key", "machine_separation", "machinery_diff",
+                         "fleet_machines", "fleet_observations", "fleet_declaration_check",
+                         "value_position", "change_replay", "supplier_trust_list",
+                         "supplier_trust_check"}
 
 
 @pytest.mark.asyncio
