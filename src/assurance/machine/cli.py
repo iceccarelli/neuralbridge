@@ -270,10 +270,10 @@ def _cmd_separation(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     envelope = SafetyEnvelope.from_json(args.envelope)
     trace = Trace.from_json(args.trace)
     limits = LimitsTable.from_json(args.limits) if args.limits else None
+    ledger = EvidenceLedger(args.ledger) if args.ledger else None
     reviews = [json.loads(p.read_text(encoding="utf-8")) for p in args.limits_review]
     trust = ReviewTrust.from_json(args.limits_trust) if args.limits_trust else None
     attestations = [load_attestation_file(p) for p in args.recorder_attestation]

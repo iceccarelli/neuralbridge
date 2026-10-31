@@ -29,6 +29,8 @@ def run(*args: str | Path, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 def _verbs(led: Path, f: Path) -> list[tuple[str, ...]]:
     ledger = ("--ledger", str(led))
+    # Deliberately absent: `machine verify --ledger` SEALS the verification into the ledger, so it is
+    # a write path that creates one on first use (the independent lab's attack suite relies on it).
     return [
         ("machinery", "passport", str(f), *ledger, "--actor", "bob"),
         ("machinery", "check", str(f), *ledger),
@@ -44,7 +46,6 @@ def _verbs(led: Path, f: Path) -> list[tuple[str, ...]]:
         ("report", "build", "--out", str(f.parent / "r.html"), *ledger),
         ("attest", "verify", "--log", str(f), "--public-key", str(f), *ledger),
         ("bridge", "art14", str(f), "--received-by", "bob", *ledger),
-        ("machine", "verify", "--envelope", str(f), "--trace", str(f), "--actor", "bob", *ledger),
         ("fleet", "list", *ledger),
         ("value", "report", *ledger),
     ]
