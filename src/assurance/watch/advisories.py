@@ -35,6 +35,20 @@ not a footnote.
 **A severity that means stop is said first.** An advisory the supplier marked
 ``stop_use`` against a machine that matched is not one line among forty; it is
 the reason this ran.
+
+**An empty fleet cannot clear anything.** An advisory whose impact verdict is
+``clear`` against a fleet with machines is counted (``FeedOutcome.cleared``) and
+carried no further. Against a fleet with ZERO machines the same verdict is
+vacuous: nothing was assessed, so nothing was cleared. Such an advisory is
+carried as a finding in the explicit state ``not_assessed`` (impact
+``not_assessed``), counted apart from ``clear``, shown in the summary and the
+JSON, and it makes the run **DEGRADED** (exit 2). DEGRADED is the most
+conservative existing verdict ("the watch could not see"): it adds no new exit
+code, it can never read as QUIET (0), and it does not claim a finding (1) that
+nobody has evidence for. A ``not_assessed`` finding has no machines and no
+report, so it opens no case, stops no use and drafts no intake, and it is not
+remembered as "seen": when the fleet is later enrolled the advisory is assessed
+as ``new``.
 """
 
 from __future__ import annotations
@@ -82,6 +96,11 @@ class FeedOutcome:
     newly_withdrawn: tuple[str, ...] = ()
     problems: tuple[str, ...] = ()
     detail: str = ""
+    #: Advisories assessed against a non-empty fleet and found to touch nothing.
+    cleared: int = 0
+    #: Advisories that could not be assessed because the fleet has no machines.
+    #: Deliberately NOT part of ``cleared``.
+    not_assessed: tuple[str, ...] = ()
     #: ``config_key`` — verified under the key file named in the watch config
     #: (an operator decision made out of band, not an auditable pin);
     #: ``pinned_key_policy`` — under a key pinned in the account's trust store.
@@ -106,6 +125,7 @@ class FeedOutcome:
             "records": self.records, "new": list(self.new),
             "newly_withdrawn": list(self.newly_withdrawn),
             "problems": list(self.problems), "detail": self.detail,
+            "cleared": self.cleared, "not_assessed": list(self.not_assessed),
             "trust_basis": self.trust_basis, "trust": dict(self.trust),
         }
 
@@ -192,6 +212,11 @@ class AdvisoryPass:
         return tuple(f for f in self.findings if f.state == "withdrawn")
 
     @property
+    def not_assessed(self) -> tuple[AdvisoryFinding, ...]:
+        """Advisories received while the fleet had no machines to assess them on."""
+        return tuple(f for f in self.findings if f.state == "not_assessed")
+
+    @property
     def untrusted(self) -> tuple[AdvisoryFinding, ...]:
         """Advisories shown for inspection that carry no consequence."""
         return tuple(f for f in self.findings if f.inspect_only)
@@ -227,6 +252,10 @@ class AdvisoryPass:
             parts.append(
                 f"{len(self.untrusted)} advisory(ies) NOT TRUSTED (inspect only, "
                 "no consequence)")
+        if self.not_assessed:
+            parts.append(
+                f"{len(self.not_assessed)} advisory(ies) NOT ASSESSED (the fleet "
+                "has no machines, so nothing was cleared)")
         if self.degraded:
             parts.append(
                 f"{len(self.degraded)} feed(s) could not be checked or are untrusted")
@@ -328,7 +357,8 @@ def check_feeds(
     back to the key file in the watch configuration, as before, and is labelled
     ``config_key`` so the two are never confused.
     """
-    seen = dict(previously_seen or {})
+    # An advisory that was only ever "not assessed" was never told to anyone.
+    seen = {k: v for k, v in (previously_seen or {}).items() if v != "not_assessed"}
     outcomes: list[FeedOutcome] = []
     findings: list[AdvisoryFinding] = []
     caveats: list[str] = []
@@ -368,6 +398,8 @@ def check_feeds(
 
         new_ids: list[str] = []
         withdrawn_ids: list[str] = []
+        cleared = 0
+        unassessed_ids: list[str] = []
 
         for advisory_id, record in standing.items():
             try:
@@ -397,9 +429,23 @@ def check_feeds(
                     inspect_only=True))
                 continue
             if report.verdict == "clear":
+                if report.machines_in_fleet == 0:
+                    # Vacuous: nothing was assessed, so nothing was cleared.
+                    # Surfaced explicitly (DEGRADED), never silently dropped.
+                    unassessed_ids.append(advisory_id)
+                    findings.append(AdvisoryFinding(
+                        advisory_id=advisory.advisory_id,
+                        supplier_id=sub.supplier_id,
+                        severity=advisory.severity.value, title=advisory.title,
+                        remedy=advisory.remedy, reference=advisory.reference,
+                        state="not_assessed", impact="not_assessed",
+                        trust_basis=str(provenance.get("trust_basis", "config_key")),
+                        trust_state=str(provenance.get("trust_state", ""))))
+                    continue
                 # Not carried as a finding, and deliberately not silent either:
-                # the feed outcome still counts it, so "we checked and it does
-                # not touch you" is recorded rather than merely implied.
+                # the feed outcome counts it, so "we checked and it does not
+                # touch you" is recorded rather than merely implied.
+                cleared += 1
                 continue
             state = "outstanding" if advisory_id in seen else "new"
             if state == "new":
@@ -434,6 +480,7 @@ def check_feeds(
                 supplier_id=sub.supplier_id, status="untrusted", records=len(records),
                 problems=tuple(trust.problems), trust_basis="none",
                 trust=trust.to_dict(), new=tuple(new_ids),
+                cleared=cleared, not_assessed=tuple(unassessed_ids),
                 detail="this feed does not meet the trust policy for the pinned key(s). "
                        "Its advisories are listed for inspection only; nothing in it "
                        "opened a case, stopped use or drafted an intake except an "
@@ -442,6 +489,7 @@ def check_feeds(
         outcomes.append(FeedOutcome(
             supplier_id=sub.supplier_id, status="verified", records=len(records),
             new=tuple(new_ids), newly_withdrawn=tuple(withdrawn_ids),
+            cleared=cleared, not_assessed=tuple(unassessed_ids),
             trust_basis="pinned_key_policy" if trust is not None else "config_key",
             trust=trust.to_dict() if trust is not None else {},
             detail=f"{len(standing)} advisory(ies) stand in this feed"))

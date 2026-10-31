@@ -214,9 +214,14 @@ class WatchRun:
         that could not be collected does. Being blind to a supplier and hearing
         nothing from one are different states, and the exit code has to say so:
         otherwise a sync that quietly stopped reads as a quiet month.
+
+        An advisory received while the fleet has no machines is ``not_assessed``
+        and also degrades the run: a watch with feeds but nothing to assess has
+        not established that anything is clear (see ``watch.advisories``).
         """
         if self.uncollectable or self.stale_observations \
-                or self.advisories.degraded or self.unwitnessed:
+                or self.advisories.degraded or self.unwitnessed \
+                or self.advisories.not_assessed:
             return "degraded"
         if self.findings or self.advisories.is_finding or self.filings.is_finding:
             return "findings"
