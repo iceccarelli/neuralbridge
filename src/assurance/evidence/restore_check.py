@@ -33,7 +33,14 @@ output somewhere else), or that a log's records are genuine (the signing key is 
 backup: ``attest verify`` with the public key does that). It says so in its output.
 
     python -m assurance.evidence.restore_check backup  <data dir> <backup dir>
-    python -m assurance.evidence.restore_check verify  [--live] <backup, restored or data dir>
+    python -m assurance.evidence.restore_check verify  [--live] [--against-live <live data dir>] <dir>
+
+``backup`` exits 1 and writes ``degraded: true`` when the source already fails a check (a
+broken chain, or an attestation log that claims more than its ledger holds); the snapshot is
+kept, and ``verify`` fails it. Every ledger carries a random ``ledger_id`` (its lineage, kept
+by a file copy); ``--against-live`` fails a restored ledger that shares an id with one on the
+live volume but disagrees with it, i.e. a fork. A hash chain alone does not detect removal
+of the newest records: without an attestation log ``verify`` says so under ``not_established``.
 
 Exit codes: 0 verified, 1 a finding, 2 could not run, 3 **unchecked** — there is no manifest
 (a backup taken by an older build, or a live data directory without ``--live`` context), so
@@ -158,11 +165,12 @@ def _tighten(root: Path) -> None:
 
 
 def _ledger_facts(path: Path) -> dict[str, Any]:
-    ledger = EvidenceLedger(path)
+    ledger = EvidenceLedger(path, mint_id=False)
     entries = ledger.entries()
     last = entries[-1] if entries else None
     return {"entries": len(entries), "head_seq": last.seq if last else 0,
-            "head_link_hash": last.link_hash if last else ""}
+            "head_link_hash": last.link_hash if last else "",
+            "ledger_id": ledger.ledger_id()}
 
 
 def _read_attestations(path: Path) -> tuple[list[Any], bool]:
@@ -174,7 +182,9 @@ def _is_ledger(rel: str) -> bool:
     return rel == _OPERATOR_LEDGER or (rel.startswith("tenants/") and rel.endswith(".db"))
 
 
-def _write_manifest(out_dir: Path, pending_not_copied: int) -> dict[str, Any]:
+def _write_manifest(
+    out_dir: Path, pending_not_copied: int, findings: list[str] | None = None
+) -> dict[str, Any]:
     files: dict[str, Any] = {}
     for path in sorted(p for p in out_dir.rglob("*") if p.is_file()):
         rel = path.relative_to(out_dir).as_posix()
@@ -196,6 +206,10 @@ def _write_manifest(out_dir: Path, pending_not_copied: int) -> dict[str, Any]:
         "files": files,
         "accounts": accounts,
         "pending_keys_not_copied": pending_not_copied,
+        # A snapshot of a source that already failed its own checks is still a snapshot
+        # (it is evidence), but it must not read as a good backup.
+        "degraded": bool(findings),
+        "source_findings": list(findings or []),
         "note": ("Checksums, not signatures: anyone who can rewrite this file can rewrite the "
                  "backup. Keep its SHA-256 (printed by `backup`) somewhere the volume is not."),
     }
@@ -205,10 +219,33 @@ def _write_manifest(out_dir: Path, pending_not_copied: int) -> dict[str, Any]:
     return manifest
 
 
+def _source_findings(root: Path) -> list[str]:
+    """Findings in a fresh snapshot: a ledger whose chain breaks, or an attestation log that
+    claims more than its ledger holds (the only way a truncated tail shows)."""
+    found: list[str] = []
+    ledgers = [p for p in (root / _OPERATOR_LEDGER,) if p.is_file()]
+    if (root / "tenants").is_dir():
+        ledgers += sorted((root / "tenants").glob("*.db"))
+    for path in ledgers:
+        label = path.relative_to(root).as_posix()
+        try:
+            ok, problems = EvidenceLedger(path, mint_id=False).verify_chain()
+        except Exception as exc:  # noqa: BLE001 - unreadable is a finding
+            found.append(f"{label}: unreadable ({type(exc).__name__})")
+            continue
+        if not ok:
+            found.extend(f"{label}: {p}" for p in problems)
+    _check_attestation_logs(root, found, {})
+    return found
+
+
 def backup(data_dir: Path, out_dir: Path) -> list[str]:
     """Snapshot every database under ``data_dir`` into ``out_dir``. Returns names.
 
-    Also writes the manifest (``MANIFEST_NAME``), which is not in the returned names. The
+    Also writes the manifest (``MANIFEST_NAME``), which is not in the returned names. Each
+    ledger is chain-verified and every attestation log is compared with its ledger after the
+    snapshot; any finding is kept (``degraded: true``, ``source_findings``) rather than
+    refusing, because a damaged source is still worth keeping. ``verify`` then fails it. The
     result is private to its owner and carries no unclaimed plaintext API keys. ``out_dir``
     must not exist or be empty (``FileExistsError``).
     """
@@ -229,10 +266,13 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
         tenants = data_dir / "tenants"
         if tenants.is_dir():
             for path in sorted(tenants.glob("*.db")):
+                EvidenceLedger(path)    # gives a pre-id ledger its lineage id before the copy
                 _snapshot(path, out_dir / "tenants" / path.name)
                 taken.append(f"tenants/{path.name}")
         for name in (_ACCOUNTS, _OPERATOR_LEDGER):
             if (data_dir / name).exists():
+                if name == _OPERATOR_LEDGER:
+                    EvidenceLedger(data_dir / name)
                 _snapshot(data_dir / name, out_dir / name)
                 taken.append(name)
         if (out_dir / _ACCOUNTS).exists():
@@ -242,7 +282,7 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
                 shutil.copytree(data_dir / name, out_dir / name, dirs_exist_ok=True)
                 taken.append(f"{name}/")
         _tighten(out_dir)
-        _write_manifest(out_dir, pending)
+        _write_manifest(out_dir, pending, _source_findings(out_dir))
         return taken
     finally:
         os.umask(previous)
@@ -335,11 +375,16 @@ def _check_manifest(
 
 def _ledger_only_grew(path: Path, rel: str, entry: dict[str, Any], problems: list[str]) -> None:
     try:
-        ledger = EvidenceLedger(path)
+        ledger = EvidenceLedger(path, mint_id=False)
         entries = ledger.entries()
     except Exception as exc:  # noqa: BLE001
         problems.append(f"{rel}: unreadable ({type(exc).__name__})")
         return
+    recorded_id, now_id = entry.get("ledger_id"), ledger.ledger_id()
+    if recorded_id and now_id and recorded_id != now_id:
+        problems.append(f"{rel}: is a different ledger from the one backed up (ledger_id "
+                        f"{now_id[:8]} where {recorded_id[:8]} was recorded) — replaced, "
+                        "not grown")
     want = entry.get("entries")
     if not isinstance(want, int):
         return
@@ -352,6 +397,13 @@ def _ledger_only_grew(path: Path, rel: str, entry: dict[str, Any], problems: lis
         if at != entry.get("head_link_hash"):
             problems.append(f"{rel}: the record at seq {entry.get('head_seq')} is not the one "
                             "the backup held — the history was rewritten")
+
+
+def _safe_records(path: Path) -> list[Any]:
+    try:
+        return _read_attestations(path)[0] if path.is_file() else []
+    except Exception:  # noqa: BLE001 - an unreadable log is reported by _check_attestation_logs
+        return []
 
 
 def _check_attestation_logs(
@@ -386,7 +438,7 @@ def _check_attestation_logs(
             continue
         try:
             found, _ = check_log_against_ledger(
-                mine, EvidenceLedger(ledger_path), basis=AttestationBasis.READ_FROM_LEDGER,
+                mine, EvidenceLedger(ledger_path, mint_id=False), basis=AttestationBasis.READ_FROM_LEDGER,
                 chain=False)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{label}: cross-check against its ledger failed "
@@ -395,7 +447,50 @@ def _check_attestation_logs(
         problems.extend(f"{label} vs tenants/{log_path.name[:-6]}.db: {p}" for p in found)
 
 
-def verify(root: Path, *, allow_growth: bool = False) -> dict[str, object]:
+def _ledger_files(root: Path) -> dict[str, Path]:
+    out = {_OPERATOR_LEDGER: root / _OPERATOR_LEDGER} if (root / _OPERATOR_LEDGER).is_file() else {}
+    if (root / "tenants").is_dir():
+        out.update({f"tenants/{p.name}": p for p in sorted((root / "tenants").glob("*.db"))})
+    return out
+
+
+def _check_lineage(root: Path, live: Path, problems: list[str]) -> None:
+    """A restored ledger must not be a second writable copy of one the live volume holds.
+
+    Same ``ledger_id`` and the same records up to the shorter of the two is one lineage
+    (the restore is behind, or equal): fine to inspect, and say nothing. Same id and a
+    different link hash at a shared position is a fork: both verify on their own, and
+    neither can tell it lost.
+    """
+    held: dict[str, tuple[str, dict[int, str]]] = {}
+    for rel, path in _ledger_files(live).items():
+        try:
+            lg = EvidenceLedger(path, mint_id=False)
+            if (lid := lg.ledger_id()):
+                held[lid] = (rel, {e.seq: e.link_hash for e in lg.entries()})
+        except Exception:  # noqa: BLE001, S112 - the live volume's own problem
+            continue
+    for rel, path in _ledger_files(root).items():
+        try:
+            lg = EvidenceLedger(path, mint_id=False)
+            lid = lg.ledger_id()
+            mine = {e.seq: e.link_hash for e in lg.entries()}
+        except Exception:  # noqa: BLE001, S112 - reported by check_ledger
+            continue
+        if lid and lid in held:
+            where, theirs = held[lid]
+            forked = sorted(q for q in mine.keys() & theirs.keys() if mine[q] != theirs[q])
+            if forked:
+                problems.append(
+                    f"{rel}: carries ledger_id {lid[:8]}, which the live volume already holds "
+                    f"as {where}, but the two disagree from seq {forked[0]} — one ledger forked "
+                    "into two lineages. Only one may stay writable; the other's records after "
+                    "the fork point are not in the first.")
+
+
+def verify(
+    root: Path, *, allow_growth: bool = False, live_dir: Path | None = None,
+) -> dict[str, object]:
     """Check a data directory or backup. Never raises on a corrupt database.
 
     ``status`` is ``ok`` (checked against the backup's manifest), ``failed`` (a finding) or
@@ -411,7 +506,7 @@ def verify(root: Path, *, allow_growth: bool = False) -> dict[str, object]:
             if (res := _integrity(path)) != "ok":
                 problems.append(f"{label}: SQLite integrity_check says {res}")
                 return
-            ledger = EvidenceLedger(path)
+            ledger = EvidenceLedger(path, mint_id=False)
             ok, found = ledger.verify_chain()
             checked[label] = len(ledger.entries())
             if not ok:
@@ -479,6 +574,31 @@ def verify(root: Path, *, allow_growth: bool = False) -> dict[str, object]:
     if manifest is not None:
         _check_manifest(root, manifest, known, allow_growth, problems)
 
+    if manifest is not None and manifest.get("degraded"):
+        found = manifest.get("source_findings")
+        problems.extend(f"taken from a damaged source: {p}" for p in
+                        (found if isinstance(found, list) and found else ["(no detail recorded)"]))
+    if live_dir is not None:
+        _check_lineage(root, live_dir, problems)
+
+    not_established = [
+        "That nothing was removed by someone who also rewrote the manifest and the "
+        "attestation log: the manifest holds checksums, not signatures. Keep the "
+        "manifest_sha256 that `backup` printed somewhere else.",
+        "That an attestation log's records are genuine: the signing key is not in a "
+        "backup. `assurance attest verify --ledger` with the public key does that.",
+        "That this backup is recent: the files carry no proof of when they were taken.",
+    ]
+    bare = sorted(
+        rel for rel in _ledger_files(root) if rel.startswith("tenants/")
+        and not any(r.basis is AttestationBasis.READ_FROM_LEDGER
+                    for r in _safe_records(root / "attestations" / f"{Path(rel).stem}.jsonl")))
+    if bare:
+        not_established.append(
+            "A ledger with no attestation log cannot be shown complete: a hash chain "
+            "verifies after records are removed from its end. No attestation log covers "
+            + ", ".join(bare[:5]) + (" and others" if len(bare) > 5 else "") + ".")
+
     status = "failed" if problems else ("ok" if manifest is not None else "unchecked")
     return {
         "ok": status == "ok",
@@ -487,14 +607,7 @@ def verify(root: Path, *, allow_growth: bool = False) -> dict[str, object]:
         "attestation_records": attestation_records,
         "problems": problems,
         "unchecked": unchecked,
-        "not_established": [
-            "That nothing was removed by someone who also rewrote the manifest and the "
-            "attestation log: the manifest holds checksums, not signatures. Keep the "
-            "manifest_sha256 that `backup` printed somewhere else.",
-            "That an attestation log's records are genuine: the signing key is not in a "
-            "backup. `assurance attest verify --ledger` with the public key does that.",
-            "That this backup is recent: the files carry no proof of when they were taken.",
-        ],
+        "not_established": not_established,
     }
 
 
@@ -505,15 +618,25 @@ def main(argv: list[str] | None = None) -> int:
             out = Path(argv[2])
             names = backup(Path(argv[1]), out)
             digest = _sha256(out / MANIFEST_NAME)
+            degraded = bool(json.loads((out / MANIFEST_NAME).read_text()).get("degraded"))
             print(json.dumps({"backed_up": names, "manifest": MANIFEST_NAME,
+                              "degraded": degraded,
                               "manifest_sha256": digest,
                               "note": "unclaimed checkout keys are not copied: re-issue after a "
                                       "restore"}, indent=2))
-            return 0
+            return 1 if degraded else 0
         live = "--live" in argv
         rest = [a for a in argv if a != "--live"]
+        live_dir: Path | None = None
+        if "--against-live" in rest:
+            k = rest.index("--against-live")
+            if k + 1 >= len(rest):
+                print(__doc__, file=sys.stderr)
+                return 2
+            live_dir = Path(rest[k + 1])
+            del rest[k:k + 2]
         if len(rest) == 2 and rest[0] == "verify":
-            result = verify(Path(rest[1]), allow_growth=live)
+            result = verify(Path(rest[1]), allow_growth=live, live_dir=live_dir)
             print(json.dumps(result, indent=2))
             return {"ok": 0, "failed": 1}.get(str(result["status"]), 3)
     except (OSError, sqlite3.Error) as exc:

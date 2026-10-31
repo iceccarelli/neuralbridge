@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -158,7 +159,13 @@ class EvidenceLedger:
                 f"{p} does not exist. Nothing was read, and no ledger was created.")
         return cls(p)
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, mint_id: bool = True) -> None:
+        """Open (creating if need be) the ledger at ``path``.
+
+        ``mint_id=False`` never writes: a verifier that opens a backup must not change
+        the bytes the backup's manifest hashed. Such a ledger without an id reports
+        ``ledger_id() is None``.
+        """
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -190,8 +197,36 @@ class EvidenceLedger:
                     f"{self.path} was written by ledger schema {row[0]}, this build speaks "
                     f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing."
                 )
+            if mint_id:
+                self._mint_ledger_id(db)
         finally:
             db.close()
+
+    @staticmethod
+    def _mint_ledger_id(db: sqlite3.Connection) -> None:
+        """Give the ledger a random identity once. Touches ``meta`` only, never ``chain``.
+
+        The id names a *lineage*: a file copy keeps it, so two writable copies that
+        diverge are recognisable as one ledger forked, not as two ledgers. A read-only
+        file is left without one rather than failing the open.
+        """
+        try:
+            if db.execute("SELECT 1 FROM meta WHERE key = 'ledger_id'").fetchone() is None:
+                retry_locked(lambda: db.execute(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('ledger_id', ?)",
+                    (uuid.uuid4().hex,)), db=db)
+        except sqlite3.OperationalError as exc:
+            if "readonly" not in str(exc).lower():
+                raise
+
+    def ledger_id(self) -> str | None:
+        """This ledger's lineage id, or ``None`` if it has none (opened read-only)."""
+        db = self._connect()
+        try:
+            row = db.execute("SELECT value FROM meta WHERE key = 'ledger_id'").fetchone()
+        finally:
+            db.close()
+        return str(row[0]) if row else None
 
     # -- plumbing ---------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -527,6 +562,51 @@ class EvidenceLedger:
         else:
             chain_cache.remember(key, head_seq, head_link, chain_cache.now())
         return (not problems, problems)
+
+    def verify_report(self, *, anchor: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """:meth:`verify_chain` plus what that walk did *not* establish.
+
+        ``completeness`` is ``"not_checked"`` unless a head ``anchor`` (a signed head
+        attestation's dict) was supplied and compared here, then ``"checked_against_anchor"``
+        (this ledger is not shorter than, and agrees with, the anchor) or
+        ``"contradicted_by_anchor"`` (and ``verified`` is false). The anchor's signature is
+        not checked here, so even then ``not_checked`` says so. ``verified`` keeps the
+        meaning of ``verify_chain``: every record present links to the one before it.
+        """
+        ok, problems = self.verify_chain()
+        problems = list(problems)
+        completeness = "not_checked"
+        not_checked = [
+            "completeness: a hash chain alone does not detect deletion. Records removed "
+            "from the end, or a chain rebuilt from its start, still verify unless the head "
+            "is compared with a signed attestation held outside this ledger.",
+            "provenance: the chain is unkeyed; it shows the records agree with each other, "
+            "not who wrote them.",
+        ]
+        if anchor is not None and ok:
+            db = self._connect()
+            try:
+                length = int(db.execute("SELECT COUNT(*) FROM chain").fetchone()[0])
+                tail = db.execute(
+                    "SELECT seq, link_hash FROM chain ORDER BY seq DESC LIMIT 1").fetchone()
+                try:
+                    self._refuse_contradicting_anchor(db, anchor, length, tail)
+                except AnchorContradictsLedgerError as exc:
+                    completeness = "contradicted_by_anchor"
+                    problems.append(str(exc))
+                else:
+                    completeness = "checked_against_anchor"
+                    not_checked[0] = (
+                        "completeness beyond the anchor: records appended after the anchor "
+                        "was signed are not covered by it.")
+                    not_checked.append(
+                        "the anchor's signature was not verified by this call; check it "
+                        "with the signer's public key.")
+            finally:
+                db.close()
+        return {"verified": ok and not problems, "problems": problems,
+                "completeness": completeness, "not_checked": not_checked,
+                "ledger_id": self.ledger_id()}
 
     def _verify_since(self, seq: int, link_hash: str) -> tuple[list[str], int, str]:
         """Check the remembered head and everything appended after it, in one snapshot."""
