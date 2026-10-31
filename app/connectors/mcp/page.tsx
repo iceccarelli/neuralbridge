@@ -33,6 +33,25 @@ const MCP_TOOLS: McpTool[] = [
   { name: 'change_reverify', route: 'POST /v1/change/cases/{case_id}/reverification', tier: 'cell', agentWrite: true },
   { name: 'change_assess_drift', route: 'POST /v1/change/assess/drift', tier: 'cell', agentWrite: true },
   { name: 'change_assess_intervention', route: 'POST /v1/change/assess/intervention', tier: 'cell', agentWrite: true },
+  // Read-only: a GET, or a POST that answers a question and records nothing.
+  { name: 'spec_fields', route: 'GET /v1/spec/fields', tier: 'free', agentWrite: false },
+  { name: 'art14_case', route: 'GET /v1/cases/{case_id}', tier: 'register', agentWrite: false },
+  { name: 'art14_register', route: 'GET /v1/register', tier: 'register', agentWrite: false },
+  { name: 'art14_breaches', route: 'GET /v1/register/breaches', tier: 'register', agentWrite: false },
+  { name: 'art14_export', route: 'GET /v1/cases/{case_id}/export', tier: 'register', agentWrite: false },
+  { name: 'ledger_verify', route: 'GET /v1/ledger/verify', tier: 'register', agentWrite: false },
+  { name: 'attest_log', route: 'GET /v1/ledger/attest/log', tier: 'cell', agentWrite: false },
+  { name: 'attest_verify', route: 'POST /v1/ledger/attest/verify', tier: 'free', agentWrite: false },
+  { name: 'attest_service_key', route: 'GET /v1/ledger/attest/key', tier: 'free', agentWrite: false },
+  { name: 'machine_separation', route: 'POST /v1/machine/separation', tier: 'free', agentWrite: false },
+  { name: 'machinery_diff', route: 'POST /v1/machinery/diff', tier: 'free', agentWrite: false },
+  { name: 'fleet_machines', route: 'GET /v1/fleet/machines', tier: 'cell', agentWrite: false },
+  { name: 'fleet_observations', route: 'GET /v1/fleet/observations', tier: 'cell', agentWrite: false },
+  { name: 'fleet_declaration_check', route: 'POST /v1/fleet/declaration/check', tier: 'free', agentWrite: false },
+  { name: 'value_position', route: 'GET /v1/value', tier: 'cell', agentWrite: false },
+  { name: 'change_replay', route: 'GET /v1/change/cases/{case_id}/replay', tier: 'cell', agentWrite: false },
+  { name: 'supplier_trust_list', route: 'GET /v1/supplier/trust', tier: 'cell', agentWrite: false },
+  { name: 'supplier_trust_check', route: 'POST /v1/supplier/trust/evaluate', tier: 'cell', agentWrite: false },
 ];
 const TOOL_BY_ROUTE = new Map(MCP_TOOLS.map((t) => [t.route, t]));
 const TOOL_COUNT = MCP_TOOLS.length;
@@ -179,11 +198,11 @@ neuralbridge-ai-mcp`}</pre>
               {TOOL_COUNT} tools — {FREE_COUNT} need no key, {TOOL_COUNT - FREE_COUNT} need one on the right plan
             </h2>
             <p>
-              Deliberately small rather than one tool per route: <code>plans</code> and{' '}
+              Reads, verifications and pure calculations, plus a few change-queue writes: <code>plans</code> and{' '}
               <code>spec_validate</code> need no key at all. The others (<code>register_cases</code> on Register; the
               machine and change tools on Cell) called on the wrong plan return the API&apos;s real structured
-              401/402, not an error from this server. The full route table below is what a larger tool set could
-              cover; the highlighted rows are what ships in <code>assurance-mcp</code> today.
+              401/402, not an error from this server. The full route table below shows every route; the highlighted
+              rows are what ships in <code>assurance-mcp</code> today.
             </p>
             <p>
               <strong>What an agent may write.</strong> Of the change-queue tools, {WRITE_TOOLS.length} write:{' '}
@@ -245,9 +264,10 @@ neuralbridge-ai-mcp`}</pre>
           </div>
           <p>
             Adding a route as a tool is mechanical — in <code>src/assurance/mcp/server.py</code> it is one
-            <code>@mcp.tool()</code> function per route calling the same <code>_call()</code> helper. The
-            remaining free-tier routes (separation, bundle/manifest/declaration checks, attestation key/verify)
-            are the natural next additions, since they need no key either. Read the source or open a PR.
+            <code>@mcp.tool()</code> function per route calling the same <code>_call()</code> helper. Reads and
+            pure checks are tools; anything that records, signs, pins or decides a thing is not, by design.
+            <code>GET /v1/capabilities</code> lists, from the code, which surface each capability has and why
+            any is missing. Read the source or open a PR.
           </p>
           <p>
             Prefer plain HTTP for now? Read <a href="/developers">/developers</a> or fetch{' '}

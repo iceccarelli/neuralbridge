@@ -434,7 +434,11 @@ Cell-tier only — see `deploy/assurance/ADR-0002-change-assurance.md` for why
 no new plan was added. 401 with no or an invalid key, 402 when authenticated but
 not entitled, always from the account's own ledger.
 
-MCP tools (exactly these): plans, capabilities, spec_validate, machine_verify, machine_check, evidence_verify, machinery_coverage, machinery_passport_check, fleet_report, register_cases, services, machine_assurance_check, fleet_machine_assurance, change_cases, change_case, change_export, change_claim, change_advance, change_reverify, change_assess_drift, change_assess_intervention
+MCP tools (exactly these): plans, capabilities, spec_validate, machine_verify, machine_check, evidence_verify, machinery_coverage, machinery_passport_check, fleet_report, register_cases, services, machine_assurance_check, fleet_machine_assurance, change_cases, change_case, change_export, change_claim, change_advance, change_reverify, change_assess_drift, change_assess_intervention, spec_fields, art14_case, art14_register, art14_breaches, art14_export, ledger_verify, attest_log, attest_verify, attest_service_key, machine_separation, machinery_diff, fleet_machines, fleet_observations, fleet_declaration_check, value_position, change_replay, supplier_trust_list, supplier_trust_check
+
+The last eighteen are read-only relays (a GET, or a POST that answers a question and records
+nothing); none supplies a trust list, a public key or a signing key, and none seals, closes,
+signs, pins or decides. `change_replay` is the only one that concerns the change queue.
 
 The change tools are thin relays to the routes above, with no local logic:
 `change_cases`, `change_case` and `change_export` read; `change_claim`,

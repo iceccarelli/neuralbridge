@@ -85,7 +85,7 @@ _KEYS = "key custody: the private key is made and held on the operator's own mac
 _TRUST = ("trust is the verifier's own configuration, edited on the operator's machine; a "
           "request or a tool cannot supply or change it")
 _HTTP = "served over HTTP to callers who hold no checkout; the CLI works on local files"
-_NO_MCP_YET = "no MCP tool yet; a read or verify that an agent could use"
+_LOCAL_FILE = "reads a feed file on the operator's own machine, which a server-side tool cannot see"
 
 CAPABILITIES: tuple[Capability, ...] = (
     # --- Article 14: CRA vulnerability and incident reporting ---------------------------------
@@ -107,23 +107,23 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("art14.validate", "Check a draft submission without recording it",
        "art14 validate", "POST /v1/spec/validate", "spec_validate"),
     _c("art14.fields", "The platform field specification for a track and stage",
-       "art14 fields", "GET /v1/spec/fields", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 fields", "GET /v1/spec/fields", "spec_fields"),
     _c("art14.case", "One case, with its deadlines",
-       "art14 case", "GET /v1/cases/{case_id}", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 case", "GET /v1/cases/{case_id}", "art14_case"),
     _c("art14.case_ids", "List case ids", (), "GET /v1/cases", "register_cases",
        gaps={"cli": _d("`art14 register` shows every case, worst first, and is the CLI view")}),
     _c("art14.register", "Readiness across every case, worst first",
-       "art14 register", "GET /v1/register", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 register", "GET /v1/register", "art14_register"),
     _c("art14.breaches", "Deadlines missed or overdue (the CLI exits 1 on any)",
-       "art14 register", "GET /v1/register/breaches", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 register", "GET /v1/register/breaches", "art14_breaches"),
     _c("art14.export", "A verifiable evidence bundle for one case",
-       "art14 export", "GET /v1/cases/{case_id}/export", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 export", "GET /v1/cases/{case_id}/export", "art14_export"),
     _c("art14.bridge", "Draft an Article 14 intake from an advisory",
        "bridge art14", gaps={"api": _d(_OFFLINE), "mcp": _d(_OFFLINE)}),
 
     # --- evidence: the ledger, its verification and its attestations --------------------------
     _c("evidence.ledger_verify", "Verify the evidence chain",
-       "art14 verify", "GET /v1/ledger/verify", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "art14 verify", "GET /v1/ledger/verify", "ledger_verify"),
     _c("evidence.verify", "Check an evidence file you were handed; stores nothing",
        "evidence verify", "POST /v1/evidence/verify", "evidence_verify"),
     _c("attest.keygen", "Make an Ed25519 key pair", "attest keygen",
@@ -132,12 +132,12 @@ CAPABILITIES: tuple[Capability, ...] = (
        "attest sign", "POST /v1/ledger/attest",
        gaps={"mcp": _d("a signature is a named operator's act; the signing key is not an agent's")}),
     _c("attest.verify", "Check an attestation log",
-       "attest verify", "POST /v1/ledger/attest/verify", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "attest verify", "POST /v1/ledger/attest/verify", "attest_verify"),
     _c("attest.log", "Print the attestations, checking nothing",
-       "attest log", "GET /v1/ledger/attest/log", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "attest log", "GET /v1/ledger/attest/log", "attest_log"),
     _c("attest.service_key", "The public key the hosted service counter-signs with",
-       (), "GET /v1/ledger/attest/key",
-       gaps={"cli": _d(_HTTP), "mcp": _p(_NO_MCP_YET)}),
+       (), "GET /v1/ledger/attest/key", "attest_service_key",
+       gaps={"cli": _d(_HTTP)}),
     _c("attest.preflight", "Would counter-signing and validated verification work here?",
        "attest preflight", gaps={"api": _d(_KEYS), "mcp": _d(_KEYS)}),
     _c("attest.trust_list_create", "Start the recorder trust file the service loads",
@@ -153,7 +153,7 @@ CAPABILITIES: tuple[Capability, ...] = (
 
     # --- machine: verifying a recorded run against a declared envelope ----------------------
     _c("machine.separation", "The protective separation distance, term by term",
-       "machine separation", "POST /v1/machine/separation", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "machine separation", "POST /v1/machine/separation", "machine_separation"),
     _c("machine.verify", "Verify a recorded run against a declared safety envelope",
        "machine verify", "POST /v1/machine/verify", "machine_verify"),
     _c("machine.check", "Re-verify a verification bundle somebody else sealed",
@@ -178,7 +178,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("machinery.intervention", "Seal an intervention record",
        "machinery record-change", "POST /v1/machinery/intervention", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.diff", "Is the machine still the configuration you signed off?",
-       "machinery diff", "POST /v1/machinery/diff", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "machinery diff", "POST /v1/machinery/diff", "machinery_diff"),
     _c("machinery.coverage", "Which safety functions a recorded verification still stands for",
        "machinery coverage", "POST /v1/machinery/coverage", "machinery_coverage"),
     _c("machinery.passport", "Seal the machine's whole evidence position",
@@ -188,13 +188,12 @@ CAPABILITIES: tuple[Capability, ...] = (
 
     # --- fleet: every machine at once, and what a supplier advisory means for them ------------
     _c("fleet.machines", "Every enrolled machine, worst coverage first",
-       "fleet list", "GET /v1/fleet/machines", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "fleet list", "GET /v1/fleet/machines", "fleet_machines"),
     _c("fleet.report", "The whole fleet on one page a plant manager can read",
        "report build", "GET /v1/fleet/report", "fleet_report"),
     _c("fleet.observations", "When each machine was last looked at, and did it work",
-       (), "GET /v1/fleet/observations",
-       gaps={"cli": _d("`watch status` shows the local run; the hosted view of pushed runs is HTTP"),
-             "mcp": _p(_NO_MCP_YET)}),
+       (), "GET /v1/fleet/observations", "fleet_observations",
+       gaps={"cli": _d("`watch status` shows the local run; the hosted view of pushed runs is HTTP")}),
     _c("fleet.advisory", "Which machines does this advisory touch?",
        "fleet advisory", "POST /v1/fleet/advisory",
        gaps={"mcp": _d("an advisory is third-party content; only a person acts on it")}),
@@ -210,9 +209,10 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("fleet.declare", "Bind a Declaration of Conformity to a configuration",
        "fleet declare", "POST /v1/fleet/declare", gaps={"mcp": _d(_WRITE)}),
     _c("fleet.declaration", "Does the declaration still describe the machine?",
-       "fleet declaration", "POST /v1/fleet/declaration/check", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "fleet declaration", "POST /v1/fleet/declaration/check",
+       "fleet_declaration_check"),
     _c("fleet.value", "Your assurance position, derived from your own ledger",
-       "value report", "GET /v1/value", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "value report", "GET /v1/value", "value_position"),
 
     # --- change: the Active Assurance Cases queue ----------------------------------------------
     _c("change.assess_drift", "Turn a manifest divergence into a case",
@@ -252,7 +252,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("change.resume", "DEFERRED to IN_REVIEW",
        "change resume", "POST /v1/change/cases/{case_id}/resume", gaps={"mcp": _d(_HUMAN)}),
     _c("change.replay", "Rebuild a case from the ledger alone and check every step",
-       "change replay", "GET /v1/change/cases/{case_id}/replay", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "change replay", "GET /v1/change/cases/{case_id}/replay",
+       "change_replay"),
     _c("change.export", "A verifiable evidence bundle for one case",
        "change export", "GET /v1/change/cases/{case_id}/export", "change_export"),
 
@@ -267,13 +268,15 @@ CAPABILITIES: tuple[Capability, ...] = (
              "mcp": _d("withdrawing an advisory is a named supplier's signed act")}),
     _c("supplier.verify", "Check a feed file before acting on it", "supplier verify",
        gaps={"api": _d("`POST /v1/supplier/trust/evaluate` is the hosted form, under pinned keys"),
-             "mcp": _p(_NO_MCP_YET)}),
+             "mcp": _d(_LOCAL_FILE + "; the MCP form of judging a feed is `supplier_trust_check`")}),
     _c("supplier.list", "What stands in a feed file", "supplier list",
        gaps={"api": _d("`GET /v1/supplier/feed/{id}` serves the feed itself"),
-             "mcp": _p(_NO_MCP_YET)}),
+             "mcp": _d(_LOCAL_FILE)}),
     _c("supplier.fetch", "Download a hosted feed",
        "supplier fetch", "GET /v1/supplier/feed/{supplier_account_id}",
-       gaps={"mcp": _p(_NO_MCP_YET)}),
+       gaps={"mcp": _d("the route serves raw third-party advisory text (ND-JSON, not an API "
+                       "answer); an agent reads a hosted feed through `supplier_trust_check`, "
+                       "which judges it under the pinned keys instead of handing it over bare")}),
     _c("supplier.trust_pin", "Trust this key for this supplier",
        "supplier trust pin", "POST /v1/supplier/trust/pin",
        gaps={"mcp": _d("pinning a key is a trust decision a named person makes")}),
@@ -284,9 +287,10 @@ CAPABILITIES: tuple[Capability, ...] = (
        "supplier trust revoke", "POST /v1/supplier/trust/revoke",
        gaps={"mcp": _d("a trust decision a named person makes")}),
     _c("supplier.trust_list", "Pinned keys and the decision history",
-       "supplier trust list", "GET /v1/supplier/trust", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "supplier trust list", "GET /v1/supplier/trust", "supplier_trust_list"),
     _c("supplier.trust_check", "What is this feed, state by state, under your pinned keys?",
-       "supplier trust check", "POST /v1/supplier/trust/evaluate", gaps={"mcp": _p(_NO_MCP_YET)}),
+       "supplier trust check", "POST /v1/supplier/trust/evaluate",
+       "supplier_trust_check"),
     _c("supplier.trust_override", "Accept ONE untrusted advisory, attributed",
        "supplier trust override", "POST /v1/supplier/trust/override",
        gaps={"mcp": _d("an override is a named person's accountable act")}),
