@@ -282,6 +282,23 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("watch.push", "Report the latest sealed run to your own hosted ledger (opt-in)",
        "watch push", "POST /v1/watch/report", gaps={"mcp": _d(_WRITE)}),
 
+    # --- intel: public-source vulnerability intelligence (KEV, NVD, EPSS, CSAF) ---------------
+    _c("intel.ingest", "Record local KEV/NVD/EPSS/CSAF files as provenance-stamped observations",
+       "intel ingest", gaps={"api": _p("an HTTP ingest route is intended"),
+                             "mcp": _p("an MCP tool is intended")}),
+    _c("intel.refresh", "Fetch one public source from its official host (only with --live)",
+       "intel refresh", gaps={"api": _p("a hosted refresh is intended"),
+                              "mcp": _p("an MCP tool is intended")}),
+    _c("intel.history", "The append-only observation history of every source",
+       "intel history", gaps={"api": _p("an HTTP read route is intended"),
+                              "mcp": _p("an MCP tool is intended")}),
+    _c("intel.show", "One observation, or what every source says about one CVE",
+       "intel show", gaps={"api": _p("an HTTP read route is intended"),
+                           "mcp": _p("an MCP tool is intended")}),
+    _c("intel.candidates", "Advisory candidates the model can represent, plus CVE enrichment",
+       "intel candidates", gaps={"api": _p("an HTTP read route is intended"),
+                                 "mcp": _p("an MCP tool is intended")}),
+
     # --- billing: operator tooling for accounts provisioned outside Stripe ---------------------
     _c("billing.grant", "Create a manual-pilot account and print its API key once",
        "billing grant", gaps={"api": _d(_OPERATOR), "mcp": _d(_ACCOUNT)}),
