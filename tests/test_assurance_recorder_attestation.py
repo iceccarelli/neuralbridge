@@ -82,6 +82,10 @@ store = _store
 
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
 START = datetime(2026, 9, 12, 4, 31, tzinfo=UTC)
+# Bundles are sealed against the real clock, so an expiry must be relative to it: a fixed date
+# stops sealing the day after it passes (this failed on 2026-10-31 with "2026-10-30").
+_TODAY = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+_EXPIRES = (_TODAY + timedelta(days=30)).date().isoformat()
 MEASURED = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
 DATASHEET = FigureBasis(kind="datasheet", reference="scanner rev D")
 ACTOR = Actor(identifier="v.grimaldi", role="verification engineer")
@@ -782,10 +786,10 @@ class TestSealedAndReassessed:
         env, tr = envelope(), make_trace()
         raw = json.loads(json.dumps(build_bundle(
             env, tr, actor=ACTOR, recorder_attestations=[
-                RECORDER.attest_for(env, tr, expires_on="2026-10-30")],
+                RECORDER.attest_for(env, tr, expires_on=_EXPIRES)],
             recorder_trust=RECORDER.trust()).to_dict()))
-        soon = datetime(2026, 10, 1, tzinfo=UTC)
-        later = datetime(2026, 11, 15, tzinfo=UTC)
+        soon = _TODAY
+        later = _TODAY + timedelta(days=60)
         assert check_bundle_data(raw, envelope=env, trace=tr, recorder_trust=RECORDER.trust(),
                                  as_of=soon).ok
         res = check_bundle_data(raw, envelope=env, trace=tr, recorder_trust=RECORDER.trust(),
@@ -839,13 +843,13 @@ class TestSealedAndReassessed:
 
         env, tr = envelope(), make_trace()
         b = build_bundle(env, tr, actor=ACTOR, recorder_attestations=[
-            RECORDER.attest_for(env, tr, expires_on="2026-10-30")],
+            RECORDER.attest_for(env, tr, expires_on=_EXPIRES)],
             recorder_trust=RECORDER.trust())
         path = b.write(tmp_path / "b.json")
         assert check_bundle(path, envelope=env, trace=tr, recorder_trust=RECORDER.trust(),
-                            as_of=datetime(2026, 10, 1, tzinfo=UTC)).ok
+                            as_of=_TODAY).ok
         assert not check_bundle(path, envelope=env, trace=tr, recorder_trust=RECORDER.trust(),
-                                as_of=datetime(2026, 11, 15, tzinfo=UTC)).ok
+                                as_of=_TODAY + timedelta(days=60)).ok
 
     def test_the_machine_serial_can_be_pinned_by_the_checker(self):
         env, tr = envelope(), make_trace()
