@@ -243,6 +243,75 @@ Carried in `checks_skipped` on every run:
   ahead of `watch run`, or wire it into whatever schedules this watch.
 
 
+## Public intelligence as an advisory source (`intel`)
+
+Besides signed supplier feeds, a watch can read a local **intel store** (the
+SQLite file `assurance intel ingest|refresh` writes: CISA KEV, NVD, FIRST EPSS,
+CSAF). The watch only reads it, from disk, offline. It never fetches and never
+refreshes; `watch` modules import no network client. Refreshing stays the
+separate, opt-in `intel refresh --live` verb, so the pipeline is two steps:
+
+```bash
+# cron / scheduler, in this order
+assurance intel refresh --source kev  --store intel.db --live            # the only networked step
+assurance intel refresh --source nvd  --store intel.db --live --cve CVE-2026-0001
+assurance intel refresh --source epss --store intel.db --live --cve CVE-2026-0001
+assurance watch run watch.json --ledger evidence.db                      # offline
+```
+
+(`assurance intel ingest --kev FILE ...` records files you already have, with no
+network.) Configuration, next to `feeds`:
+
+```json
+"intel": [
+  { "kind": "intel_store", "store": "intel/intel.db",
+    "sources": ["nvd", "csaf", "kev", "epss"], "supplier_id": "public-intel" }
+]
+```
+
+`sources` names what to read; at least one of `nvd` or `csaf` is required, as
+KEV and EPSS carry no versions and only add context. The store path is relative
+to the config.
+
+What a candidate from this source is, and is not:
+
+* **Not a supplier statement.** `trust_basis` is `none`, `trust_state`
+  `unauthenticated_public_source`. Every finding is inspect-only, the same
+  machinery as an unsigned CSAF import: it lists the machines the existing
+  impact logic matched (`inspect_machines`) but `machines` stays empty, so no
+  stop-use is raised and no Art. 14 intake is drafted, and the watch opens no
+  case. A new or changed finding still makes the run exit `1`: a person has
+  something to read. A case is opened by a **named person** through
+  `assess_advisory` (for a CSAF candidate additionally with the unsigned-import
+  override and a reason), and the case records that the advisory was
+  unauthenticated. Software drafts; people decide.
+* **Matching is the existing impact logic.** No version arithmetic is added. An
+  NVD record gives an affected component only for a CPE entry naming one exact
+  version, and it matches a manifest only if the manifest uses the same
+  supplier/name/version strings; a bounded range is kept as text and is not
+  matched. A run with no match says so, and also lists what that does not
+  establish.
+* **Enrichment is context.** KEV, EPSS, NVD/CVSS and NVD-vs-CSAF conflicts are
+  attached to the finding (`intel.enrichment`) with citations and never change a
+  match or verdict. KEV *not listed* is not "not exploited"; EPSS with no score
+  is `unavailable`, never 0; no KEV catalogue recorded is `unchecked`.
+* **Seen and changed.** The advisory's content hash is remembered per run. The
+  same recorded content is `outstanding` and not announced again; changed
+  content is `updated` and announced once.
+* **Never quiet by accident.** A store that is missing, an empty file, holds no
+  observations, is not an intel store, whose latest observation of a series was
+  rejected, that has no observation of a source the watch was told to read, or
+  whose payloads cannot be re-read, makes the run **DEGRADED** (exit `2`) with
+  the reason in the feed outcome (`absent`, `empty`, `unreadable`,
+  `rejected_latest`, `incomplete`). Older accepted data in the store is still
+  assessed. A fleet with no machines yields `not_assessed`, also degraded.
+
+What it does not establish: that the public record is correct, complete or
+current (that depends on when `intel refresh` last succeeded; a refresh that
+silently stopped looks like a quiet week, so schedule it to fail loudly), or
+that a machine is unaffected because nothing matched.
+
+
 ---
 
 # From an advisory to a drafted filing

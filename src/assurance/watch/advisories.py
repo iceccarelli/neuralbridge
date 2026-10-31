@@ -163,6 +163,12 @@ class AdvisoryFinding:
     #: Whether a person has reviewed the implications. Software never sets it.
     implications_reviewed: bool = False
     trust_state: str = ""
+    #: Hash of the advisory content behind an intel-store finding, so a changed
+    #: observation can be told from a re-seen one. Empty for supplier-feed findings.
+    content_hash: str = ""
+    #: Provenance, enrichment and caveats of an intel-store finding (see
+    #: ``watch.intel_source``). Context only: it never changes ``impact``. Empty otherwise.
+    intel: dict[str, Any] = field(default_factory=dict, compare=False)
     #: The impact engine's own report, kept in memory so the runner can hand it
     #: to :func:`assurance.change.service.assess_advisory` without asking the
     #: engine twice. Never serialised: the sealed run carries the finding, and
@@ -188,6 +194,8 @@ class AdvisoryFinding:
             "inspect_only": self.inspect_only,
             "inspect_machines": list(self.inspect_machines),
             "implications_reviewed": self.implications_reviewed,
+            **({"content_hash": self.content_hash, "intel": self.intel}
+               if self.intel else {}),
         }
 
 
@@ -206,6 +214,11 @@ class AdvisoryPass:
     @property
     def new(self) -> tuple[AdvisoryFinding, ...]:
         return tuple(f for f in self.findings if f.state == "new")
+
+    @property
+    def updated(self) -> tuple[AdvisoryFinding, ...]:
+        """Intel-store advisories already reported whose recorded content has changed."""
+        return tuple(f for f in self.findings if f.state == "updated")
 
     @property
     def withdrawn(self) -> tuple[AdvisoryFinding, ...]:
@@ -228,7 +241,7 @@ class AdvisoryPass:
     @property
     def is_finding(self) -> bool:
         """Anything that has not been reported before, or a retraction."""
-        return bool(self.new or self.withdrawn)
+        return bool(self.new or self.updated or self.withdrawn)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,6 +259,8 @@ class AdvisoryPass:
                 f"{len(self.stop_use)} STOP-USE advisory(ies) match this fleet")
         if self.new:
             parts.append(f"{len(self.new)} new")
+        if self.updated:
+            parts.append(f"{len(self.updated)} updated")
         if self.withdrawn:
             parts.append(f"{len(self.withdrawn)} withdrawn")
         if self.untrusted:
