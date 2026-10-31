@@ -24,7 +24,11 @@ read-only tools (``spec_fields``, ``art14_case``, ``art14_register``, ``art14_br
 ``machine_separation``, ``machinery_diff``, ``fleet_machines``, ``fleet_observations``,
 ``fleet_declaration_check``, ``value_position``, ``change_replay``, ``supplier_trust_list``,
 ``supplier_trust_check``) wrap a GET or a POST that answers a question and records nothing.
-Everything beyond the case work reads or verifies and never decides or records, and none of it can supply a
+Four more reads
+serve public-source intelligence from the operator's shared observation store (``intel_history``,
+``intel_observation``, ``intel_cve``, ``intel_candidates``; Cell tier); there is no tool that
+ingests or fetches a feed, and an unconfigured store is the API's real 503, never an empty
+list. Everything beyond the case work reads or verifies and never decides or records, and none of it can supply a
 trust list or a public key, so what an agent asks the server to check is judged under the server's
 own configuration. There is no tool that assesses an advisory, and no tool that closes, rejects,
 defers or resumes a case, answers its open questions or waives a re-verification: those are a
@@ -100,6 +104,18 @@ def _invalid_case_id(case_id: str) -> dict[str, Any]:
         "detail": f"{case_id[:80]!r} is not a case id. Ids look like 'case-0123456789abcdef'; "
                   "nothing was sent.",
     }
+
+
+#: A CVE id exactly as the API accepts it. Anything else never leaves this process.
+_CVE_ID = re.compile(r"CVE-[0-9]{4}-[0-9]{4,19}")
+#: The largest positive SQLite rowid the API accepts (18 digits).
+_MAX_SEQ = 10**18 - 1
+_INTEL_SOURCES = frozenset({"kev", "nvd", "epss", "csaf", "cisa_kev", "nvd_cve_api",
+                            "first_epss"})
+
+
+def _invalid(error: str, detail: str) -> dict[str, Any]:
+    return {"error": error, "detail": detail + " Nothing was sent."}
 
 
 def _case_path(case_id: str, suffix: str = "") -> str | None:
@@ -739,6 +755,83 @@ async def supplier_trust_check(
     if expect_supplier:
         body["expect_supplier"] = expect_supplier
     return await _call("POST", "/v1/supplier/trust/evaluate", json_body=body)
+
+
+# Public-source intelligence (KEV, NVD, EPSS, CSAF): four READ-ONLY tools over the operator's
+# shared observation store. There is deliberately no ingest or refresh tool: fetching and
+# recording feeds is the operator's act (`assurance intel ingest` / `refresh --live`). An
+# unconfigured or unreadable store comes back as the API's real 503, never an empty list.
+
+@mcp.tool()
+async def intel_history(source: str = "", limit: int = 200, after_seq: int = 0) -> dict[str, Any]:
+    """GET /v1/intel/history — the append-only history of recorded public-feed observations
+    (KEV, NVD, EPSS, CSAF), oldest first, each with its seq, source, retrieved_at, sha256 and
+    parser version. Read-only; Cell-tier only.
+
+    The store is the operator's shared public data, not your evidence. A 503
+    (``no_intel_store_configured`` / ``intel_store_unreadable``) means nothing is known from this
+    service yet; it is not an empty history. Page with ``after_seq``.
+
+    Args:
+        source: optional filter — kev, nvd, epss or csaf.
+        limit: 1 to 1000 observations per page (default 200).
+        after_seq: return observations after this seq (0 = from the start).
+    """
+    if source and source not in _INTEL_SOURCES:
+        return _invalid("invalid_source", "source is one of kev, nvd, epss, csaf.")
+    for value in (limit, after_seq):
+        if isinstance(value, bool) or not isinstance(value, int):
+            return _invalid("invalid_argument", "limit and after_seq are integers.")
+    params = {"limit": str(limit), "after_seq": str(after_seq)}
+    if source:
+        params["source"] = source
+    return await _call("GET", "/v1/intel/history", params=params)
+
+
+@mcp.tool()
+async def intel_observation(seq: int) -> dict[str, Any]:
+    """GET /v1/intel/observations/{seq} — one recorded observation in full: source, URL,
+    retrieved_at, sha256, parser version, disposition and, for a changed feed, what was added,
+    removed or modified. Read-only; Cell-tier only.
+
+    An observation is an UNSIGNED public feed as recorded; its sha256 shows which bytes were
+    recorded, not that the source published them. A rejected observation says nothing about what
+    the source contains.
+    """
+    if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= _MAX_SEQ:
+        return _invalid("invalid_observation_seq", "seq is a positive integer.")
+    return await _call("GET", f"/v1/intel/observations/{seq}")
+
+
+@mcp.tool()
+async def intel_cve(cve_id: str) -> dict[str, Any]:
+    """GET /v1/intel/cve/{cve_id} — what every recorded public source says about one CVE:
+    KEV (``listed`` / ``not_listed_in_kev`` / ``unchecked``), EPSS (``available`` with its score
+    date, or ``unavailable``, never 0.0), NVD (``present`` / ``rejected`` / ``unknown``), CVSS as
+    published, and any NVD-versus-vendor conflict, each with its citation. Read-only; Cell-tier
+    only.
+
+    Read ``summary.status`` and ``not_established``: ``unknown`` means no recorded source mentions
+    the CVE and is not "clear"; ``not_listed_in_kev`` does not mean "not exploited"; version
+    ranges are not matched, so this never says a machine is or is not affected.
+    """
+    if not isinstance(cve_id, str) or not _CVE_ID.fullmatch(cve_id):
+        return _invalid("invalid_cve_id", "a CVE id looks like CVE-2026-12345 (upper case).")
+    return await _call("GET", f"/v1/intel/cve/{cve_id}")
+
+
+@mcp.tool()
+async def intel_candidates() -> dict[str, Any]:
+    """GET /v1/intel/candidates — advisories the existing model can represent, built from the
+    recorded CSAF and NVD observations, plus ``not_representable`` (what a source said that an
+    advisory cannot hold, such as a bounded version range, kept as text) and NVD-versus-vendor
+    conflicts. Read-only; Cell-tier only.
+
+    Candidates are UNSIGNED and inspect-only: a person decides whether any becomes an advisory a
+    machine is assessed against. KEV never yields a candidate. No candidate is not "no advisory
+    exists".
+    """
+    return await _call("GET", "/v1/intel/candidates")
 
 
 def main() -> None:

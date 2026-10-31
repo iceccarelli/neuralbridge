@@ -90,7 +90,8 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
                          "evidence_verify", "machinery_coverage", "machinery_passport_check",
                          "fleet_report", "register_cases",
                          "services", "machine_assurance_check", "fleet_machine_assurance",
-                         "change_cases", "change_case", "change_export", "change_claim",
+                         "change_cases", "change_case", "change_export", "intel_history",
+                         "intel_observation", "intel_cve", "intel_candidates", "change_claim",
                          "change_advance", "change_reverify", "change_assess_drift",
                          "change_assess_intervention",
                          # read-only parity (tests/test_interfaces_mcp_reads.py)

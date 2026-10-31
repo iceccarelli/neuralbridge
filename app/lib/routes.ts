@@ -93,6 +93,15 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/watch/report', tier: 'cell', summary: 'Report what your own Watch saw (manifests and observation status) to your ledger — opt-in, idempotent' },
   { method: 'GET', path: '/v1/fleet/observations', tier: 'cell', summary: 'Per machine: last successful observation, last attempt, stale, open cases' },
 
+  // Public-source intelligence (src/assurance/api/intel_routes.py): READ-ONLY, Machine dependency
+  // (Cell). The store is the operator's shared public data, not tenant evidence; nothing here
+  // ingests or fetches (that is `assurance intel ingest` / `refresh --live`, an operator act). An
+  // unconfigured or unreadable store is a 503, never an empty list.
+  { method: 'GET', path: '/v1/intel/history', tier: 'cell', summary: 'Recorded KEV/NVD/EPSS/CSAF observations, oldest first, each with seq, source, retrieved_at, sha256 and parser version (503 when the operator has no store; never an empty answer)' },
+  { method: 'GET', path: '/v1/intel/observations/{seq}', tier: 'cell', summary: 'One recorded observation in full, with its provenance' },
+  { method: 'GET', path: '/v1/intel/cve/{cve_id}', tier: 'cell', summary: 'What every recorded source says about one CVE: KEV listed / not_listed_in_kev / unchecked, EPSS available (with score date) / unavailable, NVD present / rejected / unknown — and unknown when no source mentions it, never clear' },
+  { method: 'GET', path: '/v1/intel/candidates', tier: 'cell', summary: 'Unsigned advisory candidates the model can represent, plus what it cannot (not_representable) and NVD-versus-vendor conflicts' },
+
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
 ];
 
