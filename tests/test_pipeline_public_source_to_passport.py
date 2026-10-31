@@ -381,8 +381,10 @@ def test_the_whole_pipeline(tmp_path):
     # -- 8a. a tampered intel store is degraded, never quiet ------------------------------------
     shutil.copy(root / "intel.db", root / "intel-bad.db")
     db = sqlite3.connect(root / "intel-bad.db")
-    sha, body = db.execute("SELECT sha256, body FROM blobs WHERE body LIKE '%vulnerabilities%'"
-                           " AND body LIKE '%CVE-2026-0001%'").fetchone()
+    # Chosen in Python: SQLite's LIKE on a BLOB column behaves differently across the SQLite
+    # builds bundled with Python 3.11 and 3.13 (it matched nothing on 3.11).
+    sha, body = next((r[0], bytes(r[1])) for r in db.execute("SELECT sha256, body FROM blobs")
+                     if b"vulnerabilities" in bytes(r[1]) and b"CVE-2026-0001" in bytes(r[1]))
     broken = bytearray(body)
     broken[0] ^= 0x40                                    # '{' -> ';': no longer a document
     db.execute("DROP TRIGGER blobs_no_update")           # what bit-rot or an editor does
