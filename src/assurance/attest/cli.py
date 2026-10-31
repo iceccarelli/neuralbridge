@@ -1,10 +1,15 @@
 """``assurance attest`` — sign the head of a ledger, and check the signatures.
 
-    keygen   make an Ed25519 key pair, refusing to put the private half next
-             to the ledger it will sign
-    sign     attest the current head, refusing every case that would lie
-    verify   check an attestation log, and a ledger against it
-    log      print the attestations without checking anything
+    keygen      make an Ed25519 key pair, refusing to put the private half next
+                to the ledger it will sign, or to overwrite anything
+    sign        attest the current head, refusing every case that would lie
+    verify      check an attestation log, and a ledger against it (repeat
+                --public-key to verify a log that spans a rotation)
+    log         print the attestations without checking anything
+    preflight   would counter-signing and validated verification work in this
+                environment? Reads the service's own variables; prints no key
+    trust-list  create / add / revoke / list / verify-file for the recorder trust
+                file the hosted service loads (ASSURANCE_RECORDER_TRUST)
 
 ``sign`` and ``verify`` exit 0 when everything holds, 1 when there is a
 finding — a rewind, a fork, a bad signature — and 2 when the command could not
@@ -32,6 +37,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from assurance.attest.attestation import (
     AttestationBasis,
@@ -41,7 +47,18 @@ from assurance.attest.attestation import (
     attest,
     verify_log,
 )
-from assurance.attest.keys import SigningKey, VerifyingKey
+from assurance.attest.custody import require_private_key_file, verify_log_across_rotation
+from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
+from assurance.attest.preflight import run_preflight
+from assurance.attest.trustlist import (
+    add_recorder,
+    create_trust_file,
+    entries_as_json,
+    load_trust,
+    revoke_recorder,
+    summarise,
+    trust_file_problems,
+)
 from assurance.core.errors import AssuranceError
 from assurance.evidence.ledger import EvidenceLedger
 
@@ -87,6 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "refuse to store the key beside it")
     k.add_argument("--passphrase-env", default=None,
                    help="environment variable holding the passphrase")
+    k.add_argument("--json", action="store_true",
+                   help="print the public fingerprint and the two paths as JSON")
 
     s = verbs.add_parser("sign", help="attest the current head of a ledger")
     s.add_argument("--ledger", required=True, type=Path)
@@ -100,7 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = verbs.add_parser("verify", help="check an attestation log")
     v.add_argument("--log", required=True, type=Path)
-    v.add_argument("--public-key", required=True, type=Path)
+    v.add_argument("--public-key", required=True, type=Path, action="append",
+                   help="the verifier's own copy of the public key. Repeat it, once per "
+                        "key, to verify a log that spans a rotation: each attestation must "
+                        "verify under the key it names, and a key is never read from the log")
     v.add_argument("--ledger", type=Path, default=None,
                    help="check the ledger against the attestations too; without it "
                         "only the log itself is checked")
@@ -111,6 +133,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "ledger, not the one the signer read)")
     v.add_argument("--json", action="store_true")
 
+    _preflight_parser(verbs)
+    _trust_parser(verbs)
+
     ll = verbs.add_parser("log", help="print the attestations, checking nothing")
     ll.add_argument("--log", required=True, type=Path)
     ll.add_argument("--json", action="store_true")
@@ -118,13 +143,85 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _preflight_parser(verbs: Any) -> None:
+    f = verbs.add_parser(
+        "preflight",
+        help="would counter-signing and validated verification work in this environment?")
+    f.add_argument("--key", type=Path, default=None,
+                   help="a private key FILE to check in place of ASSURANCE_ATTEST_KEY")
+    f.add_argument("--trust", type=Path, default=None,
+                   help="a trust file to check in place of ASSURANCE_RECORDER_TRUST")
+    f.add_argument("--expect-fingerprint", default="",
+                   help="the service-key fingerprint you wrote down elsewhere; a mismatch "
+                        "fails the check")
+    f.add_argument("--must-be-revoked", action="append", default=[], metavar="FINGERPRINT",
+                   help="a recorder fingerprint that must not be trusted; fails if the list "
+                        "still trusts it. Repeatable")
+    f.add_argument("--require", choices=["both", "counter-signing", "validated", "none"],
+                   default="both",
+                   help="which capabilities must be available for exit 0 (default: both)")
+    f.add_argument("--json", action="store_true")
+
+
+def _trust_parser(verbs: Any) -> None:
+    t = verbs.add_parser(
+        "trust-list", help="manage the recorder trust file the hosted service loads")
+    tv = t.add_subparsers(dest="trust_command", required=True)
+
+    c = tv.add_parser("create", help="start an empty trust file (refuses to replace one)")
+    c.add_argument("--trust", required=True, type=Path)
+
+    a = tv.add_parser("add", help="trust one recorder PUBLIC key")
+    a.add_argument("--trust", required=True, type=Path)
+    a.add_argument("--public-key", required=True, type=Path)
+    a.add_argument("--label", required=True, help="whose recorder this is")
+    a.add_argument("--provenance", required=True,
+                   help="comma list of what the key may vouch for: bench, field. "
+                        "Grant the narrowest set")
+    a.add_argument("--fingerprint", required=True,
+                   help="the fingerprint the recorder operator gave you by ANOTHER route; "
+                        "a key that does not hash to it is refused")
+
+    r = tv.add_parser("revoke", help="revoke a recorder key (total and immediate)")
+    r.add_argument("--trust", required=True, type=Path)
+    r.add_argument("--fingerprint", required=True)
+    r.add_argument("--effective", required=True, metavar="YYYY-MM-DD",
+                   help="the date to record. Required, never defaulted. Every attestation of "
+                        "a revoked key is rejected, whatever date it states")
+
+    ls = tv.add_parser("list", help="print the trusted recorders (public information)")
+    ls.add_argument("--trust", required=True, type=Path)
+    ls.add_argument("--json", action="store_true")
+
+    vf = tv.add_parser("verify-file",
+                       help="check the file loads exactly as the service loads it")
+    vf.add_argument("--trust", required=True, type=Path)
+    vf.add_argument("--json", action="store_true")
+
+
 def _cmd_keygen(args: argparse.Namespace) -> int:
+    private_path = Path(args.out)
+    public = Path(args.public_out) if args.public_out else Path(str(private_path) + ".pub")
+    # Refuse before generating anything: the public half is not secret, but overwriting
+    # it would silently replace the key customers were told to check against.
+    if public.exists() or public.is_symlink():
+        raise SigningKeyError(
+            f"{public} already exists; refusing to overwrite a public key that may be the "
+            "one customers hold.")
+    if public.resolve() == private_path.resolve():
+        raise SigningKeyError("--public-out must not be the private key's path.")
     key = SigningKey.generate()
     private = key.save(args.out, passphrase=_passphrase(args), ledger=args.ledger)
-    public = Path(args.public_out) if args.public_out else Path(str(private) + ".pub")
     public.parent.mkdir(parents=True, exist_ok=True)
-    public.write_text(key.verifying.pem(), encoding="utf-8")
+    with public.open("x", encoding="utf-8") as handle:
+        handle.write(key.verifying.pem())
 
+    if args.json:
+        print(json.dumps({"fingerprint": key.fingerprint, "private_key_file": str(private),
+                          "public_key_file": str(public),
+                          "private_key_encrypted": bool(args.passphrase_env)},
+                         indent=2, sort_keys=True))
+        return 0
     print(f"key {key.fingerprint}")
     print(f"  private  {private}  (mode 600)")
     print(f"  public   {public}")
@@ -141,6 +238,7 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
 
 def _cmd_sign(args: argparse.Namespace) -> int:
     ledger = EvidenceLedger.open_existing(args.ledger)
+    require_private_key_file(args.key)
     key = SigningKey.load(args.key, passphrase=_passphrase(args))
     log = AttestationLog(args.log)
     record = attest(ledger, key, log, note=args.note, rotating=args.rotating)
@@ -162,10 +260,13 @@ def _cmd_sign(args: argparse.Namespace) -> int:
 def _cmd_verify(args: argparse.Namespace) -> int:
     ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     log = AttestationLog(args.log)
-    key = VerifyingKey.from_file(args.public_key)
+    keys = [VerifyingKey.from_file(p) for p in args.public_key]
     records, torn = log.scan()
     basis = AttestationBasis(args.basis) if args.basis else None
-    verdict = verify_log(records, key, ledger=ledger, basis=basis)
+    if len(keys) == 1:
+        verdict = verify_log(records, keys[0], ledger=ledger, basis=basis)
+    else:
+        verdict = verify_log_across_rotation(records, keys, ledger=ledger, basis=basis)
     ok = verdict.ok and not torn
     problems = [*verdict.problems, *([_TORN_MESSAGE] if torn else [])]
 
@@ -202,6 +303,79 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return TORN_TAIL_EXIT if torn else 0
 
 
+def _cmd_preflight(args: argparse.Namespace) -> int:
+    report = run_preflight(
+        key_file=args.key, trust_file=args.trust, expect_fingerprint=args.expect_fingerprint,
+        must_be_revoked=tuple(args.must_be_revoked))
+    code = report.exit_code(args.require)
+    if args.json:
+        print(json.dumps({**report.to_dict(), "ok": code == 0, "required": args.require},
+                         indent=2, sort_keys=True))
+        return code
+    yes = {True: "AVAILABLE", False: "NOT AVAILABLE"}
+    print(f"counter-signed attestation   {yes[report.counter_signing]}"
+          + (f"   key {report.service_fingerprint}" if report.service_fingerprint else ""))
+    print(f"validated-tier verification  {yes[report.validated_verification]}"
+          f"   trust list: {report.trust_status}")
+    print()
+    for c in report.checks:
+        print(f"  [{c.status:<4}] {c.name}: {c.detail}")
+    print("\n  NOT checked:")
+    for item in report.to_dict()["not_checked"]:
+        print(f"    - {item}")
+    print("\n  This inspected configuration only. Nothing was signed, verified or changed.")
+    return code
+
+
+def _cmd_trust_list(args: argparse.Namespace) -> int:
+    which = args.trust_command
+    if which == "create":
+        path = create_trust_file(args.trust)
+        print(f"{path}: empty recorder trust list created (nobody is trusted yet)")
+        return 0
+    if which == "add":
+        classes = frozenset(c.strip() for c in args.provenance.split(",") if c.strip())
+        entry = add_recorder(args.trust, args.public_key, label=args.label,
+                             provenance=classes, expected_fingerprint=args.fingerprint)
+        print(f"{args.trust}: trusted {entry.fingerprint} ({entry.label}) for "
+              f"{', '.join(entry.provenance)}")
+        print("  This is you vouching for its holder, for every account on the server. "
+              "The list is server-wide.")
+        return 0
+    if which == "revoke":
+        entry = revoke_recorder(args.trust, args.fingerprint, effective=args.effective)
+        print(f"{args.trust}: revoked {entry.fingerprint} ({entry.label}), recorded as "
+              f"{entry.revoked_on}")
+        print("  Revocation is total and immediate: every attestation by this key is "
+              "rejected, including those dated before the revocation. Evidence sealed "
+              "under it reads as community until re-attested under a trusted key.")
+        return 0
+    trust = load_trust(args.trust)         # raises on anything the server could not load
+    entries = summarise(trust)
+    problems = trust_file_problems(args.trust)
+    if which == "list":
+        if args.json:
+            print(json.dumps(entries_as_json(entries), indent=2, sort_keys=True))
+            return 0
+        if not entries:
+            print(f"{args.trust}: no recorders; nobody is trusted")
+        for e in entries:
+            state = f"REVOKED {e.revoked_on or '(no date)'}" if e.revoked else "trusted"
+            print(f"  {e.fingerprint}  {state:<22} {','.join(e.provenance):<11} {e.label}")
+        return 0
+    live = sum(1 for e in entries if not e.revoked)           # verify-file
+    ok = not problems
+    if args.json:
+        print(json.dumps({"ok": ok, "recorders": len(entries), "not_revoked": live,
+                          "problems": problems}, indent=2, sort_keys=True))
+    else:
+        print(f"{args.trust}: loads as the service loads it; {len(entries)} recorder key(s), "
+              f"{live} not revoked")
+        for problem in problems:
+            print(f"  ! {problem}")
+    return 0 if ok else 1
+
+
 def _cmd_log(args: argparse.Namespace) -> int:
     records, torn = AttestationLog(args.log).scan()
     if torn:
@@ -230,6 +404,8 @@ def main(argv: list[str] | None = None) -> int:
         "sign": _cmd_sign,
         "verify": _cmd_verify,
         "log": _cmd_log,
+        "preflight": _cmd_preflight,
+        "trust-list": _cmd_trust_list,
     }
     try:
         return handlers[args.command](args)
