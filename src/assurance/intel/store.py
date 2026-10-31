@@ -271,9 +271,20 @@ class IntelStore:
         return tuple(row) if row else ()
 
     def body(self, sha256: str) -> bytes | None:
+        """The stored payload for ``sha256``, or None if it is absent OR does not hash to it.
+
+        A blob is looked up by the hash recorded when it was observed. Re-hashing on every read
+        means bit-rot or an edit that still parses (a changed digit inside valid JSON) is
+        treated as an unreadable payload, never as the observation that was recorded.
+        """
+        import hashlib
+
         with self._read() as db:
             row = db.execute("SELECT body FROM blobs WHERE sha256=?", (sha256,)).fetchone()
-        return bytes(row["body"]) if row else None
+        if not row:
+            return None
+        body = bytes(row["body"])
+        return body if hashlib.sha256(body).hexdigest() == sha256 else None
 
     def latest_accepted(self, source: str | None = None) -> list[Observation]:
         """The newest accepted observation of each (source, url) series, oldest first."""

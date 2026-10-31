@@ -98,13 +98,13 @@ The commands say so themselves, and the test pins the wording:
   and no step says a machine, a filing or an organisation complies with
   anything.
 
-## Known gap
+## Payload integrity
 
-An intel store payload is looked up by its recorded SHA-256 and is not
-re-hashed when read. A damaged payload that is no longer parseable makes the
-watch DEGRADED (`unreadable`, exit `2`), but a change that leaves the payload
-valid JSON is read as the recorded observation. The test
-`test_a_payload_bit_flip_that_stays_valid_json_is_degraded` records this as a
-strict expected failure. Until it is fixed, treat a store file you did not write
-yourself, or that sat on writable storage, as untrusted: re-create it with
-`intel ingest` from the source files.
+An intel store payload is looked up by its recorded SHA-256 and is re-hashed
+every time it is read. A payload that no longer hashes to its key, including a
+change that leaves it valid JSON, is treated as unreadable: the watch run is
+DEGRADED (`unreadable`, exit `2`) and nothing is assessed from it. The test
+`test_a_payload_bit_flip_that_stays_valid_json_is_degraded` pins this. The store
+is a cache of public facts and is not hash-chained or signed, so it does not
+show that a payload and its recorded observation row were replaced together:
+re-create a store you did not write yourself from the source.

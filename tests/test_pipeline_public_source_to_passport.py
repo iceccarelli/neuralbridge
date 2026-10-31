@@ -36,8 +36,6 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 from assurance.change.store import CaseStore
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.record import manifests_from_ledger
@@ -450,12 +448,6 @@ def test_the_csaf_route_needs_the_unsigned_override_and_a_reason(tmp_path):
 
 
 # =====================================================================
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT (src/assurance/intel/store.py IntelStore.body + watch/intel_source.py): a stored "
-    "payload is looked up by its recorded sha256 but never re-hashed. A bit flipped inside a "
-    "payload that is still valid JSON is read as if it were the recorded observation: the run "
-    "is NOT degraded (observed exit 0, the altered version label simply stops matching the "
-    "machines). Wanted: exit 2, feed 'unreadable', because sha256(body) != the key."))
 def test_a_payload_bit_flip_that_stays_valid_json_is_degraded(tmp_path):
     root = tmp_path / "plant"
     root.mkdir()
