@@ -113,7 +113,9 @@ def test_the_offline_verbs_import_no_network_client():
         import sys
         import assurance.intel, assurance.intel.cli, assurance.intel.view, assurance.intel.store
         import assurance.intel.fetch, assurance.intel.parsers
-        print([m for m in ("urllib.request", "urllib.parse", "http.client", "socket", "ssl",
+        # urllib.parse is deliberately not listed: it is string parsing, not a network client, and
+        # on Python 3.11 a bare `import pathlib` already loads it (CI runs 3.11, 3.12 and 3.13).
+        print([m for m in ("urllib.request", "http.client", "socket", "ssl",
                            "assurance.intel.transport_urllib") if m in sys.modules])
     """)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True,  # noqa: S603
