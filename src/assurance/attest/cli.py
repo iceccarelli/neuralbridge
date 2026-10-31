@@ -8,6 +8,8 @@
     log         print the attestations without checking anything
     preflight   would counter-signing and validated verification work in this
                 environment? Reads the service's own variables; prints no key
+    anchor-all  counter-sign the head of every hosted tenant ledger (a timer job; see
+                deploy/assurance/KEY-CEREMONY.md section 11)
     trust-list  create / add / revoke / list / verify-file for the recorder trust
                 file the hosted service loads (ASSURANCE_RECORDER_TRUST)
 
@@ -134,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--json", action="store_true")
 
     _preflight_parser(verbs)
+    _anchor_all_parser(verbs)
     _trust_parser(verbs)
 
     ll = verbs.add_parser("log", help="print the attestations, checking nothing")
@@ -160,7 +163,35 @@ def _preflight_parser(verbs: Any) -> None:
     f.add_argument("--require", choices=["both", "counter-signing", "validated", "none"],
                    default="both",
                    help="which capabilities must be available for exit 0 (default: both)")
+    f.add_argument("--anchors", type=Path, default=None, metavar="DIR",
+                   help="also check that every tenant ledger under this deployment data "
+                        "directory has a verified, young anchor (read-only)")
+    f.add_argument("--max-age", type=float, default=None, metavar="HOURS",
+                   help="with --anchors: how old the newest anchor may be (default 24)")
+    f.add_argument("--tenants-dir", type=Path, default=None,
+                   help="with --anchors: tenant ledgers directory if not DIR/tenants")
+    f.add_argument("--logs-dir", type=Path, default=None,
+                   help="with --anchors: attestation logs directory if not DIR/attestations")
     f.add_argument("--json", action="store_true")
+
+
+def _anchor_all_parser(verbs: Any) -> None:
+    a = verbs.add_parser(
+        "anchor-all",
+        help="counter-sign the head of every tenant ledger (operator job; run on a timer)")
+    a.add_argument("--data-dir", required=True, type=Path,
+                   help="deployment data directory: tenants/ holds the ledgers, "
+                        "attestations/ the per-account logs")
+    a.add_argument("--key", required=True, type=Path)
+    a.add_argument("--passphrase-env", default=None)
+    a.add_argument("--max-age", type=float, default=24.0, metavar="HOURS",
+                   help="a ledger whose newest verified anchor is younger than this and "
+                        "already covers its head is left alone (default 24)")
+    a.add_argument("--tenants-dir", type=Path, default=None)
+    a.add_argument("--logs-dir", type=Path, default=None)
+    a.add_argument("--dry-run", action="store_true",
+                   help="verify and report what would be anchored; write nothing")
+    a.add_argument("--json", action="store_true")
 
 
 def _trust_parser(verbs: Any) -> None:
@@ -306,7 +337,9 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 def _cmd_preflight(args: argparse.Namespace) -> int:
     report = run_preflight(
         key_file=args.key, trust_file=args.trust, expect_fingerprint=args.expect_fingerprint,
-        must_be_revoked=tuple(args.must_be_revoked))
+        must_be_revoked=tuple(args.must_be_revoked), anchors=args.anchors,
+        anchor_max_age_hours=args.max_age, anchor_tenants_dir=args.tenants_dir,
+        anchor_logs_dir=args.logs_dir)
     code = report.exit_code(args.require)
     if args.json:
         print(json.dumps({**report.to_dict(), "ok": code == 0, "required": args.require},
@@ -325,6 +358,43 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
         print(f"    - {item}")
     print("\n  This inspected configuration only. Nothing was signed, verified or changed.")
     return code
+
+
+def _cmd_anchor_all(args: argparse.Namespace) -> int:
+    from assurance.attest.anchor_all import anchor_all, render
+
+    if args.max_age < 0:
+        raise ValueError("--max-age cannot be negative.")
+    require_private_key_file(args.key)
+    try:
+        key = SigningKey.load(args.key, passphrase=_passphrase(args), label="the key file")
+    except SigningKeyError as exc:
+        # The parser's own text can sit next to key bytes; say only what class of fault.
+        text = str(exc).lower()
+        why = ("is encrypted and no passphrase was given" if "no passphrase" in text
+               else "does not exist" if "does not exist" in text
+               else "is not an Ed25519 private key" if "not an ed25519" in text
+               else "could not be read (malformed, or the passphrase is wrong)")
+        raise ValueError(f"the key file {why}. Nothing was signed.") from None
+    if _inside(args.key.parent, args.data_dir):
+        raise ValueError("the key file sits inside the data directory it would sign for; "
+                         "whoever can rewrite the ledger could re-sign it. Nothing was signed.")
+    report = anchor_all(args.data_dir, key, tenants_dir=args.tenants_dir,
+                        logs_dir=args.logs_dir, max_age_hours=args.max_age,
+                        dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(render(report))
+    return report.exit_code
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _cmd_trust_list(args: argparse.Namespace) -> int:
@@ -405,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         "verify": _cmd_verify,
         "log": _cmd_log,
         "preflight": _cmd_preflight,
+        "anchor-all": _cmd_anchor_all,
         "trust-list": _cmd_trust_list,
     }
     try:

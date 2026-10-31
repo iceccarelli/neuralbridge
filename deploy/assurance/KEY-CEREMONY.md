@@ -235,6 +235,67 @@ Must not say:
 - Do not trust a key because it arrived with the attestation it signs.
 - Do not set the variables, deploy, or charge anyone without the founder's explicit approval.
 
+## 11. Keep hosted ledgers anchored (a timer, run by the operator)
+
+`GET /v1/ledger/verify` states completeness for a hosted account only against a head the
+service key counter-signed after reading that account's ledger. Nothing makes one by itself;
+without it the answer is `not_checked`. `attest anchor-all` makes them, for every account:
+
+```bash
+# documentation only: nothing in this repository installs this. Run it where the key is held.
+python -m assurance attest anchor-all --data-dir /data --key /secrets/attest.pem \
+    --passphrase-env ATTEST_PASSPHRASE --max-age 24 --json   # exit 0 / 1 / 2, see below
+python -m assurance attest anchor-all --data-dir /data --key /secrets/attest.pem --dry-run
+python -m assurance attest preflight --anchors /data --key /secrets/attest.pem --require counter-signing
+```
+
+`--data-dir` holds `tenants/acc_<16 hex>.db` and `attestations/acc_<16 hex>.jsonl`; pass
+`--tenants-dir` / `--logs-dir` if `ASSURANCE_TENANT_LEDGERS` / `ASSURANCE_ATTEST_LOGS` point
+elsewhere. The operator's shared ledger is not a tenant and is never touched.
+
+Cron (every 6 hours, alert on non-zero; `--max-age 24` means a ledger is re-signed at most
+daily unless it grew past its last anchor):
+
+```
+17 */6 * * *  /usr/bin/python -m assurance attest anchor-all --data-dir /data --key /secrets/attest.pem || alert-operator
+```
+
+systemd (two files, illustrative; the operator writes them, installs them and owns the key):
+
+```
+# attest-anchor.service            # attest-anchor.timer
+[Service]                          [Timer]
+Type=oneshot                       OnCalendar=*-*-* 00/6:17:00
+ExecStart=/usr/bin/python -m assurance attest anchor-all --data-dir /data --key /secrets/attest.pem
+                                   [Install]
+                                   WantedBy=timers.target
+```
+
+Exit codes: 0 every ledger anchored or fresh (a `--dry-run` that would anchor also exits 0);
+1 a finding: a ledger whose chain fails or that became shorter than an earlier anchor (nothing
+is signed; preserve the files), a log signed by a different key, a torn log, or a
+ledger-named entry that is a symlink or not a regular file; 2 the command could not run (bad
+key, key inside the data directory, missing directory, a log busy past its lock timeout).
+Entries that do not match the account pattern are listed as skipped and do not fail the run.
+Two overlapping runs cannot fork or tear a log (the log's lock serialises them); the worst case
+is one redundant anchor.
+
+**An anchor proves** that the ledger, when read, verified end to end, was not shorter than
+earlier anchors and agreed with them, and that the holder of the key with that fingerprint
+signed its head at that time. **It does not prove** the records are true; it covers nothing
+appended after it (so the newest records are unanchored until the next run); it does not
+prove the job runs (only a stale anchor shows that: `preflight --anchors` reports it);
+and an operator who controls the deployment can rewrite a ledger and its log together. It is
+as independent of the operator as the custody of the key.
+
+**Rotation.** The verify route accepts an account's log only if *every* record verifies under
+the one service key it holds. After a rotation (section 6) every existing log therefore
+fails under the new key, completeness reads `not_checked` with the reason, and `anchor-all`
+refuses to continue those logs ("a different key"). Nothing already signed is wrong; it is
+verifiable only with the old public key. Before switching, verify each log with both keys
+pinned (section 6 step 5), archive it with the old public key, and start a fresh log under
+the new key; until then the older anchors do not count. Decide that cut-over deliberately.
+
 ## What remains operator-only (not done, not doable from this repository)
 
 Generating the real keys; choosing and operating custody; setting the secrets and the variable
