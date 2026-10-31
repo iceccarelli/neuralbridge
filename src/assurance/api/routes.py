@@ -446,10 +446,15 @@ def get_breaches(register: Art14Register = Depends(get_register)) -> list[dict[s
 
 @evidence_router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
 def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
-    ok, problems = register.ledger.verify_chain()
+    report = register.ledger.verify_report()
     return {
-        "verified": ok,
-        "problems": problems,
+        "verified": report["verified"],
+        "problems": report["problems"],
+        # "verified" is the chain's self-consistency only. Completeness (nothing removed
+        # from the end) is not checked here; see not_checked.
+        "completeness": report["completeness"],
+        "not_checked": report["not_checked"],
+        "ledger_id": report["ledger_id"],
         "attestation": register.ledger.head_attestation(),
         "note": (
             "Sign or publish attestation.head_link_hash with a key held outside this service "
