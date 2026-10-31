@@ -341,6 +341,7 @@ def assess_advisory_route(
         raise _refused(exc) from exc
     return {"opened": case is not None, "case": case.to_dict() if case else None,
             "verdict": report.verdict, "incomplete": report.incomplete,
+            "clear_is_complete": report.clear_is_complete,
             "advisory_trust": report.provenance,
             "advisory_import": report.advisory_import}
 

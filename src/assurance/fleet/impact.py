@@ -211,8 +211,13 @@ class ImpactReport:
 
     @property
     def clear_is_complete(self) -> bool:
-        """A ``clear`` verdict that no unknown machine or function qualifies."""
-        return (self.verdict == "clear" and not self.unknown_machines
+        """A ``clear`` verdict that no unknown machine or function qualifies.
+
+        An empty fleet is never complete: nothing was assessed, so "no machine matches" is a
+        statement about no machines, not evidence that the advisory is irrelevant.
+        """
+        return (self.verdict == "clear" and self.machines_in_fleet > 0
+                and not self.unknown_machines
                 and not self.unknown_functions)
 
     @property

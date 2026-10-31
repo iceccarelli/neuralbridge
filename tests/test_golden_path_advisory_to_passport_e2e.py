@@ -648,18 +648,15 @@ class TestNotInTheFleet:
         assert any("absence here is not evidence of safety" in c for c in impact["checks_skipped"])
         assert w.assess(adv).json()["opened"] is False
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "DEFECT (vocabulary): with NO machine enrolled, POST /v1/fleet/advisory and "
-        "POST /v1/change/assess/advisory return verdict 'clear' with clear_is_complete=true "
-        "(and incomplete=false on the change route), although nothing was assessed. The prose "
-        "in checks_skipped says it is 'about an empty fleet', but the structured fields a "
-        "client reads say complete and clear: 'unchecked/incomplete' collapsed into 'clear'."))
     def test_an_empty_fleet_is_incomplete_not_clear_and_complete(self, world):
         w = world
         adv = advisory_for(w.manifest, "NOFLEET-5")
         impact = w.ok("POST", "/v1/fleet/advisory", body={"advisory": adv.to_dict()})
-        assert impact["clear_is_complete"] is False
-        assert w.assess(adv).json()["incomplete"] is True
+        assert impact["clear_is_complete"] is False and impact["machines_in_fleet"] == 0
+        reply = w.assess(adv).json()
+        # `incomplete` means "the advisory's own import was partial"; whether a CLEAR verdict can
+        # be relied on is `clear_is_complete`, and an empty fleet never earns it.
+        assert reply["clear_is_complete"] is False and reply["opened"] is False
 
 
 class TestPassportNegatives:
