@@ -9,6 +9,34 @@ scanner zones in a vendor tool, the robot's safety parameters in the controller,
 and the only record that a technician changed any of them may be that
 technician's memory.
 
+## Step one: enrol the machine
+
+```bash
+assurance machinery enrol manifest.json --ledger register.db --actor "a.integrator" \
+    [--site "Plant 2" --owner "Example GmbH"] [--json]
+```
+
+`POST /v1/machinery/enrol` (`{manifest, actor, role?, site?, owner?}`, gated like
+`POST /v1/machinery/manifest`) does the same through the same domain function
+(`assurance.machinery.enrol.enrol_machine`); there is no MCP tool, because enrolment is a named
+person's declaration. It seals the manifest, seals one `machinery.enrolment` record under the
+machine key, and returns a **receipt**: machine key, configuration hash, the manifest and
+enrolment entry numbers, item counts (items carrying no hash are listed as uncomparable), the tier
+ceiling (a ceiling, not a result), functions that declare no check, every function's coverage
+(`never_verified` until a verification is recorded), what enrolment does **not** establish, and
+the next steps.
+
+| outcome | what happens | CLI exit | HTTP |
+|---|---|---|---|
+| `enrolled` | manifest and enrolment sealed | 0 | 200 |
+| `already_enrolled` | same key, same configuration: nothing written | 0 | 200 |
+| `configuration_differs` | same key, changed configuration: that is drift, not an enrolment; nothing written, the receipt points at `machinery diff` / `change assess drift` | 1 | 409 |
+| `identity_conflict` | the key is enrolled with different declared attributes (site, owner, year, country): nothing written, a person decides | 1 | 409 |
+| refused input | no actor, an automation actor, a site that contradicts the manifest, an unreadable file, a ledger chain that does not verify | 2 | 422 / 409 |
+
+Enrolment does not establish that the machine is verified safe (it runs no verification), that the
+manifest is complete, or that the serial is the serial of a physical unit: identity is as declared.
+
 ## The three verbs
 
 ```bash

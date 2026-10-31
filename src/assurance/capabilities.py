@@ -175,6 +175,10 @@ CAPABILITIES: tuple[Capability, ...] = (
        gaps={"cli": _p("no CLI verb")}),
 
     # --- machinery: the machine's software identity and its change history ------------------
+    _c("machinery.enrol", "Enrol a machine: declare its identity, seal its baseline, get a receipt",
+       "machinery enrol", "POST /v1/machinery/enrol",
+       gaps={"mcp": _d("enrolment is a named person's declaration of identity; an agent is not "
+                       "offered a way to make it (and it writes the ledger of record)")}),
     _c("machinery.manifest", "Seal a safety software manifest",
        "machinery record-manifest", "POST /v1/machinery/manifest", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.intervention", "Seal an intervention record",

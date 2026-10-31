@@ -43,6 +43,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/ledger/verify', tier: 'register', summary: 'Verify the hash chain (read-out: also open to a lapsed account that once paid)' },
 
   { method: 'POST', path: '/v1/machine/verify', tier: 'cell', summary: 'Verify a recorded machine run against its declared envelope' },
+  { method: 'POST', path: '/v1/machinery/enrol', tier: 'cell', summary: 'Enrol a machine: declare its identity, seal its baseline, get a receipt' },
   { method: 'POST', path: '/v1/machinery/manifest', tier: 'cell', summary: 'Seal a safety software manifest' },
   { method: 'POST', path: '/v1/machinery/intervention', tier: 'cell', summary: 'Seal an intervention record' },
   { method: 'POST', path: '/v1/machinery/coverage', tier: 'cell', summary: 'Which safety functions a recorded verification still stands for, at what tier' },
@@ -117,7 +118,7 @@ export interface CliDomain {
 export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'kit', verbs: ['init', 'run', 'check'], summary: 'Enrol a plant’s machines without anything leaving it — offline by design, no API equivalent.' },
   { domain: 'machine', verbs: ['separation', 'verify', 'check'], summary: 'ISO/TS 15066 separation and recorded-run verification.', apiTier: 'free' },
-  { domain: 'machinery', verbs: ['record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
+  { domain: 'machinery', verbs: ['enrol', 'record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
   { domain: 'fleet', verbs: ['list', 'advisory', 'declare', 'declaration'], summary: 'Advisory fan-out and Declaration binding across a fleet.', apiTier: 'cell' },
   { domain: 'change', verbs: ['assess-drift', 'assess-advisory', 'assess-intervention', 'list', 'show', 'claim', 'advance', 'reverify', 'resolve-decision', 'waive-reverification', 'decide', 'resume', 'replay', 'export'], summary: 'Change-assurance cases: open from drift, an advisory or an intervention; claim, advance and submit re-verification evidence; close, defer or resume by a named human decision. A required re-verification is closed by a named person\'s waiver unless the verification is validated, which needs a recorder attestation accepted under the verifier\'s own trust list.', apiTier: 'cell' },
   { domain: 'attest', verbs: ['keygen', 'sign', 'verify', 'log'], summary: 'Counter-signed head attestation — catches deletion, not just editing.', apiTier: 'cell' },
