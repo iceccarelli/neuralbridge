@@ -406,6 +406,11 @@ POST /v1/change/assess/drift                       {baseline, observed, actor?}
         # the baseline is the newest manifest the account's ledger holds for the
         # machine in another configuration; the body's is used only if none is
         # sealed. The response says which (baseline_source: ledger | request).
+POST /v1/change/assess/advisory/signed             {feed | hosted_feed_id, advisory_id, expect_supplier?, actor?, ...}
+        # the feed is judged under YOUR account's pinned keys (the same function as
+        # /v1/fleet/advisory/signed). Only a pinned key with valid signatures opens a case
+        # without a named person; anything else needs one, exactly as the bare route. It
+        # never closes a case. 404 if advisory_id is not a standing advisory in the feed.
 POST /v1/change/assess/advisory                    {advisory, actor, accept_unsigned?, reason?}
         # actor must name a person for an advisory handed over as a body; an
         # unsigned import also needs accept_unsigned (409 otherwise).

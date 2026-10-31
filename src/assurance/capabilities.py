@@ -207,6 +207,13 @@ CAPABILITIES: tuple[Capability, ...] = (
        "change assess-advisory", "POST /v1/change/assess/advisory",
        gaps={"mcp": _d("a case opened from third-party content is the attack the signed feed "
                        "exists to stop; only a person opens it")}),
+    _c("change.assess_advisory_signed",
+       "Turn one advisory of a pinned, signed supplier feed into a case, with its trust",
+       (), "POST /v1/change/assess/advisory/signed",
+       gaps={"cli": _p("the offline kit has no pin store to judge a feed under; opening a "
+                       "case from a feed is the hosted account's pinned-key policy"),
+             "mcp": _d("a case opened from third-party content is the attack the signed feed "
+                       "exists to stop; only a person opens it")}),
     _c("change.assess_intervention", "Did a recorded intervention invalidate evidence?",
        "change assess-intervention", "POST /v1/change/assess/intervention",
        "change_assess_intervention"),
