@@ -83,6 +83,11 @@ _OPERATOR = ("operator tooling that works on the local account store file on the
              "socket and is not an HTTP route")
 _KEYS = "key custody: the private key is made and held on the operator's own machine"
 _HTTP = "served over HTTP to callers who hold no checkout; the CLI works on local files"
+_INTEL_RECORDING = ("recording feed files into the operator's shared observation store is an "
+                    "operator act on the host; the hosted routes only read that store")
+_INTEL_FETCHING = ("fetching from KEV/NVD/EPSS is an operator act (`--live`, a named host, an API "
+                   "key from the operator's environment); the hosted routes never reach the "
+                   "network and only read the store")
 _NO_MCP_YET = "no MCP tool yet; a read or verify that an agent could use"
 
 CAPABILITIES: tuple[Capability, ...] = (
@@ -291,20 +296,16 @@ CAPABILITIES: tuple[Capability, ...] = (
 
     # --- intel: public-source vulnerability intelligence (KEV, NVD, EPSS, CSAF) ---------------
     _c("intel.ingest", "Record local KEV/NVD/EPSS/CSAF files as provenance-stamped observations",
-       "intel ingest", gaps={"api": _p("an HTTP ingest route is intended"),
-                             "mcp": _p("an MCP tool is intended")}),
+       "intel ingest", gaps={"api": _d(_INTEL_RECORDING), "mcp": _d(_INTEL_RECORDING)}),
     _c("intel.refresh", "Fetch one public source from its official host (only with --live)",
-       "intel refresh", gaps={"api": _p("a hosted refresh is intended"),
-                              "mcp": _p("an MCP tool is intended")}),
+       "intel refresh", gaps={"api": _d(_INTEL_FETCHING), "mcp": _d(_INTEL_FETCHING)}),
     _c("intel.history", "The append-only observation history of every source",
-       "intel history", gaps={"api": _p("an HTTP read route is intended"),
-                              "mcp": _p("an MCP tool is intended")}),
+       "intel history", "GET /v1/intel/history", "intel_history"),
     _c("intel.show", "One observation, or what every source says about one CVE",
-       "intel show", gaps={"api": _p("an HTTP read route is intended"),
-                           "mcp": _p("an MCP tool is intended")}),
+       "intel show", ("GET /v1/intel/observations/{seq}", "GET /v1/intel/cve/{cve_id}"),
+       ("intel_observation", "intel_cve")),
     _c("intel.candidates", "Advisory candidates the model can represent, plus CVE enrichment",
-       "intel candidates", gaps={"api": _p("an HTTP read route is intended"),
-                                 "mcp": _p("an MCP tool is intended")}),
+       "intel candidates", "GET /v1/intel/candidates", "intel_candidates"),
 
     # --- billing: operator tooling for accounts provisioned outside Stripe ---------------------
     _c("billing.grant", "Create a manual-pilot account and print its API key once",

@@ -370,6 +370,65 @@ def test_change_list_show_and_export_agree_on_every_surface(plant_world, monkeyp
     assert identity[0] == identity[1] == identity[2] and identity[0]
 
 
+# ------------------------------------------------------------------ intel: one store, three surfaces
+@pytest.fixture
+def intel_world(live_api, tmp_path, monkeypatch) -> World:
+    """One observation store; the CLI reads the file, the API and MCP read it by the server setting."""
+    from .test_assurance_intel_api import STORE_ENV, build_store
+
+    path = tmp_path / "intel.db"
+    build_store(path)
+    monkeypatch.setenv(STORE_ENV, str(path))
+    _, headers = live_api.account("parity-intel@example.de")
+    client = live_api.client()
+    client.headers.update(headers)
+    return World(path, client, live_api.url, headers["X-API-Key"], tmp_path)
+
+
+PROVENANCE_FIELDS = ("seq", "source", "url", "retrieved_at", "sha256", "parser_version",
+                     "disposition", "parse_result", "record_count", "feed_stamp")
+
+
+def test_intel_history_cli_api_and_mcp_name_the_same_observations(intel_world, monkeypatch):
+    w = intel_world
+    via_cli = cli_json(w, "intel", "history", "--store", w.cli_ledger, "--json")
+    via_api = w.client.get("/v1/intel/history").json()["observations"]
+    via_mcp = mcp_body(mcp(monkeypatch, w, "intel_history"))["observations"]
+    pick = [[{k: o[k] for k in PROVENANCE_FIELDS} for o in rows]
+            for rows in (via_cli, via_api, via_mcp)]
+    assert pick[0] == pick[1] == pick[2] and len(pick[0]) == 5
+
+
+def test_intel_show_cli_api_and_mcp_say_the_same_about_an_observation_and_a_cve(
+        intel_world, monkeypatch):
+    w = intel_world
+    cli_obs = cli_json(w, "intel", "show", "--store", w.cli_ledger, "2", "--json")
+    api_obs = w.client.get("/v1/intel/observations/2").json()["observation"]
+    mcp_obs = mcp_body(mcp(monkeypatch, w, "intel_observation", seq=2))["observation"]
+    api_obs.pop("accepted"), mcp_obs.pop("accepted")
+    assert cli_obs == api_obs == mcp_obs
+
+    keys = ("cve_id", "kev", "epss", "nvd", "cvss", "conflicts", "not_representable",
+            "csaf_advisories")
+    for cve in ("CVE-2021-44228", "CVE-2026-0001", "CVE-1999-0001"):
+        cli_cve = cli_json(w, "intel", "show", "--store", w.cli_ledger, "--cve", cve, "--json")
+        api_cve = w.client.get(f"/v1/intel/cve/{cve}").json()
+        mcp_cve = mcp_body(mcp(monkeypatch, w, "intel_cve", cve_id=cve))
+        assert cli_cve == {k: api_cve[k] for k in keys} == {k: mcp_cve[k] for k in keys}, cve
+
+
+def test_intel_candidates_cli_api_and_mcp_name_the_same_advisories(intel_world, monkeypatch):
+    w = intel_world
+    via_cli = cli_json(w, "intel", "candidates", "--store", w.cli_ledger, "--json")
+    via_api = w.client.get("/v1/intel/candidates").json()
+    via_mcp = mcp_body(mcp(monkeypatch, w, "intel_candidates"))
+    assert via_cli["candidates"] and via_cli["candidates"] == via_api["candidates"] \
+        == via_mcp["candidates"]
+    assert via_cli["conflicts"] == via_api["conflicts"] == via_mcp["conflicts"]
+    assert len(via_cli["enrichments"]) == via_api["enrichment_count"] == via_mcp["enrichment_count"]
+    assert via_cli["unreadable_observations"] == via_api["unreadable_observations"] == []
+
+
 # ------------------------------------------------------------------ the catalogue's promise
 #: capability id -> the parity test above that exercises it, for each surface set it declares.
 EXERCISED = {
@@ -383,6 +442,9 @@ EXERCISED = {
     "change.export": ("cli", "api", "mcp"),
     "attest.verify": ("cli", "api"),
     "evidence.verify": ("cli", "api", "mcp"),
+    "intel.history": ("cli", "api", "mcp"),
+    "intel.show": ("cli", "api", "mcp"),
+    "intel.candidates": ("cli", "api", "mcp"),
 }
 
 
