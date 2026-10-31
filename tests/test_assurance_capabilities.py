@@ -126,3 +126,87 @@ def test_the_command_line_check_and_json(tmp_path):
 
 def test_the_mcp_tool_for_the_catalogue_wraps_its_route():
     assert cat.discover_mcp()["capabilities"] == "GET /v1/capabilities"
+
+
+# --- discovery is authoritative ------------------------------------------------------------
+def _register(name, doc):
+    """Register a real tool on the live MCP server, with a docstring we choose."""
+    from assurance.mcp import server
+
+    async def tool() -> dict:
+        return {}
+
+    tool.__name__ = name
+    tool.__doc__ = doc
+    server.mcp.add_tool(tool)
+    return server
+
+
+@pytest.mark.parametrize("doc", [
+    "Quietly does something with no route in the first line.",
+    "Wraps GET /v1/plans, but not as the first words.",
+    None,
+])
+def test_an_mcp_tool_is_seen_however_its_docstring_is_written(app, doc):
+    pytest.importorskip("mcp")
+    server = _register("sneaky_tool", doc)
+    try:
+        assert "sneaky_tool" in cat.discover_mcp()
+        assert any("uncatalogued mcp" in p and "sneaky_tool" in p for p in cat.problems(app))
+    finally:
+        server.mcp.remove_tool("sneaky_tool")
+    assert "sneaky_tool" not in cat.discover_mcp()
+
+
+def test_a_claimed_tool_with_no_route_in_its_description_is_reported(app, monkeypatch):
+    pytest.importorskip("mcp")
+    server = _register("routeless_tool", "No route is named here.")
+    try:
+        caps = _mutated(cat.CAPABILITIES, "machine.verify", mcp=("routeless_tool",))
+        monkeypatch.setattr(cat, "CAPABILITIES", caps)
+        assert any("routeless_tool" in p and "names no" in p for p in cat.problems(app))
+    finally:
+        server.mcp.remove_tool("routeless_tool")
+
+
+def test_the_registry_and_the_source_fallback_agree(monkeypatch):
+    pytest.importorskip("mcp")
+    live = set(cat.discover_mcp())
+
+    def no_mcp():
+        raise ImportError("mcp not installed")
+
+    monkeypatch.setattr(cat, "_mcp_registered", no_mcp)
+    assert set(cat.discover_mcp()) == live
+
+
+def test_discovery_works_from_inside_a_running_event_loop():
+    pytest.importorskip("mcp")
+    import asyncio
+
+    async def inside():
+        return cat.discover_mcp()
+
+    assert set(asyncio.run(inside())) == set(cat.discover_mcp())
+
+
+# --- an unreadable CLI domain is a problem, not a single command ----------------------------
+def test_a_cli_domain_without_a_parser_is_reported(app, monkeypatch):
+    from assurance import cli as cli_mod
+
+    monkeypatch.setitem(cli_mod._DOMAINS, "mystery", "assurance.core.api_url")
+    assert cat.opaque_cli_domains() == ["mystery"]
+    assert any("opaque cli" in p and "'mystery'" in p for p in cat.problems(app))
+
+
+def test_a_declared_single_command_domain_is_not_a_problem(app, monkeypatch):
+    from assurance import cli as cli_mod
+
+    monkeypatch.setitem(cli_mod._DOMAINS, "mystery", "assurance.core.api_url")
+    monkeypatch.setattr(cat, "_SINGLE_COMMAND_DOMAINS", frozenset({"mystery"}))
+    assert cat.opaque_cli_domains() == []
+    assert not any("opaque cli" in p for p in cat.problems(app))
+
+
+def test_no_real_cli_domain_is_opaque():
+    assert cat.opaque_cli_domains() == []
