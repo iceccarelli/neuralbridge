@@ -295,7 +295,7 @@ class TestCli:
         rc = self._fleet("advisory", "--feed", str(tmp_path / "feed.jsonl"),
                          "--unsigned-anyway", "--override-actor", "a.engineer",
                          "--ledger", str(tmp_path / "ledger.db"))
-        assert rc in (0, 1)
+        assert rc == 3      # the ledger holds no machine: nothing was assessed, so not 0 ("clear")
         assert "not signed, or its signature was not checked" in \
             capsys.readouterr().out
 
