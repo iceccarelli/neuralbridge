@@ -37,6 +37,7 @@ from .deps import (
     Metered,
     MeterTicket,
     auth_mode,
+    current_principal,
     get_accounts,
     get_register,
     require_evidence_readout,
@@ -444,22 +445,79 @@ def get_breaches(register: Art14Register = Depends(get_register)) -> list[dict[s
     return register.breaches()
 
 
+def _server_anchor(principal: Principal | None) -> Any:
+    """The anchor this account's own attestation log can supply, or the reasons it cannot.
+
+    Reads the log without its lock (verification never waits for a signer) and checks
+    every record against the **service's own public key**, never a key found in the log.
+    Only the account's own log is read, and only for a per-account ledger: the operator's
+    shared ledger has no per-account log, so it is never anchored here.
+    """
+    from ..attest.anchor import AnchorChoice, choose_anchor
+    from ..attest.attestation import AttestationError
+    from .attest_routes import _LOG_LABEL, _log_for, _service_key
+
+    account = principal.account if principal is not None else None
+    if account is None or account.id == "operator":
+        return AnchorChoice(None, [
+            "this is the operator's shared ledger, which has no per-account attestation "
+            "log; no anchor is used"])
+    try:
+        key = _service_key().verifying
+    except HTTPException:
+        key = None          # unconfigured or unusable; the detail may name a server path
+    try:
+        records, torn = _log_for(principal).scan()
+    except (AttestationError, OSError):
+        return AnchorChoice(None, [
+            f"{_LOG_LABEL} could not be read; no anchor is used"],
+            key.fingerprint if key else "")
+    return choose_anchor(records, key, torn=torn, log_label=_LOG_LABEL)
+
+
 @evidence_router.get("/ledger/verify", response_model=dict, summary="Verify the evidence chain")
-def get_ledger_verify(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
-    report = register.ledger.verify_report()
+def get_ledger_verify(
+    register: Art14Register = Depends(get_register),
+    principal: Principal | None = Depends(current_principal),
+) -> dict[str, Any]:
+    """Chain check, plus a completeness check against the service's own counter-signature.
+
+    ``completeness`` is ``checked_against_anchor`` only when this account has an
+    attestation log whose every record verifies against the *service's* public key and
+    whose newest server-read head this ledger still contains; ``contradicted_by_anchor``
+    (and ``verified`` false) when it does not. Otherwise ``not_checked``, and
+    ``not_checked`` names the missing prerequisite. ``anchor_meaning`` says what that
+    does and does not prove.
+    """
+    from ..attest.anchor import ANCHOR_MEANING, describe_choice
+
+    choice = _server_anchor(principal)
+    report = register.ledger.verify_report(
+        anchor=choice.anchor, anchor_verified_by=choice.key_fingerprint or None)
+    not_checked = list(report["not_checked"])
+    if choice.anchor is None:
+        not_checked.extend(f"anchor not used: {r}" for r in choice.reasons)
+    elif report["completeness"] == "not_checked":
+        not_checked.append(
+            "anchor not compared: the chain itself does not verify, so no completeness "
+            "statement is made")
     return {
         "verified": report["verified"],
         "problems": report["problems"],
         # "verified" is the chain's self-consistency only. Completeness (nothing removed
-        # from the end) is not checked here; see not_checked.
+        # from the end) is stated by `completeness`; see not_checked.
         "completeness": report["completeness"],
-        "not_checked": report["not_checked"],
+        "not_checked": not_checked,
         "ledger_id": report["ledger_id"],
+        "anchor": describe_choice(choice),
+        "anchor_meaning": ANCHOR_MEANING,
         "attestation": register.ledger.head_attestation(),
         "note": (
             "Sign or publish attestation.head_link_hash with a key held outside this service "
             "to make a silent rewind detectable. A self-recomputable chain detects accident "
-            "and casual tampering, not a determined insider."
+            "and casual tampering, not a determined insider. A hosted ledger's anchor comes "
+            "from a key this service holds: it is as independent of the ledger's operator as "
+            "that key's custody is."
         ),
     }
 

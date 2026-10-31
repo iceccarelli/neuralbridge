@@ -6191,6 +6191,7 @@
     },
     "/v1/ledger/verify": {
       "get": {
+        "description": "Chain check, plus a completeness check against the service's own counter-signature.\n\n``completeness`` is ``checked_against_anchor`` only when this account has an\nattestation log whose every record verifies against the *service's* public key and\nwhose newest server-read head this ledger still contains; ``contradicted_by_anchor``\n(and ``verified`` false) when it does not. Otherwise ``not_checked``, and\n``not_checked`` names the missing prerequisite. ``anchor_meaning`` says what that\ndoes and does not prove.",
         "operationId": "get_ledger_verify_v1_ledger_verify_get",
         "parameters": [
           {

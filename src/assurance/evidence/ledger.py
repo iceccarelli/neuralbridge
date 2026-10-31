@@ -563,7 +563,10 @@ class EvidenceLedger:
             chain_cache.remember(key, head_seq, head_link, chain_cache.now())
         return (not problems, problems)
 
-    def verify_report(self, *, anchor: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def verify_report(
+        self, *, anchor: Mapping[str, Any] | None = None,
+        anchor_verified_by: str | None = None,
+    ) -> dict[str, Any]:
         """:meth:`verify_chain` plus what that walk did *not* establish.
 
         ``completeness`` is ``"not_checked"`` unless a head ``anchor`` (a signed head
@@ -572,6 +575,10 @@ class EvidenceLedger:
         ``"contradicted_by_anchor"`` (and ``verified`` is false). The anchor's signature is
         not checked here, so even then ``not_checked`` says so. ``verified`` keeps the
         meaning of ``verify_chain``: every record present links to the one before it.
+
+        ``anchor_verified_by`` is for a caller that has itself verified the anchor's
+        signature (name the key, e.g. its fingerprint); it replaces the "signature was not
+        verified" caveat. It is the caller's statement, so pass it only after a real check.
         """
         ok, problems = self.verify_chain()
         problems = list(problems)
@@ -599,9 +606,15 @@ class EvidenceLedger:
                     not_checked[0] = (
                         "completeness beyond the anchor: records appended after the anchor "
                         "was signed are not covered by it.")
-                    not_checked.append(
-                        "the anchor's signature was not verified by this call; check it "
-                        "with the signer's public key.")
+                    if anchor_verified_by:
+                        not_checked.append(
+                            "the anchor's signature was verified by the caller against "
+                            f"key {anchor_verified_by}; a signature shows who signed "
+                            "the head, not that the records are true.")
+                    else:
+                        not_checked.append(
+                            "the anchor's signature was not verified by this call; check "
+                            "it with the signer's public key.")
             finally:
                 db.close()
         return {"verified": ok and not problems, "problems": problems,
