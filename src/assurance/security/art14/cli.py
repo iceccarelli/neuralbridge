@@ -253,19 +253,50 @@ def cmd_register_cmd(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     register = _register(args)
-    ok, problems = register.ledger.verify_chain()
-    if ok:
-        attestation = register.ledger.head_attestation()
-        print(f"chain verified: {attestation['length']} records")
-        print(f"  head link hash  {attestation['head_link_hash']}")
+    log_path = getattr(args, "attestations", None)
+    key_path = getattr(args, "public_key", None)
+    if bool(log_path) != bool(key_path):
+        raise ValueError(
+            "--attestations and --public-key go together: an attestation is only "
+            "trusted if it verifies against a public key you name (never one from the log)")
+    anchor_choice = None
+    if log_path:
+        # Signing deps are only needed when an anchor is asked for.
+        from ...attest.anchor import ANCHOR_MEANING, choose_anchor
+        from ...attest.attestation import AttestationLog
+        from ...attest.keys import VerifyingKey
+
+        records, torn = AttestationLog(log_path).scan()
+        anchor_choice = choose_anchor(
+            records, VerifyingKey.from_file(key_path), torn=torn, log_label=str(log_path))
+    report = register.ledger.verify_report(
+        anchor=anchor_choice.anchor if anchor_choice else None,
+        anchor_verified_by=(anchor_choice.key_fingerprint or None) if anchor_choice else None)
+    if not report["verified"]:
+        print("CHAIN VERIFICATION FAILED", file=sys.stderr)
+        for problem in report["problems"]:
+            print(f"  • {problem}", file=sys.stderr)
+        return 1
+    attestation = register.ledger.head_attestation()
+    print(f"chain verified: {attestation['length']} records")
+    print(f"  head link hash  {attestation['head_link_hash']}")
+    if anchor_choice is None:
         print(
             "  sign or publish this value to make a silent rewind detectable; a self-"
             "recomputable chain detects accident, not a determined insider."
         )
         return 0
-    print("CHAIN VERIFICATION FAILED", file=sys.stderr)
-    for problem in problems:
-        print(f"  • {problem}", file=sys.stderr)
+    if report["completeness"] == "checked_against_anchor":
+        a = anchor_choice.anchor
+        print(f"  completeness checked against attestation {a['sequence']} "
+              f"(seq {a['head_seq']}, signed {a['attested_at']}, key "
+              f"{a['key_fingerprint']})")
+        print(f"  {ANCHOR_MEANING}")
+        return 0
+    print("  completeness NOT checked: the attestation log was not used as an anchor",
+          file=sys.stderr)
+    for reason in anchor_choice.reasons:
+        print(f"  • {reason}", file=sys.stderr)
     return 1
 
 
@@ -394,6 +425,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_register_cmd)
 
     ve = sub.add_parser("verify", help="verify the evidence chain")
+    ve.add_argument("--attestations", type=Path, default=None, metavar="LOG",
+                    help="also check completeness: compare the ledger with the newest "
+                         "server-read head in this attestation log, but only if every "
+                         "record verifies against --public-key (exit 1 if it cannot)")
+    ve.add_argument("--public-key", type=Path, default=None, metavar="PEM",
+                    help="the signer's public key, obtained outside the log")
     ve.set_defaults(func=cmd_verify)
 
     e = sub.add_parser("export", help="export a verifiable bundle")
