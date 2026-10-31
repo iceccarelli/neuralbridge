@@ -34,6 +34,11 @@ What the watch does with a candidate
   latest observation of a series was REJECTED, that lacks a source the watch was told to
   read, or that holds payloads which cannot be re-read, degrades the run (exit 2) with the
   reason. Data from older accepted observations is still assessed, and labelled.
+* **Staleness (optional).** With ``max_age_hours`` on the subscription, each selected source's
+  newest ACCEPTED observation must have been retrieved within that many hours of the run's
+  clock (the recorded ``retrieved_at``, never the feed's own stamp); otherwise, or with no
+  accepted observation, the feed is ``stale`` (DEGRADED). Without it, the run says that age
+  was NOT checked. A rejected latest observation keeps status ``rejected_latest``.
 * **Empty fleet.** As for feeds: nothing assessed, nothing cleared - ``not_assessed``,
   degraded.
 """
@@ -42,10 +47,12 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..core.errors import AssuranceError
+from ..core.identity import format_utc, parse_utc, utc_now
 from ..fleet.impact import ImpactReport, assess_impact
 from ..fleet.registry import Fleet
 from ..intel.store import IntelStore
@@ -130,9 +137,49 @@ def _enrichment_for(cand: Candidate, report: IntelReport,
     return out
 
 
+def _staleness(sub: IntelSubscription, mine: Sequence[Any], now: datetime) -> list[str]:
+    """One problem per selected source whose newest ACCEPTED observation is too old or absent.
+
+    Age is the run's clock minus the observation's recorded ``retrieved_at`` (when the
+    store fetched or ingested it). The feed's own self-declared stamp is never the clock:
+    a stale mirror can carry a fresh date. Only checked when the subscription sets
+    ``max_age_hours``.
+    """
+    limit = sub.max_age_hours
+    if limit is None:
+        return []
+    out: list[str] = []
+    for name in sub.sources:
+        source = INTEL_SOURCES[name]
+        accepted = [o for o in mine if o.source == source and o.accepted]
+        if not accepted:
+            out.append(
+                f"STALE: source '{name}' has no accepted observation in the store, so its "
+                f"age cannot be established against the {limit:g} h limit.")
+            continue
+        newest = max(accepted, key=lambda o: o.seq)
+        try:
+            age_h = (now - parse_utc(newest.retrieved_at)).total_seconds() / 3600
+        except ValueError:
+            out.append(f"STALE: source '{name}': the recorded retrieval time "
+                       f"{newest.retrieved_at!r} of observation #{newest.seq} cannot be read, "
+                       "so its age cannot be established.")
+            continue
+        if age_h < 0:
+            out.append(
+                f"STALE: source '{name}': last accepted retrieval {newest.retrieved_at} is "
+                f"after this run's clock ({format_utc(now)}); its age cannot be established.")
+        elif age_h > limit:
+            out.append(
+                f"STALE: source '{name}' was last accepted (retrieved) at "
+                f"{newest.retrieved_at}, {age_h:.1f} h before this run; the limit is "
+                f"{limit:g} h. A refresh may have stopped; what is read below is that old.")
+    return out
+
+
 def _assess_store(
     sub: IntelSubscription, store: IntelStore, fleet: Fleet,
-    seen: dict[str, str], seen_hashes: dict[str, str],
+    seen: dict[str, str], seen_hashes: dict[str, str], now: datetime,
 ) -> tuple[FeedOutcome, list[AdvisoryFinding], list[str]]:
     selected = set(sub.source_ids)
     caveats: list[str] = []
@@ -163,8 +210,12 @@ def _assess_store(
     for s in absent:
         problems.append(f"no observation of source '{s}' has been recorded, though this "
                         "watch was told to read it.")
+    stale = _staleness(sub, mine, now)
+    problems.extend(stale)
     if rejected:
         status = "rejected_latest"
+    elif stale:
+        status = "stale"
     elif absent or not mine:
         status = "incomplete"
 
@@ -276,20 +327,37 @@ def check_intel(
     subscriptions: Sequence[IntelSubscription], fleet: Fleet, *,
     previously_seen: dict[str, str] | None = None,
     previous_hashes: dict[str, str] | None = None,
+    now: datetime | None = None,
 ) -> AdvisoryPass:
-    """Read every subscribed intel store, offline, and say what is new for this fleet."""
+    """Read every subscribed intel store, offline, and say what is new for this fleet.
+
+    ``now`` is the run's clock (the runner passes its own, so a run is deterministic); it is
+    used only to judge staleness, and only for subscriptions that set ``max_age_hours``.
+    """
+    clock = now if now is not None else utc_now()
     seen = {k: v for k, v in (previously_seen or {}).items() if v != "not_assessed"}
     hashes = dict(previous_hashes or {})
     outcomes: list[FeedOutcome] = []
     findings: list[AdvisoryFinding] = []
     caveats: list[str] = []
     for sub in subscriptions:
+        if sub.max_age_hours is None:
+            caveats.append(
+                f"{sub.supplier_id}: the age of the intel store was NOT checked (no "
+                "max_age_hours is set). A refresh job that silently stopped looks the same "
+                "as a quiet week.")
+        else:
+            caveats.append(
+                f"{sub.supplier_id}: store age is the run's clock minus the recorded "
+                "retrieval time of each selected source's newest accepted observation "
+                f"(limit {sub.max_age_hours:g} h). A recent retrieval says the store was "
+                "refreshed, not that the source had nothing newer.")
         store, failure = _open(sub)
         if failure is not None or store is None:
             assert failure is not None
             outcomes.append(failure)
             continue
-        outcome, found, notes = _assess_store(sub, store, fleet, seen, hashes)
+        outcome, found, notes = _assess_store(sub, store, fleet, seen, hashes, clock)
         outcomes.append(outcome)
         findings.extend(found)
         caveats.extend(notes)

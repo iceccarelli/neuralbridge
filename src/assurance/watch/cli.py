@@ -3,6 +3,7 @@
     run     one pass over every target: collect, compare, seal what moved
     status  what the last run found, without looking again
     push    OPT-IN: report the latest run to your own hosted ledger
+    open-case  a NAMED PERSON opens a case from a public-intel finding (never decides)
 
 ``run`` and ``status`` never touch the network. ``push`` is the one command here
 that can, only when you give it an explicit ``--api-url`` and the name of an
@@ -98,6 +99,27 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--retry-wait", type=float, default=1.0)
     h.add_argument("--max-body-bytes", type=int, default=900_000,
                    help="split the report into requests no larger than this")
+
+    o = verbs.add_parser(
+        "open-case", allow_abbrev=False,
+        help="a named person opens a case from a public-intel finding",
+        description="Re-derive an intel finding from the watch's local intel store and open "
+                    "a case for it in the ledger, as a NAMED PERSON. Reads the store from "
+                    "disk (no network). Refuses an automation/service/empty name, an id "
+                    "that is not a current finding, and a CSAF-derived candidate without "
+                    "--accept-unsigned and --reason. Never closes, decides or waives "
+                    "anything. Exit 0 opened or already open, 1 refused (reason printed), "
+                    "2 usage or I/O. Re-running writes nothing new.")
+    o.add_argument("--config", required=True, type=Path)
+    o.add_argument("--ledger", required=True, type=Path)
+    o.add_argument("--advisory-id", required=True)
+    o.add_argument("--actor", required=True, help="the person's name")
+    o.add_argument("--role", required=True, help="the person's role, as free text")
+    o.add_argument("--accept-unsigned", action="store_true",
+                   help="a CSAF-derived candidate is unsigned: the person accepts that")
+    o.add_argument("--reason", default="",
+                   help="what you checked, against what (required with --accept-unsigned)")
+    o.add_argument("--json", action="store_true")
 
     return p
 
@@ -240,6 +262,49 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return _exit_code(str(body.get("verdict", "degraded")))
 
 
+def _cmd_open_case(args: argparse.Namespace) -> int:
+    from assurance.change.service import CaseTransitionError
+    from assurance.watch.open_case import (
+        NEXT_STEPS,
+        NOT_ESTABLISHED,
+        OpenCaseRefusedError,
+        open_case,
+    )
+
+    config = WatchConfig.from_json(args.config)
+    ledger = EvidenceLedger.open_existing(args.ledger)
+    try:
+        res = open_case(config, ledger, args.advisory_id, actor_name=args.actor,
+                        role=args.role, accept_unsigned=args.accept_unsigned,
+                        reason=args.reason)
+    except (OpenCaseRefusedError, CaseTransitionError) as exc:
+        print(f"refused: {neutralise(str(exc))}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({
+            "case_id": res.case_id, "outcome": res.outcome, "status": res.status,
+            "trust_state": res.trust_state, "recorded_trust": res.recorded_trust,
+            "machines": list(res.machines), "accepted_by": res.accepted_by,
+            "not_established": list(NOT_ESTABLISHED), "next_steps": list(NEXT_STEPS)},
+            indent=2, sort_keys=True))
+        return 0
+    verb = "opened" if res.outcome == "opened" else "already open (nothing written)"
+    print(f"case {res.case_id}: {verb}, status {res.status}")
+    print(f"  advisory:    {neutralise(args.advisory_id)}")
+    print(f"  machines:    {neutralise(', '.join(res.machines))}")
+    print(f"  accepted by: {neutralise(res.accepted_by)}")
+    print(f"  trust state: {res.trust_state}"
+          + (f" (case records: {neutralise(res.recorded_trust)})"
+             if res.recorded_trust != res.trust_state else ""))
+    print("  NOT established:")
+    for line in NOT_ESTABLISHED:
+        print(f"    - {line}")
+    print("  next, by a person:")
+    for line in NEXT_STEPS:
+        print(f"    - {line.replace('CASE_ID', res.case_id).replace('LEDGER', str(args.ledger))}")
+    return 0
+
+
 def _cmd_push(args: argparse.Namespace) -> int:
     # Imported here and nowhere else: `watch run` and the kit never load it.
     from assurance.watch.push import main_push
@@ -249,7 +314,8 @@ def _cmd_push(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {"run": _cmd_run, "status": _cmd_status, "push": _cmd_push}
+    handlers = {"run": _cmd_run, "status": _cmd_status, "push": _cmd_push,
+                "open-case": _cmd_open_case}
     try:
         return handlers[args.command](args)
     except FileNotFoundError as exc:
