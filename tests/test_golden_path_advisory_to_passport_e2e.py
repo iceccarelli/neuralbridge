@@ -283,6 +283,10 @@ class TestAdvisoryToPassport:
         assert w.ok("GET", "/v1/change/cases")["cases"] == []
 
         ledger = live_api.tenant_ledger(w.account_id)
+        # Manifests are stamped to the second, and a re-verification manifest is refused when it
+        # predates the case's trigger (step 8). Without this gap the sealed manifest and the case
+        # can share a second on a fast machine and the refusal never fires (intermittent failure).
+        time.sleep(1.1)
         opened = w.assess(adv).json()
         assert opened["opened"] is True and opened["verdict"] == "exposed"
         case = opened["case"]

@@ -334,7 +334,8 @@ def _import_banner(impact: ImpactReport) -> str:
 
 def _impact_block(impact: ImpactReport) -> str:
     head = {
-        "clear": ("", "No machine in this fleet matches this advisory."),
+        "clear": ("", "No machine in this fleet matches this advisory." if impact.machines_in_fleet
+                  else "No machine is enrolled, so nothing was assessed. This is not a clear."),
         "exposed": ("bad", "Standing safety evidence is now in question."),
         "needs_review": ("warn", "Matches found; none had standing evidence."),
     }[impact.verdict]

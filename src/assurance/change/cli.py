@@ -275,9 +275,10 @@ def _cmd_assess_advisory(args: argparse.Namespace) -> int:
 
 
 def _cmd_assess_intervention(args: argparse.Namespace) -> int:
+    store = _store(args.ledger)        # a missing ledger is an error before anything else
     manifest = _manifest(args.manifest)
     chosen, case = assess_recorded_intervention(
-        _store(args.ledger), manifest, args.intervention_id,
+        store, manifest, args.intervention_id,
         actor=_actor(args.actor, "watch"))
     if case is None:
         print(f"{chosen.intervention_id} invalidated no verified function: "
