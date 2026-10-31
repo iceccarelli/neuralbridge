@@ -54,8 +54,8 @@ class AdvisoryIn(BaseModel):
     advisory: dict[str, Any]
 
 
-class SignedAdvisoryIn(BaseModel):
-    """A supplier feed to assess against the fleet, under the account's pinned keys."""
+class SignedFeedIn(BaseModel):
+    """The feed fields shared by every route that judges a feed under the account's pins."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +63,11 @@ class SignedAdvisoryIn(BaseModel):
     hosted_feed_id: str = Field(default="", max_length=128)
     expect_supplier: str = Field(default="", max_length=200)
     candidate_public_key_pem: str = Field(default="", max_length=4096)
+
+
+class SignedAdvisoryIn(SignedFeedIn):
+    """A supplier feed to assess against the fleet, under the account's pinned keys."""
+
     #: Limit to these advisory ids. Empty: every standing advisory.
     advisory_ids: list[str] = []
 
@@ -253,6 +258,32 @@ _BARE_ADVISORY = {
 }
 
 
+def evaluate_signed_feed(
+    body: SignedFeedIn, principal: Principal, register: Any,
+) -> tuple[list[Any], Any, str]:
+    """Judge a feed under the *account's* pinned keys: ``(records, trust, error)``.
+
+    The one place a signed feed is evaluated for a route: the fleet fan-out and the case
+    route both call it, so they can never disagree about trust. An unreadable feed returns
+    ``error`` (and no trust). The operator's shared ledger holds no pins, so an operator
+    sees every feed as untrusted.
+    """
+    from assurance.api.supplier_routes import EvaluateIn, _candidate, load_feed_records
+
+    account = principal.account
+    store = (SupplierTrustStore(register.ledger)
+             if account is not None and account.id != "operator" else None)
+    records, error = load_feed_records(EvaluateIn(
+        feed=body.feed, hosted_feed_id=body.hosted_feed_id,
+        expect_supplier=body.expect_supplier,
+        candidate_public_key_pem=body.candidate_public_key_pem))
+    if error:
+        return [], None, error
+    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
+                          candidate_key=_candidate(body.candidate_public_key_pem))
+    return records, trust, ""
+
+
 @fleet_router.post(
     "/advisory/signed",
     summary="Assess a signed supplier feed against your fleet, with its trust state",
@@ -275,25 +306,12 @@ def advisory_impact_signed(
     proves who signed the bytes, not that the advisory is correct, complete or
     timely.
     """
-    from assurance.api.supplier_routes import (
-        EvaluateIn,
-        _candidate,
-        load_feed_records,
-        unreadable_payload,
-    )
+    from assurance.api.supplier_routes import unreadable_payload
 
-    account = principal.account
-    store = (SupplierTrustStore(register.ledger)
-             if account is not None and account.id != "operator" else None)
-    records, error = load_feed_records(EvaluateIn(
-        feed=body.feed, hosted_feed_id=body.hosted_feed_id,
-        expect_supplier=body.expect_supplier,
-        candidate_public_key_pem=body.candidate_public_key_pem))
-    if error:
+    records, trust, error = evaluate_signed_feed(body, principal, register)
+    if error or trust is None:
         return {"trust": unreadable_payload(error), "advisories": [],
                 "inspect_only": True, "trust_statement": TRUST_STATEMENT}
-    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
-                          candidate_key=_candidate(body.candidate_public_key_pem))
     first = {r.advisory_id: r for r in records if not r.is_withdrawal}
     fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
     out: list[dict[str, Any]] = []

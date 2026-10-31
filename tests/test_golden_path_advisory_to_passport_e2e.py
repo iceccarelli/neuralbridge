@@ -150,6 +150,13 @@ class World:
             body["actor"] = actor
         return self.call("POST", "/v1/change/assess/advisory", body=body)
 
+    def assess_signed(self, feed_text: str, advisory_id: str, actor: str = "",
+                      headers: dict[str, str] | None = None, **extra: Any) -> httpx.Response:
+        body = {"feed": feed_text, "advisory_id": advisory_id, **extra}
+        if actor:
+            body["actor"] = actor
+        return self.call("POST", "/v1/change/assess/advisory/signed", headers, body)
+
     def case(self, case_id: str) -> dict[str, Any]:
         return self.ok("GET", f"/v1/change/cases/{case_id}")
 
@@ -191,6 +198,8 @@ class TestAdvisoryToPassport:
             ("POST", "/v1/machinery/manifest", {"manifest": manifest, "actor": "m.keller"}),
             ("POST", "/v1/fleet/advisory/signed", {"feed": feed_text}),
             ("POST", "/v1/change/assess/advisory", {"advisory": adv.to_dict(), "actor": PERSON}),
+            ("POST", "/v1/change/assess/advisory/signed",
+             {"feed": feed_text, "advisory_id": adv.advisory_id}),
             ("POST", "/v1/machinery/intervention", {"intervention": {}}),
             ("POST", "/v1/machinery/coverage", {"manifest": manifest}),
             ("POST", "/v1/machinery/passport", {"manifest": manifest, "actor": PERSON}),
@@ -565,15 +574,6 @@ class TestUnsignedAndUntrusted:
         assert out["case"]["provenance"]["advisory_trust"] == "unauthenticated_input"
         assert any("no signature was checked" in c for c in out["case"]["checks_skipped"])
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "GAP, found by this test: /v1/fleet/advisory/signed evaluates a signed+pinned feed and "
-        "says automated_consequences_permitted=true (and always returns case_opened=''), but "
-        "the only route that opens a case, POST /v1/change/assess/advisory, takes a bare "
-        "advisory body and cannot receive the signed record. The case it opens therefore says "
-        "'nobody has authenticated ... no signature was checked' (trust_state "
-        "unauthenticated_input) about an advisory this account already verified under a pinned "
-        "key, and still demands a named person. The honest direction (never over-trusting) is "
-        "preserved, but the signed leg of the path does not reach the case."))
     def test_a_pinned_signed_advisory_reaches_the_case_with_its_trust(self, world, tmp_path):
         w = world
         w.seal_manifest()
@@ -581,11 +581,19 @@ class TestUnsignedAndUntrusted:
         text = signed_feed(tmp_path, adv, w.supplier_key)
         w.pin_supplier()
         assert w.signed(text)["advisories"][0]["automated_consequences_permitted"] is True
-        reply = w.assess(adv, actor="")      # no named person: the feed itself is trusted
+        reply = w.assess_signed(text, "ROBO-SIGNED-1")   # no named person: the feed is trusted
         assert reply.status_code == 200, reply.text[:200]
         out = reply.json()
         assert out["opened"] is True
         assert out["advisory_trust"]["trust_basis"] == "pinned_key_policy"
+        assert out["advisory_trust"]["automated_consequences_permitted"] is True
+        assert out["case"]["provenance"].get("advisory_trust") != "unauthenticated_input"
+        assert not any("no signature was checked" in c for c in out["case"]["checks_skipped"])
+        # it never closes anything, and re-delivery is the same case
+        assert out["case"]["status"] != "closed"
+        again = w.assess_signed(text, "ROBO-SIGNED-1").json()
+        assert again["case"]["case_id"] == out["case"]["case_id"]
+        assert len(w.ok("GET", "/v1/change/cases")["cases"]) == 1
 
 
 class TestNotInTheFleet:

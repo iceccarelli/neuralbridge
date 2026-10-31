@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Machine, get_register
+from assurance.api.fleet_routes import SignedFeedIn, evaluate_signed_feed
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -344,6 +345,66 @@ def assess_advisory_route(
             "clear_is_complete": report.clear_is_complete,
             "advisory_trust": report.provenance,
             "advisory_import": report.advisory_import}
+
+
+class SignedAssessIn(SignedFeedIn):
+    """A signed supplier feed, and the one advisory in it to open a case from."""
+
+    advisory_id: str = Field(min_length=1, max_length=200)
+    accept_unsigned: bool = False
+    reason: str = Field(default="", max_length=500)
+    actor: str = Field(default="", max_length=200)
+
+
+@change_router.post("/assess/advisory/signed",
+                    summary="Turn one advisory of a signed supplier feed into a case, with its trust")
+def assess_advisory_signed_route(
+    body: SignedAssessIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Same case as ``/assess/advisory``, but the advisory arrives with its signature.
+
+    The feed is judged by the same function as ``/v1/fleet/advisory/signed``, under the
+    account's own pinned keys. Only an advisory whose policy is satisfied by a *pinned*
+    key and valid signatures opens without a named person, and the case records that
+    basis. Anything else (unknown key, bad signature, unreadable, a translation) is
+    handled exactly as the bare route handles it: a named person is required. Nothing
+    here closes a case; closing stays a named decider's act.
+    """
+    records, trust, error = evaluate_signed_feed(body, principal, register)
+    if error or trust is None:
+        raise _bad(AssuranceError(f"the feed cannot be read: {error}"), "feed")
+    first = {r.advisory_id: r for r in records if not r.is_withdrawal}
+    stands = any(a["advisory_id"] == body.advisory_id for a in trust.advisories)
+    if body.advisory_id not in first or not stands:
+        raise HTTPException(status_code=404, detail={
+            "error": "advisory_not_in_feed",
+            "detail": f"advisory {body.advisory_id!r} is not a standing advisory in this feed."})
+    try:
+        advisory = first[body.advisory_id].component()
+    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+        raise _bad(exc, "advisory") from exc
+    provenance = trust.provenance_for(body.advisory_id)
+    if provenance.get("trust_basis") != "pinned_key_policy":
+        # Only a pinned key vouches for an advisory without a person. Any other basis
+        # (a manual override, nothing) is handled as an unauthenticated input.
+        provenance = {**provenance, "automated_consequences_permitted": False,
+                      "inspect_only": True}
+    fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
+    report = assess_impact(advisory, fleet, provenance=provenance)
+    store = CaseStore(register.ledger)
+    try:
+        case = assess_advisory(
+            store, report,
+            actor=_actor(body.actor, "fleet", principal, human=body.accept_unsigned),
+            accept_unsigned=body.accept_unsigned, reason=body.reason)
+    except _REFUSALS as exc:
+        raise _refused(exc) from exc
+    return {"opened": case is not None, "case": case.to_dict() if case else None,
+            "verdict": report.verdict, "incomplete": report.incomplete,
+            "advisory_trust": report.provenance,
+            "advisory_import": report.advisory_import,
+            "feed_trust": trust.to_dict()}
 
 
 @change_router.post("/assess/intervention", summary="Did a recorded intervention invalidate evidence?")
