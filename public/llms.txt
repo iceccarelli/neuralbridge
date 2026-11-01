@@ -66,6 +66,11 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/applications
 - CLI (python -m assurance, the real command tree):
   https://neuralbridge.io/cli
+- Capabilities by surface (118 capabilities over 88 HTTP routes, 98 CLI commands in
+  18 domains and 43 MCP tools; each capability with its CLI, API and MCP surfaces, and
+  for every surface it lacks whether that is by design or planned; generated from the
+  code, not written by hand): https://neuralbridge.io/docs/capabilities and, as JSON,
+  https://neuralbridge.io/capabilities.json
 - Connectors: https://neuralbridge.io/connectors/cursor and
   https://neuralbridge.io/connectors/mcp
 - Browser REST console (paste an API key, call real /v1 routes):
@@ -87,6 +92,16 @@ have independently confirmed the live API responds.
   takes real money; it does not probe a live service):
   https://neuralbridge.io/status
 - Privacy: https://neuralbridge.io/privacy
+
+## Public-source intelligence
+
+`assurance intel` records CISA KEV, NVD, EPSS and CSAF files as provenance-stamped,
+append-only observations. Fetching a feed (`intel refresh --live`) and recording a file
+(`intel ingest`) are operator commands on the operator's own machine. The hosted
+`/v1/intel/*` routes and the four `intel_*` MCP tools only read that store: they answer
+503 until the operator sets `ASSURANCE_INTEL_STORE`, never an empty list. A CVE no recorded
+source mentions is reported unknown, never clear, and absence from KEV is not evidence that
+a vulnerability is not exploited. Nothing is deployed today.
 
 ## For AI agents evaluating or integrating with this product
 

@@ -21,6 +21,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${SITE_URL}/ai`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/connectors/cursor`, changeFrequency: 'monthly', priority: 0.6 },
     { url: `${SITE_URL}/connectors/mcp`, changeFrequency: 'monthly', priority: 0.6 },
+    { url: `${SITE_URL}/docs`, changeFrequency: 'weekly', priority: 0.6 },
+    { url: `${SITE_URL}/docs/capabilities`, changeFrequency: 'weekly', priority: 0.6 },
     { url: `${SITE_URL}/roadmap`, changeFrequency: 'monthly', priority: 0.5 },
     { url: `${SITE_URL}/security`, changeFrequency: 'monthly', priority: 0.4 },
     ...SOLUTIONS.map((s) => ({
@@ -33,7 +35,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       url: `${SITE_URL}/docs${slug.length ? `/${slug.join('/')}` : ''}`,
 
       changeFrequency: 'weekly' as const,
-      priority: slug.length === 0 ? 0.6 : 0.5,
+      priority: 0.5,
     })),
   ];
 

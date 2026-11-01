@@ -1,0 +1,22 @@
+# EXAMPLE ONLY. Nothing here is installed or enabled by this repository.
+# Install by hand with `crontab -e` as the unprivileged service user, after
+# `python -m assurance ops check --config /etc/assurance/ops.json` passes.
+#
+# One cycle a day at 03:17 local time (pick your own minute; avoid :00).
+# `--live` lets the intel refresh use the network, and only if the config also
+# says "live": true. Remove it to run fully offline: the refresh is then recorded
+# as "not refreshed" and a watch with max_age_hours will report the store stale.
+#
+# Exit codes of `ops cycle`: 0 all ok, 1 flagged for a person (not a failure),
+# 2 degraded/failed/could not start. Cron mails any output; the record is the
+# audit trail (`ops status` reads it). The exit-2 branch is the one to alert on.
+#
+# Environment: secrets are read from the environment by name (see ops.example.json).
+# Put them in a file only the service user can read, and source it; never in this line.
+
+MAILTO=ops-oncall@example.invalid
+17 3 * * *  . /etc/assurance/ops.env && /opt/assurance/venv/bin/python -m assurance ops cycle --config /etc/assurance/ops.json --live >/dev/null; [ $? -ge 2 ] && echo "ops cycle degraded or failed; run: python -m assurance ops status --config /etc/assurance/ops.json"
+
+# A separate, independent staleness check: a dead scheduler writes no record, so only a
+# reader that runs elsewhere can notice. Exit 2 = stale, no record, or last cycle degraded.
+47 9 * * *  . /etc/assurance/ops.env && /opt/assurance/venv/bin/python -m assurance ops status --config /etc/assurance/ops.json >/dev/null || echo "ops status is not healthy"

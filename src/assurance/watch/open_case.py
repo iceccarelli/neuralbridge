@@ -20,6 +20,7 @@ It reads the intel store from disk and opens no socket.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from assurance.change.service import (
     advisory_case_id,
@@ -29,12 +30,15 @@ from assurance.change.service import (
 from assurance.change.store import CaseStore
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
+from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.fleet.impact import ImpactReport
 from assurance.fleet.registry import Fleet
-from assurance.watch.config import WatchConfig
-from assurance.watch.intel_source import INTEL_TRUST_STATE, impact_for_case
+from assurance.watch.config import IntelSubscription, WatchConfig
+from assurance.watch.intel_source import INTEL_TRUST_STATE, impact_for_case, store_ages
 
-__all__ = ["OpenCaseRefusedError", "OpenCaseResult", "NOT_ESTABLISHED", "NEXT_STEPS", "open_case"]
+__all__ = ["OpenCaseRefusedError", "OpenCaseResult", "NOT_ESTABLISHED", "NEXT_STEPS", "open_case",
+           "open_case_from_report", "role_problem"]
 
 
 class OpenCaseRefusedError(AssuranceError):
@@ -71,6 +75,39 @@ class OpenCaseResult:
     machines: tuple[str, ...]
     accepted_by: str
     checks_skipped: tuple[str, ...]
+    #: One line per selected source of the store this finding was read from that is older
+    #: than the subscription's ``max_age_hours`` (or has no accepted observation). Empty when
+    #: fresh or when age is not checked. A warning, never a refusal: a person may knowingly
+    #: open a case from older data.
+    intel_age_warnings: tuple[str, ...] = ()
+
+
+def _age_warnings(sub: IntelSubscription, now: datetime) -> tuple[str, ...]:
+    ages = store_ages(sub, now)
+    out = []
+    for a in ages.ages:
+        if a.ok:
+            continue
+        if a.state == "stale":
+            out.append(
+                f"the intel store is STALE: source '{a.source}' was last accepted at "
+                f"{a.retrieved_at}, {a.age_hours:.1f} h ago; the limit is {a.limit_hours:g} h. "
+                "The case was opened from data that old.")
+        else:
+            out.append(a.message.replace("STALE: ", "the intel store is STALE: ", 1)
+                       + " The case was opened from data of unknown age.")
+    return tuple(out)
+
+
+def role_problem(role: str) -> str:
+    """Why ``role`` cannot be recorded as a person's declared role, or ``""``."""
+    if not role.strip():
+        return "opening a case needs the person's role"
+    if "=" in role or ";" in role:
+        # The change service reads `attribution=...` tokens out of the role string; a
+        # caller-typed role must not be able to imitate one.
+        return "the role is free text and may not contain '=' or ';'"
+    return ""
 
 
 def _actor(name: str, role: str) -> Actor:
@@ -84,9 +121,7 @@ def _actor(name: str, role: str) -> Actor:
     if not role.strip():
         raise OpenCaseRefusedError("opening a case needs the person's role (--role). "
                               "Nothing was opened.")
-    if "=" in role or ";" in role:
-        # The change service reads `attribution=...` tokens out of the role string; a
-        # caller-typed role must not be able to imitate one.
+    if role_problem(role):
         raise OpenCaseRefusedError("the role is free text and may not contain '=' or ';'. "
                               "Nothing was opened.")
     return Actor(identifier=name.strip(), role=role.strip(), kind="person")
@@ -95,14 +130,20 @@ def _actor(name: str, role: str) -> Actor:
 def open_case(
     config: WatchConfig, ledger: EvidenceLedger, advisory_id: str, *,
     actor_name: str, role: str, accept_unsigned: bool = False, reason: str = "",
+    now: datetime | None = None,
 ) -> OpenCaseResult:
+    # `now` is for the age WARNING only (library callers / tests); the CLI never sets it,
+    # because this command writes a case and its record must not carry a forged clock.
+    now = now or utc_now()
     actor = _actor(actor_name, role)
     fleet = Fleet.from_ledger(ledger)
     report = None
+    used = None
     last: AssuranceError | None = None
     for sub in config.intel:
         try:
             report = impact_for_case(sub, advisory_id, fleet)
+            used = sub
             break
         except AssuranceError as exc:
             last = exc
@@ -111,12 +152,28 @@ def open_case(
         raise OpenCaseRefusedError(
             f"{advisory_id!r} is not a current finding of this watch's intel store(s): "
             f"{why}. Nothing was opened.")
+    return open_case_from_report(
+        ledger, report, actor, accept_unsigned=accept_unsigned, reason=reason,
+        age_warnings=_age_warnings(used, now) if used is not None else ())
+
+
+def open_case_from_report(
+    ledger: EvidenceLedger, report: ImpactReport, actor: Actor, *,
+    accept_unsigned: bool = False, reason: str = "",
+    age_warnings: tuple[str, ...] = (),
+) -> OpenCaseResult:
+    """Open (or return) the case for an already-derived inspect-only report.
+
+    The one domain step behind the CLI and ``POST /v1/change/assess/advisory/intel``: refuses
+    a report that touches no machine, never reopens or alters a settled case, never
+    re-attributes a case someone else already accepted, and otherwise lets
+    :func:`assess_advisory` (the only writer) apply the named-person / unsigned-import rules.
+    """
     if report.verdict == "clear":
         raise OpenCaseRefusedError(
-            f"{advisory_id!r} matches no machine in this ledger's fleet (verdict "
+            f"{report.advisory_id!r} matches no machine in this ledger's fleet (verdict "
             f"{report.verdict!r}), so it is not a current finding; a case is opened only for "
             "an advisory that touches the fleet. Nothing was opened.")
-
     store = CaseStore(ledger)
     case_id = advisory_case_id(report)
     existing = store.get(case_id)
@@ -136,6 +193,7 @@ def open_case(
     if case is None:       # defensive: 'clear' was refused above
         raise OpenCaseRefusedError("no case applies to this advisory. Nothing was opened.")
     return OpenCaseResult(
+        intel_age_warnings=age_warnings,
         case_id=case.case_id, outcome="already_open" if existing is not None else "opened",
         status=case.status.value, trust_state=INTEL_TRUST_STATE,
         recorded_trust=str(case.provenance.get("advisory_trust", "")),

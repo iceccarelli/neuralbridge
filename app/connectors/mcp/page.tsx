@@ -4,6 +4,7 @@ import { IMAGES } from '../../lib/images';
 import { ROUTES, TIER_LABEL, type Tier } from '../../lib/routes';
 import RotatingImage from '../../components/RotatingImage';
 import ImageryNote from '../../components/ImageryNote';
+import { mcpCellForRoute } from '../../lib/siteCapabilities';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -70,6 +71,19 @@ const HUMAN_ONLY = new Set([
   'POST /v1/change/cases/{case_id}/waive-reverification',
 ]);
 
+// A route with no tool says why, from the capability catalogue (public/capabilities.json): a decision
+// ("by design") or a known gap ("planned"). A route the catalogue does not know is shown as unknown,
+// never as a gap that was meant.
+function McpGap({ route }: { route: string }) {
+  const cell = mcpCellForRoute(route);
+  if (!cell || cell.status === 'available') return <span className="status-pill">No tool listed</span>;
+  return (
+    <span className={`status-pill ${cell.status === 'planned' ? 'evolving' : ''}`} title={cell.reason}>
+      {cell.status === 'planned' ? 'Planned, no tool yet' : 'No tool, by design'}
+    </span>
+  );
+}
+
 export const metadata: Metadata = {
   title: 'MCP connector | Industrial Autonomous Assurance',
   description: 'Two installable MCP servers — assurance-mcp for the Assurance API, neuralbridge-ai-mcp for the /ai control plane — pip install, no fake responses.',
@@ -127,7 +141,7 @@ export default function McpConnectorPage() {
         <div className="shell" style={{ maxWidth: '72ch' }}>
           <div className="section-head">
             <span className="eyebrow">Install</span>
-            <h2>Three commands</h2>
+            <h2>Install and run</h2>
           </div>
           <pre className="code-panel">{`pip install -e '.[assurance-mcp]'
 
@@ -224,6 +238,14 @@ neuralbridge-ai-mcp`}</pre>
               HTTP API. Each write takes an <code>actor</code> name; it is asserted by the caller and recorded, not
               proven — the API refuses a blank one but does not check who is behind the key.
             </p>
+            <p>
+              <strong>Public-source intelligence is read-only here.</strong> The{' '}
+              {MCP_TOOLS.filter((t) => t.name.startsWith('intel_')).length} <code>intel_*</code> tools read a store the
+              operator builds with the CLI. They answer 503 until the operator sets <code>ASSURANCE_INTEL_STORE</code>,
+              and nothing in this server fetches a feed or records an observation; those are operator commands. Which
+              capabilities have no tool, and whether that is by design or planned, is on{' '}
+              <a href="/docs/capabilities">the capabilities page</a>.
+            </p>
           </div>
           <div className="status-table-wrap">
             <table className="status-table">
@@ -248,7 +270,7 @@ neuralbridge-ai-mcp`}</pre>
                         ) : HUMAN_ONLY.has(key) ? (
                           <span className="status-pill">Human-only, no tool by design</span>
                         ) : (
-                          <span className="status-pill">Not yet a tool</span>
+                          <McpGap route={key} />
                         )}
                       </td>
                     </tr>

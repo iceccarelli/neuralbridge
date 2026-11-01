@@ -1,0 +1,27 @@
+{
+  "schema": "neuralbridge-ops/1",
+  "ops_id": "example-ops",
+  "data_dir": "/srv/assurance/data",
+  "record": "/var/lib/assurance-ops/cycles.jsonl",
+  "backup_dir": "/srv/assurance/backups",
+  "max_cycle_age_hours": 26,
+  "min_free_disk_mb": 2048,
+  "intel": {
+    "live": false,
+    "store": "/srv/assurance/intel/intel.db",
+    "timeout_s": 30,
+    "sources": [
+      {"source": "kev"},
+      {"source": "nvd", "cves": ["CVE-2026-0001"], "api_key_env": "NVD_API_KEY"},
+      {"source": "epss", "cves": ["CVE-2026-0001"]}
+    ]
+  },
+  "watch": [
+    {"config": "/srv/assurance/watch/watch.json", "ledger": "/srv/assurance/watch/evidence.db"}
+  ],
+  "attest": {
+    "key": "/etc/assurance/keys/anchor.pem",
+    "passphrase_env": "ASSURANCE_ATTEST_PASSPHRASE",
+    "max_age_hours": 24
+  }
+}

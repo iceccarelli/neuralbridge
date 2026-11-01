@@ -209,8 +209,11 @@ def parse_csaf(raw: bytes, max_bytes: int) -> ParsedFeed:
                    if isinstance(v, dict) and isinstance(v.get("cve"), str)
                    and CVE_ID.match(v["cve"].strip())})
     rid = str(head["id"]).strip()
+    tracking = {k: str(head.get(k, ""))[:200] for k in
+                ("id", "version", "initial_release_date", "current_release_date", "status")}
     return ParsedFeed("csaf", {rid: doc}, {rid: digest_record(doc)},
-                      str(head.get("current_release_date", "")), {"cves": cves})
+                      str(head.get("current_release_date", "")),
+                      {"cves": cves, "tracking": tracking})
 
 
 def parser_for(source_id: str) -> Callable[[bytes, int], ParsedFeed]:

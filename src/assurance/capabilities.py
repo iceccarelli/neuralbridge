@@ -92,6 +92,10 @@ _INTEL_FETCHING = ("fetching from KEV/NVD/EPSS is an operator act (`--live`, a n
                    "key from the operator's environment); the hosted routes never reach the "
                    "network and only read the store")
 
+_OPS = ("operator tooling a timer runs on the host: it works on the data volume, the signing key "
+        "and the backup directory, and it can reach the network only through the operator's own "
+        "`--live`; a request or a tool is not offered any of those")
+
 CAPABILITIES: tuple[Capability, ...] = (
     # --- Article 14: CRA vulnerability and incident reporting ---------------------------------
     _c("art14.signal", "Open a case with the first thing anyone heard",
@@ -184,6 +188,10 @@ CAPABILITIES: tuple[Capability, ...] = (
        "machinery enrol", "POST /v1/machinery/enrol",
        gaps={"mcp": _d("enrolment is a named person's declaration of identity; an agent is not "
                        "offered a way to make it (and it writes the ledger of record)")}),
+    _c("machinery.amend_enrolment", "Amend a machine's declared site or owner, as a new record",
+       "machinery amend-enrolment", "POST /v1/machinery/enrol/amend",
+       gaps={"mcp": _d("an amendment is a named person's declaration of identity; an agent is "
+                       "not offered a way to make it (and it writes the ledger of record)")}),
     _c("machinery.manifest", "Seal a safety software manifest",
        "machinery record-manifest", "POST /v1/machinery/manifest", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.intervention", "Seal an intervention record",
@@ -318,10 +326,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("watch.push", "Report the latest sealed run to your own hosted ledger (opt-in)",
        "watch push", "POST /v1/watch/report", gaps={"mcp": _d(_WRITE)}),
     _c("watch.open_case", "A named person opens a case from a public-intel finding",
-       "watch open-case",
-       gaps={"api": _p("the hosted route for a case opened from third-party content is "
-                       "`POST /v1/change/assess/advisory`; the intel-store form is offline"),
-             "mcp": _d("a case opened from third-party content is a named person's act; "
+       "watch open-case", "POST /v1/change/assess/advisory/intel",
+       gaps={"mcp": _d("a case opened from third-party content is a named person's act; "
                        "software drafts, people decide")}),
 
     # --- intel: public-source vulnerability intelligence (KEV, NVD, EPSS, CSAF) ---------------
@@ -336,6 +342,15 @@ CAPABILITIES: tuple[Capability, ...] = (
        ("intel_observation", "intel_cve")),
     _c("intel.candidates", "Advisory candidates the model can represent, plus CVE enrichment",
        "intel candidates", "GET /v1/intel/candidates", "intel_candidates"),
+
+    # --- ops: the unattended pipeline steps as one auditable cycle (operator tooling) ---------
+    _c("ops.cycle", "Run one operator cycle (intel refresh with --live, watch, anchor, backup "
+       "+ verify) and append its record",
+       "ops cycle", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
+    _c("ops.status", "The last cycle, its age and the human actions it left (stale -> exit 2)",
+       "ops status", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
+    _c("ops.check", "Preflight the ops config and host; lists what it does not check",
+       "ops check", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
 
     # --- billing: operator tooling for accounts provisioned outside Stripe ---------------------
     _c("billing.grant", "Create a manual-pilot account and print its API key once",

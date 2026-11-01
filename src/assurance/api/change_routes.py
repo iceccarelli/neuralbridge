@@ -15,7 +15,8 @@ looser parser for the same JSON shape.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import sqlite3
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,7 @@ from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, 
 from assurance.api.declared_actor import sanitise_declared_role
 from assurance.api.deps import Machine, get_register
 from assurance.api.fleet_routes import SignedFeedIn, evaluate_signed_feed
+from assurance.api.intel_routes import _open_store, _read_failed
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -56,6 +58,16 @@ from assurance.machinery.divergence import compare
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
+from assurance.watch.config import INTEL_SOURCES
+from assurance.watch.intel_source import impact_and_candidate_from_store
+from assurance.watch.open_case import (
+    NOT_ESTABLISHED as INTEL_CASE_NOT_ESTABLISHED,
+)
+from assurance.watch.open_case import (
+    OpenCaseRefusedError,
+    open_case_from_report,
+    role_problem,
+)
 
 __all__ = ["change_router"]
 
@@ -405,6 +417,87 @@ def assess_advisory_signed_route(
             "advisory_trust": report.provenance,
             "advisory_import": report.advisory_import,
             "feed_trust": trust.to_dict()}
+
+
+class IntelAssessIn(BaseModel):
+    """A named person asks to open a case from one public-intel candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    advisory_id: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="", max_length=200)
+    role: str = Field(min_length=1, max_length=200)
+    #: The override for a CSAF-derived (unsigned import) candidate; needs a reason too.
+    accept_unsigned: bool = False
+    reason: str = Field(default="", max_length=500)
+    #: Which recorded candidate sources to look in (never KEV/EPSS: they carry no versions).
+    sources: list[Literal["nvd", "csaf"]] = Field(default_factory=lambda: ["nvd", "csaf"],
+                                                  min_length=1, max_length=2)
+
+
+@change_router.post(
+    "/assess/advisory/intel",
+    summary="A named person opens a case from a public-intel (unauthenticated) finding")
+def assess_advisory_intel_route(
+    body: IntelAssessIn, principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """The hosted twin of ``assurance watch open-case``: same domain function, same rules.
+
+    Reads the operator's intel store read-only (503 ``no_intel_store_configured`` /
+    ``intel_store_unreadable``), re-derives the candidate for the CALLER'S fleet with the
+    watch's own matcher, and opens the case through
+    :func:`~assurance.change.service.assess_advisory` as an unauthenticated public-source,
+    inspect-only advisory: a named person is required, a CSAF-derived candidate needs
+    ``accept_unsigned`` with a reason and an operator key with the ``decider`` role, an
+    existing open case is returned untouched (never re-attributed), a settled case is never
+    reopened. Nothing is closed, decided, waived or advanced here, and no MCP tool calls it.
+    """
+    problem = role_problem(body.role)
+    if problem:
+        raise HTTPException(status_code=422, detail={"error": "invalid_role",
+                                                     "detail": problem + ". Nothing was opened."})
+    store = _open_store()
+    fleet = Fleet.from_ledger(register.ledger, recorder_trust=reader_recorder_trust())
+    source_ids = tuple(INTEL_SOURCES[s] for s in body.sources)
+    try:
+        report, candidate = impact_and_candidate_from_store(
+            store, body.advisory_id, fleet, source_ids)
+    except AssuranceError as exc:
+        if str(exc).startswith("no intel candidate"):
+            raise HTTPException(status_code=404, detail={
+                "error": "advisory_not_found",
+                "detail": f"{body.advisory_id!r} is not an advisory candidate in the recorded "
+                          "intel observations. Nothing was opened."}) from exc
+        raise _read_failed(exc) from exc
+    except (sqlite3.Error, OSError) as exc:
+        raise _read_failed(exc) from exc
+    if report.machines_in_fleet == 0:
+        raise HTTPException(status_code=409, detail={
+            "error": "nothing_assessed",
+            "detail": "this account's fleet has no machine with a sealed manifest, so nothing "
+                      "was assessed and nothing was cleared. Nothing was opened."})
+    try:
+        result = open_case_from_report(
+            register.ledger, report,
+            _actor(body.actor, "fleet", principal, human=body.accept_unsigned),
+            accept_unsigned=body.accept_unsigned, reason=body.reason)
+    except OpenCaseRefusedError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "open_case_refused", "detail": str(exc)}) from exc
+    except _REFUSALS as exc:
+        raise _refused(exc) from exc
+    case = CaseStore(register.ledger).get(result.case_id)
+    return {"opened": result.outcome == "opened", "outcome": result.outcome,
+            "case": case.to_dict() if case else None,
+            "verdict": report.verdict, "incomplete": report.incomplete,
+            "clear_is_complete": report.clear_is_complete,
+            "advisory_trust": report.provenance,
+            "advisory_import": report.advisory_import,
+            "intel": {"source": candidate.source, "citation": candidate.citation,
+                      "notes": list(candidate.notes),
+                      "not_representable": list(candidate.not_representable)},
+            "not_established": list(INTEL_CASE_NOT_ESTABLISHED)}
 
 
 @change_router.post("/assess/intervention", summary="Did a recorded intervention invalidate evidence?")

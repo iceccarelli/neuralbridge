@@ -1,0 +1,71 @@
+# EXAMPLE ONLY -- documentation, not a deployment. Nothing in this repository runs it.
+# No secrets are in this file: every key-like value is a ${PLACEHOLDER} the operator supplies
+# from their own environment or secret manager at `docker compose up` time. Review before use.
+#
+# Two services on ONE volume, because the ledgers are SQLite on a single host:
+#   api        the assurance service (deploy/assurance/Dockerfile), one worker, on purpose
+#   ops-cycle  a cron-like loop around `python -m assurance ops cycle`
+# The ops container runs the same image as the api. It needs read/write on the same /data
+# volume (ledgers, attestations), a path for backups, a path for the cycle record, and the
+# anchor key mounted read-only from OUTSIDE /data (anchor-all refuses a key inside the data dir).
+#
+# Build the image first (from the repository root):
+#   docker build -f deploy/assurance/Dockerfile -t assurance:local .
+# and copy deploy/assurance/ops/ops.example.json to ./ops/ops.json, then edit the container
+# paths in it (/data, /backups, /ops-record, /keys/anchor.pem) to match the mounts below.
+#
+# `ops cycle` exit codes: 0 ok, 1 flagged for a person (not a failure), 2 degraded/failed.
+# The loop logs the exit code and keeps going; the healthcheck is `ops status`, which turns
+# unhealthy when the last cycle is degraded or older than max_cycle_age_hours.
+
+services:
+  api:
+    image: assurance:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      ASSURANCE_LEDGER: /data/art14-register.db
+      ASSURANCE_ACCOUNTS: /data/accounts.db
+      ASSURANCE_TENANT_LEDGERS: /data/tenants
+      ASSURANCE_ATTEST_LOGS: /data/attestations
+    volumes:
+      - assurance-data:/data
+
+  ops-cycle:
+    image: assurance:local
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # Names are read by the cycle from its environment; values come from YOUR shell or
+      # secret manager when you run compose. Leave unset what you do not use.
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      ASSURANCE_ATTEST_PASSPHRASE: ${ASSURANCE_ATTEST_PASSPHRASE:-}
+      OPS_INTERVAL_SECONDS: ${OPS_INTERVAL_SECONDS:-86400}
+    volumes:
+      - assurance-data:/data
+      - ./backups:/backups
+      - ./ops:/ops-record
+      - ./ops/ops.json:/etc/assurance/ops.json:ro
+      - ${ANCHOR_KEY_DIR:-./keys}:/keys:ro
+    entrypoint: ["/bin/sh", "-c"]
+    # The loop: one cycle, log its exit code, sleep. 0 ok / 1 flagged / 2 degraded are all logged;
+    # the record (/ops-record/cycles.jsonl) is the audit trail. `--live` is passed here, but the
+    # refresh still runs only if ops.json says "live": true.
+    command:
+      - |
+        while true; do
+          python -m assurance ops cycle --config /etc/assurance/ops.json --live
+          echo "ops cycle exit $$?"
+          sleep "$${OPS_INTERVAL_SECONDS}"
+        done
+    healthcheck:
+      test: ["CMD", "python", "-m", "assurance", "ops", "status", "--config", "/etc/assurance/ops.json"]
+      interval: 1h
+      timeout: 30s
+      retries: 1
+      start_period: 24h
+
+volumes:
+  assurance-data:

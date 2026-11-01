@@ -339,7 +339,53 @@ succeeded. A rejected observation does not count as a refresh.
 
 Set it a little above your refresh interval (a daily job: 26-30).
 
+#### Setting the clock: `--now`
+
+To see what a watch would say at a later (or earlier) moment without waiting,
+`watch run` and `watch status` take `--now YYYY-MM-DDTHH:MM:SSZ`:
+
+```bash
+# would this watch be degraded by staleness 30 hours from the last refresh?
+assurance watch run watch.json --ledger evidence.db --dry-run --now 2026-11-02T18:00:00Z
+assurance watch status watch.json --ledger evidence.db --now 2026-11-02T18:00:00Z
+```
+
+* **The clock for assessment only:** staleness and age checks, and the run
+  record's assessed-at (`started_at` / `finished_at`). The limit is exclusive
+  at the edge: with `max_age_hours: 24`, 24h00m old is not stale, 24h01m is.
+* **`watch run --now` is refused (exit `2`) unless `--dry-run` is also given.**
+  A run that seals records must use the real clock; otherwise a caller could
+  write history that never happened. The refusal happens before the ledger is
+  opened, so nothing is written. `watch status` only reads, so it accepts
+  `--now` on its own.
+* A malformed value is refused (exit `2`): it must be a full UTC instant ending
+  in `Z` (no date alone, no zone offset, no guessed zone).
+* **`watch open-case` has no `--now`.** It writes a case, so its record cannot
+  be given a forged clock; it uses the real one for the warning below.
+
+#### `watch status`: how old is each source
+
+When the config has an intel subscription, `status` also prints, per selected
+source, the retrieval time and age of its newest **accepted** observation, the
+limit, and `fresh` / `STALE` / `NEVER OBSERVED` (computed by the same function
+the run uses, so the two cannot disagree). With no `max_age_hours` it says `age
+not checked`. A missing, empty or unreadable store prints the run's own wording
+(`does not exist ... blind to this source`). `--json` adds an
+`intel_staleness` object.
+
+Exit codes are unchanged (`0` quiet, `1` findings, `2` degraded or never run),
+with one addition that applies only when an intel subscription exists: `status`
+exits `2` when any selected source is stale, never observed, unreadable, or its
+store cannot be read.
+
 ### From a finding to a case: `watch open-case`
+
+The hosted twin is `POST /v1/change/assess/advisory/intel` (Cell tier, `{advisory_id, actor,
+role, accept_unsigned?, reason?, sources?}`): it reads the operator's `ASSURANCE_INTEL_STORE`
+read-only (503 when unconfigured or unreadable), re-derives the candidate for the **caller's**
+fleet with the same functions as this command, and applies the same rules below. A CSAF-derived
+candidate additionally needs an operator key with the `decider` role over HTTP. It is not an MCP
+tool. See `CHANGE.md`.
 
 The pipeline has three steps and only the first is networked:
 
@@ -374,6 +420,13 @@ offline; nothing is fetched.
   human steps. `--json` gives the same.
 * **Never** closes, decides, waives, advances or claims anything, and the next
   `watch run` shows the finding as `outstanding`, not `new`.
+
+* **Warns when the store is stale** (only when `max_age_hours` is set): one
+  `warning:` line per stale or never-observed source on stderr, saying how old
+  the data is and the limit, and an `intel_age_warnings` list in `--json`
+  (empty when fresh or unchecked). It is a warning, not a refusal: a person may
+  knowingly open a case from older data. Refresh the store and re-check the
+  advisory if you did not mean to.
 
 Exit codes: `0` opened or already open, `1` refused, `2` usage or I/O (missing
 config, missing ledger; it never creates a ledger).

@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS observations (
     diff_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS obs_series ON observations (source, url, seq);
+CREATE TABLE IF NOT EXISTS provenance (
+    seq       INTEGER PRIMARY KEY REFERENCES observations(seq),
+    provider  TEXT NOT NULL,
+    listed_at TEXT NOT NULL,
+    settled   INTEGER NOT NULL CHECK (settled IN (0,1)),
+    meta_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provenance_provider ON provenance (provider, seq);
+CREATE TRIGGER IF NOT EXISTS provenance_no_update BEFORE UPDATE ON provenance
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS provenance_no_delete BEFORE DELETE ON provenance
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS observations_no_update BEFORE UPDATE ON observations
   BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS observations_no_delete BEFORE DELETE ON observations
@@ -206,9 +218,16 @@ class IntelStore:
         self, *, source: str, url: str, locator: str, via: str, retrieved_at: datetime,
         http_status: int | None, byte_length: int, sha256: str, parser_version: str,
         parse_result: str, reason: str, raw: bytes | None = None,
-        parsed: ParsedFeed | None = None,
+        parsed: ParsedFeed | None = None, provenance: dict[str, Any] | None = None,
     ) -> Observation:
-        """Record one observation. Decides the disposition inside the write transaction."""
+        """Record one observation. Decides the disposition inside the write transaction.
+
+        ``provenance`` (CSAF provider fetches only) is stored beside the observation in the
+        same transaction: ``provider``, ``listed_at`` (when the provider's index said the
+        document last changed), ``settled`` (False for a transient failure that must be
+        retried) and any other keys as ``meta``. For an accepted CSAF document the document's
+        own tracking block (id, version, release dates) is added from the parsed feed.
+        """
         accepted = parse_result == "ok"
         if accepted and (raw is None or parsed is None):
             raise ValueError("an accepted observation needs its raw bytes and parsed feed")
@@ -239,6 +258,17 @@ class IntelStore:
                 (source, url, locator, via, format_utc(retrieved_at), http_status, byte_length,
                  sha256, parser_version, parse_result, reason, disposition, count, stamp,
                  json.dumps(diff, sort_keys=True) if diff is not None else None))
+            if provenance is not None:
+                meta = {k: v for k, v in provenance.items()
+                        if k not in ("provider", "listed_at", "settled")}
+                if parsed is not None and accepted and parsed.meta.get("tracking"):
+                    meta["tracking"] = parsed.meta["tracking"]
+                db.execute(
+                    "INSERT INTO provenance (seq,provider,listed_at,settled,meta_json) "
+                    "VALUES (?,?,?,?,?)",
+                    (cur.lastrowid, provenance["provider"], provenance.get("listed_at", ""),
+                     1 if provenance.get("settled", True) else 0,
+                     json.dumps(meta, sort_keys=True)))
             row = db.execute("SELECT * FROM observations WHERE seq=?",
                              (cur.lastrowid,)).fetchone()
             return _row_to_observation(row)
@@ -256,6 +286,39 @@ class IntelStore:
             args.append(limit)
         with self._read() as db:
             return [_row_to_observation(r) for r in db.execute(sql, args)]
+
+    def provenance(self, seq: int) -> dict[str, Any] | None:
+        """Provider provenance of one observation, or None (also for a store without it)."""
+        with self._read() as db:
+            try:
+                row = db.execute("SELECT * FROM provenance WHERE seq=?", (seq,)).fetchone()
+            except sqlite3.OperationalError:
+                return None
+        if row is None:
+            return None
+        return {"provider": row["provider"], "listed_at": row["listed_at"],
+                "settled": bool(row["settled"]), **json.loads(row["meta_json"])}
+
+    def settled_listings(self, provider: str) -> dict[str, str]:
+        """url -> newest ``listed_at`` already settled (accepted or rejected for good).
+
+        This is the incremental cursor: a document whose listing is not newer than this has
+        been dealt with. A transient failure is not settled, so it is tried again.
+        """
+        with self._read() as db:
+            try:
+                rows = db.execute(
+                    "SELECT o.url AS url, p.listed_at AS listed_at FROM provenance p "
+                    "JOIN observations o ON o.seq = p.seq "
+                    "WHERE p.provider=? AND p.settled=1 AND p.listed_at != ''",
+                    (provider,)).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        out: dict[str, str] = {}
+        for r in rows:
+            if r["url"] not in out or r["listed_at"] > out[r["url"]]:
+                out[r["url"]] = r["listed_at"]
+        return out
 
     def get(self, seq: int) -> Observation:
         with self._read() as db:

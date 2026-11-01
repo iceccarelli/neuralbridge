@@ -39,6 +39,18 @@ const items: ChecklistItem[] = [
     action: 'Create the endpoint at https://<your-fly-app>.fly.dev/v1/billing/webhook, subscribed to the events the handler reads: checkout.session.completed, checkout.session.async_payment_succeeded, invoice.payment_failed, customer.subscription.updated, customer.subscription.deleted (src/assurance/api/billing_routes.py:post_webhook). See DEPLOY_NOW.md §3.',
   },
   {
+    label: 'Attestation key and recorder trust file (key ceremony)',
+    done: false,
+    detail: 'Prepared, not performed. No production key exists and no deployment has ASSURANCE_ATTEST_KEY_PEM or ASSURANCE_RECORDER_TRUST. Until then the attestation routes answer 503, and hosted evidence stays at the community level. Cannot be checked from a static build.',
+    action: 'The founder follows deploy/assurance/KEY-CEREMONY.md on a machine they control (see /docs/assurance/key-ceremony), then runs assurance attest preflight with those variables set. Nothing in this repository has done it.',
+  },
+  {
+    label: 'Public-source intelligence store (ASSURANCE_INTEL_STORE)',
+    done: false,
+    detail: 'The hosted /v1/intel routes and the intel_* MCP tools only read a store the operator builds, and answer 503 until one is configured. Fetching KEV, NVD or EPSS is an operator CLI command, never a route. Cannot be checked from a static build, and the live-fetch step has not been exercised by this repository’s tests.',
+    action: 'Build the store with assurance intel refresh --live (or intel ingest on files you downloaded) on your own machine, put it on the deployment’s volume, and set ASSURANCE_INTEL_STORE. See /docs/assurance/intel.',
+  },
+  {
     label: 'GitHub Pages enabled (docs mirror)',
     done: false,
     detail: 'The on-site /docs pages work regardless — this only affects whether iceccarelli.github.io/neuralbridge also serves as a static mirror.',

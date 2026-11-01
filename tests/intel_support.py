@@ -77,6 +77,39 @@ def epss_doc(*rows: tuple[str, str, str, str]) -> dict:
             "data": [{"cve": c, "epss": e, "percentile": p, "date": d} for c, e, p, d in rows]}
 
 
+CSAF_HOST = "csaf.example.invalid"
+CSAF_META_URL = f"https://{CSAF_HOST}/.well-known/csaf/provider-metadata.json"
+CSAF_DIR = f"https://{CSAF_HOST}/csaf/white"
+
+
+def csaf_doc(tracking_id: str, *, version: str = "1", current: str = "2026-10-02T08:30:00Z",
+             extra: str | None = None) -> dict:
+    """A SYNTHETIC CSAF 2.0 advisory (names no real product), accepted by the repo importer."""
+    doc = copy.deepcopy(fixture_json("csaf_synthetic.json"))
+    doc.pop("_fixture", None)
+    t = doc["document"]["tracking"]
+    t.update(id=tracking_id, version=version, current_release_date=current)
+    doc["document"]["title"] = f"SYNTHETIC {tracking_id} v{version}"
+    if extra is not None:
+        doc["document"]["notes"].append({"category": "general", "text": extra})
+    return doc
+
+
+def provider_metadata(directory: str = CSAF_DIR) -> dict:
+    """SYNTHETIC provider-metadata.json in the CSAF 2.0 shape."""
+    return {"canonical_url": CSAF_META_URL, "last_updated": "2026-10-31T00:00:00Z",
+            "list_on_CSAF_aggregators": False, "metadata_version": "2.0",
+            "mirror_on_CSAF_aggregators": False, "public_openpgp_keys": [],
+            "publisher": {"category": "vendor", "name": "Example Controls GmbH",
+                          "namespace": "https://example.invalid"},
+            "role": "csaf_trusted_provider",
+            "distributions": [{"directory_url": directory}]}
+
+
+def changes_csv(*rows: tuple[str, str]) -> bytes:
+    return "".join(f'"{p}","{t}"\n' for p, t in rows).encode()
+
+
 def nvd_doc(*cves: dict) -> dict:
     return {"resultsPerPage": len(cves), "startIndex": 0, "totalResults": len(cves),
             "format": "NVD_CVE", "version": "2.0", "timestamp": "2026-10-31T00:00:00.000",

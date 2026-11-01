@@ -3076,3 +3076,33 @@ table.status-table tbody tr:last-child td {
   font-size: 1.2rem;
   margin: 2rem 0 0.5rem;
 }
+
+/* ====================== CAPABILITIES TABLE (generated from public/capabilities.json) ====================== */
+.status-pill.available {
+  background: #eaf6f0;
+  color: var(--success);
+}
+
+.cap-table-wrap {
+  margin: 0 0 1.5rem;
+}
+
+.docs-content table.cap-table {
+  margin: 0;
+  font-size: 0.8rem;
+  min-width: 640px;
+}
+
+.cap-table .cap-name {
+  display: block;
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+  font-size: 0.74rem;
+}
+
+.cap-table .cap-reason {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}

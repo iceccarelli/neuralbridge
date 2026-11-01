@@ -37,6 +37,53 @@ the next steps.
 Enrolment does not establish that the machine is verified safe (it runs no verification), that the
 manifest is complete, or that the serial is the serial of a physical unit: identity is as declared.
 
+### Changing the site or owner after enrolment
+
+An enrolment record is sealed and never rewritten. When a machine moves or is sold, a named person
+amends the declaration as a **new** record:
+
+```bash
+assurance machinery amend-enrolment --ledger register.db --machine "Grimaldi/AR-7#0412" \
+    --actor "a.integrator" --reason "moved to Plant 3 on 2026-10-01" [--site "Plant 3"] \
+    [--owner "Example AG"] [--json]
+```
+
+`POST /v1/machinery/enrol/amend` (`{machine, actor, role?, reason, changes: {site?, owner?}}`,
+gated exactly like `POST /v1/machinery/enrol`) calls the same domain function
+(`assurance.machinery.amend.amend_enrolment`). There is no MCP tool: it is a named person's
+declaration of identity.
+
+* The amendment (`machinery.enrolment_amendment`) names the enrolment entry hash and the previous
+  amendment's hash, so each machine has one amendment chain, oldest first. The enrolment record and
+  earlier amendments stay in the ledger byte for byte; the previous value is shown beside the new.
+* The **effective identity** is the enrolment followed by its amendments in order. Re-reading by
+  `machinery enrol` (receipt) and `GET /v1/fleet/machines` (site) show the effective values and that
+  they were amended: who, when, why, from -> to (`identity_amended`, `amendments`,
+  `original_declared`; fleet rows add `declared_site`, `identity_amendments`).
+* Only `site` and `owner` are amendable (an attribute never declared can be added). Year and country
+  are not; the machine key (manufacturer / model / serial) and the configuration are not attributes:
+  a different key is a different machine (`machinery enrol`), a changed configuration is drift
+  (`machinery diff`, `change assess drift`).
+* **Re-enrolling after an amendment** compares the claim with the *effective* identity. Enrolling
+  again with the original site or owner is an `identity_conflict` (nothing written), as is a
+  manifest that still carries the original site. The amendment wins until a named person amends again.
+* Concurrent amendments are serialised by the ledger's compare-and-swap on the machine's newest
+  enrolment/amendment entry: both are recorded in one order, or one is refused. The chain never forks.
+* The ledger chain must verify first; an amendment chain that does not link to the enrolment, or whose
+  `from` is not the value then in force, stops the effective identity at that point and is reported.
+* An amendment does not establish that the identity is authenticated to a physical unit, that the
+  reason is true, or anything about verification: the configuration hash and every function's coverage
+  are as they were.
+
+| outcome | what happens | CLI exit | HTTP |
+|---|---|---|---|
+| `amended` | amendment sealed | 0 | 200 |
+| `no_change` | same values as in force: nothing written | 0 | 200 |
+| `not_enrolled` | no enrolment under this key: enrol first; nothing written | 1 | 409 |
+| `unknown_attribute` | not `site` / `owner`; nothing written | 1 | 409 |
+| `key_change_refused` | key or configuration named; nothing written, points at enrol / diff | 1 | 409 |
+| refused input | no actor, an automation actor, no reason, an empty value, nothing to amend, a ledger that does not exist (CLI never creates one), a chain that does not verify | 2 | 422 / 409 |
+
 ## The three verbs
 
 ```bash

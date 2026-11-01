@@ -1,0 +1,284 @@
+# Operating the assurance service: install, cycle, upgrade, backup, restore drill, health
+
+Status: **prepared, not performed.** Nothing in this file has been run against a production host,
+and no timer, container or unit described here is installed by this repository. The commands
+exist in this repository and are exercised by `tests/test_ops_cycle.py` on throwaway data. The
+actions (installing, enabling, upgrading, restoring) are the operator's (`CLAUDE.md`,
+"Authority"). Facts only: this page makes no claim about customers, markets or regulatory
+outcomes.
+
+`PIPELINE.md` fixes the order of the public-source pipeline and says who acts at each step. This
+page covers what *runs unattended* and how to keep it healthy. The pieces:
+
+| piece | what it is | file |
+|---|---|---|
+| `python -m assurance ops cycle` | one cycle of the non-human steps, recorded as one JSON line | `src/assurance/ops/` |
+| `python -m assurance ops status` | last cycle, its age, the human actions it left | same |
+| `python -m assurance ops check` | preflight of the config and the host | same |
+| examples | config, cron, systemd service + timer, compose | `deploy/assurance/ops/` |
+
+## 1. Reproducible install
+
+What the repository pins, stated plainly:
+
+- **Python dependencies are not locked.** `requirements/*.txt`, the `[project.optional-dependencies]`
+  in `pyproject.toml` and the `pip install` line in `deploy/assurance/Dockerfile` all use lower
+  bounds (`>=`). There is no `pip-compile` output, hash file or constraints file in the
+  repository. Two installs a month apart can resolve different versions, and a rebuilt image is
+  not byte-identical to the last one.
+- The **website** is locked (`package-lock.json`; use `npm ci`). That does not cover the service.
+
+So reproducibility is something the operator *records*, not something the repository provides.
+A defensible procedure, using only what exists:
+
+```bash
+git clone <your remote> assurance && cd assurance
+git checkout <the exact commit or tag you reviewed>          # write the full SHA in your log
+python3 -m venv /opt/assurance/venv
+/opt/assurance/venv/bin/pip install --upgrade pip
+/opt/assurance/venv/bin/pip install -e ".[assurance-api]"      # fastapi, uvicorn, cryptography (>=)
+/opt/assurance/venv/bin/python -m assurance capabilities --check   # exit 0: catalogue matches code
+/opt/assurance/venv/bin/pip freeze > /opt/assurance/lock-$(date -u +%Y%m%dT%H%M%SZ).txt
+```
+
+Keep that `pip freeze` file with the commit SHA and the Python version (`python --version`).
+It is the lock for *this* install: to reproduce it, create a fresh venv and
+`pip install -r <that file>` (the freeze lists versions, not hashes; add hashes with your own
+tooling if you need them, none is provided here). For the container, record the image digest
+(`docker image inspect --format '{{.Id}}' assurance:local`) after the build; the digest, not the
+tag, is what you can redeploy.
+
+If you want the repository to carry a real lock, that is a change to be made and reviewed
+(adding a lock and a CI check that the Dockerfile uses it). It has not been done.
+
+Then, before the first cycle:
+
+```bash
+python -m assurance ops check --config /etc/assurance/ops.json
+```
+
+`ops check` validates the config and the host and lists what it does **not** check. Fix every
+`[fail]` line; read the `NOT checked` list: that is the operator's remaining work.
+
+## 2. The cycle
+
+`ops cycle` runs, in this fixed order, calling the existing verbs in-process (it re-implements
+none of them):
+
+| # | step name | runs | skipped when |
+|---|---|---|---|
+| 1 | `intel.refresh:<source>` | `intel refresh --source S --store F --live [--cve …]` | config `live` is not `true`, **or** `--live` was not passed, **or** no sources configured. Recorded as `skipped`, detail `not refreshed: …` |
+| 2 | `watch.run:<config>` | `watch run CONFIG --ledger L --json`, one per configured watch | none configured |
+| 3 | `ledger.verify` | read-only chain walk of every `tenants/acc_<16 hex>.db` and `art14-register.db` under `data_dir` | no ledger exists |
+| 4 | `attest.anchor_all` | `attest anchor-all --data-dir D --key K --max-age H --json` | no `attest.key` configured; **or ledger.verify failed** (an anchor over a known-broken chain would vouch for it) |
+| 5 | `backup` | `restore_check backup DATA BACKUP_DIR/<UTC timestamp>` into a **new** directory | never skipped |
+| 6 | `backup.verify` | `restore_check verify` on that directory immediately | no backup was taken |
+
+Each step is isolated: an exception or a non-zero exit is recorded and the rest still run, except
+the dependency in row 4. Nothing in the cycle opens a case, establishes awareness, decides an
+Article 14 track or closes anything; those are a named person's acts (`PIPELINE.md`, "The human
+acts"). The cycle only reports that a person has something to read.
+
+### Network
+
+The only networked step is the intel refresh, and it needs **both** `"live": true` in the config
+**and** `--live` on the command line. Without either, nothing opens a socket and the step says
+`not refreshed`. A watch with `max_age_hours` then reports the store stale (exit 2): that is the
+intended alarm, not a bug.
+
+### Step status and exit code
+
+| step status | meaning |
+|---|---|
+| `ok` | the verb's own exit code was 0 |
+| `flagged` | something for a person to read; **not a failure** (watch exit 1; intel input rejected; anchor-all refused a ledger; a backup of an already-failing source) |
+| `degraded` | the verb said it could not rely on its inputs (watch exit 2, including a stale store) |
+| `failed` | the verb could not run, or raised (recorded exit 70), or the chain/backup verification failed |
+| `skipped` | did not run; `detail` says why |
+
+`ops cycle` exit code mirrors `watch run`:
+
+| exit | cycle status | meaning |
+|---|---|---|
+| `0` | `ok` | every step ok or skipped |
+| `1` | `flagged` | nothing failed; at least one step has something for a person |
+| `2` | `degraded` | any step degraded or failed; **also** the cycle could not start (bad config; `cycle already running`), in which case nothing was written |
+
+Findings are deliberately not a failure: a systemd unit uses `SuccessExitStatus=1` so only exit 2
+fails the unit. Exit 2 is shared by "degraded" and "could not start"; the record (written only
+when a cycle ran) tells them apart, and `cycle already running` is on stderr.
+
+### The cycle record
+
+One JSON object per line, **appended** to `record` (never rewritten; earlier lines are byte-identical
+after the next cycle). Fields: `format`, `ops_id`, `started_at` / `finished_at` (UTC, from the host's
+real clock), `duration_s`, `live_requested`, `status`, `exit_code`, `steps[]` (`name`, `command` as the
+equivalent `assurance …` command line, `status`, `exit_code`, `duration_s`, `detail`, a few counts in
+`info`), `human_actions[]` (`step`, `ref`, `action`), `not_established`.
+
+It never holds key material, a passphrase, an API key, ledger contents or a step's raw output. Two
+independent guards: raw output is never stored; and every string is filtered for the values of the
+configured secret environment variables, the lines of the configured key file, PEM markers and long
+base64-like runs. The key path is shown as `<configured key file>`. Treat the filter as defence in
+depth, not as permission to put secrets in places they do not belong.
+
+`human_actions` are derived from findings (a new or updated advisory finding, a stop-use match, a
+changed or uncollectable machine, a filing prompt with no awareness decision, an anchor-all anomaly,
+a backup that does not verify). They are prompts to read and decide. The record cannot tell whether a
+person did.
+
+### `ops status`
+
+Reads the record (not the data). Prints the last cycle, its age, and the actions it raised, plus
+actions raised by earlier cycles (last 30) and not raised again, labelled as such. Exit: `0` last
+cycle ok and younger than `max_cycle_age_hours`; `1` last cycle flagged; `2` older than
+`max_cycle_age_hours` (**stale**), no record at all, or last cycle degraded. Run it from a
+monitor that is not the machine being monitored: a dead scheduler writes no record, so only a
+reader elsewhere notices.
+
+### Scheduling (examples; nothing is installed)
+
+`deploy/assurance/ops/` has `cron.example`, `assurance-ops.service.example` +
+`assurance-ops.timer.example` and `docker-compose.ops.yml`, each marked EXAMPLE, none with a secret
+value (environment variable *names* only). Copying, reviewing and enabling them is the operator's
+act. The cycle takes an exclusive `flock` on `<record>.lock`; a second cycle exits 2 with
+`cycle already running` and writes nothing.
+
+## 3. Upgrade
+
+An upgrade changes code that reads and writes the ledgers. Take the safety net first and prove it.
+
+1. **Before.** Run a cycle (or `restore_check backup`) and verify the result:
+   ```bash
+   python -m assurance ops cycle --config /etc/assurance/ops.json     # exit 0 or 1
+   python -m assurance.evidence.restore_check verify /srv/assurance/backups/<newest>   # exit 0
+   python -m assurance ops status --config /etc/assurance/ops.json
+   ```
+   Store the `manifest_sha256` from the backup step (in the record, `steps[].info`) somewhere other
+   than this host. Stop here if anything is not 0.
+2. **Stop the writers** (the api, the timer): one writer per ledger file. `systemctl stop
+   assurance-ops.timer` / `docker compose stop ops-cycle api` as applicable.
+3. **Upgrade** by repeating section 1 at the new commit in a **new** venv (or new image); keep the old
+   one until step 6. Record the new commit, `pip freeze` and digest.
+4. Run `python -m assurance capabilities --check` and `python -m assurance ops check --config …`
+   with the new code.
+5. **Start** the api, then run one cycle by hand.
+6. **After.** Verify the *new* backup the cycle just took as in step 1. Then
+   `restore_check verify --against-live /srv/assurance/data <the pre-upgrade backup>` (a
+   copy of it in a scratch directory): it fails a backed-up ledger that shares a ledger id
+   with a live one but disagrees with it (a fork). Only then remove the old venv or image.
+7. **Rollback**: stop writers, restore the old venv or image, start. If the data were changed by the
+   new code and you need the old state, that is a restore (section 4), and anything appended after
+   the backup is lost; say so in your log.
+
+## 4. Backup and RESTORE DRILL
+
+`restore_check backup` snapshots `accounts.db`, the operator ledger and every tenant ledger
+transactionally (a plain file copy of a WAL database can lose its newest records), copies the
+attestation and supplier-feed logs, and writes `backup-manifest.json` (every file's size and SHA-256,
+each ledger's length and head link hash, the accounts). The directory is `0700`, files `0600`, and
+`pending_keys` (API keys minted by a checkout and not yet collected) are **not copied**: a customer
+whose key was unclaimed at backup time needs a new one after a restore.
+
+A backup is only a backup once a restore has been shown to work. Do the drill **before** you rely on
+the cycle, after every upgrade, and on a schedule you set. Never on the production volume:
+
+```bash
+SCRATCH=$(mktemp -d /var/tmp/restore-drill.XXXXXX)        # not under the data directory
+BK=/srv/assurance/backups/<timestamp>                      # a backup directory the cycle made
+# 1. restore = copy the backup tree to a scratch directory, preserving modes
+cp -a "$BK"/. "$SCRATCH"/
+# 2. the restored copy verifies from its own files and manifest
+python -m assurance.evidence.restore_check verify "$SCRATCH"             # expect exit 0
+# 3. and agrees with the live volume's history (fails a fork or a rewound ledger)
+python -m assurance.evidence.restore_check verify --against-live /srv/assurance/data "$SCRATCH"
+# 4. the operator ledger and every tenant ledger verify as the product reads them
+python -m assurance art14 --ledger "$SCRATCH/art14-register.db" verify
+for L in "$SCRATCH"/tenants/acc_*.db; do python -m assurance art14 --ledger "$L" verify || echo "FAIL $L"; done
+# 5. completeness against the signed anchor (needs the PUBLIC key from outside the backup)
+python -m assurance art14 --ledger "$SCRATCH/tenants/acc_<id>.db" verify \
+    --attestations "$SCRATCH/attestations/acc_<id>.jsonl" --public-key /path/to/anchor.pub
+rm -rf "$SCRATCH"                                          # when done; it holds customer evidence
+```
+
+Pass criteria: step 2 exit `0`, step 3 exit `0`, every `art14 verify` exit `0`; step 5 exit `0` for an
+account that has an anchor. Exit `3` from `restore_check verify` means *unchecked* (no manifest), and
+is not a pass. Record in your own decision log: date, backup name, the `manifest_sha256` you stored at
+backup time and the one `backup` prints now, results, who ran it.
+
+What the drill does **not** show: that the manifest was not rewritten together with the data (the
+manifest is checksums, not a signature; keep `manifest_sha256` elsewhere), that an attestation log's
+records are genuine without the public key, or that the backup exists off this host. An
+off-host copy is the operator's to make; nothing here does it.
+
+The cycle takes a new timestamped backup directory each time and deletes none. Retention (and the
+disk it uses) is not managed; `ops check` measures free space once.
+
+## 5. Health
+
+- **Is it running?** `ops status` exit 0. Stale (exit 2) means no cycle finished within
+  `max_cycle_age_hours`: the timer stopped, the host was down, or cycles are failing before they write.
+- **Is it sound?** Read the last cycle's `steps[]`. `ledger.verify` and `backup.verify` must be `ok`.
+- **Can it still be restored?** The last drill's date and result (section 4). `ops` does not run the drill.
+- **Key and anchors.** `python -m assurance attest preflight --key … --anchors … --max-age …`
+  (`ATTEST.md`) reads the anchors that exist.
+- The compose healthcheck is `ops status`; it turns unhealthy when the last cycle is degraded or stale.
+
+## 6. Incident handling
+
+First, preserve: stop writers, copy the data directory (a backup into a *new* directory is safe), and
+write down the time and what you saw. Do not delete or "repair" a ledger in place.
+
+**Chain verify fails** (`ledger.verify` failed; the cycle degrades; anchors are skipped; the backup is
+kept and flagged). 1) `python -m assurance art14 --ledger <path> verify` prints the sequence numbers of
+the breaks. 2) Compare with the newest backup that verified (`restore_check verify --against-live`) and
+the last attestation. 3) Treat the live ledger as untrusted until a person has decided what happened;
+the damaged file is evidence, keep it. 4) Restore from the newest verifying backup into a scratch
+directory first (section 4) and compare. 5) Anything appended after that backup is not in it. A hash
+chain detects accident, not a determined insider who can rewrite the ledger and its log together.
+
+**An anchor is contradicted** (`attest anchor-all` flagged a ledger, or `art14 verify --attestations`
+says the ledger is shorter than, or does not contain, a signed head). That is evidence that records were
+removed or rewritten after the anchor, or that the log and ledger are from different lineages. Do not
+re-anchor over it (anchoring would sign the contradicted state). Stop writers, preserve both files,
+verify the log with the public key obtained elsewhere (`attest verify`), then proceed as for a failed
+chain. Anchors you wrote before the break remain valid statements about what they covered.
+
+**Intel is stale** (`watch run` DEGRADED with `stale`; or steps show `not refreshed` for days). The
+refresh did not run: `live` false, `--live` not passed, the host unreachable, or the source rejected the
+request. Read the `intel.refresh:*` rows and `intel history`. Until a refresh succeeds, a quiet watch
+does not mean the fleet is unaffected. Do not widen `max_age_hours` to silence it.
+
+**The key is suspected compromised.** Follow `KEY-CEREMONY.md`, sections 6 (rotate) and 7 (revoke),
+and the decision record in section 9. Remove the key from the cycle config (`attest` omitted: the
+cycle then skips anchoring and says so) rather than leaving a suspect key signing. Existing anchors
+made by that key can no longer be trusted as independent of whoever held it; say so. A rotation
+creates a new key; it does not repair history.
+
+**Backup does not verify.** The step is `failed` and the cycle degrades. Do not delete older backups.
+Re-run `restore_check verify` by hand on it, read the problems, and take another backup. If the live
+data are healthy and a fresh backup also fails to verify, stop and investigate before the next upgrade.
+
+**Cycle already running / lock stuck.** `flock` is released by the kernel when the process ends, so a
+stale lock file with no holder does not block. A cycle that never ends is a hung step; inspect the
+process rather than deleting the lock.
+
+## 7. Not established
+
+This tooling and this runbook do **not** establish:
+
+- That a scheduler is installed, enabled or running (only a stale `ops status` shows it stopped).
+- That the key is held safely, was never copied, or that a recoverable copy exists (`KEY-CEREMONY.md`
+  is the procedure; `ops check` checks a file's mode and that it sits outside the data directory).
+- That an off-host backup exists, or that any backup restores, until a drill has been performed and
+  recorded. `ops cycle` verifies the backup it just took against its own manifest.
+- That the cycle record is genuine or complete: it is an unsigned, unchained operator log.
+- That a quiet watch means the fleet is unaffected; that a public record, KEV entry or EPSS score is
+  correct, complete or current; that a vendor advisory applies to a site's installed firmware.
+- That a machine is safe, that a case is closed or that anyone decided anything: `ok` means a step's
+  own exit code was 0.
+- That the clock of the host is right.
+- That the Python dependencies at install time match any earlier install (no lock exists).
+- Anything about legal or regulatory status. No step here says a machine, a filing or an organisation
+  complies with anything.
+- Postgres, the `/ai` control plane and the website are outside this runbook.
