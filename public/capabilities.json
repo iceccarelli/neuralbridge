@@ -2233,6 +2233,69 @@
       "title": "Re-verify a passport you did not produce"
     },
     {
+      "id": "ops.check",
+      "service": "ops",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "ops check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        }
+      },
+      "title": "Preflight the ops config and host; lists what it does not check"
+    },
+    {
+      "id": "ops.cycle",
+      "service": "ops",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "ops cycle"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        }
+      },
+      "title": "Run one operator cycle (intel refresh with --live, watch, anchor, backup + verify) and append its record"
+    },
+    {
+      "id": "ops.status",
+      "service": "ops",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "ops status"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        }
+      },
+      "title": "The last cycle, its age and the human actions it left (stale -> exit 2)"
+    },
+    {
       "id": "report.demo",
       "service": "report",
       "surfaces": {
@@ -2732,6 +2795,11 @@
       "record-change",
       "record-manifest"
     ],
+    "ops": [
+      "check",
+      "cycle",
+      "status"
+    ],
     "report": [
       "build",
       "demo"
@@ -2757,24 +2825,24 @@
   },
   "counts": {
     "api_routes": 88,
-    "capabilities": 115,
-    "cli_commands": 95,
-    "cli_domains": 17,
+    "capabilities": 118,
+    "cli_commands": 98,
+    "cli_domains": 18,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
         "available": 82,
-        "by_design": 32,
+        "by_design": 35,
         "planned": 1
       },
       "cli": {
-        "available": 97,
+        "available": 100,
         "by_design": 12,
         "planned": 6
       },
       "mcp": {
         "available": 42,
-        "by_design": 73,
+        "by_design": 76,
         "planned": 0
       }
     }

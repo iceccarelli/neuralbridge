@@ -1,0 +1,34 @@
+# EXAMPLE ONLY. Documentation: this file is not a unit and nothing installs or enables it.
+# To use it, copy it by hand to /etc/systemd/system/assurance-ops.service (without the
+# .example suffix), review every line, then `systemctl daemon-reload`. That is the operator's
+# act, after `ops check` passes. The matching timer is assurance-ops.timer.example.
+#
+# Exit codes of `ops cycle`: 0 ok, 1 flagged for a person, 2 degraded/failed/not started.
+# SuccessExitStatus=1 keeps "something to read" from marking the unit failed, so a failed unit
+# means exit 2 (or a crash). Flagged findings are in `ops status` and the cycle record.
+
+[Unit]
+Description=Assurance operator cycle (intel refresh, watch, anchor, backup + verify)
+Documentation=file:///opt/assurance/deploy/assurance/OPS.md
+After=network-online.target
+Wants=network-online.target
+# OnFailure=assurance-ops-alert.service    # your own alerting unit; not provided here
+
+[Service]
+Type=oneshot
+User=assurance
+Group=assurance
+# Secrets by name only, from a file readable by the service user alone (mode 0600). The file
+# is yours to create; this repository ships none. Example lines: NVD_API_KEY=...,
+# ASSURANCE_ATTEST_PASSPHRASE=...
+EnvironmentFile=-/etc/assurance/ops.env
+ExecStart=/opt/assurance/venv/bin/python -m assurance ops cycle --config /etc/assurance/ops.json --live
+SuccessExitStatus=1
+TimeoutStartSec=2h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Everything the cycle writes: the data volume (ledgers, attestations), the backups, the record.
+ReadWritePaths=/srv/assurance /var/lib/assurance-ops
