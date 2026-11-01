@@ -10,12 +10,13 @@ const SITE_URL = 'https://neuralbridge.io';
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
 // Counted from the OpenAPI schema exported by scripts/export_openapi.py, which a test
-// (tests/test_site_routes_parity.py) keeps equal to what the service really serves.
+// (tests/test_site_routes_parity.py) keeps equal to what the service really serves. Only /v1 operations
+// count: `/` and `/healthz` are liveness probes, not product routes, and public/capabilities.json counts
+// the same /v1 routes (tests/test_site_capabilities_contract.py).
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
-const ROUTE_COUNT = Object.values(openapi.paths as Record<string, Record<string, unknown>>).reduce(
-  (n, item) => n + Object.keys(item).filter((k) => METHODS.includes(k)).length,
-  0,
-);
+const ROUTE_COUNT = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
+  .filter(([path]) => path.startsWith('/v1/'))
+  .reduce((n, [, item]) => n + Object.keys(item).filter((k) => METHODS.includes(k)).length, 0);
 
 export const metadata: Metadata = {
   title: 'Developers | Industrial Autonomous Assurance',
@@ -63,7 +64,7 @@ export default function DevelopersPage() {
               <span>
                 {API_BASE
                   ? `This deployment's base URL is set. Everything below is callable now.`
-                  : 'This marketing site was built without NEXT_PUBLIC_ASSURANCE_API_URL set. The routes, auth model, and examples below are real — read straight from the code — but there is nothing to call until the founder finishes deploy/assurance/README.md. Run it yourself: uvicorn assurance.api.service:app.'}
+                  : 'This marketing site was built without NEXT_PUBLIC_ASSURANCE_API_URL set. The routes, auth model, and examples below are real — read straight from the code — but there is nothing to call until the founder finishes DEPLOY_NOW.md. Run it yourself: uvicorn assurance.api.service:app.'}
               </span>
             </div>
           </div>
@@ -97,9 +98,15 @@ export default function DevelopersPage() {
             <h2>Free vs. paid, straight from the routers</h2>
             <p>
               Every row below is gated in code, in <code>src/assurance/api/deps.py</code> — if it is not gated,
-              it is free. This is a curated view of the {ROUTE_COUNT} routes; the full machine-readable schema (parameters,
+              it is free. This table lists {ROUTES.length} of the {ROUTE_COUNT} routes; the full machine-readable schema (parameters,
               response shapes, every route including account/billing) is at{' '}
-              <a href="/openapi.json">/openapi.json</a>.
+              <a href="/openapi.json">/openapi.json</a>. Which of these a command-line verb or an MCP tool also offers is
+              on <a href="/docs/capabilities">the capabilities page</a>, generated from the code.
+            </p>
+            <p>
+              The <code>/v1/intel</code> routes only read a store the operator builds: they answer 503 until the operator
+              sets <code>ASSURANCE_INTEL_STORE</code>, and fetching KEV, NVD or EPSS is an operator command
+              (<code>assurance intel refresh --live</code>), never a route.
             </p>
           </div>
           <div className="status-table-wrap">

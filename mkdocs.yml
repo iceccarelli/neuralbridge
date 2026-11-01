@@ -40,12 +40,17 @@ nav:
     - Machine safety: assurance/machine.md
     - Machinery Annex III: assurance/machinery.md
     - Fleet advisory: assurance/fleet.md
+    - Change assurance: assurance/change.md
+    - Public-source intelligence: assurance/intel.md
     - Watch: assurance/watch.md
     - Attest: assurance/attest.md
+    - Key ceremony: assurance/key-ceremony.md
+    - Trust runbook: assurance/trust-runbook.md
     - Offline kit: assurance/kit.md
     - Supplier feeds: assurance/supplier.md
     - Bridge: assurance/bridge.md
-    - Deploying the register: assurance/deploy.md
+    - Operator pipeline: assurance/pipeline.md
+    - Deploying (rehearse in test mode first): assurance/deploy.md
   - Pricing: pricing.md
   - Claims registry: claims-registry.md
   - Platform status: platform.md

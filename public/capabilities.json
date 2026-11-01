@@ -1,0 +1,2828 @@
+{
+  "capabilities": [
+    {
+      "id": "account.billing_portal",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/billing/portal"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Manage your subscription"
+    },
+    {
+      "id": "account.billing_webhook",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/billing/webhook"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Stripe webhook (signature verified)"
+    },
+    {
+      "id": "account.checkout",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/checkout"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Start a subscription"
+    },
+    {
+      "id": "account.checkout_complete",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/checkout/complete"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Collect the key after paying"
+    },
+    {
+      "id": "account.keys",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/keys",
+            "POST /v1/keys",
+            "POST /v1/keys/revoke"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "List, issue and revoke API keys"
+    },
+    {
+      "id": "account.me",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/me"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Your account, plan and usage"
+    },
+    {
+      "id": "account.operators",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/operators",
+            "POST /v1/operators",
+            "POST /v1/operators/{operator_id}/disable"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "List, create and disable operators"
+    },
+    {
+      "id": "account.usage",
+      "service": "account",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/usage",
+            "POST /v1/usage/limits"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "What your account has used, and its spend limit"
+    },
+    {
+      "id": "art14.availability",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/availability"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 availability"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Attach the product and Member State record the filing needs"
+    },
+    {
+      "id": "art14.awareness",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/awareness"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 awareness"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Establish the moment every deadline runs from"
+    },
+    {
+      "id": "art14.breaches",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/register/breaches"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 register"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "art14_breaches"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Deadlines missed or overdue (the CLI exits 1 on any)"
+    },
+    {
+      "id": "art14.bridge",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "bridge art14"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Draft an Article 14 intake from an advisory"
+    },
+    {
+      "id": "art14.case",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/cases/{case_id}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 case"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "art14_case"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "One case, with its deadlines"
+    },
+    {
+      "id": "art14.case_ids",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/cases"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "`art14 register` shows every case, worst first, and is the CLI view",
+          "status": "by_design"
+        },
+        "mcp": {
+          "names": [
+            "register_cases"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "List case ids"
+    },
+    {
+      "id": "art14.export",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/cases/{case_id}/export"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 export"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "art14_export"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "A verifiable evidence bundle for one case"
+    },
+    {
+      "id": "art14.fields",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/spec/fields"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 fields"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "spec_fields"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The platform field specification for a track and stage"
+    },
+    {
+      "id": "art14.filing",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/filings"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 file"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Record a submission, validated against the platform field spec"
+    },
+    {
+      "id": "art14.measure",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/measure"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 measure"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Record a corrective or mitigating measure becoming available"
+    },
+    {
+      "id": "art14.register",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/register"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 register"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "art14_register"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Readiness across every case, worst first"
+    },
+    {
+      "id": "art14.signal",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/signal"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 signal"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Open a case with the first thing anyone heard"
+    },
+    {
+      "id": "art14.triage",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/triage"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 triage"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Work the reportability decision path"
+    },
+    {
+      "id": "art14.user_notification",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/user-notification"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 notify-users"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Record the Article 14(8) notification to users"
+    },
+    {
+      "id": "art14.validate",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/spec/validate"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 validate"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "spec_validate"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Check a draft submission without recording it"
+    },
+    {
+      "id": "attest.anchor_all",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest anchor-all"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        }
+      },
+      "title": "Counter-sign the head of every hosted tenant ledger (timer job)"
+    },
+    {
+      "id": "attest.keygen",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest keygen"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        }
+      },
+      "title": "Make an Ed25519 key pair"
+    },
+    {
+      "id": "attest.log",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ledger/attest/log"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "attest log"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "attest_log"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Print the attestations, checking nothing"
+    },
+    {
+      "id": "attest.preflight",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest preflight"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        }
+      },
+      "title": "Would counter-signing and validated verification work here?"
+    },
+    {
+      "id": "attest.service_key",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ledger/attest/key"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "served over HTTP to callers who hold no checkout; the CLI works on local files",
+          "status": "by_design"
+        },
+        "mcp": {
+          "names": [
+            "attest_service_key"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The public key the hosted service counter-signs with"
+    },
+    {
+      "id": "attest.sign",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/ledger/attest"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "attest sign"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a signature is a named operator's act; the signing key is not an agent's",
+          "status": "by_design"
+        }
+      },
+      "title": "Attest the current head of a ledger"
+    },
+    {
+      "id": "attest.trust_list_add",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest trust-list add"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Trust a recorder's PUBLIC key, pinned to a fingerprint"
+    },
+    {
+      "id": "attest.trust_list_create",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest trust-list create"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Start the recorder trust file the service loads"
+    },
+    {
+      "id": "attest.trust_list_list",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest trust-list list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Print the trusted recorders"
+    },
+    {
+      "id": "attest.trust_list_revoke",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest trust-list revoke"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Revoke a recorder key, with an explicit date"
+    },
+    {
+      "id": "attest.trust_list_verify",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest trust-list verify-file"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Check the trust file loads as the service loads it"
+    },
+    {
+      "id": "attest.verify",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/ledger/attest/verify"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "attest verify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "attest_verify"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Check an attestation log"
+    },
+    {
+      "id": "billing.end",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing end"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "End a manual grant now: revoke every key"
+    },
+    {
+      "id": "billing.extend",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing extend"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Move a manual grant's last day"
+    },
+    {
+      "id": "billing.grant",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing grant"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Create a manual-pilot account and print its API key once"
+    },
+    {
+      "id": "billing.issue_key",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing issue-key"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Print another key for an existing manual grant, once"
+    },
+    {
+      "id": "billing.list",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Every account in the store: source, expiry, no secrets"
+    },
+    {
+      "id": "billing.revoke_key",
+      "service": "billing",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling that works on the local account store file on the host; it opens no socket and is not an HTTP route",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "billing revoke-key"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the account plane (billing, keys, operators); not an assurance capability to automate",
+          "status": "by_design"
+        }
+      },
+      "title": "Stop one key of a manual grant at once"
+    },
+    {
+      "id": "catalogue.capabilities",
+      "service": "catalogue",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/capabilities"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "capabilities"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "capabilities"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "This catalogue"
+    },
+    {
+      "id": "catalogue.plans",
+      "service": "catalogue",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/plans"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "served over HTTP to callers who hold no checkout; the CLI works on local files",
+          "status": "by_design"
+        },
+        "mcp": {
+          "names": [
+            "plans"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "What is on sale, generated from the enforced entitlements"
+    },
+    {
+      "id": "change.advance",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/advance"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change advance"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_advance"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Move to the next required stop"
+    },
+    {
+      "id": "change.assess_advisory",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/assess/advisory"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change assess-advisory"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a case opened from third-party content is the attack the signed feed exists to stop; only a person opens it",
+          "status": "by_design"
+        }
+      },
+      "title": "Turn a fleet impact report into a case"
+    },
+    {
+      "id": "change.assess_advisory_signed",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/assess/advisory/signed"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "the offline kit has no pin store to judge a feed under; opening a case from a feed is the hosted account's pinned-key policy",
+          "status": "planned"
+        },
+        "mcp": {
+          "reason": "a case opened from third-party content is the attack the signed feed exists to stop; only a person opens it",
+          "status": "by_design"
+        }
+      },
+      "title": "Turn one advisory of a pinned, signed supplier feed into a case, with its trust"
+    },
+    {
+      "id": "change.assess_drift",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/assess/drift"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change assess-drift"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_assess_drift"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Turn a manifest divergence into a case"
+    },
+    {
+      "id": "change.assess_intervention",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/assess/intervention"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change assess-intervention"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_assess_intervention"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Did a recorded intervention invalidate evidence?"
+    },
+    {
+      "id": "change.claim",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/claim"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change claim"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_claim"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "OPEN to IN_REVIEW"
+    },
+    {
+      "id": "change.decide",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/decision"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change decide"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Close, reject or defer a case"
+    },
+    {
+      "id": "change.export",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/change/cases/{case_id}/export"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change export"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_export"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "A verifiable evidence bundle for one case"
+    },
+    {
+      "id": "change.list",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/change/cases"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_cases"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The Active Assurance Cases queue"
+    },
+    {
+      "id": "change.replay",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/change/cases/{case_id}/replay"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change replay"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_replay"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Rebuild a case from the ledger alone and check every step"
+    },
+    {
+      "id": "change.resolve_decision",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/resolve-decision"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change resolve-decision"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Answer one of a case's open human questions"
+    },
+    {
+      "id": "change.resume",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/resume"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change resume"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "DEFERRED to IN_REVIEW"
+    },
+    {
+      "id": "change.reverify",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/reverification"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change reverify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_reverify"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Supply fresh verification evidence"
+    },
+    {
+      "id": "change.show",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/change/cases/{case_id}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change show"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "change_case"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "One case in full"
+    },
+    {
+      "id": "change.waive_reverification",
+      "service": "change",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/change/cases/{case_id}/waive-reverification"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "change waive-reverification"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Close one re-verification entry WITHOUT evidence"
+    },
+    {
+      "id": "check.fleet_machine",
+      "service": "check",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/check/fleet-machine"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "no CLI verb",
+          "status": "planned"
+        },
+        "mcp": {
+          "names": [
+            "fleet_machine_assurance"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Check an enrolled machine against its own ledger history"
+    },
+    {
+      "id": "check.machine",
+      "service": "check",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/check/machine"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "no CLI verb",
+          "status": "planned"
+        },
+        "mcp": {
+          "names": [
+            "machine_assurance_check"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Ad-hoc check: one manifest, one advisory, no account"
+    },
+    {
+      "id": "check.services",
+      "service": "check",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/check/services"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "no CLI verb",
+          "status": "planned"
+        },
+        "mcp": {
+          "names": [
+            "services"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The Machine Assurance Check service catalogue, machine-readable"
+    },
+    {
+      "id": "collect.check_plan",
+      "service": "collect",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "collect check-plan"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "What a collection plan would catch, and miss"
+    },
+    {
+      "id": "collect.probe",
+      "service": "collect",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "collect probe"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Which rules report an export's own noise"
+    },
+    {
+      "id": "collect.run",
+      "service": "collect",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "collect run"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Collect one machine"
+    },
+    {
+      "id": "evidence.ledger_verify",
+      "service": "evidence",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ledger/verify"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 verify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "ledger_verify"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Verify the evidence chain"
+    },
+    {
+      "id": "evidence.verify",
+      "service": "evidence",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/evidence/verify"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "evidence verify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "evidence_verify"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Check an evidence file you were handed; stores nothing"
+    },
+    {
+      "id": "fleet.advisory",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/fleet/advisory"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "fleet advisory"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "an advisory is third-party content; only a person acts on it",
+          "status": "by_design"
+        }
+      },
+      "title": "Which machines does this advisory touch?"
+    },
+    {
+      "id": "fleet.advisory_check",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/fleet/advisory/check"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "no CLI verb for the stateless one-machine form",
+          "status": "planned"
+        },
+        "mcp": {
+          "reason": "an advisory is third-party content; only a person acts on it",
+          "status": "by_design"
+        }
+      },
+      "title": "Is this one machine affected by this advisory?"
+    },
+    {
+      "id": "fleet.advisory_signed",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/fleet/advisory/signed"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "fleet advisory"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "an advisory is third-party content; only a person acts on it",
+          "status": "by_design"
+        }
+      },
+      "title": "Assess a signed supplier feed against the fleet, with its trust"
+    },
+    {
+      "id": "fleet.declaration",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/fleet/declaration/check"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "fleet declaration"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "fleet_declaration_check"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Does the declaration still describe the machine?"
+    },
+    {
+      "id": "fleet.declare",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/fleet/declare"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "fleet declare"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "writes the ledger of record; an agent is not offered a way to seal records",
+          "status": "by_design"
+        }
+      },
+      "title": "Bind a Declaration of Conformity to a configuration"
+    },
+    {
+      "id": "fleet.import_csaf",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "fleet import-csaf"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Translate a CSAF 2.0 advisory into our advisory format (inspect-only)"
+    },
+    {
+      "id": "fleet.machines",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/fleet/machines"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "fleet list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "fleet_machines"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Every enrolled machine, worst coverage first"
+    },
+    {
+      "id": "fleet.observations",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/fleet/observations"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "`watch status` shows the local run; the hosted view of pushed runs is HTTP",
+          "status": "by_design"
+        },
+        "mcp": {
+          "names": [
+            "fleet_observations"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "When each machine was last looked at, and did it work"
+    },
+    {
+      "id": "fleet.report",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/fleet/report"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "report build"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "fleet_report"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The whole fleet on one page a plant manager can read"
+    },
+    {
+      "id": "fleet.value",
+      "service": "fleet",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/value"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "value report"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "value_position"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Your assurance position, derived from your own ledger"
+    },
+    {
+      "id": "intel.candidates",
+      "service": "intel",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/intel/candidates"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "intel candidates"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "intel_candidates"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Advisory candidates the model can represent, plus CVE enrichment"
+    },
+    {
+      "id": "intel.history",
+      "service": "intel",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/intel/history"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "intel history"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "intel_history"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The append-only observation history of every source"
+    },
+    {
+      "id": "intel.ingest",
+      "service": "intel",
+      "surfaces": {
+        "api": {
+          "reason": "recording feed files into the operator's shared observation store is an operator act on the host; the hosted routes only read that store",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "intel ingest"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "recording feed files into the operator's shared observation store is an operator act on the host; the hosted routes only read that store",
+          "status": "by_design"
+        }
+      },
+      "title": "Record local KEV/NVD/EPSS/CSAF files as provenance-stamped observations"
+    },
+    {
+      "id": "intel.refresh",
+      "service": "intel",
+      "surfaces": {
+        "api": {
+          "reason": "fetching from KEV/NVD/EPSS is an operator act (`--live`, a named host, an API key from the operator's environment); the hosted routes never reach the network and only read the store",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "intel refresh"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "fetching from KEV/NVD/EPSS is an operator act (`--live`, a named host, an API key from the operator's environment); the hosted routes never reach the network and only read the store",
+          "status": "by_design"
+        }
+      },
+      "title": "Fetch one public source from its official host (only with --live)"
+    },
+    {
+      "id": "intel.show",
+      "service": "intel",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/intel/cve/{cve_id}",
+            "GET /v1/intel/observations/{seq}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "intel show"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "intel_cve",
+            "intel_observation"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "One observation, or what every source says about one CVE"
+    },
+    {
+      "id": "kit.check",
+      "service": "kit",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "kit check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "What the kit would do, touching nothing"
+    },
+    {
+      "id": "kit.init",
+      "service": "kit",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "kit init"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Write a runnable kit into a folder"
+    },
+    {
+      "id": "kit.run",
+      "service": "kit",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "kit run"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "Enrol every machine, offline"
+    },
+    {
+      "id": "machine.check",
+      "service": "machine",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machine/bundle/check"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machine check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machine_check"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Re-verify a verification bundle somebody else sealed"
+    },
+    {
+      "id": "machine.recorder_sign",
+      "service": "machine",
+      "surfaces": {
+        "api": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "machine recorder-sign"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        }
+      },
+      "title": "Sign a trace as a recorder attestation"
+    },
+    {
+      "id": "machine.recorder_trust",
+      "service": "machine",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration; a request cannot supply it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "machine recorder-trust"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration; a tool cannot supply it",
+          "status": "by_design"
+        }
+      },
+      "title": "Add a recorder's PUBLIC key to your own trust file"
+    },
+    {
+      "id": "machine.separation",
+      "service": "machine",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machine/separation"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machine separation"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machine_separation"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The protective separation distance, term by term"
+    },
+    {
+      "id": "machine.verify",
+      "service": "machine",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machine/verify"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machine verify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machine_verify"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Verify a recorded run against a declared safety envelope"
+    },
+    {
+      "id": "machinery.amend_enrolment",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/enrol/amend"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery amend-enrolment"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "an amendment is a named person's declaration of identity; an agent is not offered a way to make it (and it writes the ledger of record)",
+          "status": "by_design"
+        }
+      },
+      "title": "Amend a machine's declared site or owner, as a new record"
+    },
+    {
+      "id": "machinery.coverage",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/coverage"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery coverage"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machinery_coverage"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Which safety functions a recorded verification still stands for"
+    },
+    {
+      "id": "machinery.diff",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/diff"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery diff"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machinery_diff"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Is the machine still the configuration you signed off?"
+    },
+    {
+      "id": "machinery.enrol",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/enrol"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery enrol"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "enrolment is a named person's declaration of identity; an agent is not offered a way to make it (and it writes the ledger of record)",
+          "status": "by_design"
+        }
+      },
+      "title": "Enrol a machine: declare its identity, seal its baseline, get a receipt"
+    },
+    {
+      "id": "machinery.intervention",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/intervention"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery record-change"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "writes the ledger of record; an agent is not offered a way to seal records",
+          "status": "by_design"
+        }
+      },
+      "title": "Seal an intervention record"
+    },
+    {
+      "id": "machinery.manifest",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/manifest"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery record-manifest"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "writes the ledger of record; an agent is not offered a way to seal records",
+          "status": "by_design"
+        }
+      },
+      "title": "Seal a safety software manifest"
+    },
+    {
+      "id": "machinery.passport",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/passport"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery passport"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "writes the ledger of record; an agent is not offered a way to seal records",
+          "status": "by_design"
+        }
+      },
+      "title": "Seal the machine's whole evidence position"
+    },
+    {
+      "id": "machinery.passport_check",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/passport/check"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machinery_passport_check"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Re-verify a passport you did not produce"
+    },
+    {
+      "id": "report.demo",
+      "service": "report",
+      "surfaces": {
+        "api": {
+          "reason": "a demonstration on invented data, nothing to host",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "report demo"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a demonstration on invented data, nothing to drive",
+          "status": "by_design"
+        }
+      },
+      "title": "Build a worked synthetic fleet and report on it"
+    },
+    {
+      "id": "supplier.fetch",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/supplier/feed/{supplier_account_id}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier fetch"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the route serves raw third-party advisory text (ND-JSON, not an API answer); an agent reads a hosted feed through `supplier_trust_check`, which judges it under the pinned keys instead of handing it over bare",
+          "status": "by_design"
+        }
+      },
+      "title": "Download a hosted feed"
+    },
+    {
+      "id": "supplier.keygen",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "supplier keygen"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "key custody: the private key is made and held on the operator's own machine",
+          "status": "by_design"
+        }
+      },
+      "title": "An Ed25519 publishing key"
+    },
+    {
+      "id": "supplier.list",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "reason": "`GET /v1/supplier/feed/{id}` serves the feed itself",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "supplier list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "reads a feed file on the operator's own machine, which a server-side tool cannot see",
+          "status": "by_design"
+        }
+      },
+      "title": "What stands in a feed file"
+    },
+    {
+      "id": "supplier.publish",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/advisory"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier publish"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "publishing an advisory is a named supplier's signed act",
+          "status": "by_design"
+        }
+      },
+      "title": "Sign an advisory into a feed"
+    },
+    {
+      "id": "supplier.trust_baseline",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/feed-baseline"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "no CLI verb",
+          "status": "planned"
+        },
+        "mcp": {
+          "reason": "a trust decision a named person makes",
+          "status": "by_design"
+        }
+      },
+      "title": "Accept a re-issued, trusted feed as the new rollback baseline"
+    },
+    {
+      "id": "supplier.trust_check",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/evaluate"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "supplier_trust_check"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "What is this feed, state by state, under your pinned keys?"
+    },
+    {
+      "id": "supplier.trust_list",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/supplier/trust"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust list"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "supplier_trust_list"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Pinned keys and the decision history"
+    },
+    {
+      "id": "supplier.trust_override",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/override"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust override"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "an override is a named person's accountable act",
+          "status": "by_design"
+        }
+      },
+      "title": "Accept ONE untrusted advisory, attributed"
+    },
+    {
+      "id": "supplier.trust_pin",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/pin"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust pin"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "pinning a key is a trust decision a named person makes",
+          "status": "by_design"
+        }
+      },
+      "title": "Trust this key for this supplier"
+    },
+    {
+      "id": "supplier.trust_revoke",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/revoke"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust revoke"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a trust decision a named person makes",
+          "status": "by_design"
+        }
+      },
+      "title": "Stop trusting a key"
+    },
+    {
+      "id": "supplier.trust_rotate",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/trust/rotate"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "supplier trust rotate"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a trust decision a named person makes",
+          "status": "by_design"
+        }
+      },
+      "title": "Pin a new key and retire the old from a date"
+    },
+    {
+      "id": "supplier.verify",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "reason": "`POST /v1/supplier/trust/evaluate` is the hosted form, under pinned keys",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "supplier verify"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "reads a feed file on the operator's own machine, which a server-side tool cannot see; the MCP form of judging a feed is `supplier_trust_check`",
+          "status": "by_design"
+        }
+      },
+      "title": "Check a feed file before acting on it"
+    },
+    {
+      "id": "supplier.withdraw",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "reason": "the hosted feed has no withdrawal route",
+          "status": "planned"
+        },
+        "cli": {
+          "names": [
+            "supplier withdraw"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "withdrawing an advisory is a named supplier's signed act",
+          "status": "by_design"
+        }
+      },
+      "title": "Sign a withdrawal of an advisory"
+    },
+    {
+      "id": "watch.open_case",
+      "service": "watch",
+      "surfaces": {
+        "api": {
+          "reason": "the hosted route for a case opened from third-party content is `POST /v1/change/assess/advisory`; the intel-store form is offline",
+          "status": "planned"
+        },
+        "cli": {
+          "names": [
+            "watch open-case"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a case opened from third-party content is a named person's act; software drafts, people decide",
+          "status": "by_design"
+        }
+      },
+      "title": "A named person opens a case from a public-intel finding"
+    },
+    {
+      "id": "watch.push",
+      "service": "watch",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/watch/report"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "watch push"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "writes the ledger of record; an agent is not offered a way to seal records",
+          "status": "by_design"
+        }
+      },
+      "title": "Report the latest sealed run to your own hosted ledger (opt-in)"
+    },
+    {
+      "id": "watch.run",
+      "service": "watch",
+      "surfaces": {
+        "api": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "watch run"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "One pass over every target"
+    },
+    {
+      "id": "watch.status",
+      "service": "watch",
+      "surfaces": {
+        "api": {
+          "reason": "the hosted view is `GET /v1/fleet/observations`",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "watch status"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+          "status": "by_design"
+        }
+      },
+      "title": "What the last run found"
+    }
+  ],
+  "cli_domains": {
+    "art14": [
+      "availability",
+      "awareness",
+      "case",
+      "export",
+      "fields",
+      "file",
+      "measure",
+      "notify-users",
+      "register",
+      "signal",
+      "triage",
+      "validate",
+      "verify"
+    ],
+    "attest": [
+      "anchor-all",
+      "keygen",
+      "log",
+      "preflight",
+      "sign",
+      "trust-list",
+      "verify"
+    ],
+    "billing": [
+      "end",
+      "extend",
+      "grant",
+      "issue-key",
+      "list",
+      "revoke-key"
+    ],
+    "bridge": [
+      "art14"
+    ],
+    "capabilities": [],
+    "change": [
+      "advance",
+      "assess-advisory",
+      "assess-drift",
+      "assess-intervention",
+      "claim",
+      "decide",
+      "export",
+      "list",
+      "replay",
+      "resolve-decision",
+      "resume",
+      "reverify",
+      "show",
+      "waive-reverification"
+    ],
+    "collect": [
+      "check-plan",
+      "probe",
+      "run"
+    ],
+    "evidence": [
+      "verify"
+    ],
+    "fleet": [
+      "advisory",
+      "declaration",
+      "declare",
+      "import-csaf",
+      "list"
+    ],
+    "intel": [
+      "candidates",
+      "history",
+      "ingest",
+      "refresh",
+      "show"
+    ],
+    "kit": [
+      "check",
+      "init",
+      "run"
+    ],
+    "machine": [
+      "check",
+      "recorder-sign",
+      "recorder-trust",
+      "separation",
+      "verify"
+    ],
+    "machinery": [
+      "amend-enrolment",
+      "check",
+      "coverage",
+      "diff",
+      "enrol",
+      "passport",
+      "record-change",
+      "record-manifest"
+    ],
+    "report": [
+      "build",
+      "demo"
+    ],
+    "supplier": [
+      "fetch",
+      "keygen",
+      "list",
+      "publish",
+      "trust",
+      "verify",
+      "withdraw"
+    ],
+    "value": [
+      "report"
+    ],
+    "watch": [
+      "open-case",
+      "push",
+      "run",
+      "status"
+    ]
+  },
+  "counts": {
+    "api_routes": 87,
+    "capabilities": 115,
+    "cli_commands": 95,
+    "cli_domains": 17,
+    "mcp_tools": 43,
+    "surfaces": {
+      "api": {
+        "available": 81,
+        "by_design": 32,
+        "planned": 2
+      },
+      "cli": {
+        "available": 97,
+        "by_design": 12,
+        "planned": 6
+      },
+      "mcp": {
+        "available": 42,
+        "by_design": 73,
+        "planned": 0
+      }
+    }
+  },
+  "generated_by": "scripts/export_capabilities.py, from src/assurance/capabilities.py",
+  "mcp_tools": [
+    "art14_breaches",
+    "art14_case",
+    "art14_export",
+    "art14_register",
+    "attest_log",
+    "attest_service_key",
+    "attest_verify",
+    "capabilities",
+    "change_advance",
+    "change_assess_drift",
+    "change_assess_intervention",
+    "change_case",
+    "change_cases",
+    "change_claim",
+    "change_export",
+    "change_replay",
+    "change_reverify",
+    "evidence_verify",
+    "fleet_declaration_check",
+    "fleet_machine_assurance",
+    "fleet_machines",
+    "fleet_observations",
+    "fleet_report",
+    "intel_candidates",
+    "intel_cve",
+    "intel_history",
+    "intel_observation",
+    "ledger_verify",
+    "machine_assurance_check",
+    "machine_check",
+    "machine_separation",
+    "machine_verify",
+    "machinery_coverage",
+    "machinery_diff",
+    "machinery_passport_check",
+    "plans",
+    "register_cases",
+    "services",
+    "spec_fields",
+    "spec_validate",
+    "supplier_trust_check",
+    "supplier_trust_list",
+    "value_position"
+  ],
+  "meaning": "available: the command, route or tool exists in this build. It does not say the surfaces behave identically, that anything is deployed, or what a plan includes. by_design: the surface is absent on purpose, for the reason given. planned: a known gap, listed so it is not hidden.",
+  "schema": "neuralbridge.site-capabilities/1"
+}

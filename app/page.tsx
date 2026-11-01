@@ -96,8 +96,26 @@ const products = [
   {
     badge: 'Engine',
     badgeClass: 'source',
+    name: 'Change assurance',
+    body: 'A manifest drift, an advisory or an intervention becomes a case with an owner and a required re-verification. Closing, rejecting, deferring or resuming it is a named person’s decision; software drafts.',
+    href: `/docs/assurance/change`,
+    cta: 'Read the engine guide',
+    imageKey: 'card-engine-fleet',
+  },
+  {
+    badge: 'Engine',
+    badgeClass: 'source',
+    name: 'Public-source intelligence',
+    body: 'KEV, NVD, EPSS and CSAF files recorded as provenance-stamped observations by an operator command; the hosted routes and MCP tools only read that store and answer 503 until the operator configures one. A CVE no source mentions is unknown, never clear.',
+    href: `/docs/assurance/intel`,
+    cta: 'Read the engine guide',
+    imageKey: 'card-engine-watch',
+  },
+  {
+    badge: 'Engine',
+    badgeClass: 'source',
     name: 'Watch',
-    body: 'Scheduled drift checks. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved". Runs in your kit or cron; the hosted API does not run it.',
+    body: 'Scheduled drift checks, optionally reading the operator’s intel store with a maximum age. Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares an exit code with "nothing moved". Runs in your kit or cron; the hosted API does not run it.',
     href: `/docs/assurance/watch`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-watch',
@@ -106,7 +124,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Attest',
-    body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened.',
+    body: 'A signature over the ledger head by a key the ledger’s operator does not hold. Only this catches a ledger that was quietly shortened. Key and trust-file tooling runs on the operator’s own machine.',
     href: `/docs/assurance/attest`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-attest',
@@ -124,7 +142,7 @@ const products = [
     badge: 'API',
     badgeClass: 'source',
     name: 'Assurance API',
-    body: 'FastAPI surface: plans and entitlements, the Article 14 register, machine verification, fleet and change assurance, Watch reports and hosted supplier feeds. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
+    body: 'FastAPI surface: plans and entitlements, the Article 14 register, machine verification, fleet and change assurance, Watch reports, read-only public-source intelligence (503 until the operator configures a store) and hosted supplier feeds. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
     href: `${SRC}/api`,
     cta: 'View source',
     imageKey: 'card-api-assurance',
@@ -330,7 +348,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>Plans, engines, and the API, in one place.</h2>
             <p>
               Every row below maps to code that runs. Nothing on this page is listed that the software does not do.
-              Engine tiles link to the buyer-facing guide for that engine; plan tiles link to pricing.
+              Engine tiles link to the buyer-facing guide for that engine; plan tiles link to pricing. Which of the command line, the HTTP API and the MCP server offers each capability is on <a href="/docs/capabilities">the capabilities page</a>, generated from the code.
             </p>
           </div>
 
