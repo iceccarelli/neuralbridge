@@ -36,12 +36,14 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/register', tier: 'register', summary: 'The Article 14 register for your account' },
   { method: 'GET', path: '/v1/register/breaches', tier: 'register', summary: 'Cases past a deadline clock' },
   { method: 'GET', path: '/v1/cases', tier: 'register', summary: 'List cases (read-out: also open, from your own ledger, to an account whose subscription has lapsed after it paid)' },
-  { method: 'GET', path: '/v1/cases/{id}/export', tier: 'register', summary: 'A verifiable evidence bundle for one case (read-out: also open to a lapsed account that once paid)' },
+  { method: 'GET', path: '/v1/cases/{case_id}', tier: 'register', summary: 'One case, with its deadlines' },
+  { method: 'GET', path: '/v1/cases/{case_id}/export', tier: 'register', summary: 'A verifiable evidence bundle for one case (read-out: also open to a lapsed account that once paid)' },
   { method: 'POST', path: '/v1/cases/{id}/triage', tier: 'register', summary: 'Record a triage decision' },
   { method: 'POST', path: '/v1/cases/{id}/filings', tier: 'register', summary: 'Record a platform filing' },
   { method: 'GET', path: '/v1/ledger/verify', tier: 'register', summary: 'Verify the hash chain (read-out: also open to a lapsed account that once paid)' },
 
   { method: 'POST', path: '/v1/machine/verify', tier: 'cell', summary: 'Verify a recorded machine run against its declared envelope' },
+  { method: 'POST', path: '/v1/machinery/enrol', tier: 'cell', summary: 'Enrol a machine: declare its identity, seal its baseline, get a receipt' },
   { method: 'POST', path: '/v1/machinery/manifest', tier: 'cell', summary: 'Seal a safety software manifest' },
   { method: 'POST', path: '/v1/machinery/intervention', tier: 'cell', summary: 'Seal an intervention record' },
   { method: 'POST', path: '/v1/machinery/coverage', tier: 'cell', summary: 'Which safety functions a recorded verification still stands for, at what tier' },
@@ -91,6 +93,15 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/watch/report', tier: 'cell', summary: 'Report what your own Watch saw (manifests and observation status) to your ledger — opt-in, idempotent' },
   { method: 'GET', path: '/v1/fleet/observations', tier: 'cell', summary: 'Per machine: last successful observation, last attempt, stale, open cases' },
 
+  // Public-source intelligence (src/assurance/api/intel_routes.py): READ-ONLY, Machine dependency
+  // (Cell). The store is the operator's shared public data, not tenant evidence; nothing here
+  // ingests or fetches (that is `assurance intel ingest` / `refresh --live`, an operator act). An
+  // unconfigured or unreadable store is a 503, never an empty list.
+  { method: 'GET', path: '/v1/intel/history', tier: 'cell', summary: 'Recorded KEV/NVD/EPSS/CSAF observations, oldest first, each with seq, source, retrieved_at, sha256 and parser version (503 when the operator has no store; never an empty answer)' },
+  { method: 'GET', path: '/v1/intel/observations/{seq}', tier: 'cell', summary: 'One recorded observation in full, with its provenance' },
+  { method: 'GET', path: '/v1/intel/cve/{cve_id}', tier: 'cell', summary: 'What every recorded source says about one CVE: KEV listed / not_listed_in_kev / unchecked, EPSS available (with score date) / unavailable, NVD present / rejected / unknown — and unknown when no source mentions it, never clear' },
+  { method: 'GET', path: '/v1/intel/candidates', tier: 'cell', summary: 'Unsigned advisory candidates the model can represent, plus what it cannot (not_representable) and NVD-versus-vendor conflicts' },
+
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
 ];
 
@@ -116,7 +127,7 @@ export interface CliDomain {
 export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'kit', verbs: ['init', 'run', 'check'], summary: 'Enrol a plant’s machines without anything leaving it — offline by design, no API equivalent.' },
   { domain: 'machine', verbs: ['separation', 'verify', 'check'], summary: 'ISO/TS 15066 separation and recorded-run verification.', apiTier: 'free' },
-  { domain: 'machinery', verbs: ['record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
+  { domain: 'machinery', verbs: ['enrol', 'record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
   { domain: 'fleet', verbs: ['list', 'advisory', 'declare', 'declaration'], summary: 'Advisory fan-out and Declaration binding across a fleet.', apiTier: 'cell' },
   { domain: 'change', verbs: ['assess-drift', 'assess-advisory', 'assess-intervention', 'list', 'show', 'claim', 'advance', 'reverify', 'resolve-decision', 'waive-reverification', 'decide', 'resume', 'replay', 'export'], summary: 'Change-assurance cases: open from drift, an advisory or an intervention; claim, advance and submit re-verification evidence; close, defer or resume by a named human decision. A required re-verification is closed by a named person\'s waiver unless the verification is validated, which needs a recorder attestation accepted under the verifier\'s own trust list.', apiTier: 'cell' },
   { domain: 'attest', verbs: ['keygen', 'sign', 'verify', 'log'], summary: 'Counter-signed head attestation — catches deletion, not just editing.', apiTier: 'cell' },

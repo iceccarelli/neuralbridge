@@ -49,12 +49,61 @@ ALLOWED = [
     ("GET", r"/v1/change/cases"),
     ("GET", rf"/v1/change/cases/{_ID}"),
     ("GET", rf"/v1/change/cases/{_ID}/export"),
+    ("GET", r"/v1/intel/history"),
+    ("GET", rf"/v1/intel/observations/{_ID}"),
+    ("GET", rf"/v1/intel/cve/{_ID}"),
+    ("GET", r"/v1/intel/candidates"),
     ("POST", rf"/v1/change/cases/{_ID}/claim"),
     ("POST", rf"/v1/change/cases/{_ID}/advance"),
     ("POST", rf"/v1/change/cases/{_ID}/reverification"),
     ("POST", r"/v1/change/assess/drift"),
     ("POST", r"/v1/change/assess/intervention"),
 ]
+#: The read-only tools (a GET, or a POST that answers a question and records nothing). Kept apart
+#: from ALLOWED so a test can say "these, and only these, never write": nothing here may ever
+#: be moved to a route that seals, signs, pins, closes or decides.
+READ_ONLY_ALLOWED = [
+    ("GET", r"/v1/spec/fields"),
+    ("GET", rf"/v1/cases/{_ID}"),
+    ("GET", rf"/v1/cases/{_ID}/export"),
+    ("GET", r"/v1/register"),
+    ("GET", r"/v1/register/breaches"),
+    ("GET", r"/v1/ledger/verify"),
+    ("GET", r"/v1/ledger/attest/log"),
+    ("GET", r"/v1/ledger/attest/key"),
+    ("POST", r"/v1/ledger/attest/verify"),
+    ("POST", r"/v1/machine/separation"),
+    ("POST", r"/v1/machinery/diff"),
+    ("GET", r"/v1/fleet/machines"),
+    ("GET", r"/v1/fleet/observations"),
+    ("POST", r"/v1/fleet/declaration/check"),
+    ("GET", r"/v1/value"),
+    ("GET", rf"/v1/change/cases/{_ID}/replay"),
+    ("GET", r"/v1/supplier/trust"),
+    ("POST", r"/v1/supplier/trust/evaluate"),
+]
+ALLOWED += READ_ONLY_ALLOWED
+#: The tools added for read-only parity, each with the one call it documents.
+READ_ONLY_TOOLS = {
+    "spec_fields": ("GET", "/v1/spec/fields"),
+    "art14_case": ("GET", "/v1/cases/case-0123456789abcdef"),
+    "art14_register": ("GET", "/v1/register"),
+    "art14_breaches": ("GET", "/v1/register/breaches"),
+    "art14_export": ("GET", "/v1/cases/case-0123456789abcdef/export"),
+    "ledger_verify": ("GET", "/v1/ledger/verify"),
+    "attest_log": ("GET", "/v1/ledger/attest/log"),
+    "attest_verify": ("POST", "/v1/ledger/attest/verify"),
+    "attest_service_key": ("GET", "/v1/ledger/attest/key"),
+    "machine_separation": ("POST", "/v1/machine/separation"),
+    "machinery_diff": ("POST", "/v1/machinery/diff"),
+    "fleet_machines": ("GET", "/v1/fleet/machines"),
+    "fleet_observations": ("GET", "/v1/fleet/observations"),
+    "fleet_declaration_check": ("POST", "/v1/fleet/declaration/check"),
+    "value_position": ("GET", "/v1/value"),
+    "change_replay": ("GET", "/v1/change/cases/case-0123456789abcdef/replay"),
+    "supplier_trust_list": ("GET", "/v1/supplier/trust"),
+    "supplier_trust_check": ("POST", "/v1/supplier/trust/evaluate"),
+}
 #: Path segments that mean a human decision. None may appear in any call.
 FORBIDDEN = ("decision", "resume", "resolve", "waive", "reject", "defer", "close")
 HOSTILE = ["case-x/decision", "case-x/../resume", "x/waive-reverification?", "x#/decision",
@@ -191,3 +240,90 @@ async def test_an_agent_can_take_a_case_to_the_human_stop_and_no_further(
         final = (await server.change_case(cid))["body"]
         assert final["status"] == "awaiting_reverification"
         assert final["decision"] == "" and final["resolved_decisions"] == []
+
+
+def _benign_kwargs(fn) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    for name, p in inspect.signature(fn).parameters.items():
+        ann = str(p.annotation)
+        if p.default is not inspect.Parameter.empty:
+            continue
+        kwargs[name] = ({} if "dict" in ann else [] if "list" in ann else 1.0 if "float" in ann
+                        else "case-0123456789abcdef")
+    return kwargs
+
+
+@pytest.mark.asyncio
+async def test_the_read_only_tools_are_in_the_allow_list_and_reach_no_write_route(
+        monkeypatch) -> None:
+    """Each read-only tool makes exactly the one call it documents; that call is on the
+    read-only allow-list; and no route that records, seals, signs, pins or decides can be
+    named by any argument. The write routes are taken from the live API, not from a list here."""
+    from assurance.api.service import create_app
+    from assurance.mcp import server
+
+    def matches(allowed: list[tuple[str, str]], method: str, path: str) -> bool:
+        return any(method == m and re.fullmatch(rx, path) for m, rx in allowed)
+
+    paths = create_app().openapi()["paths"]
+    write_routes: list[tuple[str, re.Pattern[str]]] = []
+    for route, item_ in paths.items():
+        sample = re.sub(r"\{[^}]+\}", "x", route)
+        for method in item_:
+            if method in ("post", "put", "patch", "delete") and not matches(
+                    READ_ONLY_ALLOWED, method.upper(), sample):
+                write_routes.append((method.upper(),
+                                     re.compile(re.sub(r"\\\{[^}]+\\\}", "[^/]+",
+                                                       re.escape(route)))))
+    assert len(write_routes) > 40, "the live API listed no write routes; the test is vacuous"
+    # sanity: the decision routes are among the routes the read-only tools must never reach
+    assert any(m == "POST" and w.fullmatch("/v1/change/cases/x/decision")
+               for m, w in write_routes)
+    assert any(m == "POST" and w.fullmatch("/v1/ledger/attest") for m, w in write_routes)
+    assert any(m == "POST" and w.fullmatch("/v1/supplier/trust/pin") for m, w in write_routes)
+
+    seen: list[tuple[str, str]] = []
+
+    async def record(method: str, path: str, *, json_body: Any = None, params: Any = None):
+        seen.append((method, path))
+        return {"status": 200, "body": {}}
+
+    monkeypatch.setattr(server, "_call", record)
+    registered = {t.name for t in await server.mcp.list_tools()}
+    assert set(READ_ONLY_TOOLS) <= registered
+
+    def reaches_write(method: str, path: str) -> bool:
+        return any(method == m and w.fullmatch(path) for m, w in write_routes)
+
+    for name, (method, path) in READ_ONLY_TOOLS.items():
+        fn = getattr(server, name)
+        seen.clear()
+        await fn(**_benign_kwargs(fn))
+        assert seen == [(method, path)], name
+        assert matches(READ_ONLY_ALLOWED, method, path), name
+        assert not reaches_write(method, path), (name, path)
+        for hostile in HOSTILE:
+            seen.clear()
+            kwargs = {k: (hostile if isinstance(v, str) else v)
+                      for k, v in _benign_kwargs(fn).items()}
+            await fn(**kwargs)
+            for m, p in seen:
+                assert matches(READ_ONLY_ALLOWED, m, p), (name, hostile, p)
+                assert not reaches_write(m, p), (name, hostile, p)
+                assert not {"decision", "resume", "resolve-decision", "waive-reverification",
+                            "pin", "rotate", "revoke", "override", "feed-baseline", "declare",
+                            "manifest", "intervention", "passport", "report"
+                            } & set(p.split("/")), (name, p)
+
+
+@pytest.mark.asyncio
+async def test_no_read_only_tool_takes_a_key_a_trust_list_or_a_signature() -> None:
+    """What makes a verifier tool safe to offer: what it is asked to check is judged under the
+    server's own configuration, never under anything the caller supplies."""
+    from assurance.mcp import server
+
+    forbidden = {"public_key_pem", "candidate_public_key_pem", "recorder_trust", "trust",
+                 "private_key", "key", "signing_key", "actor", "reason", "pin", "override"}
+    for name in READ_ONLY_TOOLS:
+        params = set(inspect.signature(getattr(server, name)).parameters)
+        assert not params & forbidden, (name, params & forbidden)

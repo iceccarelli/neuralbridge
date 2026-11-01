@@ -17,6 +17,7 @@ from assurance.watch.advisories import (
 from assurance.watch.config import (
     Article14Duty,
     FeedSubscription,
+    IntelSubscription,
     WatchConfig,
     WatchError,
     WatchTarget,
@@ -28,6 +29,7 @@ from assurance.watch.filings import (
     FilingsPass,
     draft_filings,
 )
+from assurance.watch.intel_source import check_intel, impact_for_case, merge_passes
 from assurance.watch.runner import (
     OBSERVATION_KIND,
     RUN_KIND,
@@ -49,6 +51,10 @@ __all__ = [
     "AdvisoryPass",
     "FeedOutcome",
     "FeedSubscription",
+    "IntelSubscription",
+    "check_intel",
+    "impact_for_case",
+    "merge_passes",
     "check_feeds",
     "OBSERVATION_KIND",
     "RUN_KIND",

@@ -43,7 +43,10 @@ from .test_assurance_reconcile import FakeStripe, sub
 ALLOWANCE = PLANS["payg"].validations_per_day
 EVENT = "nb_verification_ops"
 METER = "mtr_test_fake"
-NOW = datetime.now(UTC)
+# Mid-month, so that "now minus 30 hours" is still in the same account-month. With the real
+# clock this file failed on the first day or so of every month: the reconciliation correctly
+# works per account-month, and events straddling the boundary are two months, not one.
+NOW = datetime.now(UTC).replace(day=15, hour=12, minute=0, second=0, microsecond=0)
 
 
 # ---------------------------------------------------------------------------

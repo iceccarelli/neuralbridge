@@ -77,6 +77,7 @@ from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
 from assurance.watch.config import WatchConfig, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
+from assurance.watch.intel_source import check_intel, merge_passes
 from assurance.watch.observations import (
     OBSERVATION_KIND,
     last_complete_manifest,
@@ -438,6 +439,18 @@ def _previously_reported(run: dict[str, Any] | None) -> dict[str, str]:
     }
 
 
+def _previous_hashes(run: dict[str, Any] | None) -> dict[str, str]:
+    """Advisory id -> content hash last reported (intel-store findings only)."""
+    if not run:
+        return {}
+    body = run.get("advisories") or {}
+    return {
+        str(f.get("advisory_id", "")): str(f["content_hash"])
+        for f in body.get("findings", ())
+        if f.get("advisory_id") and f.get("content_hash")
+    }
+
+
 def _previous_state(run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     if not run:
         return {}
@@ -650,7 +663,7 @@ def run_watch(
     # yesterday's fleet against today's advisories, which is the one combination
     # guaranteed to be wrong.
     advisories = AdvisoryPass()
-    if config.feeds:
+    if config.feeds or config.intel:
         advisories = check_feeds(
             list(config.feeds),
             Fleet.from_ledger(ledger),
@@ -658,6 +671,12 @@ def run_watch(
             now=started,
             trust_store=SupplierTrustStore(ledger),
         )
+        if config.intel:
+            # Offline: reads recorded intel stores from disk, never fetches or refreshes.
+            advisories = merge_passes(advisories, check_intel(
+                list(config.intel), Fleet.from_ledger(ledger),
+                previously_seen=_previously_reported(previous),
+                previous_hashes=_previous_hashes(previous), now=started))
         caveats.extend(advisories.checks_skipped)
         if seal:
             advisories = _open_advisory_cases(store, advisories, actor)
@@ -667,7 +686,7 @@ def run_watch(
     # Intakes are drafted from the advisories this run just established, and
     # only when the operator has declared the duty. See watch.filings.
     filings = FilingsPass()
-    if config.feeds:
+    if config.feeds or config.intel:
         filings = draft_filings(
             advisories.findings,
             {f.advisory_id: a for f, a in _advisories_by_id(advisories, config)},

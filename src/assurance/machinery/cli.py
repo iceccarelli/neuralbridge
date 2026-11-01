@@ -1,11 +1,17 @@
 """``assurance machinery`` — the machine's software identity and its change history.
 
+    enrol             the front door: declare one machine, seal its baseline, get a receipt
     record-manifest   seal what is on the machine today
     record-change     seal an intervention in safety-relevant software
     diff              compare a baseline manifest against what was found
     coverage          which safety functions a recorded verification still stands for
     passport          seal and export the machine's whole evidence position
     check             re-verify a passport somebody else produced
+
+``enrol`` exits 0 when the machine is enrolled (now, or already with this configuration),
+1 when it refuses (the key is enrolled with a different configuration or different declared
+attributes; nothing is written), 2 on a usage or I/O error or an actor that is not a named
+person.
 
 ``coverage`` and ``passport`` exit non-zero unless every declared safety function is
 currently covered on evidence at ``validated`` or better, which makes them a gate rather
@@ -27,6 +33,7 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.divergence import compare
+from assurance.machinery.enrol import enrol_machine, require_person
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
@@ -53,6 +60,17 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     verbs = p.add_subparsers(dest="command", required=True)
+
+    en = verbs.add_parser("enrol", help="enrol one machine: identity, baseline, receipt")
+    en.add_argument("manifest", type=Path)
+    en.add_argument("--ledger", required=True, type=Path,
+                    help="created on first use, like record-manifest")
+    en.add_argument("--actor", required=True,
+                    help="the named person making the declaration")
+    en.add_argument("--role", default="")
+    en.add_argument("--site", default=None, help="declared site (must agree with the manifest)")
+    en.add_argument("--owner", default=None, help="declared owner of the machine")
+    en.add_argument("--json", action="store_true")
 
     rm = verbs.add_parser("record-manifest", help="seal a safety software manifest")
     rm.add_argument("manifest", type=Path)
@@ -96,6 +114,20 @@ def build_parser() -> argparse.ArgumentParser:
     ck.add_argument("--json", action="store_true")
 
     return p
+
+
+def _cmd_enrol(args: argparse.Namespace) -> int:
+    manifest = SafetyManifest.from_json(args.manifest)
+    actor = require_person(_actor(args))   # before the ledger exists: a refusal leaves no file
+    # A write path that legitimately creates the ledger on first use, as record-manifest does.
+    ledger = EvidenceLedger(args.ledger)
+    receipt = enrol_machine(ledger, manifest, actor=actor,
+                            site=args.site, owner=args.owner)
+    if args.json:
+        print(json.dumps(receipt.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(receipt.summary())
+    return 1 if receipt.refused else 0
 
 
 def _cmd_record_manifest(args: argparse.Namespace) -> int:
@@ -221,6 +253,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {
+        "enrol": _cmd_enrol,
         "record-manifest": _cmd_record_manifest,
         "record-change": _cmd_record_change,
         "diff": _cmd_diff,

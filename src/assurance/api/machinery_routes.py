@@ -32,6 +32,7 @@ from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.machinery.divergence import compare
+from assurance.machinery.enrol import EnrolmentError, enrol_machine
 from assurance.machinery.intervention import Intervention
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
@@ -75,6 +76,17 @@ class ManifestIn(BaseModel):
     manifest: dict[str, Any]
     actor: str = Field(default="", max_length=200)
     role: str = Field(default="", max_length=200)
+
+
+class EnrolIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, Any]
+    #: Required: enrolment is a declaration by a named person.
+    actor: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="", max_length=200)
+    site: str | None = Field(default=None, max_length=200)
+    owner: str | None = Field(default=None, max_length=200)
 
 
 class InterventionIn(BaseModel):
@@ -192,6 +204,50 @@ def post_manifest(
                                      for f in manifest.undemonstrable_functions],
         "checks_skipped": list(evidence.checks_skipped),
     }
+
+
+@machinery_router.post(
+    "/enrol",
+    summary="Enrol a machine: declare its identity, seal its baseline, get a receipt",
+    responses={
+        409: {"description": "`configuration_differs`: this key is already enrolled with a "
+                             "different configuration (that is drift, not an enrolment: see "
+                             "`POST /v1/machinery/diff`); `identity_conflict`: it is enrolled "
+                             "with different declared attributes; `ledger_chain_unverified`. "
+                             "Nothing was written. The body carries the receipt."},
+        422: {"description": "`invalid_manifest`, or `invalid_enrolment`: the actor is not a "
+                             "named person, or the declared site contradicts the manifest."},
+    },
+)
+def post_enrol(
+    body: EnrolIn,
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """The front door of the lifecycle: one call that makes a machine an enrolled machine.
+
+    Idempotent: the same key with the same configuration is ``already_enrolled`` and
+    writes nothing. The receipt lists what enrolment does **not** establish (not verified
+    safe, no verification run yet, manifest completeness not shown, identity as declared and
+    not authenticated to a physical unit). Gated exactly like ``POST /v1/machinery/manifest``.
+    """
+    manifest = _manifest(body.manifest)
+    actor = Actor(identifier=body.actor,
+                  role=sanitise_declared_role(body.role, default=""), kind="person")
+    try:
+        receipt = enrol_machine(register.ledger, manifest, actor=actor,
+                                site=body.site, owner=body.owner)
+    except EnrolmentError as exc:
+        text = str(exc)
+        if text.startswith("the ledger chain does not verify"):
+            raise HTTPException(status_code=409, detail={
+                "error": "ledger_chain_unverified", "detail": text}) from exc
+        raise _bad(exc, "enrolment") from exc
+    if receipt.refused:
+        raise HTTPException(status_code=409, detail={
+            "error": receipt.status, "detail": receipt.pointer,
+            "receipt": receipt.to_dict()})
+    return receipt.to_dict()
 
 
 @machinery_router.post(

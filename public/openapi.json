@@ -705,6 +705,58 @@
         "title": "DriftIn",
         "type": "object"
       },
+      "EnrolIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          },
+          "site": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Site"
+          }
+        },
+        "required": [
+          "manifest",
+          "actor"
+        ],
+        "title": "EnrolIn",
+        "type": "object"
+      },
       "EvaluateIn": {
         "additionalProperties": false,
         "properties": {
@@ -5686,6 +5738,354 @@
         ]
       }
     },
+    "/v1/intel/candidates": {
+      "get": {
+        "description": "Unsigned, inspect-only advisory candidates built from the recorded CSAF and NVD\nobservations, plus every statement a source made that the advisory model cannot hold\n(``not_representable``: bounded version ranges and similar, as text) and NVD-versus-vendor\nconflicts. KEV carries no versions and never yields a candidate. Candidates are drafts for a\nperson to read; severity defaults to ``safety_relevant`` and nothing is matched here.",
+        "operationId": "intel_candidates_v1_intel_candidates_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Intel Candidates V1 Intel Candidates Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_machine_verification`; the body names the plan)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "`no_intel_store_configured` or `intel_store_unreadable`: the operator's observation store is not available. This is not an empty answer; nothing is known from this service until it is."
+          }
+        },
+        "summary": "Advisory candidates the model can represent, and what it cannot (read-only)",
+        "tags": [
+          "intel"
+        ]
+      }
+    },
+    "/v1/intel/cve/{cve_id}": {
+      "get": {
+        "description": "KEV ``listed`` / ``not_listed_in_kev`` / ``unchecked``; EPSS ``available`` (with its score\ndate) / ``unavailable``; NVD ``present`` / ``rejected`` / ``unknown``; NVD-versus-vendor\nconflicts. ``summary.status`` is ``unknown`` when no recorded source mentions the CVE.",
+        "operationId": "intel_cve_v1_intel_cve__cve_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cve_id",
+            "required": true,
+            "schema": {
+              "title": "Cve Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Intel Cve V1 Intel Cve  Cve Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_machine_verification`; the body names the plan)."
+          },
+          "422": {
+            "description": "`invalid_cve_id`: not `CVE-YYYY-NNNN+`."
+          },
+          "503": {
+            "description": "`no_intel_store_configured` or `intel_store_unreadable`: the operator's observation store is not available. This is not an empty answer; nothing is known from this service until it is."
+          }
+        },
+        "summary": "What every recorded public source says about one CVE (KEV, EPSS, NVD, conflicts)",
+        "tags": [
+          "intel"
+        ]
+      }
+    },
+    "/v1/intel/history": {
+      "get": {
+        "description": "Every recorded observation: accepted, unchanged and rejected alike.\n\nPage with ``after_seq`` (the last ``seq`` you have). ``status`` is ``empty`` when the store\nexists but nothing was recorded, which means nothing is known, not that nothing exists.",
+        "operationId": "intel_history_v1_intel_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Source",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 1000000000000000000,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Intel History V1 Intel History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_machine_verification`; the body names the plan)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "`no_intel_store_configured` or `intel_store_unreadable`: the operator's observation store is not available. This is not an empty answer; nothing is known from this service until it is."
+          }
+        },
+        "summary": "Intel observation history, oldest first (read-only, operator-owned public data)",
+        "tags": [
+          "intel"
+        ]
+      }
+    },
+    "/v1/intel/observations/{seq}": {
+      "get": {
+        "operationId": "intel_observation_v1_intel_observations__seq__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "title": "Seq",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Intel Observation V1 Intel Observations  Seq  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_machine_verification`; the body names the plan)."
+          },
+          "404": {
+            "description": "`observation_not_found`."
+          },
+          "422": {
+            "description": "`invalid_observation_seq`: not a positive integer."
+          },
+          "503": {
+            "description": "`no_intel_store_configured` or `intel_store_unreadable`: the operator's observation store is not available. This is not an empty answer; nothing is known from this service until it is."
+          }
+        },
+        "summary": "One intel observation in full, with its provenance",
+        "tags": [
+          "intel"
+        ]
+      }
+    },
     "/v1/keys": {
       "get": {
         "description": "Prefixes, labels and dates. Never a key and never a hash.",
@@ -6191,6 +6591,7 @@
     },
     "/v1/ledger/verify": {
       "get": {
+        "description": "Chain check, plus a completeness check against the service's own counter-signature.\n\n``completeness`` is ``checked_against_anchor`` only when this account has an\nattestation log whose every record verifies against the *service's* public key and\nwhose newest server-read head this ledger still contains; ``contradicted_by_anchor``\n(and ``verified`` false) when it does not. Otherwise ``not_checked``, and\n``not_checked`` names the missing prerequisite. ``anchor_meaning`` says what that\ndoes and does not prove.",
         "operationId": "get_ledger_verify_v1_ledger_verify_get",
         "parameters": [
           {
@@ -6682,6 +7083,80 @@
           }
         },
         "summary": "Is the machine still the configuration you signed off?",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
+    "/v1/machinery/enrol": {
+      "post": {
+        "description": "The front door of the lifecycle: one call that makes a machine an enrolled machine.\n\nIdempotent: the same key with the same configuration is ``already_enrolled`` and\nwrites nothing. The receipt lists what enrolment does **not** establish (not verified\nsafe, no verification run yet, manifest completeness not shown, identity as declared and\nnot authenticated to a physical unit). Gated exactly like ``POST /v1/machinery/manifest``.",
+        "operationId": "post_enrol_v1_machinery_enrol_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Enrol V1 Machinery Enrol Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "`configuration_differs`: this key is already enrolled with a different configuration (that is drift, not an enrolment: see `POST /v1/machinery/diff`); `identity_conflict`: it is enrolled with different declared attributes; `ledger_chain_unverified`. Nothing was written. The body carries the receipt."
+          },
+          "422": {
+            "description": "`invalid_manifest`, or `invalid_enrolment`: the actor is not a named person, or the declared site contradicts the manifest."
+          }
+        },
+        "summary": "Enrol a machine: declare its identity, seal its baseline, get a receipt",
         "tags": [
           "machinery"
         ]

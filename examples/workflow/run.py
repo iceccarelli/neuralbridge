@@ -61,11 +61,13 @@ def main() -> int:
              cli(work, "machine", "recorder-trust", "--trust", "trust.json", "--public-key",
                  "rec.pem.pub", "--label", "SYNTHETIC demo recorder", "--provenance", "bench,field"),
              0, "which key this verifier would believe", "that the key belongs to a real recorder")
-        step("manifest: seal what the machine declares today",
-             cli(work, "machinery", "record-manifest", "--ledger", ledger, "--actor",
+        step("enrol: declare the machine and seal its baseline manifest",
+             cli(work, "machinery", "enrol", "--ledger", ledger, "--actor",
                  "a.integrator", "manifest.json"),
-             0, "a hash-chained record of the declared configuration and safety functions",
-             "that the declaration is complete or true")
+             0, "a hash-chained record of the declared identity, configuration and safety "
+             "functions, and a receipt listing what enrolment does not establish",
+             "that the declaration is complete or true, that the serial belongs to a physical "
+             "unit, or that any function has been verified (all read never_verified)")
 
         def verify(tag: str, attested_on: str) -> subprocess.CompletedProcess:
             sign = cli(work, "machine", "recorder-sign", "--key", "rec.pem", "--trace",

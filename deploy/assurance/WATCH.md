@@ -243,6 +243,142 @@ Carried in `checks_skipped` on every run:
   ahead of `watch run`, or wire it into whatever schedules this watch.
 
 
+## Public intelligence as an advisory source (`intel`)
+
+Besides signed supplier feeds, a watch can read a local **intel store** (the
+SQLite file `assurance intel ingest|refresh` writes: CISA KEV, NVD, FIRST EPSS,
+CSAF). The watch only reads it, from disk, offline. It never fetches and never
+refreshes; `watch` modules import no network client. Refreshing stays the
+separate, opt-in `intel refresh --live` verb, so the pipeline is two steps:
+
+```bash
+# cron / scheduler, in this order
+assurance intel refresh --source kev  --store intel.db --live            # the only networked step
+assurance intel refresh --source nvd  --store intel.db --live --cve CVE-2026-0001
+assurance intel refresh --source epss --store intel.db --live --cve CVE-2026-0001
+assurance watch run watch.json --ledger evidence.db                      # offline
+```
+
+(`assurance intel ingest --kev FILE ...` records files you already have, with no
+network.) Configuration, next to `feeds`:
+
+```json
+"intel": [
+  { "kind": "intel_store", "store": "intel/intel.db",
+    "sources": ["nvd", "csaf", "kev", "epss"], "supplier_id": "public-intel" }
+]
+```
+
+`sources` names what to read; at least one of `nvd` or `csaf` is required, as
+KEV and EPSS carry no versions and only add context. The store path is relative
+to the config.
+
+What a candidate from this source is, and is not:
+
+* **Not a supplier statement.** `trust_basis` is `none`, `trust_state`
+  `unauthenticated_public_source`. Every finding is inspect-only, the same
+  machinery as an unsigned CSAF import: it lists the machines the existing
+  impact logic matched (`inspect_machines`) but `machines` stays empty, so no
+  stop-use is raised and no Art. 14 intake is drafted, and the watch opens no
+  case. A new or changed finding still makes the run exit `1`: a person has
+  something to read. A case is opened by a **named person** through
+  `assess_advisory` (for a CSAF candidate additionally with the unsigned-import
+  override and a reason), and the case records that the advisory was
+  unauthenticated. Software drafts; people decide.
+* **Matching is the existing impact logic.** No version arithmetic is added. An
+  NVD record gives an affected component only for a CPE entry naming one exact
+  version, and it matches a manifest only if the manifest uses the same
+  supplier/name/version strings; a bounded range is kept as text and is not
+  matched. A run with no match says so, and also lists what that does not
+  establish.
+* **Enrichment is context.** KEV, EPSS, NVD/CVSS and NVD-vs-CSAF conflicts are
+  attached to the finding (`intel.enrichment`) with citations and never change a
+  match or verdict. KEV *not listed* is not "not exploited"; EPSS with no score
+  is `unavailable`, never 0; no KEV catalogue recorded is `unchecked`.
+* **Seen and changed.** The advisory's content hash is remembered per run. The
+  same recorded content is `outstanding` and not announced again; changed
+  content is `updated` and announced once.
+* **Never quiet by accident.** A store that is missing, an empty file, holds no
+  observations, is not an intel store, whose latest observation of a series was
+  rejected, that has no observation of a source the watch was told to read, or
+  whose payloads cannot be re-read, makes the run **DEGRADED** (exit `2`) with
+  the reason in the feed outcome (`absent`, `empty`, `unreadable`,
+  `rejected_latest`, `incomplete`, `stale`). Older accepted data in the store is still
+  assessed. A fleet with no machines yields `not_assessed`, also degraded.
+
+What it does not establish: that the public record is correct, complete or
+current, or that a machine is unaffected because nothing matched. Whether the
+store is current is the next check.
+
+### Staleness: `max_age_hours`
+
+A refresh job that silently stopped looks exactly like a quiet week, so a
+subscription can declare how old the store may be:
+
+```json
+{ "kind": "intel_store", "store": "intel/intel.db", "max_age_hours": 26 }
+```
+
+`max_age_hours` is optional and must be a positive number. For each selected
+source (`nvd`, `csaf`, `kev`, `epss`) the watch takes its newest **accepted**
+observation and computes `run clock - recorded retrieved_at`. The feed's own
+stamp (a KEV catalogue date, an NVD `lastModified`, an EPSS date) is never the
+clock: it says when the publisher wrote something, not when this store last
+succeeded. A rejected observation does not count as a refresh.
+
+* Older than the limit, or no accepted observation of a selected source at
+  all: the feed outcome is `stale` and the run is **DEGRADED** (exit `2`). The
+  problem names the source, its last accepted retrieval time and the limit. A
+  retrieval time after the run's clock cannot establish an age and is treated
+  the same way. Older data is still assessed and the findings still appear.
+* A rejected latest observation keeps its own status, `rejected_latest`; the
+  staleness lines are added to its problems when they also apply.
+* Absent: age is **not checked**, and the run's `not checked` list says so.
+  A fresh retrieval means the store was refreshed, not that the source had
+  nothing newer to publish.
+
+Set it a little above your refresh interval (a daily job: 26-30).
+
+### From a finding to a case: `watch open-case`
+
+The pipeline has three steps and only the first is networked:
+
+```bash
+assurance intel refresh --source nvd --store intel.db --live --cve CVE-2026-0001   # fetch (opt-in)
+assurance watch run watch.json --ledger evidence.db                                 # offline; reports
+assurance watch open-case --config watch.json --ledger evidence.db \
+    --advisory-id nvd:CVE-2026-0001 --actor "Dana Reviewer" --role "safety engineer"
+```
+
+`open-case` is a **named person's** act. It re-derives the finding from the
+local store with the same function the watch uses (no matching is duplicated),
+and opens the case in `--ledger` through `assess_advisory`. Reading the store is
+offline; nothing is fetched.
+
+* **Refused (exit `1`, reason on stderr, nothing written):** an empty name or one
+  automation goes by (`automation`, `watch`, `system`, ...); an empty role, or a
+  role containing `=` or `;`; an advisory id that is not a current finding (not
+  in the store's selected sources, an unusable store, or matching no machine in
+  the ledger's fleet); a case that already exists and is closed, rejected or
+  deferred (reopening is a person's decision through `change`).
+* **CSAF-derived candidates** are unsigned imports: `--accept-unsigned` and a
+  non-empty `--reason` (what you checked, against what) are both required, as
+  for `change assess-advisory`. NVD candidates need neither; the case is still
+  marked unauthenticated.
+* **Idempotent.** Re-running returns the same case id and writes nothing new.
+  A second person re-running does not re-attribute who accepted it.
+* **Prints** the case id, the trust state (`unauthenticated_public_source`; the
+  case provenance records it with the person who opened it), what is **not**
+  established (the advisory is not shown genuine; matches are on recorded labels;
+  an unmatched machine is not shown unaffected; nothing is verified), and the next
+  human steps. `--json` gives the same.
+* **Never** closes, decides, waives, advances or claims anything, and the next
+  `watch run` shows the finding as `outstanding`, not `new`.
+
+Exit codes: `0` opened or already open, `1` refused, `2` usage or I/O (missing
+config, missing ledger; it never creates a ledger).
+
+
 ---
 
 # From an advisory to a drafted filing

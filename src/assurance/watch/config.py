@@ -16,14 +16,15 @@ that ambiguity into an alarm.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 
-__all__ = ["WatchConfig", "WatchError", "WatchTarget"]
+__all__ = ["INTEL_SOURCES", "IntelSubscription", "WatchConfig", "WatchError", "WatchTarget"]
 
 
 class WatchError(AssuranceError):
@@ -116,6 +117,92 @@ class FeedSubscription:
         )
 
 
+#: The names a subscription may use for the sources an intel store records, and what each
+#: is for. ``nvd`` and ``csaf`` can produce advisory candidates; ``kev`` and ``epss`` only
+#: ever add context to a finding.
+INTEL_SOURCES: dict[str, str] = {
+    "nvd": "nvd_cve_api", "csaf": "csaf", "kev": "cisa_kev", "epss": "first_epss"}
+_INTEL_CANDIDATE_SOURCES = ("nvd", "csaf")
+
+
+@dataclass(frozen=True)
+class IntelSubscription:
+    """An advisory source that is a local intel store, read offline.
+
+    The store is the SQLite file `assurance intel ingest|refresh` writes. The watch
+    only READS it: it never fetches and never refreshes (refresh is the separate
+    `intel refresh --live` verb). What it reads is unauthenticated public data, so every
+    candidate it yields is inspect-only: a finding for a person to review, never a
+    stop-use, an intake or a case opened by software.
+    """
+
+    store: str
+    #: Which recorded sources to read: any of ``nvd`` ``csaf`` ``kev`` ``epss``. At
+    #: least one of ``nvd``/``csaf`` is required: KEV and EPSS carry no versions, so on
+    #: their own they could never match anything and the watch would only look busy.
+    sources: tuple[str, ...] = ("nvd", "csaf", "kev", "epss")
+    #: Label under which findings from this store are reported.
+    supplier_id: str = "public-intel"
+    notes: str = ""
+    #: How old the newest ACCEPTED observation of each selected source may be, measured from
+    #: its recorded ``retrieved_at`` against the run's clock. Absent = staleness is NOT
+    #: checked (and the run says so). A refresh job that silently stopped otherwise looks
+    #: exactly like a quiet week.
+    max_age_hours: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.store.strip():
+            raise WatchError("an intel subscription needs a store path.")
+        if self.max_age_hours is not None and (
+                isinstance(self.max_age_hours, bool)
+                or not isinstance(self.max_age_hours, (int, float))
+                or not math.isfinite(self.max_age_hours) or self.max_age_hours <= 0):
+            raise WatchError(
+                "an intel subscription's max_age_hours must be a positive number "
+                f"(got {self.max_age_hours!r}); leave it out to say staleness is not checked.")
+        if not self.supplier_id.strip():
+            raise WatchError("an intel subscription needs a supplier_id label.")
+        unknown = [s for s in self.sources if s not in INTEL_SOURCES]
+        if unknown:
+            raise WatchError(
+                f"unknown intel source(s) {unknown!r}; known: {sorted(INTEL_SOURCES)}.")
+        if len(set(self.sources)) != len(self.sources):
+            raise WatchError("an intel subscription names a source twice.")
+        if not any(s in _INTEL_CANDIDATE_SOURCES for s in self.sources):
+            raise WatchError(
+                "an intel subscription must read at least one of 'nvd' or 'csaf': KEV and "
+                "EPSS carry no versions and can only add context to a finding.")
+
+    @property
+    def source_ids(self) -> tuple[str, ...]:
+        return tuple(INTEL_SOURCES[s] for s in self.sources)
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "kind": "intel_store", "store": self.store, "sources": list(self.sources),
+            "supplier_id": self.supplier_id, "notes": self.notes}
+        if self.max_age_hours is not None:      # absent when unused: existing hashes hold
+            d["max_age_hours"] = self.max_age_hours
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> IntelSubscription:
+        if d.get("kind", "intel_store") != "intel_store":
+            raise WatchError(f"unknown advisory source kind {d.get('kind')!r}.")
+        raw = d.get("sources")
+        age = d.get("max_age_hours")
+        if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float))):
+            raise WatchError(
+                f"an intel subscription's max_age_hours must be a positive number (got {age!r}).")
+        return cls(
+            store=str(d.get("store", "")),
+            sources=tuple(str(s) for s in raw) if raw is not None
+            else ("nvd", "csaf", "kev", "epss"),
+            supplier_id=str(d.get("supplier_id", "public-intel")),
+            notes=str(d.get("notes", "")),
+            max_age_hours=float(age) if age is not None else None)
+
+
 @dataclass(frozen=True)
 class Article14Duty:
     """Whether this operator carries the Art. 14 reporting duty, stated explicitly.
@@ -164,6 +251,8 @@ class WatchConfig:
     #: "did anything here change"; these answer "did the world change underneath
     #: machines that did not", which is the half nobody notices in time.
     feeds: tuple[FeedSubscription, ...] = ()
+    #: Local intel stores read as unauthenticated public advisory sources (offline).
+    intel: tuple[IntelSubscription, ...] = ()
     #: Declared, never inferred. See Article14Duty.
     article_14: Article14Duty = field(default_factory=Article14Duty)
     #: Who the watch runs as. Every record it seals is attributed here, and an
@@ -199,6 +288,12 @@ class WatchConfig:
                     f"watch {self.watch_id!r} subscribes to supplier "
                     f"{f.supplier_id!r} twice.")
             suppliers.add(f.supplier_id)
+        for i in self.intel:
+            if i.supplier_id in suppliers:
+                raise WatchError(
+                    f"watch {self.watch_id!r} uses {i.supplier_id!r} for two advisory "
+                    "sources.")
+            suppliers.add(i.supplier_id)
 
     @property
     def targets_without_country(self) -> tuple[WatchTarget, ...]:
@@ -208,6 +303,13 @@ class WatchConfig:
         return next((t for t in self.targets if t.serial == serial), None)
 
     def hashable_payload(self) -> dict[str, Any]:
+        payload = self._base_payload()
+        if self.intel:     # absent when unused, so an existing watch keeps its hash
+            payload["intel"] = [i.to_dict() for i in
+                                sorted(self.intel, key=lambda i: i.supplier_id)]
+        return payload
+
+    def _base_payload(self) -> dict[str, Any]:
         return {
             "watch_id": self.watch_id,
             "operator": self.operator,
@@ -234,6 +336,7 @@ class WatchConfig:
             targets=tuple(WatchTarget.from_dict(t) for t in d["targets"]),
             feeds=tuple(FeedSubscription.from_dict(f)
                         for f in (d.get("feeds") or ())),
+            intel=tuple(IntelSubscription.from_dict(i) for i in (d.get("intel") or ())),
             article_14=Article14Duty.from_dict(d.get("article_14")),
             operator=str(d.get("operator", "assurance-watch")),
             organisation=str(d.get("organisation", "")),
@@ -276,6 +379,11 @@ class WatchConfig:
                     notes=f.notes,
                 )
                 for f in config.feeds
+            ),
+            intel=tuple(
+                replace(i, store=str((base / i.store).resolve())
+                        if not Path(i.store).is_absolute() else i.store)
+                for i in config.intel
             ),
             article_14=config.article_14,
         )

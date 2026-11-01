@@ -31,6 +31,7 @@ from .check_routes import check_router
 from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode, too_deep_body
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
+from .intel_routes import intel_router
 from .logging_filters import install as install_log_filters
 from .machine_routes import machine_router
 from .machinery_routes import machinery_router
@@ -174,6 +175,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(evidence_verify_router)
     application.include_router(attest_router)
     application.include_router(supplier_router)
+    application.include_router(intel_router)
     application.include_router(router)
     application.include_router(evidence_router)
     return application
