@@ -2610,6 +2610,69 @@
       "title": "Sign a withdrawal of an advisory"
     },
     {
+      "id": "tenant.delete",
+      "service": "tenant",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "tenant delete"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        }
+      },
+      "title": "Plan an account's removal; with --execute, a verified export and a named person, unlink exactly the planned files and record a tombstone"
+    },
+    {
+      "id": "tenant.export",
+      "service": "tenant",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "tenant export"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        }
+      },
+      "title": "Export one account's ledger, evidence bundle and attestation log into a manifest-hashed directory"
+    },
+    {
+      "id": "tenant.verify_export",
+      "service": "tenant",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "tenant verify-export"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling on the data volume: it reads one account's ledger and attestation log and, only with a verified export and a named person's confirmation, unlinks them; a request or a tool is not offered a way to export or destroy a tenant's files",
+          "status": "by_design"
+        }
+      },
+      "title": "Re-hash a tenant export against its manifest and re-verify the copied chain"
+    },
+    {
       "id": "watch.open_case",
       "service": "watch",
       "surfaces": {
@@ -2813,6 +2876,11 @@
       "verify",
       "withdraw"
     ],
+    "tenant": [
+      "delete",
+      "export",
+      "verify-export"
+    ],
     "value": [
       "report"
     ],
@@ -2825,24 +2893,24 @@
   },
   "counts": {
     "api_routes": 88,
-    "capabilities": 118,
-    "cli_commands": 98,
-    "cli_domains": 18,
+    "capabilities": 121,
+    "cli_commands": 101,
+    "cli_domains": 19,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
         "available": 82,
-        "by_design": 35,
+        "by_design": 38,
         "planned": 1
       },
       "cli": {
-        "available": 100,
+        "available": 103,
         "by_design": 12,
         "planned": 6
       },
       "mcp": {
         "available": 42,
-        "by_design": 76,
+        "by_design": 79,
         "planned": 0
       }
     }

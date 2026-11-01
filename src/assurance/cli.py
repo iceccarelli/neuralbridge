@@ -37,6 +37,7 @@ _DOMAINS = {
     "intel": "assurance.intel.cli",
     "value": "assurance.value.cli",
     "ops": "assurance.ops.cli",
+    "tenant": "assurance.tenant.cli",
     "billing": "assurance.billing.cli",
     "capabilities": "assurance.capabilities_cli",
 }

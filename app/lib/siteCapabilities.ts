@@ -55,6 +55,7 @@ export const SERVICE_TITLE: Record<string, string> = {
   machine: 'Machine safety',
   machinery: 'Machinery Annex III',
   ops: 'Operator cycle (operator tooling)',
+  tenant: 'Tenant export and offboarding (operator tooling)',
   report: 'Report',
   supplier: 'Supplier feeds',
   watch: 'Watch',
