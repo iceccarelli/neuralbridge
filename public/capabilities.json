@@ -2551,8 +2551,10 @@
       "service": "watch",
       "surfaces": {
         "api": {
-          "reason": "the hosted route for a case opened from third-party content is `POST /v1/change/assess/advisory`; the intel-store form is offline",
-          "status": "planned"
+          "names": [
+            "POST /v1/change/assess/advisory/intel"
+          ],
+          "status": "available"
         },
         "cli": {
           "names": [
@@ -2754,16 +2756,16 @@
     ]
   },
   "counts": {
-    "api_routes": 87,
+    "api_routes": 88,
     "capabilities": 115,
     "cli_commands": 95,
     "cli_domains": 17,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
-        "available": 81,
+        "available": 82,
         "by_design": 32,
-        "planned": 2
+        "planned": 1
       },
       "cli": {
         "available": 97,
