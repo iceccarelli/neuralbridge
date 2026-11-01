@@ -20,10 +20,15 @@ from assurance.fleet.advisory import AdvisoryError
 from assurance.fleet.csaf import advisory_from_csaf
 from assurance.intel.sources import CVE_ID
 
-__all__ = ["PARSER_VERSION", "FeedRejected", "ParsedFeed", "digest_record", "parse_csaf",
-           "parse_epss", "parse_kev", "parse_nvd", "parser_for"]
+__all__ = ["INTERIM_REFUSAL", "INTERIM_STATUS_NOTE", "PARSER_VERSION", "FeedRejected",
+           "ParsedFeed", "digest_record", "parse_csaf", "parse_epss", "parse_kev", "parse_nvd",
+           "parser_for"]
 
 PARSER_VERSION = "assurance-intel-parse/1"
+#: The recorded reason of an interim CSAF document refused by default. Stable: callers count it.
+INTERIM_REFUSAL = "wrong_shape: tracking status is interim"
+#: Carried by every candidate built from a document that was ``interim`` when read.
+INTERIM_STATUS_NOTE = "tracking status was interim when read; the vendor may revise it"
 
 
 class FeedRejected(Exception):  # noqa: N818 - reads as the verdict it is
@@ -196,14 +201,33 @@ def parse_epss(raw: bytes, max_bytes: int) -> ParsedFeed:
 
 
 # --------------------------------------------------------------------------- CSAF
-def parse_csaf(raw: bytes, max_bytes: int) -> ParsedFeed:
-    """Accept a document only if the repo's own CSAF importer accepts it (final status)."""
+def parse_csaf(raw: bytes, max_bytes: int, *, allow_interim: bool = False) -> ParsedFeed:
+    """Accept a document only if the repo's own CSAF importer accepts it (final status).
+
+    ``allow_interim`` is the operator's explicit option (``--allow-interim``). It admits
+    ``interim`` documents only. The importer treats ``draft`` and ``interim`` identically
+    (one ``allow_draft`` switch), but a draft is an unpublished working copy, so it is
+    refused here even with the option. A document refused for any other reason stays refused:
+    the importer is always consulted, and an interim or draft document that it would refuse
+    anyway is reported with the importer's own reason.
+    """
     doc = load_json(raw, max_bytes)
     _shape(isinstance(doc, dict), "a CSAF document must be a JSON object")
+    head0 = doc.get("document")
+    tracking0 = head0.get("tracking") if isinstance(head0, dict) else None
+    status = (str(tracking0.get("status", "")).strip().casefold()
+              if isinstance(tracking0, dict) else "")
+    # draft is only ever looked past when the option is on (to refuse it with its own reason);
+    # by default the importer's own refusal stands, exactly as before.
+    gated = status == "interim" or (status == "draft" and allow_interim)
     try:
-        advisory_from_csaf(doc)
+        advisory_from_csaf(doc, allow_draft=gated)
     except AdvisoryError as exc:
         raise FeedRejected(f"wrong_shape: the CSAF importer refused it: {exc}") from exc
+    if status == "draft":
+        raise FeedRejected("wrong_shape: tracking status is draft")
+    if status == "interim" and not allow_interim:
+        raise FeedRejected(INTERIM_REFUSAL)
     head = doc["document"]["tracking"]
     cves = sorted({v["cve"].strip() for v in (doc.get("vulnerabilities") or [])
                    if isinstance(v, dict) and isinstance(v.get("cve"), str)
@@ -216,6 +240,9 @@ def parse_csaf(raw: bytes, max_bytes: int) -> ParsedFeed:
                       {"cves": cves, "tracking": tracking})
 
 
-def parser_for(source_id: str) -> Callable[[bytes, int], ParsedFeed]:
+def parser_for(source_id: str, *, allow_interim: bool = False
+               ) -> Callable[[bytes, int], ParsedFeed]:
+    if allow_interim and source_id == "csaf":
+        return lambda raw, cap: parse_csaf(raw, cap, allow_interim=True)
     return {"cisa_kev": parse_kev, "nvd_cve_api": parse_nvd, "first_epss": parse_epss,
             "csaf": parse_csaf}[source_id]

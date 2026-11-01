@@ -299,16 +299,20 @@ class IntelStore:
         return {"provider": row["provider"], "listed_at": row["listed_at"],
                 "settled": bool(row["settled"]), **json.loads(row["meta_json"])}
 
-    def settled_listings(self, provider: str) -> dict[str, str]:
+    def settled_listings(self, provider: str, *, allow_interim: bool = False
+                         ) -> dict[str, str]:
         """url -> newest ``listed_at`` already settled (accepted or rejected for good).
 
         This is the incremental cursor: a document whose listing is not newer than this has
-        been dealt with. A transient failure is not settled, so it is tried again.
+        been dealt with. A transient failure is not settled, so it is tried again. With
+        ``allow_interim`` a document that was refused only for being interim is not settled:
+        the operator has now asked for those.
         """
         with self._read() as db:
             try:
                 rows = db.execute(
-                    "SELECT o.url AS url, p.listed_at AS listed_at FROM provenance p "
+                    "SELECT o.url AS url, p.listed_at AS listed_at, p.meta_json AS meta "
+                    "FROM provenance p "
                     "JOIN observations o ON o.seq = p.seq "
                     "WHERE p.provider=? AND p.settled=1 AND p.listed_at != ''",
                     (provider,)).fetchall()
@@ -316,6 +320,8 @@ class IntelStore:
                 return {}
         out: dict[str, str] = {}
         for r in rows:
+            if allow_interim and json.loads(r["meta"]).get("interim_refused"):
+                continue
             if r["url"] not in out or r["listed_at"] > out[r["url"]]:
                 out[r["url"]] = r["listed_at"]
         return out

@@ -10,6 +10,9 @@
         fetch CSAF advisories from a provider the operator names. --allow-host is required
         and exact; a provider-metadata run fetches only documents new or changed since the
         last run and says how many it did not fetch. Imports stay unsigned (inspect-only).
+    --allow-interim  (ingest --csaf, refresh --source csaf) operator option, off by default:
+        also import CSAF documents whose tracking status is 'interim' (never 'draft'), as
+        inspect-only with a visible "interim when read" note; recorded in provenance.
     history --store DB [--source S] [--limit N] [--json]
     show    --store DB SEQ | --cve CVE-ID  [--json]
     candidates --store DB [--out DIR] [--json]
@@ -33,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from assurance.intel.fetch import build_headers, fetch, ingest_file
+from assurance.intel.parsers import INTERIM_REFUSAL
 from assurance.intel.sources import SOURCES, epss_url, nvd_url, resolve_source
 from assurance.intel.store import IntelStore, Observation
 from assurance.intel.view import build_report
@@ -43,6 +47,22 @@ EXIT_REJECTED = 1
 EXIT_COULD_NOT_RUN = 2
 
 
+_ALLOW_INTERIM_HELP = (
+    "csaf only: also import documents whose tracking status is 'interim' (inspect-only, "
+    "flagged as interim, recorded as imported under this option). 'draft' stays refused. "
+    "Off by default.")
+
+
+def interim_hint(count: int) -> str:
+    return (f"{count} interim document(s) refused; pass --allow-interim to import them as "
+            "inspect-only")
+
+
+def _interim_count(observations: list[Observation]) -> int:
+    return sum(o.disposition == "rejected" and o.reason == INTERIM_REFUSAL
+               for o in observations)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="assurance intel", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -50,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ing = sub.add_parser("ingest", help="record local feed files as observations (offline)")
     ing.add_argument("--store", required=True, type=Path)
+    ing.add_argument("--allow-interim", action="store_true", help=_ALLOW_INTERIM_HELP)
     for flag in ("kev", "nvd", "epss", "csaf"):
         ing.add_argument(f"--{flag}", type=Path, action="append", default=[],
                          metavar="FILE")
@@ -72,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="csaf only: a provider-metadata.json; only new/changed documents")
     ref.add_argument("--max-documents", type=int, default=None, metavar="N",
                      help="csaf provider mode: fetch at most N documents per run (default 50)")
+    ref.add_argument("--allow-interim", action="store_true", help=_ALLOW_INTERIM_HELP)
     ref.add_argument("--max-total-bytes", type=int, default=None, metavar="N",
                      help="csaf: stop fetching once N bytes were read (default 64 MiB)")
 
@@ -134,7 +156,12 @@ def _ingest(args: argparse.Namespace) -> int:
             print(f"error: {path} is not a readable file", file=sys.stderr)
             return EXIT_COULD_NOT_RUN
     store = IntelStore(args.store)
-    return _report([ingest_file(store, sid, path) for sid, path in jobs])
+    done = [ingest_file(store, sid, path, allow_interim=args.allow_interim and sid == "csaf")
+            for sid, path in jobs]
+    code = _report(done)
+    if _interim_count(done):
+        print(interim_hint(_interim_count(done)))
+    return code
 
 
 def _refresh_csaf(args: argparse.Namespace) -> int:
@@ -164,13 +191,15 @@ def _refresh_csaf(args: argparse.Namespace) -> int:
         transport = _make_transport("csaf", hosts)
         if args.url:
             report = refresh_documents(store, args.url, transport, allowed_hosts=hosts,
-                                       timeout=args.timeout, max_total_bytes=total)
+                                       timeout=args.timeout, max_total_bytes=total,
+                                       allow_interim=args.allow_interim)
         else:
             report = refresh_provider(
                 store, args.provider_metadata_url, transport, allowed_hosts=hosts,
                 max_documents=(DEFAULT_MAX_DOCUMENTS if args.max_documents is None
                                else args.max_documents),
-                max_total_bytes=total, timeout=args.timeout)
+                max_total_bytes=total, timeout=args.timeout,
+                allow_interim=args.allow_interim)
     except CsafRefusal as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_COULD_NOT_RUN
@@ -183,6 +212,8 @@ def _refresh_csaf(args: argparse.Namespace) -> int:
           f"already up to date {report.up_to_date}, fetched {len(report.observations)} "
           f"(first {c['first']}, changed {c['changed']}, unchanged {c['unchanged']}, "
           f"rejected {c['rejected']}), bytes {report.bytes_fetched}")
+    if report.interim_refused:
+        print(interim_hint(report.interim_refused))
     if report.not_fetched:
         print(f"{report.not_fetched} more not fetched ({report.stopped}); run again to "
               "continue")
@@ -203,6 +234,9 @@ def _refresh(args: argparse.Namespace) -> int:
     src = resolve_source(args.source)
     if src.id == "csaf":
         return _refresh_csaf(args)
+    if args.allow_interim:
+        print("error: --allow-interim is for --source csaf only", file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
     if args.allow_host or args.url or args.provider_metadata_url:
         print("error: --allow-host, --url and --provider-metadata-url are for "
               "--source csaf only", file=sys.stderr)
@@ -254,6 +288,8 @@ def _history(args: argparse.Namespace) -> int:
             print(_line(o) + _tracking_text(prov))
         if not rows:
             print("no observations")
+        elif _interim_count(rows):
+            print(interim_hint(_interim_count(rows)))
     return 0
 
 
