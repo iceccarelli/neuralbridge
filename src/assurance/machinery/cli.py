@@ -1,6 +1,7 @@
 """``assurance machinery`` — the machine's software identity and its change history.
 
     enrol             the front door: declare one machine, seal its baseline, get a receipt
+    import-inventory  enrol many machines from an inventory export file (CSV or JSON)
     amend-enrolment   a named person changes a declared site / owner, as a new record
     record-manifest   seal what is on the machine today
     record-change     seal an intervention in safety-relevant software
@@ -13,6 +14,12 @@
 1 when it refuses (the key is enrolled with a different configuration or different declared
 attributes; nothing is written), 2 on a usage or I/O error or an actor that is not a named
 person.
+
+``import-inventory`` is a FILE importer, not a CMDB connector and not a supported adapter. Each
+row is enrolled through the same front door as ``enrol``; the data is as declared by the
+customer's system, not collected from the machines. Exit 0 when every row is enrolled or
+already enrolled, 1 when any row was refused, rejected or not processed (over --max-rows), 2 on a
+usage or I/O error, a refused file, mapping or ledger, or an actor that is not a named person.
 
 ``amend-enrolment`` never rewrites the enrolment: it appends an amendment that names the
 enrolment and the amendment before it. It opens an existing ledger only (a typo creates
@@ -42,6 +49,7 @@ from assurance.machinery.amend import AMENDABLE, amend_enrolment
 from assurance.machinery.divergence import compare
 from assurance.machinery.enrol import enrol_machine, require_person
 from assurance.machinery.intervention import Intervention
+from assurance.machinery.inventory import DEFAULT_MAX_ROWS, import_file
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
     build_passport,
@@ -78,6 +86,24 @@ def build_parser() -> argparse.ArgumentParser:
     en.add_argument("--site", default=None, help="declared site (must agree with the manifest)")
     en.add_argument("--owner", default=None, help="declared owner of the machine")
     en.add_argument("--json", action="store_true")
+
+    ii = verbs.add_parser(
+        "import-inventory",
+        help="enrol many machines from an inventory/CMDB export file (a file importer)")
+    ii.add_argument("file", type=Path, help="CSV (',' or ';', UTF-8) or a JSON array of objects")
+    ii.add_argument("--mapping", required=True, type=Path,
+                    help="JSON: source columns -> canonical fields, items, source_system, "
+                         "export_date")
+    ii.add_argument("--ledger", required=True, type=Path,
+                    help="created on first use like enrol; never created by --dry-run")
+    ii.add_argument("--actor", required=True, help="the named person making the declaration")
+    ii.add_argument("--role", default="")
+    ii.add_argument("--dry-run", action="store_true",
+                    help="show the outcomes the import would produce; write nothing")
+    ii.add_argument("--max-rows", type=int, default=DEFAULT_MAX_ROWS,
+                    help=f"rows beyond this are not processed and are reported (default "
+                         f"{DEFAULT_MAX_ROWS})")
+    ii.add_argument("--json", action="store_true")
 
     am = verbs.add_parser("amend-enrolment",
                           help="change a machine's declared site or owner, as a new record")
@@ -147,6 +173,16 @@ def _cmd_enrol(args: argparse.Namespace) -> int:
     else:
         print(receipt.summary())
     return 1 if receipt.refused else 0
+
+
+def _cmd_import_inventory(args: argparse.Namespace) -> int:
+    report = import_file(args.file, args.mapping, args.ledger, actor=_actor(args),
+                         dry_run=args.dry_run, max_rows=args.max_rows)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(report.summary())
+    return 0 if report.ok else 1
 
 
 def _cmd_amend_enrolment(args: argparse.Namespace) -> int:
@@ -286,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {
         "enrol": _cmd_enrol,
+        "import-inventory": _cmd_import_inventory,
         "amend-enrolment": _cmd_amend_enrolment,
         "record-manifest": _cmd_record_manifest,
         "record-change": _cmd_record_change,

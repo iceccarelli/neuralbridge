@@ -188,6 +188,12 @@ CAPABILITIES: tuple[Capability, ...] = (
        "machinery enrol", "POST /v1/machinery/enrol",
        gaps={"mcp": _d("enrolment is a named person's declaration of identity; an agent is not "
                        "offered a way to make it (and it writes the ledger of record)")}),
+    _c("machinery.import_inventory",
+       "Enrol many machines from an inventory export file (a file importer, not a connector)",
+       "machinery import-inventory", "POST /v1/machinery/enrol/batch",
+       gaps={"mcp": _d("bulk enrolment is a named person's declaration of identity from the "
+                       "customer's own file; an agent is not offered a way to make it (and it "
+                       "writes the ledger of record)")}),
     _c("machinery.amend_enrolment", "Amend a machine's declared site or owner, as a new record",
        "machinery amend-enrolment", "POST /v1/machinery/enrol/amend",
        gaps={"mcp": _d("an amendment is a named person's declaration of identity; an agent is "

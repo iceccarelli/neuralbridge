@@ -1,0 +1,6 @@
+Hersteller,Typ,Seriennr,Standort,Eigentuemer,Baujahr,Land,SPS Firmware,SPS Version,SPS SHA256,Scanner Version
+Grimaldi,AR-7,0501,Plant 1,Example GmbH,2021,DE,Safety controller firmware,3.8.2,1111111111111111111111111111111111111111111111111111111111111111,r4
+Grimaldi,AR-7,0502,Plant 1,Example GmbH,2021,DE,Safety controller firmware,3.8.2,1111111111111111111111111111111111111111111111111111111111111111,r4
+Grimaldi,AR-7,0503,Plant 2,Example GmbH,2022,DE,Safety controller firmware,3.8.1,,r3
+Grimaldi,AR-9,0601,Plant 2,Example GmbH,2023,AT,Safety controller firmware,4.0.0,2222222222222222222222222222222222222222222222222222222222222222,r5
+Grimaldi,AR-9,0602,Plant 2,Example GmbH,2023,AT,Safety controller firmware,4.0.0,2222222222222222222222222222222222222222222222222222222222222222,r5

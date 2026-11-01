@@ -84,6 +84,120 @@ declaration of identity.
 | `key_change_refused` | key or configuration named; nothing written, points at enrol / diff | 1 | 409 |
 | refused input | no actor, an automation actor, no reason, an empty value, nothing to amend, a ledger that does not exist (CLI never creates one), a chain that does not verify | 2 | 422 / 409 |
 
+## Onboarding a fleet from an inventory export
+
+`machinery enrol` takes one machine. A plant that already has a list (an asset-management or CMDB
+export, a spreadsheet) enrols it in one command:
+
+```bash
+assurance machinery import-inventory export.csv --mapping mapping.json --ledger register.db \
+    --actor "a.integrator" [--dry-run] [--max-rows 500] [--json]
+```
+
+**This is a file importer.** It is not a live CMDB connector, not an integration with SAP PM,
+Maximo or any other product, and not a supported adapter; nothing in it talks to another system.
+Each row goes through `enrol_machine` (the one front door: no sealing is reimplemented), with the
+named actor, so the outcomes are enrol's own.
+
+**Input.** CSV (RFC 4180, UTF-8, a header row, delimiter `,` or `;`, a BOM is tolerated, quoted
+fields may contain newlines) or a JSON array of objects. At most `--max-rows` data rows (default
+500) are processed. A file over 25 MB, not UTF-8, or containing a NUL byte is refused.
+
+**Mapping** (`mapping.json`; unknown keys are refused). A synthetic example is in
+`tests/fixtures/inventory/` (`mapping.synthetic.json`, `sap-pm-export.synthetic.csv`):
+
+```json
+{
+  "source_system": "sap-pm-export",
+  "export_date": "2026-10-15",
+  "columns": {"manufacturer": "Hersteller", "model": "Typ", "serial": "Seriennr",
+              "site": "Standort", "owner": "Eigentuemer", "year": "Baujahr", "country": "Land"},
+  "items": [
+    {"name_column": "SPS Firmware", "version_column": "SPS Version", "sha256_column": "SPS SHA256",
+     "supplier": "ControlCo", "kind": "firmware", "implements": ["SF-01"]},
+    {"name": "Safety scanner zone set", "version_column": "Scanner Version",
+     "kind": "safety_configuration", "implements": ["SF-01"]}
+  ],
+  "functions": [
+    {"function_id": "SF-01", "description": "Protective stop on zone intrusion",
+     "required_performance": "PL d", "verified_by": ["ssm_separation", "stop_characterisation"]}
+  ]
+}
+```
+
+* `columns`: `manufacturer`, `model`, `serial` are required; `site`, `owner`, `year` (four digits),
+  `country` (ISO 3166-1 alpha-2) are optional.
+* `items`: each is a literal `name` or a `name_column`, plus `version_column`; optional
+  `supplier` / `supplier_column`, `sha256_column`, `kind` (default `firmware`), `implements`. An item
+  whose name cell is empty is not listed; one with a name and no version is not listed and the row
+  says so. A row with no items is rejected.
+* `functions`: safety functions the **mapping** declares for every machine in the batch, with the
+  checks that exercise them (`verified_by`). The export itself says nothing about safety functions;
+  without `functions` the manifests declare none. With them, every function reads `never_verified`
+  after the import, because no verification has been run.
+* `source_system` (a label) and `export_date` (`YYYY-MM-DD`, when the customer's system produced the
+  export) are required and are recorded.
+
+**What each row becomes.** One manifest: source `as_declared`, every item's hash source `declared`
+(the existing vocabulary; no new trust tier). A `sha256` cell, when present, must be exactly 64
+hexadecimal characters or the **row** is rejected: it is never repaired, truncated or guessed. An item
+with no digest is `uncomparable`, as in any enrolment. The sealed manifest carries its provenance
+(importer version, source system, export date, the file's SHA-256, the row number) and says that the
+entry is customer-provided and not collected from the machine.
+
+**Outcomes** (per row; one bad row never aborts the batch; nothing is hidden):
+
+| outcome | meaning | written |
+|---|---|---|
+| `enrolled` | manifest and enrolment sealed | yes |
+| `already_enrolled` | same key, same configuration | no |
+| `configuration_differs` | same key, changed items: drift, not an enrolment; the row carries the pointer to `machinery diff` | no |
+| `identity_conflict` | same key, different declared site / owner / year / country | no |
+| `rejected` + reason | unreadable row, empty required value, bad digest, bad year or country, control character, over-long field, `duplicate in file` (the second occurrence of a machine key), or an error from enrol | no |
+
+Rows past `--max-rows` are **not processed** and are reported as `N rows not processed`; they are
+never dropped silently, and they make the exit code 1. The summary lists the count per outcome and
+every row that is not enrolled with its reason.
+
+**Safety of the cells.** A cell that begins with `=`, `+`, `-` or `@` is kept as text (the row notes
+it) and is never evaluated. Control characters, invisible format characters (zero-width, bidi
+overrides) and fields over 200 characters are refused for that row. Only whitespace controls (tab,
+newline) are accepted and collapse to a single space.
+
+**Before and after the write.** The file, mapping and actor are checked in full before the ledger is
+opened for writing: a header that lacks a mapped column, a bad mapping, a non-UTF-8 file or an
+automation actor is refused with exit 2 and nothing is written. The ledger is created on first use,
+like `enrol`; its chain is verified first. After a run that enrolled at least one machine, one
+`machinery.inventory_import` record is sealed: file SHA-256, mapping SHA-256, source system, export
+date, the counts, the actor, and per row the row number, machine key and outcome. It holds no
+other row contents (no owner, site, version or digest). A re-run that enrolls nothing writes nothing,
+including that record.
+
+**`--dry-run`** runs every validation and shows the outcomes the import would produce, including
+`already_enrolled` against the real ledger. The real ledger is only read (its bytes are copied to a
+temporary directory and the import runs on the copy); it is never opened for writing and, if absent,
+never created.
+
+**Exit codes.** 0: every processed row is `enrolled` or `already_enrolled` and none was left
+unprocessed. 1: some row is `rejected`, `configuration_differs`, `identity_conflict`, or not
+processed. 2: usage or I/O error, a refused file, mapping, actor or ledger (including a chain that
+does not verify).
+
+**What the import does not establish.** The inventory is as declared by the customer's own system:
+nothing was read from a machine, no verification was run, identity is not authenticated to a physical
+unit, and the export's completeness is unknown (a machine or software item absent from the file is
+absent from the record). Items without a digest cannot be compared later.
+
+**API.** `POST /v1/machinery/enrol/batch` (`{rows, source_system, actor, role?, file_sha256?,
+export_date?, functions?}`, gated exactly like `POST /v1/machinery/enrol`) takes **canonical machine
+dicts** (`manufacturer, model, serial, site?, owner?, year?, country?, items: [{name, version,
+supplier?, sha256?, kind?, implements?}]`), at most 200 per request (more is `413 too_many_rows`,
+nothing processed), and calls the same domain function. It answers 200 with the per-row outcomes
+whenever the batch was processed (some rows may have been written; read `counts`). `file_sha256` is
+the caller's claim and is recorded as asserted, not checked. CSV parsing and column mapping stay in
+the CLI on purpose: a server that parses arbitrary uploaded files is a larger attack surface than one
+that takes canonical rows. There is no MCP tool: it is a named person's declaration of identity.
+
 ## The three verbs
 
 ```bash
