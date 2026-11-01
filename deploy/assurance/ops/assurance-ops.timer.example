@@ -1,0 +1,19 @@
+# EXAMPLE ONLY. Documentation: nothing installs or enables this file.
+# By hand: copy to /etc/systemd/system/assurance-ops.timer, review, `systemctl daemon-reload`,
+# then `systemctl enable --now assurance-ops.timer` -- the operator's act, not this repository's.
+# Whether the timer is installed is NOT something `ops check` can see; `ops status` going stale
+# (older than max_cycle_age_hours) is the signal that it stopped.
+
+[Unit]
+Description=Daily assurance operator cycle
+
+[Timer]
+# Pick your own minute; avoid :00 so many hosts do not fire at once.
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=5min
+# If the host was off at 03:17, run once after boot instead of skipping the day.
+Persistent=true
+Unit=assurance-ops.service
+
+[Install]
+WantedBy=timers.target
