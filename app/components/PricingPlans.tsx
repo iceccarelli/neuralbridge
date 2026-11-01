@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DEPLOY_BLOB, QUICKSTART, SALES, SALES_SUPPLIER } from '../lib/links';
+import RepoLink from './RepoLink';
+import { QUICKSTART, SALES, SALES_SUPPLIER } from '../lib/links';
 import { FALLBACK_PLANS, type Plan } from '../lib/plans';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
@@ -208,7 +209,7 @@ export default function PricingPlans() {
         There is also a fourth, unlisted tier — <strong>Supplier</strong> — for component suppliers who want to
         publish signed advisories to a hosted feed (<code>POST /v1/supplier/advisory</code>). It has no self-serve
         price yet, sales-assigned only per{' '}
-        <a href={`${DEPLOY_BLOB}/ADR-0001-supplier-api.md`} target="_blank" rel="noreferrer">ADR-0001</a>:{' '}
+        <RepoLink path="/blob/main/deploy/assurance/ADR-0001-supplier-api.md" plain>ADR-0001</RepoLink>:{' '}
         <a href={SALES_SUPPLIER}>get in touch</a>.
       </p>
     </>

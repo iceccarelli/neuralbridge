@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
 import { firstParagraph } from './docDescription';
+import { REPO_PUBLIC, stripRepoLinks } from './links';
 
 export { firstParagraph };
 
@@ -82,7 +83,9 @@ const FRAGMENT_LINK_MAP: Record<string, string> = {
 };
 
 export function rewriteLinks(markdown: string): string {
-  return markdown
+  // With the repository private (lib/links.ts REPO_PUBLIC false) a link into it would 404 for a
+  // reader: keep the anchor text, drop the href.
+  return (REPO_PUBLIC ? markdown : stripRepoLinks(markdown))
     .replace(/\]\(([a-zA-Z0-9/_-]+\.md#[a-zA-Z0-9-]+)\)/g, (match, target: string) => {
       const mapped = FRAGMENT_LINK_MAP[target];
       return mapped ? `](${mapped})` : match;

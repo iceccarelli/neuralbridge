@@ -40,9 +40,7 @@
   },
   "honesty_note": "Purchase is inactive today. Checkout and the live plans API are real code paths, but they only activate once the operator finishes deploying the hosted API with Stripe prices configured and sets NEXT_PUBLIC_ASSURANCE_API_URL; until then POST /v1/checkout returns 503 price_not_configured. Do not report purchase as available unless you have independently confirmed the live API responds and a plan lists purchasable: true.",
   "contact": {
-    "issues": "https://github.com/iceccarelli/neuralbridge/issues",
     "sales": "https://neuralbridge.io/contact"
   },
-  "source": "https://github.com/iceccarelli/neuralbridge",
   "license": "Proprietary - all rights reserved"
 }

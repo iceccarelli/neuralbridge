@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO } from '../lib/links';
+import RepoLink from '../components/RepoLink';
 
 export const metadata: Metadata = {
   title: 'Deploy checklist | Industrial Autonomous Assurance',
@@ -87,7 +87,7 @@ export default function StatusPage() {
           <h1 style={{ maxWidth: '26ch' }}>What&apos;s between this build and a live, sellable deployment</h1>
           <p className="hero-lead" style={{ maxWidth: '68ch' }}>
             Every item below is deploy/ops work outside this repository&apos;s CI — nothing here is something a PR
-            can fix. See <a href={`${REPO}/blob/main/DEPLOY_NOW.md`} target="_blank" rel="noreferrer">DEPLOY_NOW.md</a>{' '}
+            can fix. See <RepoLink path="/blob/main/DEPLOY_NOW.md" plain>DEPLOY_NOW.md</RepoLink>{' '}
             for the exact command sequence and <code>.env.example</code> for every variable name.
           </p>
           <div className="status-progress">

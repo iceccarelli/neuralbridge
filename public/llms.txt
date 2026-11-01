@@ -57,10 +57,8 @@ have independently confirmed the live API responds.
   - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
   - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
   - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
-- Documentation: https://neuralbridge.io/docs (renders the same docs/ and
-  deploy/assurance/ markdown this repository ships, on-site — no GitHub
-  detour needed; a GitHub Pages mirror may also exist once a repo admin
-  enables it, see /status)
+- Documentation: https://neuralbridge.io/docs (renders the product's docs/
+  and deploy/assurance/ markdown on-site)
 - Developers / API reference: https://neuralbridge.io/developers
 - Applications (by capability, each mapped to a real gated route):
   https://neuralbridge.io/applications
@@ -85,7 +83,6 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/openapi.json
 - Structured agent descriptor (JSON sibling of this file):
   https://neuralbridge.io/.well-known/agent.json
-- Source repository: https://github.com/iceccarelli/neuralbridge
 - Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
 - Security policy (how to report a vulnerability): https://neuralbridge.io/security
 - Deploy checklist (a static founder checklist of what is left before this

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO, SRC } from '../lib/links';
+import RepoLink from '../components/RepoLink';
 import { IMAGES } from '../lib/images';
 import { ROUTES, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
@@ -44,7 +44,7 @@ export default function DevelopersPage() {
           </p>
           <div className="hero-actions">
             <a className="btn btn-primary" href="/openapi.json">Get openapi.json</a>
-            <a className="btn btn-outline" href={`${SRC}/api`} target="_blank" rel="noreferrer">Read the source</a>
+            <RepoLink path="/tree/main/src/assurance/api" className="btn btn-outline">Read the source</RepoLink>
           </div>
           <RotatingImage
             slot={IMAGES['api-fastapi-docs']}
@@ -175,7 +175,7 @@ else:
             <a className="btn btn-primary" href="/llms.txt">Get llms.txt</a>
             <a className="btn btn-outline" href="/cli">Install the CLI</a>
             <a className="btn btn-outline" href="/connectors/mcp">MCP connector</a>
-            <a className="btn btn-outline" href={REPO} target="_blank" rel="noreferrer">Browse the source</a>
+            <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>
       </section>

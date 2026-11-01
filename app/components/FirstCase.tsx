@@ -1,5 +1,6 @@
 'use client';
 
+import RepoLink from './RepoLink';
 import { useState } from 'react';
 
 // A guided path to the one call that proves a Register/Cell key is real:
@@ -93,9 +94,9 @@ export default function FirstCase({ apiBase, apiKey }: { apiBase: string; apiKey
         <span className="status-pill register">First Register case</span>
       </div>
       <p style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
-        The same write <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/buyer-journey.md">
+        The same write <RepoLink path="/blob/main/docs/buyer-journey.md" plain>
           docs/buyer-journey.md
-        </a>{' '}
+        </RepoLink>{' '}
         walks through with curl — <code>POST /v1/cases/&#123;case_id&#125;/signal</code> — from this page. Paste
         your Register/Cell key above, fill in what was reported, and this opens a real case in the hash-chained
         ledger. No key, or a free-tier key, gets the real refusal below — never a faked success.

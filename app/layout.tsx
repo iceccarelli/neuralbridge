@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import Header from './Header';
 import CookieConsent from './components/CookieConsent';
 import CookiePreferencesLink from './components/CookiePreferencesLink';
-import { DOCS, REPO } from './lib/links';
+import RepoLink from './components/RepoLink';
+import { DOCS, ownerLink, repoLink, repoSameAs } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
 import './globals.css';
 
@@ -26,7 +27,7 @@ export const metadata: Metadata = {
     'robot cell safety evidence',
     'safety software manifest',
   ],
-  authors: [{ name: 'Vincenzo Grimaldi', url: 'https://github.com/iceccarelli' }],
+  authors: [{ name: 'Vincenzo Grimaldi', ...(ownerLink() ? { url: ownerLink() as string } : {}) }],
   creator: 'Vincenzo Grimaldi',
   publisher: 'Industrial Autonomous Assurance',
   alternates: { canonical: '/', languages: { 'x-default': '/' } },
@@ -53,9 +54,9 @@ const organizationData = {
   founder: {
     '@type': 'Person',
     name: 'Vincenzo Grimaldi',
-    url: 'https://github.com/iceccarelli',
+    ...(ownerLink() ? { url: ownerLink() } : {}),
   },
-  sameAs: [REPO],
+  ...(repoSameAs().length ? { sameAs: repoSameAs() } : {}),
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -92,7 +93,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/#pricing">Register — &euro;390/mo</a></li>
                   <li><a href="/#pricing">Cell — &euro;1,290/mo</a></li>
                   <li><a href="/assurance">Workspace (your key)</a></li>
-                  <li><a href={`${REPO}/tree/main/src/assurance/api`} target="_blank" rel="noreferrer">Assurance API</a></li>
+                  <li>
+                    {repoLink() ? (
+                      <RepoLink path="/tree/main/src/assurance/api">Assurance API</RepoLink>
+                    ) : (
+                      <a href="/developers">Assurance API</a>
+                    )}
+                  </li>
                 </ul>
               </div>
 
@@ -126,9 +133,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <li><a href="/connectors/cursor">Cursor connector</a></li>
                   <li><a href="/console">Console</a></li>
                   <li><a href="/ai">AI control plane</a></li>
-                  <li><a href={REPO} target="_blank" rel="noreferrer">GitHub repository</a></li>
+                  {repoLink() && <li><RepoLink path="">GitHub repository</RepoLink></li>}
                   <li><a href="/roadmap">Roadmap</a></li>
-                  <li><a href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a></li>
+                  {repoLink() && <li><RepoLink path="/blob/main/CONTRIBUTING.md">Contributing</RepoLink></li>}
                   <li><a href="/security">Security</a></li>
                 </ul>
               </div>
@@ -146,7 +153,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
             <div className="shell footer-bottom">
               <span>&copy; 2026 Industrial Autonomous Assurance &middot; All rights reserved &middot; Built by Vincenzo Grimaldi</span>
-              <a href={REPO} target="_blank" rel="noreferrer">github.com/iceccarelli/neuralbridge</a>
+              <RepoLink path="">{(repoLink() ?? '').replace('https://', '')}</RepoLink>
             </div>
           </footer>
         </div>

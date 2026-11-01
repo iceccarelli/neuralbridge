@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO, SRC } from '../lib/links';
+import RepoLink from '../components/RepoLink';
 import { IMAGES } from '../lib/images';
 import { CLI_DOMAINS, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
@@ -31,8 +31,7 @@ export default function CliPage() {
             <code>watch</code> never do, by design.
           </p>
           <div className="hero-actions">
-            <a className="btn btn-primary" href="/docs/getting-started">Read the quickstart</a>
-            <a className="btn btn-outline" href={`${SRC}`} target="_blank" rel="noreferrer">Browse the source</a>
+            <a className="btn btn-primary" href="/docs/getting-started">Read the quickstart</a>            <RepoLink path="/tree/main/src/assurance" className="btn btn-outline">Browse the source</RepoLink>
           </div>
           <RotatingImage
             slot={IMAGES['card-api-assurance']}
@@ -125,7 +124,7 @@ python -m assurance kit check plant/kit.json`}</pre>
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href="/developers">Go to /developers</a>
-            <a className="btn btn-outline" href={REPO} target="_blank" rel="noreferrer">Browse the source</a>
+            <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>
       </section>

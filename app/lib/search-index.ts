@@ -1,4 +1,4 @@
-import { DEPLOY_BLOB, DOCS, REPO, SRC } from './links';
+import { DOCS, repoLink, srcLink } from './links';
 import { SOLUTIONS } from './solutions';
 
 export type SearchGroup = 'Products' | 'Solutions' | 'Docs';
@@ -25,7 +25,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Watch', group: 'Products', href: `/docs/assurance/watch`, blurb: 'The component that runs when nobody is looking.' },
   { title: 'Attest', group: 'Products', href: `/docs/assurance/attest`, blurb: 'Counter-signed head attestation; catches deletion, not just editing.' },
   { title: 'Offline enrolment kit', group: 'Products', href: `/docs/assurance/kit`, blurb: 'Your ledger, your disk. No account, no upload.' },
-  { title: 'Assurance API', group: 'Products', href: `${SRC}/api`, blurb: 'FastAPI surface for billing and entitlements.', external: true },
+  { title: 'Assurance API', group: 'Products', href: srcLink('/api') ?? '/developers', blurb: 'FastAPI surface for billing and entitlements.', external: srcLink('/api') !== null },
   ...SOLUTIONS.map((s) => ({
     title: s.role,
     group: 'Solutions' as const,
@@ -53,10 +53,10 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Contact / sales', group: 'Docs', href: '/contact', blurb: 'Register, Cell, or Supplier inquiries — one form.' },
   { title: 'OpenAPI schema', group: 'Docs', href: '/openapi.json', blurb: 'The real OpenAPI 3 schema, generated from the FastAPI app.' },
   { title: 'Capability contract (JSON)', group: 'Docs', href: '/capabilities.json', blurb: 'Machine-readable: each capability with its CLI, API and MCP surfaces, generated from the code.' },
-  { title: 'README — full source', group: 'Docs', href: `${REPO}#readme`, blurb: 'Every CLI verb, checked against --help.', external: true },
+  ...(repoLink('#readme') ? [{ title: 'README — full source', group: 'Docs' as const, href: repoLink('#readme') as string, blurb: 'Every CLI verb, checked against --help.', external: true }] : []),
   { title: 'Deploy guide', group: 'Docs', href: `/docs/assurance/deploy`, blurb: 'Rehearse in Stripe test mode first: nothing here has been deployed.' },
   { title: 'Roadmap', group: 'Docs', href: '/roadmap', blurb: 'What is planned and not yet built.' },
   { title: 'Security policy', group: 'Docs', href: '/security', blurb: 'How to report a vulnerability.' },
-  { title: 'Contributing', group: 'Docs', href: `${REPO}/blob/main/CONTRIBUTING.md`, blurb: 'How to propose a change to this repository.', external: true },
+  ...(repoLink('/blob/main/CONTRIBUTING.md') ? [{ title: 'Contributing', group: 'Docs' as const, href: repoLink('/blob/main/CONTRIBUTING.md') as string, blurb: 'How to propose a change to this repository.', external: true }] : []),
   { title: 'Privacy', group: 'Docs', href: '/privacy', blurb: 'What this site stores in your browser, and what the free API keeps per address.' },
 ];

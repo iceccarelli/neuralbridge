@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { DEPLOY_BLOB, DOCS, REPO, SALES, SRC } from './lib/links';
+import RepoLink from './components/RepoLink';
+import { DOCS, repoLink, SALES, srcLink } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
 import SearchOverlay from './components/SearchOverlay';
 
@@ -34,7 +35,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
     cards: [
       { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
       { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '/#platform' },
-      { name: 'Assurance API', blurb: 'GET /v1/plans mirrors the entitlements the code enforces.', href: `${SRC}/api`, external: true },
+      { name: 'Assurance API', blurb: 'GET /v1/plans mirrors the entitlements the code enforces.', href: srcLink('/api') ?? '/developers', external: srcLink('/api') !== null },
       { name: 'Workspace', blurb: 'Your fleet, cases, supplier advisories and plan, read from the API with your key.', href: '/assurance' },
       { name: 'Console', blurb: 'Browser REST console for the Assurance API — key paste, real /v1 calls.', href: '/console' },
       { name: 'Investigate', blurb: 'An enrolled machine’s configuration, evidence, interventions and fleet impact in one place.', href: '/investigate' },
@@ -126,7 +127,7 @@ export default function Header() {
             <div className="utility-links">
               <a href="/docs/assurance/deploy">Deploy docs</a>
               <a href={SALES}>Contact sales</a>
-              <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
+              {repoLink() && <a href={repoLink() ?? undefined} target="_blank" rel="noreferrer">GitHub</a>}
             </div>
           </div>
         </div>
@@ -244,7 +245,11 @@ export default function Header() {
                 <span className="mega-promo-kicker">About</span>
                 <h4>Why this exists</h4>
                 <p>Two regulations turned a quality problem into a legal one. Read the case in full.</p>
-                <a href={`${REPO}#readme`} target="_blank" rel="noreferrer" onClick={closeAll}>Read the README →</a>
+                {repoLink('#readme') ? (
+                  <a href={repoLink('#readme') ?? undefined} target="_blank" rel="noreferrer" onClick={closeAll}>Read the README →</a>
+                ) : (
+                  <a href={DOCS} onClick={closeAll}>Read the docs →</a>
+                )}
               </div>
             </div>
           </div>
@@ -336,10 +341,10 @@ export default function Header() {
                 <strong>Privacy</strong>
                 <span>What we collect and why.</span>
               </a>
-              <a className="finder-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer" onClick={closeAll}>
+              <RepoLink path="/blob/main/CONTRIBUTING.md" className="finder-item" onClick={closeAll}>
                 <strong>Contributing</strong>
                 <span>How to propose a change to this repository.</span>
-              </a>
+              </RepoLink>
             </div>
           </div>
         </div>
@@ -416,7 +421,7 @@ export default function Header() {
               <a className="mobile-drill-item" href="/status" onClick={() => setMobileOpen(false)}>Status</a>
               <a className="mobile-drill-item" href={SALES} onClick={() => setMobileOpen(false)}>Contact</a>
               <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
-              <a className="mobile-drill-item" href={`${REPO}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noreferrer">Contributing</a>
+              <RepoLink path="/blob/main/CONTRIBUTING.md" className="mobile-drill-item">Contributing</RepoLink>
             </>
           )}
         </div>

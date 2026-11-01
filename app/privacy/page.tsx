@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO } from '../lib/links';
+import { SALES } from '../lib/links';
 
 export const metadata: Metadata = {
   title: 'Privacy | Industrial Autonomous Assurance',
@@ -29,7 +29,7 @@ export default function PrivacyPage() {
             <p>
               Written the way the rest of this product is written: checked against the code before it was
               published, not asserted. If this page and the code ever disagree, the code is right and this page is
-              wrong — <a href={`${REPO}/issues/new?title=Privacy+page+is+wrong`} target="_blank" rel="noreferrer">tell us</a>.
+              wrong — <a href={SALES}>tell us</a>.
             </p>
           </div>
 
@@ -123,7 +123,7 @@ export default function PrivacyPage() {
 
           <h2>Contact</h2>
           <p>
-            Questions about this page: <a href={`${REPO}/issues/new?title=Privacy+question`} target="_blank" rel="noreferrer">open an issue</a>.
+            Questions about this page: <a href={SALES}>contact us</a>.
             Security issues: see <a href="/security">the security policy</a>.
           </p>
         </div>

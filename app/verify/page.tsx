@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import EvidenceVerifier from '../components/EvidenceVerifier';
-import { REPO } from '../lib/links';
+import { repoLink } from '../lib/links';
 
 export const metadata: Metadata = {
   title: 'Check an evidence file | Industrial Autonomous Assurance',
@@ -114,8 +114,8 @@ export default function VerifyPage() {
               no account.
             </p>
           </div>
-          <p className="code-panel-label">From a checkout of the source</p>
-          <pre className="code-panel">{`git clone ${REPO}.git && cd neuralbridge
+          <p className="code-panel-label">{repoLink() ? 'From a checkout of the source' : 'From a copy of the source'}</p>
+          <pre className="code-panel">{`${repoLink() ? `git clone ${repoLink()}.git && cd neuralbridge` : 'cd neuralbridge   # your copy of the source'}
 pip install cryptography && export PYTHONPATH=src
 python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
 python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head (exit 0 only if anchored)

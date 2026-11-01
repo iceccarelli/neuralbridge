@@ -153,6 +153,16 @@ Deployment notes, including why `max_machines_running = 1` is load-bearing —
 the ledger is a hash chain and a second writer forks it — are in
 [`deploy/assurance/`](deploy/assurance/).
 
+## Website
+
+The Next.js site (`app/`) links to this repository only when
+`NEXT_PUBLIC_REPO_PUBLIC=true` at build time. The default is off, because the
+repository is private and proprietary: no "View source", "Edit on GitHub",
+JSON-LD `sameAs`, or repository URL appears in the pages, `public/llms.txt` or
+`public/.well-known/agent.json`. All repository links go through `app/lib/links.ts`;
+the two static files are rendered by `scripts/export_site_static.py` from
+`scripts/site_static/*.tmpl`, and `tests/test_site_repo_links.py` enforces both.
+
 ## Repository layout
 
 ```

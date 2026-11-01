@@ -46,6 +46,13 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      # The repo-link gate builds the site twice (flag off, flag on); the Python test job has no
+      # node_modules, so it skips there and this step is where it runs.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - run: python -m pytest tests/test_site_repo_links.py -q -o addopts="" -p no:cacheprovider -rs
 
   # ── Unit Tests ─────────────────────────────────────────────
   test:

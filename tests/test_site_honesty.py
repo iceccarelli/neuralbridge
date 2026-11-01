@@ -1010,6 +1010,7 @@ _STUB_MARKED = (
     "\"export async function resolve(s, c, n) { if (s === 'marked') return "
     "{ url: 'data:text/javascript,export const marked = { parse: () => \\\"\\\" };', shortCircuit: true };"
     " if (s === './docDescription') return n('./docDescription.ts', c);"
+    " if (s === './links') return n('./links.ts', c);"
     " return n(s, c); }\"));"
 )
 
