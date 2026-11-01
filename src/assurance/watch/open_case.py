@@ -153,12 +153,14 @@ def open_case(
             f"{advisory_id!r} is not a current finding of this watch's intel store(s): "
             f"{why}. Nothing was opened.")
     return open_case_from_report(
-        ledger, report, actor, accept_unsigned=accept_unsigned, reason=reason)
+        ledger, report, actor, accept_unsigned=accept_unsigned, reason=reason,
+        age_warnings=_age_warnings(used, now) if used is not None else ())
 
 
 def open_case_from_report(
     ledger: EvidenceLedger, report: ImpactReport, actor: Actor, *,
     accept_unsigned: bool = False, reason: str = "",
+    age_warnings: tuple[str, ...] = (),
 ) -> OpenCaseResult:
     """Open (or return) the case for an already-derived inspect-only report.
 
@@ -191,7 +193,7 @@ def open_case_from_report(
     if case is None:       # defensive: 'clear' was refused above
         raise OpenCaseRefusedError("no case applies to this advisory. Nothing was opened.")
     return OpenCaseResult(
-        intel_age_warnings=_age_warnings(used, now) if used is not None else (),
+        intel_age_warnings=age_warnings,
         case_id=case.case_id, outcome="already_open" if existing is not None else "opened",
         status=case.status.value, trust_state=INTEL_TRUST_STATE,
         recorded_trust=str(case.provenance.get("advisory_trust", "")),
