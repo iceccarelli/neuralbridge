@@ -414,6 +414,16 @@ POST /v1/change/assess/advisory/signed             {feed | hosted_feed_id, advis
 POST /v1/change/assess/advisory                    {advisory, actor, accept_unsigned?, reason?}
         # actor must name a person for an advisory handed over as a body; an
         # unsigned import also needs accept_unsigned (409 otherwise).
+POST /v1/change/assess/advisory/intel              {advisory_id, actor, role, accept_unsigned?, reason?, sources?}
+        # the hosted `watch open-case`: reads the operator's intel store read-only (503
+        # no_intel_store_configured / intel_store_unreadable), re-derives the candidate for
+        # YOUR fleet with the watch's own matcher, and opens the case as an unauthenticated
+        # public-source, inspect-only advisory. A named person is required (409), role may not
+        # contain '=' or ';' (422), a CSAF-derived candidate also needs accept_unsigned + a
+        # reason + a decider operator key. 404 unknown id; 409 when it matches no machine of
+        # yours or your fleet is empty ("nothing assessed"). Idempotent: an open case is
+        # returned untouched (never re-attributed); a settled case is never reopened. It never
+        # closes or decides anything and is not an MCP tool.
 POST /v1/change/assess/intervention                {manifest, intervention_id, actor?}
 GET  /v1/change/cases[?status=]                    {cases: [row], summary}
 GET  /v1/change/cases/{case_id}

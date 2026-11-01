@@ -31,6 +31,11 @@ GET /v1/intel/candidates                           advisory candidates + not_rep
 MCP tools (read-only): intel_history, intel_observation, intel_cve, intel_candidates
 ```
 
+One route reads this store to open a case, for a named person only:
+`POST /v1/change/assess/advisory/intel` (see `CHANGE.md`). It reads the store the same read-only
+way, re-derives the candidate for the caller's own fleet, and opens the case as an
+unauthenticated public-source, inspect-only advisory. It is not an MCP tool (`by_design`).
+
 Ids are validated before the store is opened: `cve_id` must be `CVE-YYYY-NNNN...` (upper case,
 ASCII digits), `seq` a positive integer, `source` one of `kev|nvd|epss|csaf`; otherwise **422**
 (`invalid_cve_id`, `invalid_observation_seq`, `invalid_source`).
