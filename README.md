@@ -80,9 +80,18 @@ not do; what it does not do is listed in each command's output.
 | **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
 | **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change. |
 | **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
+| **Case** | `assurance change assess-drift` | A drift, an advisory or an intervention becomes a case with an owner and a required re-verification. Closing, rejecting, deferring or resuming it is a named person's decision; closure is never inferred. |
+| **Intel** | `assurance intel history` | KEV, NVD, EPSS and CSAF files recorded as provenance-stamped, append-only observations. Recording (`intel ingest`) and fetching (`intel refresh --live`) are operator commands; the hosted `/v1/intel/*` routes and the `intel_*` MCP tools only read the store and answer 503 until `ASSURANCE_INTEL_STORE` is set. A CVE no source mentions is `unknown`, never clear. |
 | **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |
 | **Attest** | `assurance attest sign` | A signature over the ledger head by a key the ledger's operator does not hold. A hash chain detects editing; only this detects **deletion**. |
 | **File** | `assurance art14` | The Article 14 register: awareness records with the reasoning that defends them, both deadline clocks computed correctly, triage with the grounds cited. |
+
+Which of the command line, the HTTP API and the MCP server offers each capability is
+declared in `src/assurance/capabilities.py` and checked against the real surfaces by
+`python -m assurance capabilities --check`; `GET /v1/capabilities` serves it, and
+`public/capabilities.json` (written by `python scripts/export_capabilities.py`) is the
+copy the website renders. A surface a capability lacks says whether that is by design
+(a named person's act, key custody, offline) or planned.
 
 ## The findings this produces that nothing else does
 

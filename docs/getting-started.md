@@ -59,5 +59,7 @@ network calls.
 
 - [Assurance engines](assurance/index.md) — what each command establishes,
   and the finding nobody else produces.
-- [Deploying the register](assurance/deploy.md) — Fly.io, Stripe, and what
-  to check after deploying.
+- [The operator pipeline](assurance/pipeline.md) — a public vulnerability record
+  to a machine passport, in the order an operator runs it.
+- [Deploying](assurance/deploy.md) — Fly.io and Stripe in test mode first;
+  nothing in this repository has been deployed.

@@ -19,21 +19,28 @@ export interface DocPage {
   sourcePath: string;
 }
 
-// Engine pages under docs/assurance/*.md are pure mkdocs snippet-includes of
-// deploy/assurance/*.md (see the HTML comment at the top of each — "the real
-// content lives at deploy/assurance/X.md, edit it there"). Read the real
-// source directly instead of parsing the `--8<--` include directive.
-const ENGINE_PAGES: { slug: string; title: string; file: string }[] = [
-  { slug: 'collect', title: 'Collect', file: 'COLLECT.md' },
-  { slug: 'machine', title: 'Machine safety', file: 'MACHINE.md' },
-  { slug: 'machinery', title: 'Machinery Annex III', file: 'MACHINERY.md' },
-  { slug: 'fleet', title: 'Fleet advisory', file: 'FLEET.md' },
-  { slug: 'watch', title: 'Watch', file: 'WATCH.md' },
-  { slug: 'attest', title: 'Attest', file: 'ATTEST.md' },
-  { slug: 'kit', title: 'Offline kit', file: 'KIT.md' },
-  { slug: 'supplier', title: 'Supplier feeds', file: 'SUPPLIER.md' },
-  { slug: 'bridge', title: 'Bridge', file: 'BRIDGE.md' },
-  { slug: 'deploy', title: 'Deploying the register', file: 'README.md' },
+// Engine pages under docs/assurance/*.md are pure mkdocs snippet-includes of the real guide (see
+// the HTML comment at the top of each: "the real content lives at ..., edit it there"). Read the
+// real source directly instead of parsing the `--8<--` include directive. `source` is relative to
+// the repository root; a page whose source is absent is neither listed nor routed (listDocSlugs),
+// and tests/test_site_capabilities_contract.py fails if one is declared here.
+const ENGINE_PAGES: { slug: string; title: string; source: string }[] = [
+  { slug: 'collect', title: 'Collect', source: 'deploy/assurance/COLLECT.md' },
+  { slug: 'machine', title: 'Machine safety', source: 'deploy/assurance/MACHINE.md' },
+  { slug: 'machinery', title: 'Machinery Annex III', source: 'deploy/assurance/MACHINERY.md' },
+  { slug: 'fleet', title: 'Fleet advisory', source: 'deploy/assurance/FLEET.md' },
+  { slug: 'change', title: 'Change assurance', source: 'deploy/assurance/CHANGE.md' },
+  { slug: 'intel', title: 'Public-source intelligence', source: 'deploy/assurance/INTEL.md' },
+  { slug: 'watch', title: 'Watch', source: 'deploy/assurance/WATCH.md' },
+  { slug: 'attest', title: 'Attest', source: 'deploy/assurance/ATTEST.md' },
+  { slug: 'key-ceremony', title: 'Key ceremony', source: 'deploy/assurance/KEY-CEREMONY.md' },
+  { slug: 'trust-runbook', title: 'Trust runbook', source: 'deploy/assurance/TRUST-RUNBOOK.md' },
+  { slug: 'kit', title: 'Offline kit', source: 'deploy/assurance/KIT.md' },
+  { slug: 'supplier', title: 'Supplier feeds', source: 'deploy/assurance/SUPPLIER.md' },
+  { slug: 'bridge', title: 'Bridge', source: 'deploy/assurance/BRIDGE.md' },
+  { slug: 'pipeline', title: 'Operator pipeline', source: 'deploy/assurance/PIPELINE.md' },
+  // deploy/assurance/README.md was deleted; the deploy walkthrough that exists is DEPLOY_NOW.md.
+  { slug: 'deploy', title: 'Deploying (rehearse in test mode first)', source: 'DEPLOY_NOW.md' },
 ];
 
 export const DOCS_NAV: { label: string; href: string; children?: { label: string; href: string }[] }[] = [
@@ -44,6 +51,7 @@ export const DOCS_NAV: { label: string; href: string; children?: { label: string
     href: '/docs/assurance',
     children: ENGINE_PAGES.map((p) => ({ label: p.title, href: `/docs/assurance/${p.slug}` })),
   },
+  { label: 'Capabilities', href: '/docs/capabilities' },
   { label: 'Pricing', href: '/docs/pricing' },
   { label: 'Platform status', href: '/docs/platform' },
 ];
@@ -58,10 +66,12 @@ const LINK_MAP: Record<string, string> = {
   'docs/platform.md': '/docs/platform',
   'docs/index.md': '/docs',
   'assurance/index.md': '/docs/assurance',
-  'assurance/deploy.md': '/docs/assurance/deploy',
   'ROADMAP.md': '/roadmap',
   'SECURITY.md': '/security',
+  // A guide is linked by its mkdocs name (`watch.md`) or by its own file name (`KEY-CEREMONY.md`).
   ...Object.fromEntries(ENGINE_PAGES.map((p) => [`${p.slug}.md`, `/docs/assurance/${p.slug}`])),
+  ...Object.fromEntries(ENGINE_PAGES.map((p) => [`assurance/${p.slug}.md`, `/docs/assurance/${p.slug}`])),
+  ...Object.fromEntries(ENGINE_PAGES.map((p) => [p.source.split('/').pop() as string, `/docs/assurance/${p.slug}`])),
 };
 
 // README.md#some-anchor is a root-relative link only ROADMAP.md uses today,
@@ -71,7 +81,7 @@ const FRAGMENT_LINK_MAP: Record<string, string> = {
   'README.md#neuralbridge--the-platform-underneath': '/#platform',
 };
 
-function rewriteLinks(markdown: string): string {
+export function rewriteLinks(markdown: string): string {
   return markdown
     .replace(/\]\(([a-zA-Z0-9/_-]+\.md#[a-zA-Z0-9-]+)\)/g, (match, target: string) => {
       const mapped = FRAGMENT_LINK_MAP[target];
@@ -87,15 +97,11 @@ function stripFrontmatter(markdown: string): string {
   return markdown.replace(/^---\n[\s\S]*?\n---\n/, '');
 }
 
-function firstHeading(markdown: string, fallback: string): string {
-  const match = markdown.match(/^#\s+(.+)$/m);
-  return match ? match[1].trim() : fallback;
-}
-
 export function resolveDocSource(slug: string[] | undefined): { file: string; title: string } | null {
   const parts = slug ?? [];
 
-  if (parts.length === 0) return { file: 'docs/index.md', title: 'Documentation' };
+  // /docs itself (no slug) has no markdown source: docs/index.md was removed, and app/docs renders
+  // the landing from DOCS_NAV.
   if (parts.length === 1 && parts[0] === 'getting-started') {
     return { file: 'docs/getting-started.md', title: 'Getting started' };
   }
@@ -106,7 +112,7 @@ export function resolveDocSource(slug: string[] | undefined): { file: string; ti
   }
   if (parts.length === 2 && parts[0] === 'assurance') {
     const engine = ENGINE_PAGES.find((p) => p.slug === parts[1]);
-    if (engine) return { file: `deploy/assurance/${engine.file}`, title: engine.title };
+    if (engine) return { file: engine.source, title: engine.title };
   }
   return null;
 }
@@ -133,7 +139,7 @@ export function loadDoc(slug: string[] | undefined): { title: string; html: stri
   if (!fs.existsSync(abs)) return null;
 
   const raw = stripFrontmatter(fs.readFileSync(abs, 'utf-8'));
-  const title = resolved.title === 'Documentation' ? firstHeading(raw, 'Documentation') : resolved.title;
+  const title = resolved.title;
   const html = singleH1(marked.parse(rewriteLinks(raw), { async: false }) as string);
 
   return { title, html, editPath: resolved.file, description: firstParagraph(raw) };
@@ -159,7 +165,6 @@ export function loadRootDoc(file: string, title: string): { title: string; html:
  */
 export function listDocSlugs(): { slug: string[] }[] {
   const all = [
-    { slug: [] as string[] },
     { slug: ['getting-started'] },
     { slug: ['pricing'] },
     { slug: ['platform'] },
