@@ -152,6 +152,28 @@ jobs:
           name: sbom
           path: sbom.json
 
+  # ── Lock drift (NON-GATING, additive) ──────────────────────
+  # Checks that requirements/*.lock still equal what uv resolves from requirements/*.txt,
+  # keeping the already-pinned versions (scripts/lock.sh --check). It is a separate job that
+  # no other job `needs`, and continue-on-error keeps a drift from turning the run red, so it
+  # cannot break the existing checks (lint, site, test, security, docker). Nothing installs
+  # from the lock here: the test and docker jobs still use the .txt files, except the root
+  # Dockerfile, which now installs from requirements/prod.lock. Read the job result in the
+  # log; it is advisory until a maintainer decides to make it required.
+  lock-drift:
+    name: Lock drift (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install "uv==0.11.32"
+      - name: Check requirements/*.lock against requirements/*.txt
+        run: scripts/lock.sh --check
+
   # ── Dashboard Build ────────────────────────────────────────
   dashboard:
     name: Build Dashboard
