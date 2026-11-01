@@ -465,3 +465,32 @@ def test_files_are_born_private_not_only_tightened_afterwards(data, tmp_path, mo
         os.umask(old)
     assert seen and all(mode & 0o077 == 0 for mode in seen.values()), \
         {k: oct(v) for k, v in seen.items()}
+
+
+def test_files_are_born_private_even_where_the_umask_is_ignored(data, tmp_path, monkeypatch):
+    """A default ACL, or a filesystem that ignores the umask, defeats the umask-only defence.
+
+    Observed in a Codespace: under umask 077, /tmp gave files 0646 and directories 0756. The
+    umask is simulated away here (the process runs with umask 0 and the backup's own umask call
+    changes nothing), so what is checked is that backup() makes its directories private
+    explicitly, and creates each snapshot file 0600, whatever the umask or ACL says.
+    """
+    root, first, _ = data
+    seen: dict[str, int] = {}
+    real = restore_check._tighten
+
+    def spy(path):
+        for rel in ("accounts.db", f"tenants/{first}.db", "art14-register.db", "tenants", "."):
+            seen[rel] = stat.S_IMODE((path / rel).stat().st_mode)
+        real(path)
+
+    monkeypatch.setattr(restore_check, "_tighten", spy)
+    old = os.umask(0)                                   # the real process umask: open
+    monkeypatch.setattr(restore_check.os, "umask", lambda mask: 0)    # ...and backup() can't change it
+    try:
+        restore_check.backup(root, tmp_path / "bk")
+    finally:
+        monkeypatch.undo()
+        os.umask(old)
+    assert seen and all(mode & 0o077 == 0 for mode in seen.values()), \
+        {k: oct(v) for k, v in seen.items()}
