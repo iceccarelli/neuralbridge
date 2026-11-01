@@ -5,7 +5,7 @@
 </p>
 <p align="center">
   <a href="https://github.com/iceccarelli/neuralbridge/actions/workflows/ci.yml"><img src="https://github.com/iceccarelli/neuralbridge/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
-  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Proprietary-lightgrey.svg" alt="License: Proprietary, all rights reserved"></a>
 </p>
 
 A robot cell is sold with a Declaration of Conformity, a risk assessment and a
@@ -465,7 +465,7 @@ Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidance.
 If you discover a security issue, please refer to [SECURITY.md](SECURITY.md). Security work is especially valuable when it improves authentication behavior, access control boundaries, configuration hygiene, audit consistency, and the safety of the supported default workflow.
 
 ## License
-NeuralBridge is licensed under the [MIT License](LICENSE).
+NeuralBridge is proprietary software. Copyright (c) 2026 Vincenzo Ceccarelli Grimaldi. All rights reserved. No licence is granted except by a separate written agreement; see [LICENSE](LICENSE). Earlier versions were published under the MIT Licence, which applies only to those versions as published.
 
 ## Closing Note
 NeuralBridge has a broader long-term ambition, but this README is intentionally grounded in what the project should responsibly promise now. The goal is to build something smaller, clearer, and genuinely useful first, and then expand it carefully over time.

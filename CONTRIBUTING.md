@@ -1,6 +1,6 @@
 > # NeuralBridge — Contribution Guide
 > 
-> First off, thank you for considering contributing to NeuralBridge! It's people like you that make the open-source community such a great place.
+> **This is proprietary software and external contributions are not accepted.** Nothing may be contributed to this repository unless the contributor and the copyright holder have first signed a written assignment or licence (see [LICENSE](LICENSE), section 4). Please contact https://neuralbridge.io/contact before preparing any change. The rest of this file describes how work is reviewed for those who already have such an agreement.
 > 
 > ## Code of Conduct
 > 

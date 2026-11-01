@@ -138,14 +138,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <ul>
                   <li><a href="/privacy">Privacy</a></li>
                   <li><CookiePreferencesLink className="footer-link-button" /></li>
-                  <li><a href={`${REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer">MIT License</a></li>
+                  <li><a href="/contact">Licensing &amp; permissions</a></li>
                   <li><a href="/status">Deploy checklist</a></li>
                 </ul>
               </div>
             </div>
 
             <div className="shell footer-bottom">
-              <span>&copy; 2026 Industrial Autonomous Assurance &middot; MIT Licensed &middot; Built by Vincenzo Grimaldi</span>
+              <span>&copy; 2026 Industrial Autonomous Assurance &middot; All rights reserved &middot; Built by Vincenzo Grimaldi</span>
               <a href={REPO} target="_blank" rel="noreferrer">github.com/iceccarelli/neuralbridge</a>
             </div>
           </footer>
