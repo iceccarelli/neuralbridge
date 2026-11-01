@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -63,10 +64,14 @@ from .config import INTEL_SOURCES, IntelSubscription
 __all__ = [
     "INTEL_TRUST_BASIS",
     "INTEL_TRUST_STATE",
+    "SourceAge",
+    "StoreAges",
     "check_intel",
     "impact_for_case",
     "intel_provenance",
     "merge_passes",
+    "source_ages",
+    "store_ages",
 ]
 
 INTEL_TRUST_STATE = "unauthenticated_public_source"
@@ -137,44 +142,133 @@ def _enrichment_for(cand: Candidate, report: IntelReport,
     return out
 
 
-def _staleness(sub: IntelSubscription, mine: Sequence[Any], now: datetime) -> list[str]:
-    """One problem per selected source whose newest ACCEPTED observation is too old or absent.
+@dataclass(frozen=True)
+class SourceAge:
+    """How old one selected source's newest ACCEPTED observation is, against the limit.
 
-    Age is the run's clock minus the observation's recorded ``retrieved_at`` (when the
-    store fetched or ingested it). The feed's own self-declared stamp is never the clock:
-    a stale mirror can carry a fresh date. Only checked when the subscription sets
-    ``max_age_hours``.
+    ``state``: ``fresh`` | ``stale`` | ``never_observed`` (no accepted observation) |
+    ``unreadable`` (its recorded retrieval time cannot be read) | ``future`` (retrieved after
+    the clock, so no age can be established). Everything but ``fresh`` is a problem, and
+    ``message`` is the run's own wording for it (empty when fresh).
+    """
+
+    source: str
+    state: str
+    limit_hours: float
+    retrieved_at: str = ""
+    seq: int | None = None
+    age_hours: float | None = None
+    message: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.state == "fresh"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"source": self.source, "state": self.state, "limit_hours": self.limit_hours,
+                "retrieved_at": self.retrieved_at, "seq": self.seq,
+                "age_hours": None if self.age_hours is None else round(self.age_hours, 3),
+                "message": self.message}
+
+
+def source_ages(sub: IntelSubscription, mine: Sequence[Any], now: datetime) -> list[SourceAge]:
+    """One :class:`SourceAge` per selected source; empty when ``max_age_hours`` is not set.
+
+    Age is the clock minus the observation's recorded ``retrieved_at`` (when the store
+    fetched or ingested it). The feed's own self-declared stamp is never the clock: a stale
+    mirror can carry a fresh date. This is the ONE place the rule lives: the runner
+    (:func:`_staleness`) and ``watch status`` / ``watch open-case`` all call it.
     """
     limit = sub.max_age_hours
     if limit is None:
         return []
-    out: list[str] = []
+    out: list[SourceAge] = []
     for name in sub.sources:
         source = INTEL_SOURCES[name]
         accepted = [o for o in mine if o.source == source and o.accepted]
         if not accepted:
-            out.append(
+            out.append(SourceAge(name, "never_observed", limit, message=(
                 f"STALE: source '{name}' has no accepted observation in the store, so its "
-                f"age cannot be established against the {limit:g} h limit.")
+                f"age cannot be established against the {limit:g} h limit.")))
             continue
         newest = max(accepted, key=lambda o: o.seq)
         try:
             age_h = (now - parse_utc(newest.retrieved_at)).total_seconds() / 3600
         except ValueError:
-            out.append(f"STALE: source '{name}': the recorded retrieval time "
-                       f"{newest.retrieved_at!r} of observation #{newest.seq} cannot be read, "
-                       "so its age cannot be established.")
+            out.append(SourceAge(name, "unreadable", limit, newest.retrieved_at, newest.seq,
+                                 message=(
+                f"STALE: source '{name}': the recorded retrieval time "
+                f"{newest.retrieved_at!r} of observation #{newest.seq} cannot be read, "
+                "so its age cannot be established.")))
             continue
         if age_h < 0:
-            out.append(
+            out.append(SourceAge(name, "future", limit, newest.retrieved_at, newest.seq,
+                                 age_h, message=(
                 f"STALE: source '{name}': last accepted retrieval {newest.retrieved_at} is "
-                f"after this run's clock ({format_utc(now)}); its age cannot be established.")
+                f"after this run's clock ({format_utc(now)}); its age cannot be established.")))
         elif age_h > limit:
-            out.append(
+            out.append(SourceAge(name, "stale", limit, newest.retrieved_at, newest.seq,
+                                 age_h, message=(
                 f"STALE: source '{name}' was last accepted (retrieved) at "
                 f"{newest.retrieved_at}, {age_h:.1f} h before this run; the limit is "
-                f"{limit:g} h. A refresh may have stopped; what is read below is that old.")
+                f"{limit:g} h. A refresh may have stopped; what is read below is that old.")))
+        else:
+            out.append(SourceAge(name, "fresh", limit, newest.retrieved_at, newest.seq, age_h))
     return out
+
+
+def _staleness(sub: IntelSubscription, mine: Sequence[Any], now: datetime) -> list[str]:
+    """One problem per selected source whose newest ACCEPTED observation is too old or absent."""
+    return [a.message for a in source_ages(sub, mine, now) if not a.ok]
+
+
+@dataclass(frozen=True)
+class StoreAges:
+    """What ``watch status`` / ``open-case`` say about one subscription's age."""
+
+    supplier_id: str
+    store: str
+    #: ``max_age_hours`` is set; when False, ``ages`` is empty and age was NOT checked.
+    checked: bool
+    limit_hours: float | None
+    #: Set when the store itself cannot be read (absent / empty / unreadable): the runner's
+    #: own status word and wording for that, so no age can be shown.
+    problem_status: str = ""
+    problem: str = ""
+    ages: tuple[SourceAge, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.problem and all(a.ok for a in self.ages)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"supplier_id": self.supplier_id, "store": self.store,
+                "age_checked": self.checked, "limit_hours": self.limit_hours,
+                "store_status": self.problem_status, "store_problem": self.problem,
+                "sources": [a.to_dict() for a in self.ages], "ok": self.ok}
+
+
+def store_ages(sub: IntelSubscription, now: datetime) -> StoreAges:
+    """The age of each selected source of ``sub``'s store at ``now``. Reads only; no network."""
+    base: dict[str, Any] = {
+        "supplier_id": sub.supplier_id, "store": sub.store,
+        "checked": sub.max_age_hours is not None, "limit_hours": sub.max_age_hours}
+    store, failure = _open(sub)
+    if store is None:
+        assert failure is not None
+        return StoreAges(**base, problem_status=failure.status, problem=failure.detail)
+    try:
+        everything = store.observations()
+    except (AssuranceError, sqlite3.Error, OSError) as exc:
+        return StoreAges(**base, problem_status="unreadable", problem=(
+            f"intel store {sub.store} could not be read: {exc}"))
+    if not everything:
+        return StoreAges(**base, problem_status="empty", problem=(
+            f"intel store {sub.store} holds no observations. Nothing has been recorded, "
+            "which is not the same as nothing being published."))
+    selected = set(sub.source_ids)
+    mine = [o for o in everything if o.source in selected]
+    return StoreAges(**base, ages=tuple(source_ages(sub, mine, now)))
 
 
 def _assess_store(

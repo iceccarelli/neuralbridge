@@ -10,10 +10,9 @@ payloads in ``tests/fixtures/intel`` (the equivalent of the contract-fixture tra
 no transport at all), and every subprocess starts with a ``sitecustomize`` that makes any socket
 connect or DNS lookup raise, so an accidental fetch is a failing exit code, not a pass.
 
-The one clock the CLI does not expose (``watch run`` has no ``--now``) is advanced the way the
-runner's own tests do it: a subprocess whose ``assurance.watch.runner.utc_now`` is shifted
-forward, running the same CLI entry point. It is used only with ``--dry-run`` so nothing it
-writes carries a future timestamp.
+Staleness is tested with the CLI's own ``watch run --dry-run --now ISO8601Z``, which sets the
+clock for assessment only and is refused without ``--dry-run`` so a run that seals records can
+never carry a forged clock.
 
 What this proves: the pieces hand each other the right objects, each human act stays a human
 act, and every "not established" statement the CLI makes is still made. What it does NOT prove:
@@ -33,7 +32,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from assurance.change.store import CaseStore
@@ -64,15 +63,9 @@ _GUARD = textwrap.dedent('''
     socket.getaddrinfo = _refuse
 ''')
 
-#: The CLI entry point with only the watch's wall clock moved forward.
-_SHIFTED = textwrap.dedent('''
-    import datetime, sys
-    import assurance.watch.runner as runner
-    _real, _by = runner.utc_now, datetime.timedelta(hours=float(sys.argv.pop(1)))
-    runner.utc_now = lambda: _real() + _by
-    from assurance.cli import main
-    raise SystemExit(main(sys.argv[1:]))
-''')
+def _at(hours: float) -> str:
+    """The real UTC clock plus ``hours``, as the ``--now`` argument (to the second)."""
+    return (datetime.now(UTC) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Operator:
@@ -85,11 +78,8 @@ class Operator:
         return {"PYTHONPATH": os.pathsep.join([str(self.guard), SRC]),
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
 
-    def sh(self, *argv: object, expect: int | None = None,
-           shift_hours: float | None = None) -> subprocess.CompletedProcess[str]:
+    def sh(self, *argv: object, expect: int | None = None) -> subprocess.CompletedProcess[str]:
         cmd = [sys.executable, "-m", "assurance", *map(str, argv)]
-        if shift_hours is not None:
-            cmd = [sys.executable, "-c", _SHIFTED, str(shift_hours), *map(str, argv)]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.root,  # noqa: S603
                            env=self.env(), check=False)
         if expect is not None:
@@ -365,9 +355,11 @@ def test_the_whole_pipeline(tmp_path):
 
     # -- 7. staleness: the same watch, a clock past max_age_hours --------------------------------
     n_anchor = _entries(ledger)
-    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", "--json", shift_hours=1)
+    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", "--json",
+                "--now", _at(1))
     assert r.returncode in (0, 1)                        # an hour on: fresh, not degraded
-    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", "--json", shift_hours=30, expect=2)
+    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", "--json",
+              "--now", _at(30), expect=2)
     doc = json.loads(r.stdout)
     feed = doc["advisories"]["feeds"][0]
     assert doc["verdict"] == "degraded" and feed["status"] == "stale"
@@ -375,7 +367,7 @@ def test_the_whole_pipeline(tmp_path):
     assert "STALE" in stale and "limit is 24 h" in stale
     for source in ("'nvd'", "'csaf'", "'kev'", "'epss'"):
         assert source in stale
-    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", shift_hours=30, expect=2)
+    r = op.sh("watch", "run", "watch.json", *led, "--dry-run", "--now", _at(30), expect=2)
     assert "DEGRADED" in r.stdout and "STALE" in r.stdout
 
     # -- 8a. a tampered intel store is degraded, never quiet ------------------------------------

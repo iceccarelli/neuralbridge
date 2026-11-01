@@ -15,6 +15,11 @@ exactly what would be sent and sends nothing.
 last pass, and 2 when the watch could not see part of the fleet — because
 "I could not look" and "nothing moved" must never share an exit code.
 
+``--now ISO8601Z`` (on ``run`` and ``status``) sets the clock for ASSESSMENT ONLY:
+staleness and age checks, and the run record's assessed-at. It is refused (exit 2)
+unless ``run`` is also ``--dry-run``: a run that seals records must use the real clock,
+or it could write forged history. ``open-case`` has no ``--now``: it writes a case.
+
 Put it on a timer:
 
     0 6 * * 1  assurance watch run watch.json --ledger register.db || mail -s ...
@@ -26,13 +31,16 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
 from assurance.core.errors import AssuranceError
+from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.watch.config import WatchConfig
+from assurance.watch.intel_source import StoreAges, store_ages
 from assurance.watch.runner import last_run, run_watch
 
 __all__ = ["build_parser", "main"]
@@ -56,6 +64,21 @@ class _Parser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: error: {message}\n")
 
 
+def _iso_z(text: str) -> datetime:
+    """``--now``: an explicit UTC instant, ``YYYY-MM-DDTHH:MM:SSZ`` (a zone is never guessed)."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z", text or ""):
+        raise argparse.ArgumentTypeError(
+            "--now must be an ISO 8601 UTC instant ending in Z, e.g. 2026-11-01T06:30:00Z")
+    try:
+        return parse_utc(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--now is not a valid instant: {exc}") from None
+
+
+_NOW_HELP = ("ISO 8601 UTC instant (e.g. 2026-11-01T06:30:00Z) used as the clock for "
+             "ASSESSMENT ONLY (staleness / age checks and the assessed-at).")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = _Parser(
         prog="assurance watch",
@@ -72,11 +95,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="look and report without sealing anything")
     r.add_argument("--out", type=Path, default=None)
     r.add_argument("--json", action="store_true")
+    r.add_argument("--now", type=_iso_z, default=None, metavar="ISO8601Z",
+                   help=_NOW_HELP + " REFUSED unless --dry-run is also given: a run that "
+                        "seals records must use the real clock.")
 
     s = verbs.add_parser("status", help="what the last run found")
     s.add_argument("config", type=Path)
     s.add_argument("--ledger", required=True, type=Path)
     s.add_argument("--json", action="store_true")
+    s.add_argument("--now", type=_iso_z, default=None, metavar="ISO8601Z",
+                   help=_NOW_HELP + " Read-only: nothing is written.")
 
     h = verbs.add_parser(
         "push", allow_abbrev=False, help="OPT-IN: report the latest sealed run to your hosted ledger",
@@ -129,9 +157,16 @@ def _exit_code(verdict: str) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    if args.now is not None and not args.dry_run:
+        # Checked before anything is opened, so a refusal writes nothing at all.
+        print("error: --now sets the assessment clock and is accepted only with --dry-run. "
+              "A run that seals records must use the real clock; otherwise it could write "
+              "history that never happened. Nothing was run and nothing was written.",
+              file=sys.stderr)
+        return 2
     config = WatchConfig.from_json(args.config)
     ledger = EvidenceLedger(args.ledger)
-    run = run_watch(config, ledger, seal=not args.dry_run)
+    run = run_watch(config, ledger, seal=not args.dry_run, now=args.now)
 
     if args.out:
         Path(args.out).write_text(
@@ -248,8 +283,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"{config.watch_id}: this watch has never run against this ledger.",
               file=sys.stderr)
         return 2
+    code = _exit_code(str(body.get("verdict", "degraded")))
+    clock = args.now or utc_now()
+    ages = [store_ages(sub, clock) for sub in config.intel]
+    if any(not a.ok for a in ages):
+        code = 2          # only ever ADDS the intel condition, and only when one is subscribed
     if args.json:
-        print(json.dumps(body, indent=2, sort_keys=True))
+        doc = dict(body)
+        if ages:
+            doc["intel_staleness"] = {
+                "assessed_at": format_utc(clock), "ok": all(a.ok for a in ages),
+                "subscriptions": [a.to_dict() for a in ages]}
+        print(json.dumps(doc, indent=2, sort_keys=True))
     else:
         print(f"{config.watch_id} — last run {body.get('started_at')} — "
               f"{str(body.get('verdict', '')).upper()}")
@@ -259,7 +304,29 @@ def _cmd_status(args: argparse.Namespace) -> int:
         if body.get("stale_observations"):
             print("  not looked at recently enough: "
                   + ", ".join(body["stale_observations"]))
-    return _exit_code(str(body.get("verdict", "degraded")))
+        for a in ages:
+            _print_ages(a, clock)
+    return code
+
+
+def _print_ages(a: StoreAges, clock: datetime) -> None:
+    print(f"  intel {neutralise(a.supplier_id)} — assessed at {format_utc(clock)}")
+    if a.problem:
+        print(f"    !! {a.problem_status}: {neutralise(a.problem)}")
+        return
+    if not a.checked:
+        print("    age not checked (no max_age_hours is set on this subscription)")
+        return
+    for src in a.ages:
+        if src.age_hours is not None and src.state in ("fresh", "stale"):
+            age = f"{src.age_hours:.1f} h"
+        else:
+            age = "n/a"
+        verdict = {"fresh": "fresh", "stale": "STALE", "never_observed": "NEVER OBSERVED",
+                   "unreadable": "UNREADABLE (retrieval time)",
+                   "future": "UNREADABLE (retrieved after the clock)"}[src.state]
+        print(f"    {src.source:<5} newest accepted: {src.retrieved_at or 'none':<20} "
+              f"age {age:>8} / limit {src.limit_hours:g} h — {verdict}")
 
 
 def _cmd_open_case(args: argparse.Namespace) -> int:
@@ -280,12 +347,16 @@ def _cmd_open_case(args: argparse.Namespace) -> int:
     except (OpenCaseRefusedError, CaseTransitionError) as exc:
         print(f"refused: {neutralise(str(exc))}", file=sys.stderr)
         return 1
+    # A warning, not a refusal: a person may knowingly open a case from older data.
+    for warning in res.intel_age_warnings:
+        print(f"warning: {neutralise(warning)}", file=sys.stderr)
     if args.json:
         print(json.dumps({
             "case_id": res.case_id, "outcome": res.outcome, "status": res.status,
             "trust_state": res.trust_state, "recorded_trust": res.recorded_trust,
             "machines": list(res.machines), "accepted_by": res.accepted_by,
-            "not_established": list(NOT_ESTABLISHED), "next_steps": list(NEXT_STEPS)},
+            "not_established": list(NOT_ESTABLISHED), "next_steps": list(NEXT_STEPS),
+            "intel_age_warnings": list(res.intel_age_warnings)},
             indent=2, sort_keys=True))
         return 0
     verb = "opened" if res.outcome == "opened" else "already open (nothing written)"
