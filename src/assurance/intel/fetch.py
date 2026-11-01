@@ -15,12 +15,19 @@ import re
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from assurance.core.identity import utc_now
 from assurance.intel.parsers import PARSER_VERSION, FeedRejected, parser_for
 from assurance.intel.sources import SOURCES, Source, resolve_source
 from assurance.intel.store import IntelStore, Observation
-from assurance.intel.transport import ResponseTooLarge, Transport, TransportError
+from assurance.intel.transport import (
+    HostNotAllowed,
+    RedirectRefused,
+    ResponseTooLarge,
+    Transport,
+    TransportError,
+)
 
 __all__ = ["RequestHeaders", "build_headers", "fetch", "ingest_bytes", "ingest_file"]
 
@@ -62,7 +69,7 @@ def build_headers(source: Source, *, api_key_env: str | None = None,
 def ingest_bytes(
     store: IntelStore, source_id: str, raw: bytes, *, url: str, locator: str, via: str,
     http_status: int | None, retrieved_at: datetime | None = None, max_bytes: int | None = None,
-    reason_prefix: str = "",
+    reason_prefix: str = "", provenance: dict[str, Any] | None = None,
 ) -> Observation:
     """Parse ``raw`` and record the outcome, accepted or rejected."""
     source = SOURCES[source_id]
@@ -77,11 +84,12 @@ def ingest_bytes(
             source=source_id, url=url, locator=locator, via=via, retrieved_at=when,
             http_status=http_status, byte_length=len(raw), sha256=sha,
             parser_version=PARSER_VERSION, parse_result="malformed",
-            reason=reason_prefix + str(exc))
+            reason=reason_prefix + str(exc), provenance=provenance)
     obs = store.append(
         source=source_id, url=url, locator=locator, via=via, retrieved_at=when,
         http_status=http_status, byte_length=len(raw), sha256=sha,
-        parser_version=PARSER_VERSION, parse_result="ok", reason="", raw=raw, parsed=parsed)
+        parser_version=PARSER_VERSION, parse_result="ok", reason="", raw=raw, parsed=parsed,
+        provenance=provenance)
     log.info("intel: %s %s seq=%d", source_id, obs.disposition, obs.seq)
     return obs
 
@@ -108,6 +116,7 @@ def fetch(
     store: IntelStore, source: str, url: str, transport: Transport, *,
     headers: Mapping[str, str] | None = None, timeout: float = 30.0,
     max_bytes: int | None = None, clock: Callable[[], datetime] = utc_now,
+    provenance: dict[str, Any] | None = None,
 ) -> Observation:
     """One GET through the injected transport, recorded whatever happens."""
     src = resolve_source(source)
@@ -119,18 +128,30 @@ def fetch(
     except ResponseTooLarge as exc:
         return _rejected(store, src, url, when, exc.status, exc.partial,
                          f"oversized: the body exceeded the size cap ({exc}); the sha256 "
-                         "covers only the bytes read before stopping")
+                         "covers only the bytes read before stopping", provenance)
     except TransportError as exc:
-        return _rejected(store, src, url, when, 0, b"", f"transport_error: {exc}")
+        # A refused host/redirect is a verdict; any other transport failure is transient.
+        return _rejected(store, src, url, when, 0, b"", f"transport_error: {exc}",
+                         _settle(provenance, permanent=isinstance(
+                             exc, (HostNotAllowed, RedirectRefused))))
     if status != 200:
-        return _rejected(store, src, url, when, status, raw, f"http_status: {status}")
+        permanent = 400 <= status < 500 and status != 429
+        return _rejected(store, src, url, when, status, raw, f"http_status: {status}",
+                         _settle(provenance, permanent=permanent))
     return ingest_bytes(store, src.id, raw, url=url, locator=url, via="network",
-                        http_status=status, retrieved_at=when, max_bytes=max_bytes)
+                        http_status=status, retrieved_at=when, max_bytes=max_bytes,
+                        provenance=provenance)
+
+
+def _settle(provenance: dict[str, Any] | None, *, permanent: bool) -> dict[str, Any] | None:
+    return None if provenance is None else {**provenance, "settled": permanent}
 
 
 def _rejected(store: IntelStore, src: Source, url: str, when: datetime, status: int,
-              raw: bytes, reason: str) -> Observation:
+              raw: bytes, reason: str, provenance: dict[str, Any] | None = None
+              ) -> Observation:
     return store.append(
         source=src.id, url=url, locator=url, via="network", retrieved_at=when,
         http_status=status, byte_length=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
-        parser_version=PARSER_VERSION, parse_result="malformed", reason=reason)
+        parser_version=PARSER_VERSION, parse_result="malformed", reason=reason,
+        provenance=provenance)

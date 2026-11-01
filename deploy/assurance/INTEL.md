@@ -66,3 +66,51 @@ Set `ASSURANCE_INTEL_STORE` to the store file (a persistent volume path on Fly).
 repository sets it in production; doing so is the founder's deployment step. Refresh the store
 with the CLI on the operator's side and ship/mount the file; the API sees new observations on
 the next request.
+
+## Refreshing CSAF vendor advisories live (operator CLI)
+
+A vendor advisory describes a **product**. It does not say what any customer has installed, and
+a fetched document is still an unsigned, inspect-only import: nothing here adds trust, and a
+document is accepted only if the repo's own CSAF importer (`assurance.fleet.csaf`) accepts it.
+
+```
+python -m assurance intel refresh --source csaf --live --allow-host HOST [--allow-host ...] \
+    --provider-metadata-url https://HOST/.../provider-metadata.json \
+    [--max-documents 50] [--max-total-bytes 67108864] --store PATH
+python -m assurance intel refresh --source csaf --live --allow-host HOST --url https://HOST/x.json \
+    --store PATH                                    # one or more named documents
+```
+
+* **`--allow-host` is required** and exact (bare lower-case host names; no scheme, port, path or
+  wildcard). Every URL touched must be https on one of those hosts, including each
+  `directory_url` or ROLIE feed the provider's own metadata announces: a host the metadata names
+  that the operator did not is refused, not followed. A URL with a query, fragment or userinfo is
+  refused, so no credential can travel in a URL; csaf takes no API key and sends no credential.
+  Redirects are followed only to the same host (the shared transport, unchanged); Retry-After is
+  honoured by it; a 429/503 from the provider stops the batch.
+* **Provider mode** reads `provider-metadata.json`, then `changes.csv` (path + last-change time) of
+  the first announced `directory_url`, else `index.txt` (no times, so no incremental skipping),
+  else a TLP:WHITE **ROLIE** JSON feed (`content.src` + `updated`; some providers, e.g. Siemens
+  ProductCERT, announce only this). Index rows with an unusable path, link or time are counted
+  and reported (`N index rows skipped`), never guessed.
+* **Incremental**: no cursor is stored that could be corrupted. A document is skipped when this
+  store already holds a *settled* observation of its URL whose recorded listing time is not older
+  than the provider's current one. Newest first, at most `--max-documents` (default 50) per run,
+  and `N more not fetched (max-documents reached)` is printed, so the next run continues; a
+  `--max-total-bytes` cap (default 64 MiB, checked before each request) does the same. A
+  transient failure (transport error, 429, 5xx) is recorded but not settled and is retried; a
+  malformed or oversized document is recorded as `rejected` and settled until the provider lists
+  it as changed. One bad document never aborts the batch.
+* **Observations**: one per fetched document (`source csaf`, url, retrieved_at, http status, byte
+  length, sha256, parser version) plus provenance kept beside it (provider metadata URL, listing
+  time, publisher, and for an accepted document its own `tracking` id / version /
+  initial_release_date / current_release_date). Same sha256 = `unchanged` (no downstream event);
+  a revision of the same advisory (same URL, new sha256) is `changed` with the old observation
+  and blob kept. `intel history` shows the tracking line; `--json` adds `provenance`.
+* Missing `fixed` data stays unknown. `vers:` ranges are kept as text and never evaluated.
+* Exit codes: 0 done, 1 something was rejected or refused, 2 could not run (no `--live`, no
+  `--allow-host`, off-list host, unreadable metadata).
+
+The tests use a contract fixture (an in-memory provider on `csaf.example.invalid`); they are not
+live integration. Each fetch of a ROLIE provider re-downloads its whole feed (no conditional
+GET yet).

@@ -4,6 +4,12 @@
         parse local files and record one observation per file. Opens no socket.
     refresh --source kev|nvd|epss --store DB --live [--cve ID ...] [--api-key-env NAME]
         fetch from the official host. Refuses to touch the network without --live.
+    refresh --source csaf --store DB --live --allow-host HOST [--allow-host ...]
+            (--url DOC_URL ... | --provider-metadata-url URL [--max-documents N]
+             [--max-total-bytes N])
+        fetch CSAF advisories from a provider the operator names. --allow-host is required
+        and exact; a provider-metadata run fetches only documents new or changed since the
+        last run and says how many it did not fetch. Imports stay unsigned (inspect-only).
     history --store DB [--source S] [--limit N] [--json]
     show    --store DB SEQ | --cve CVE-ID  [--json]
     candidates --store DB [--out DIR] [--json]
@@ -49,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
                          metavar="FILE")
 
     ref = sub.add_parser("refresh", help="fetch one source from its official host (--live)")
-    ref.add_argument("--source", required=True, choices=["kev", "nvd", "epss"])
+    ref.add_argument("--source", required=True, choices=["kev", "nvd", "epss", "csaf"])
     ref.add_argument("--store", required=True, type=Path)
     ref.add_argument("--live", action="store_true",
                      help="required: without it nothing touches the network")
@@ -58,6 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
     ref.add_argument("--api-key-env", metavar="NAME", default=None,
                      help="NAME of the environment variable holding the NVD API key")
     ref.add_argument("--timeout", type=float, default=30.0)
+    ref.add_argument("--allow-host", action="append", default=[], metavar="HOST",
+                     help="csaf only, required: an exact host the run may contact (repeat)")
+    ref.add_argument("--url", action="append", default=[], metavar="HTTPS_URL",
+                     help="csaf only: one CSAF document URL (repeatable)")
+    ref.add_argument("--provider-metadata-url", metavar="HTTPS_URL", default=None,
+                     help="csaf only: a provider-metadata.json; only new/changed documents")
+    ref.add_argument("--max-documents", type=int, default=None, metavar="N",
+                     help="csaf provider mode: fetch at most N documents per run (default 50)")
+    ref.add_argument("--max-total-bytes", type=int, default=None, metavar="N",
+                     help="csaf: stop fetching once N bytes were read (default 64 MiB)")
 
     hist = sub.add_parser("history", help="list observations, oldest first")
     hist.add_argument("--store", required=True, type=Path)
@@ -87,10 +103,16 @@ def _line(o: Observation) -> str:
             f"http={status:<4} bytes={o.byte_length:<9} sha256={o.sha256[:12]}{tail}")
 
 
-def _make_transport(source_id: str) -> Any:
-    """The only place the real network client is constructed (lazy: offline verbs never)."""
+def _make_transport(source_id: str, allowed_hosts: frozenset[str] | None = None) -> Any:
+    """The only place the real network client is constructed (lazy: offline verbs never).
+
+    CSAF gets exactly the hosts the operator named, never the three fixed source hosts.
+    """
     from assurance.intel.transport_urllib import UrllibTransport
 
+    if allowed_hosts is not None:
+        return UrllibTransport(allowed_hosts=allowed_hosts,
+                               max_bytes=SOURCES[source_id].max_bytes)
     return UrllibTransport(max_bytes=SOURCES[source_id].max_bytes)
 
 
@@ -115,12 +137,76 @@ def _ingest(args: argparse.Namespace) -> int:
     return _report([ingest_file(store, sid, path) for sid, path in jobs])
 
 
+def _refresh_csaf(args: argparse.Namespace) -> int:
+    from assurance.intel.csaf_live import (
+        DEFAULT_MAX_DOCUMENTS,
+        DEFAULT_MAX_TOTAL_BYTES,
+        CsafRefusal,
+        normalise_allow_hosts,
+        refresh_documents,
+        refresh_provider,
+    )
+
+    if bool(args.url) == bool(args.provider_metadata_url):
+        print("error: csaf takes either --url (one or more documents) or "
+              "--provider-metadata-url, not both and not neither", file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
+    if args.api_key_env:
+        print("error: csaf takes no API key; credentials are never sent to a vendor host",
+              file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
+    try:
+        hosts = normalise_allow_hosts(args.allow_host)
+        if args.max_total_bytes is not None and args.max_total_bytes < 1:
+            raise CsafRefusal("--max-total-bytes must be positive")
+        total = args.max_total_bytes or DEFAULT_MAX_TOTAL_BYTES
+        store = IntelStore(args.store)
+        transport = _make_transport("csaf", hosts)
+        if args.url:
+            report = refresh_documents(store, args.url, transport, allowed_hosts=hosts,
+                                       timeout=args.timeout, max_total_bytes=total)
+        else:
+            report = refresh_provider(
+                store, args.provider_metadata_url, transport, allowed_hosts=hosts,
+                max_documents=(DEFAULT_MAX_DOCUMENTS if args.max_documents is None
+                               else args.max_documents),
+                max_total_bytes=total, timeout=args.timeout)
+    except CsafRefusal as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
+    for what, info in report.index_status.items():
+        print(f"index {what}: http={info['http_status']} bytes={info['bytes']} {info['url']}")
+    for o in report.observations:
+        print(_line(o))
+    c = report.counts()
+    print(f"csaf {report.provider}: listed {report.listed} ({report.index_kind or 'direct'}), "
+          f"already up to date {report.up_to_date}, fetched {len(report.observations)} "
+          f"(first {c['first']}, changed {c['changed']}, unchanged {c['unchanged']}, "
+          f"rejected {c['rejected']}), bytes {report.bytes_fetched}")
+    if report.not_fetched:
+        print(f"{report.not_fetched} more not fetched ({report.stopped}); run again to "
+              "continue")
+    elif report.stopped:
+        print(f"note: {report.stopped}")
+    if report.skipped_rows:
+        print(f"{report.skipped_rows} index rows skipped (unusable path or time)")
+    for label in report.refused:
+        print(f"refused (host not allowed): {label}")
+    return EXIT_REJECTED if report.rejected else 0
+
+
 def _refresh(args: argparse.Namespace) -> int:
     if not args.live:
         print("error: refresh fetches from the network and does nothing without --live. "
               "Use `intel ingest` to record files you already have.", file=sys.stderr)
         return EXIT_COULD_NOT_RUN
     src = resolve_source(args.source)
+    if src.id == "csaf":
+        return _refresh_csaf(args)
+    if args.allow_host or args.url or args.provider_metadata_url:
+        print("error: --allow-host, --url and --provider-metadata-url are for "
+              "--source csaf only", file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
     if src.id == "cisa_kev":
         urls = [src.url]
     elif not args.cve:
@@ -141,14 +227,31 @@ def _refresh(args: argparse.Namespace) -> int:
                     for u in urls])
 
 
+def _tracking_text(prov: dict[str, Any] | None) -> str:
+    t = (prov or {}).get("tracking")
+    if not t or prov is None:
+        return ""
+    return (f"\n      csaf id={t['id']} v{t['version']} initial={t['initial_release_date']} "
+            f"current={t['current_release_date']} provider={prov['provider']}")
+
+
 def _history(args: argparse.Namespace) -> int:
     source = resolve_source(args.source).id if args.source else None
-    rows = IntelStore(args.store).observations(source=source, limit=args.limit)
+    store = IntelStore(args.store)
+    rows = store.observations(source=source, limit=args.limit)
     if args.json:
-        print(json.dumps([o.to_dict() for o in rows], indent=1))
+        out = []
+        for o in rows:
+            d = o.to_dict()
+            prov = store.provenance(o.seq) if o.source == "csaf" else None
+            if prov:
+                d["provenance"] = prov
+            out.append(d)
+        print(json.dumps(out, indent=1))
     else:
         for o in rows:
-            print(_line(o))
+            prov = store.provenance(o.seq) if o.source == "csaf" else None
+            print(_line(o) + _tracking_text(prov))
         if not rows:
             print("no observations")
     return 0
