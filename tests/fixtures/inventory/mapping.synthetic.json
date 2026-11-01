@@ -1,0 +1,18 @@
+{
+  "source_system": "sap-pm-export",
+  "export_date": "2026-10-15",
+  "columns": {
+    "manufacturer": "Hersteller", "model": "Typ", "serial": "Seriennr",
+    "site": "Standort", "owner": "Eigentuemer", "year": "Baujahr", "country": "Land"
+  },
+  "items": [
+    {"name_column": "SPS Firmware", "version_column": "SPS Version", "sha256_column": "SPS SHA256",
+     "supplier": "ControlCo", "kind": "firmware", "implements": ["SF-01"]},
+    {"name": "Safety scanner zone set", "version_column": "Scanner Version",
+     "kind": "safety_configuration", "implements": ["SF-01"]}
+  ],
+  "functions": [
+    {"function_id": "SF-01", "description": "Protective stop on zone intrusion",
+     "required_performance": "PL d", "verified_by": ["ssm_separation", "stop_characterisation"]}
+  ]
+}

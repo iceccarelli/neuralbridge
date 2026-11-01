@@ -2139,6 +2139,29 @@
       "title": "Enrol a machine: declare its identity, seal its baseline, get a receipt"
     },
     {
+      "id": "machinery.import_inventory",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/enrol/batch"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery import-inventory"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "bulk enrolment is a named person's declaration of identity from the customer's own file; an agent is not offered a way to make it (and it writes the ledger of record)",
+          "status": "by_design"
+        }
+      },
+      "title": "Enrol many machines from an inventory export file (a file importer, not a connector)"
+    },
+    {
       "id": "machinery.intervention",
       "service": "machinery",
       "surfaces": {
@@ -2854,6 +2877,7 @@
       "coverage",
       "diff",
       "enrol",
+      "import-inventory",
       "passport",
       "record-change",
       "record-manifest"
@@ -2892,25 +2916,25 @@
     ]
   },
   "counts": {
-    "api_routes": 88,
-    "capabilities": 121,
-    "cli_commands": 101,
+    "api_routes": 89,
+    "capabilities": 122,
+    "cli_commands": 102,
     "cli_domains": 19,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
-        "available": 82,
+        "available": 83,
         "by_design": 38,
         "planned": 1
       },
       "cli": {
-        "available": 103,
+        "available": 104,
         "by_design": 12,
         "planned": 6
       },
       "mcp": {
         "available": 42,
-        "by_design": 79,
+        "by_design": 80,
         "planned": 0
       }
     }

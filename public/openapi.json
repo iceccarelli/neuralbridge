@@ -751,6 +751,82 @@
         "title": "DriftIn",
         "type": "object"
       },
+      "EnrolBatchIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "export_date": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Export Date"
+          },
+          "file_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Sha256"
+          },
+          "functions": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Functions"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          },
+          "rows": {
+            "items": {},
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          },
+          "source_system": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source System",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rows",
+          "source_system",
+          "actor"
+        ],
+        "title": "EnrolBatchIn",
+        "type": "object"
+      },
       "EnrolIn": {
         "additionalProperties": false,
         "properties": {
@@ -7409,6 +7485,83 @@
           }
         },
         "summary": "Amend a machine's declared site or owner, as a new record",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
+    "/v1/machinery/enrol/batch": {
+      "post": {
+        "description": "Enrol up to 200 machines through the same domain function as ``POST /enrol``.\n\nPer-row outcomes are exactly enrol's (`enrolled`, `already_enrolled`,\n`configuration_differs`, `identity_conflict`) plus `rejected` with a reason. The response\nis 200 whenever the batch was processed, because some rows may have been written; read\n`counts` and `outcomes`. The data is customer-provided and as declared: it is not collected\nfrom the machines and no verification is run. Gated exactly like `POST /enrol`. No MCP\ntool; no CSV upload (a server that parses arbitrary uploaded files is a larger attack\nsurface than one that takes canonical rows).",
+        "operationId": "post_enrol_batch_v1_machinery_enrol_batch_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolBatchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Enrol Batch V1 Machinery Enrol Batch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "`ledger_chain_unverified`: nothing was written."
+          },
+          "413": {
+            "description": "`too_many_rows`: more rows than one request takes; split the batch. Nothing was written."
+          },
+          "422": {
+            "description": "`invalid_enrolment`: the actor is not a named person, or the request is malformed. A bad ROW is not a 422: it is reported as `rejected` in the outcomes and the other rows proceed."
+          }
+        },
+        "summary": "Enrol many machines from canonical rows of an inventory export",
         "tags": [
           "machinery"
         ]

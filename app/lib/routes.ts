@@ -49,6 +49,7 @@ export const ROUTES: RouteRow[] = [
 
   { method: 'POST', path: '/v1/machine/verify', tier: 'cell', summary: 'Verify a recorded machine run against its declared envelope' },
   { method: 'POST', path: '/v1/machinery/enrol', tier: 'cell', summary: 'Enrol a machine: declare its identity, seal its baseline, get a receipt' },
+  { method: 'POST', path: '/v1/machinery/enrol/batch', tier: 'cell', summary: 'Enrol many machines from canonical rows of an inventory export (up to 200)' },
   { method: 'POST', path: '/v1/machinery/enrol/amend', tier: 'cell', summary: 'Amend a machine’s declared site or owner, as a new record' },
   { method: 'POST', path: '/v1/machinery/manifest', tier: 'cell', summary: 'Seal a safety software manifest' },
   { method: 'POST', path: '/v1/machinery/intervention', tier: 'cell', summary: 'Seal an intervention record' },
@@ -134,7 +135,7 @@ export interface CliDomain {
 export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'kit', verbs: ['init', 'run', 'check'], summary: 'Enrol a plant’s machines without anything leaving it — offline by design, no API equivalent.' },
   { domain: 'machine', verbs: ['separation', 'verify', 'check', 'recorder-sign', 'recorder-trust'], summary: 'ISO/TS 15066 separation and recorded-run verification.', apiTier: 'free' },
-  { domain: 'machinery', verbs: ['enrol', 'amend-enrolment', 'record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Machine enrolment (a named person’s declaration; an amendment is a new, chained record), Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
+  { domain: 'machinery', verbs: ['enrol', 'import-inventory', 'amend-enrolment', 'record-manifest', 'record-change', 'diff', 'coverage', 'passport', 'check'], summary: 'Machine enrolment (a named person’s declaration; an amendment is a new, chained record), Annex III safety software manifests and the staleness join.', apiTier: 'cell' },
   { domain: 'fleet', verbs: ['list', 'advisory', 'import-csaf', 'declare', 'declaration'], summary: 'Advisory fan-out (import-csaf translates a CSAF 2.0 advisory offline, inspect-only) and Declaration binding across a fleet.', apiTier: 'cell' },
   { domain: 'change', verbs: ['assess-drift', 'assess-advisory', 'assess-intervention', 'list', 'show', 'claim', 'advance', 'reverify', 'resolve-decision', 'waive-reverification', 'decide', 'resume', 'replay', 'export'], summary: 'Change-assurance cases: open from drift, an advisory or an intervention; claim, advance and submit re-verification evidence; close, defer or resume by a named human decision. A required re-verification is closed by a named person\'s waiver unless the verification is validated, which needs a recorder attestation accepted under the verifier\'s own trust list.', apiTier: 'cell' },
   { domain: 'attest', verbs: ['keygen', 'sign', 'verify', 'log', 'preflight', 'anchor-all', 'trust-list'], summary: 'Counter-signed head attestation — catches deletion, not just editing. keygen, trust-list, preflight and anchor-all are key-ceremony tooling for the operator’s own machine (no hosted route or MCP tool, by design).', apiTier: 'cell' },
