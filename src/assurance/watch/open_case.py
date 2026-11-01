@@ -32,11 +32,13 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.fleet.impact import ImpactReport
 from assurance.fleet.registry import Fleet
 from assurance.watch.config import IntelSubscription, WatchConfig
 from assurance.watch.intel_source import INTEL_TRUST_STATE, impact_for_case, store_ages
 
-__all__ = ["OpenCaseRefusedError", "OpenCaseResult", "NOT_ESTABLISHED", "NEXT_STEPS", "open_case"]
+__all__ = ["OpenCaseRefusedError", "OpenCaseResult", "NOT_ESTABLISHED", "NEXT_STEPS", "open_case",
+           "open_case_from_report", "role_problem"]
 
 
 class OpenCaseRefusedError(AssuranceError):
@@ -97,6 +99,17 @@ def _age_warnings(sub: IntelSubscription, now: datetime) -> tuple[str, ...]:
     return tuple(out)
 
 
+def role_problem(role: str) -> str:
+    """Why ``role`` cannot be recorded as a person's declared role, or ``""``."""
+    if not role.strip():
+        return "opening a case needs the person's role"
+    if "=" in role or ";" in role:
+        # The change service reads `attribution=...` tokens out of the role string; a
+        # caller-typed role must not be able to imitate one.
+        return "the role is free text and may not contain '=' or ';'"
+    return ""
+
+
 def _actor(name: str, role: str) -> Actor:
     """The person, as the change service will judge them. Always kind ``person``: a command
     line cannot be anything else, and the service refuses the names automation goes by."""
@@ -108,9 +121,7 @@ def _actor(name: str, role: str) -> Actor:
     if not role.strip():
         raise OpenCaseRefusedError("opening a case needs the person's role (--role). "
                               "Nothing was opened.")
-    if "=" in role or ";" in role:
-        # The change service reads `attribution=...` tokens out of the role string; a
-        # caller-typed role must not be able to imitate one.
+    if role_problem(role):
         raise OpenCaseRefusedError("the role is free text and may not contain '=' or ';'. "
                               "Nothing was opened.")
     return Actor(identifier=name.strip(), role=role.strip(), kind="person")
@@ -141,12 +152,26 @@ def open_case(
         raise OpenCaseRefusedError(
             f"{advisory_id!r} is not a current finding of this watch's intel store(s): "
             f"{why}. Nothing was opened.")
+    return open_case_from_report(
+        ledger, report, actor, accept_unsigned=accept_unsigned, reason=reason)
+
+
+def open_case_from_report(
+    ledger: EvidenceLedger, report: ImpactReport, actor: Actor, *,
+    accept_unsigned: bool = False, reason: str = "",
+) -> OpenCaseResult:
+    """Open (or return) the case for an already-derived inspect-only report.
+
+    The one domain step behind the CLI and ``POST /v1/change/assess/advisory/intel``: refuses
+    a report that touches no machine, never reopens or alters a settled case, never
+    re-attributes a case someone else already accepted, and otherwise lets
+    :func:`assess_advisory` (the only writer) apply the named-person / unsigned-import rules.
+    """
     if report.verdict == "clear":
         raise OpenCaseRefusedError(
-            f"{advisory_id!r} matches no machine in this ledger's fleet (verdict "
+            f"{report.advisory_id!r} matches no machine in this ledger's fleet (verdict "
             f"{report.verdict!r}), so it is not a current finding; a case is opened only for "
             "an advisory that touches the fleet. Nothing was opened.")
-
     store = CaseStore(ledger)
     case_id = advisory_case_id(report)
     existing = store.get(case_id)

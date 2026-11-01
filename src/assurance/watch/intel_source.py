@@ -67,6 +67,7 @@ __all__ = [
     "SourceAge",
     "StoreAges",
     "check_intel",
+    "impact_and_candidate_from_store",
     "impact_for_case",
     "intel_provenance",
     "merge_passes",
@@ -467,6 +468,21 @@ def merge_passes(*passes: AdvisoryPass) -> AdvisoryPass:
         checks_skipped=tuple(dict.fromkeys(c for p in passes for c in p.checks_skipped)))
 
 
+def impact_and_candidate_from_store(
+    store: IntelStore, advisory_id: str, fleet: Fleet, source_ids: Sequence[str],
+) -> tuple[ImpactReport, Candidate]:
+    """The inspect-only impact report (and the candidate it came from) for one advisory id.
+
+    The one place a candidate is looked up and matched against a fleet for a person opening a
+    case: the CLI (:func:`impact_for_case`) and the hosted route both call it, over a store
+    each opened their own way. Matching is :func:`assess_impact`; nothing is added here.
+    """
+    for cand in build_report(store).candidates:
+        if cand.advisory.advisory_id == advisory_id and cand.source in source_ids:
+            return assess_impact(cand.advisory, fleet, provenance=intel_provenance()), cand
+    raise AssuranceError(f"no intel candidate {advisory_id!r} in the recorded observations")
+
+
 def impact_for_case(sub: IntelSubscription, advisory_id: str, fleet: Fleet) -> ImpactReport:
     """The report a NAMED PERSON hands to ``assess_advisory`` to open a case from a finding.
 
@@ -476,8 +492,9 @@ def impact_for_case(sub: IntelSubscription, advisory_id: str, fleet: Fleet) -> I
     store, failure = _open(sub)
     if store is None:
         raise AssuranceError(failure.detail if failure else "intel store unavailable")
-    for cand in build_report(store).candidates:
-        if cand.advisory.advisory_id == advisory_id and cand.source in sub.source_ids:
-            return assess_impact(cand.advisory, fleet, provenance=intel_provenance())
-    raise AssuranceError(f"no intel candidate {advisory_id!r} in {sub.store}")
-
+    try:
+        return impact_and_candidate_from_store(store, advisory_id, fleet, sub.source_ids)[0]
+    except AssuranceError as exc:
+        if str(exc).startswith("no intel candidate"):
+            raise AssuranceError(f"no intel candidate {advisory_id!r} in {sub.store}") from exc
+        raise

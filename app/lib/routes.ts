@@ -75,6 +75,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'POST', path: '/v1/change/assess/drift', tier: 'cell', summary: 'Turn a manifest divergence (baseline vs observed) into a change-assurance case' },
   { method: 'POST', path: '/v1/change/assess/advisory', tier: 'cell', summary: 'Turn a fleet impact report for one advisory into a change-assurance case' },
   { method: 'POST', path: '/v1/change/assess/advisory/signed', tier: 'cell', summary: 'Turn one advisory of a signed supplier feed into a case; opens without a named person only when the feed is signed under a key your account pinned' },
+  { method: 'POST', path: '/v1/change/assess/advisory/intel', tier: 'cell', summary: 'A named person opens a case from a public-intel (unauthenticated) candidate in the operator\'s intel store; a CSAF-derived one needs accept_unsigned, a reason and a decider operator key. Body {advisory_id, actor, role, accept_unsigned?, reason?, sources?}' },
   { method: 'POST', path: '/v1/change/assess/intervention', tier: 'cell', summary: 'Did an intervention you already sealed invalidate standing evidence? Body {manifest, intervention_id, actor?}' },
   { method: 'GET', path: '/v1/change/cases', tier: 'cell', summary: 'The Active Assurance Cases queue (optional ?status=); the summary counts deferred and degraded cases apart from open ones' },
   { method: 'GET', path: '/v1/change/cases/{case_id}', tier: 'cell', summary: 'One change-assurance case in full' },

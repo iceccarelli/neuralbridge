@@ -1028,6 +1028,60 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IntelAssessIn": {
+        "additionalProperties": false,
+        "description": "A named person asks to open a case from one public-intel candidate.",
+        "properties": {
+          "accept_unsigned": {
+            "default": false,
+            "title": "Accept Unsigned",
+            "type": "boolean"
+          },
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "advisory_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Advisory Id",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "enum": [
+                "nvd",
+                "csaf"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "advisory_id",
+          "role"
+        ],
+        "title": "IntelAssessIn",
+        "type": "object"
+      },
       "InterventionAssessIn": {
         "additionalProperties": false,
         "properties": {
@@ -3564,6 +3618,84 @@
           }
         },
         "summary": "Turn a fleet impact report into a case",
+        "tags": [
+          "change"
+        ]
+      }
+    },
+    "/v1/change/assess/advisory/intel": {
+      "post": {
+        "description": "The hosted twin of ``assurance watch open-case``: same domain function, same rules.\n\nReads the operator's intel store read-only (503 ``no_intel_store_configured`` /\n``intel_store_unreadable``), re-derives the candidate for the CALLER'S fleet with the\nwatch's own matcher, and opens the case through\n:func:`~assurance.change.service.assess_advisory` as an unauthenticated public-source,\ninspect-only advisory: a named person is required, a CSAF-derived candidate needs\n``accept_unsigned`` with a reason and an operator key with the ``decider`` role, an\nexisting open case is returned untouched (never re-attributed), a settled case is never\nreopened. Nothing is closed, decided, waived or advanced here, and no MCP tool calls it.",
+        "operationId": "assess_advisory_intel_route_v1_change_assess_advisory_intel_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntelAssessIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Advisory Intel Route V1 Change Assess Advisory Intel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A named person opens a case from a public-intel (unauthenticated) finding",
         "tags": [
           "change"
         ]

@@ -380,6 +380,13 @@ store cannot be read.
 
 ### From a finding to a case: `watch open-case`
 
+The hosted twin is `POST /v1/change/assess/advisory/intel` (Cell tier, `{advisory_id, actor,
+role, accept_unsigned?, reason?, sources?}`): it reads the operator's `ASSURANCE_INTEL_STORE`
+read-only (503 when unconfigured or unreadable), re-derives the candidate for the **caller's**
+fleet with the same functions as this command, and applies the same rules below. A CSAF-derived
+candidate additionally needs an operator key with the `decider` role over HTTP. It is not an MCP
+tool. See `CHANGE.md`.
+
 The pipeline has three steps and only the first is networked:
 
 ```bash

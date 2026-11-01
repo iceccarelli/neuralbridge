@@ -322,10 +322,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("watch.push", "Report the latest sealed run to your own hosted ledger (opt-in)",
        "watch push", "POST /v1/watch/report", gaps={"mcp": _d(_WRITE)}),
     _c("watch.open_case", "A named person opens a case from a public-intel finding",
-       "watch open-case",
-       gaps={"api": _p("the hosted route for a case opened from third-party content is "
-                       "`POST /v1/change/assess/advisory`; the intel-store form is offline"),
-             "mcp": _d("a case opened from third-party content is a named person's act; "
+       "watch open-case", "POST /v1/change/assess/advisory/intel",
+       gaps={"mcp": _d("a case opened from third-party content is a named person's act; "
                        "software drafts, people decide")}),
 
     # --- intel: public-source vulnerability intelligence (KEV, NVD, EPSS, CSAF) ---------------
