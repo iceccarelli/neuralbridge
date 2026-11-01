@@ -31,6 +31,7 @@ from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
+from assurance.machinery.amend import amend_enrolment
 from assurance.machinery.divergence import compare
 from assurance.machinery.enrol import EnrolmentError, enrol_machine
 from assurance.machinery.intervention import Intervention
@@ -87,6 +88,21 @@ class EnrolIn(BaseModel):
     role: str = Field(default="", max_length=200)
     site: str | None = Field(default=None, max_length=200)
     owner: str | None = Field(default=None, max_length=200)
+
+
+class AmendEnrolmentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The machine key as enrolled (``manufacturer/model#serial``).
+    machine: str = Field(min_length=1, max_length=400)
+    #: Required: an amendment is a declaration by a named person.
+    actor: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="", max_length=200)
+    #: Required: why the declaration changed.
+    reason: str = Field(min_length=1, max_length=1000)
+    #: ``{"site": ..., "owner": ...}``. Left open on purpose so that an attribute that is not
+    #: amendable (or is the machine key) is refused by the domain function with a receipt.
+    changes: dict[str, str] = Field(min_length=1, max_length=20)
 
 
 class InterventionIn(BaseModel):
@@ -243,6 +259,47 @@ def post_enrol(
             raise HTTPException(status_code=409, detail={
                 "error": "ledger_chain_unverified", "detail": text}) from exc
         raise _bad(exc, "enrolment") from exc
+    if receipt.refused:
+        raise HTTPException(status_code=409, detail={
+            "error": receipt.status, "detail": receipt.pointer,
+            "receipt": receipt.to_dict()})
+    return receipt.to_dict()
+
+
+@machinery_router.post(
+    "/enrol/amend",
+    summary="Amend a machine's declared site or owner, as a new record",
+    responses={
+        409: {"description": "`not_enrolled`, `unknown_attribute` or `key_change_refused` "
+                             "(the body carries the receipt), or `ledger_chain_unverified`. "
+                             "Nothing was written."},
+        422: {"description": "`invalid_amendment`: the actor is not a named person, the reason "
+                             "is empty, or a value is empty or malformed."},
+    },
+)
+def post_amend_enrolment(
+    body: AmendEnrolmentIn,
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Change the declared ``site`` / ``owner`` of an enrolled machine, as a new record.
+
+    The enrolment is never rewritten: the amendment names it and the amendment before it, and
+    the previous value stays in the ledger. Same values as in force write nothing
+    (`no_change`). The identity remains as declared, not authenticated to a physical unit.
+    Gated exactly like ``POST /v1/machinery/enrol``. No MCP tool: it is a named person's act.
+    """
+    actor = Actor(identifier=body.actor,
+                  role=sanitise_declared_role(body.role, default=""), kind="person")
+    try:
+        receipt = amend_enrolment(register.ledger, body.machine, actor=actor,
+                                  changes=body.changes, reason=body.reason)
+    except EnrolmentError as exc:
+        text = str(exc)
+        if text.startswith("the ledger chain does not verify"):
+            raise HTTPException(status_code=409, detail={
+                "error": "ledger_chain_unverified", "detail": text}) from exc
+        raise _bad(exc, "amendment") from exc
     if receipt.refused:
         raise HTTPException(status_code=409, detail={
             "error": receipt.status, "detail": receipt.pointer,

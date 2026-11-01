@@ -184,6 +184,10 @@ CAPABILITIES: tuple[Capability, ...] = (
        "machinery enrol", "POST /v1/machinery/enrol",
        gaps={"mcp": _d("enrolment is a named person's declaration of identity; an agent is not "
                        "offered a way to make it (and it writes the ledger of record)")}),
+    _c("machinery.amend_enrolment", "Amend a machine's declared site or owner, as a new record",
+       "machinery amend-enrolment", "POST /v1/machinery/enrol/amend",
+       gaps={"mcp": _d("an amendment is a named person's declaration of identity; an agent is "
+                       "not offered a way to make it (and it writes the ledger of record)")}),
     _c("machinery.manifest", "Seal a safety software manifest",
        "machinery record-manifest", "POST /v1/machinery/manifest", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.intervention", "Seal an intervention record",

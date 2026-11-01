@@ -52,6 +52,9 @@ class MachineRecord:
     #: ``covered`` on rows drawn from a store whose integrity is in question: deleting or
     #: editing the one record that invalidated a function would otherwise be enough.
     chain_verified: bool = True
+    #: The enrolment plus its amendments (:class:`~assurance.machinery.amend.EffectiveIdentity`),
+    #: when the machine is enrolled. Without one, the site is the manifest's.
+    identity: Any = None
 
     @property
     def verdict(self) -> str:
@@ -82,12 +85,23 @@ class MachineRecord:
 
     @property
     def site(self) -> str:
+        """The site in force: the latest amendment of it, else the manifest's own."""
+        if self.site_amended:
+            return self.identity.effective["site"]
         return self.manifest.machine.site
+
+    @property
+    def site_amended(self) -> bool:
+        return self.identity is not None and any(
+            "site" in a.changes for a in self.identity.amendments)
 
     def to_row(self) -> dict[str, Any]:
         return {
             "machine": self.machine_key,
             "site": self.site,
+            **({"declared_site": self.identity.original.get("site", ""),
+                "identity_amendments": [a.to_dict() for a in self.identity.amendments]}
+               if self.site_amended else {}),
             "manifest_id": self.manifest.manifest_id,
             "configuration_hash": self.manifest.configuration_hash(),
             "taken_at": self.manifest.taken_at.isoformat().replace("+00:00", "Z"),
@@ -208,16 +222,21 @@ class Fleet:
 
         records: list[MachineRecord] = []
         for key, manifest in sorted(latest.items()):
+            from assurance.machinery.amend import effective_identity
             from assurance.machinery.record import interventions_from_ledger
 
             ivs = interventions_from_ledger(ledger, key)
+            try:
+                identity = effective_identity(ledger, key)
+            except AssuranceError:
+                identity = None   # a damaged enrolment record is for `machinery enrol` to say
             vfs = VerificationRecord.from_ledger(
                 ledger, subject=key, recorder_trust=recorder_trust, claims=claims)
             records.append(MachineRecord(
                 machine_key=key, manifest=manifest,
                 coverage=assess_coverage(manifest, vfs, ivs),
                 interventions=tuple(ivs), verifications=tuple(vfs),
-                chain_verified=chain_ok,
+                chain_verified=chain_ok, identity=identity,
             ))
 
         return cls(records=tuple(records), chain_verified=chain_ok,
@@ -286,11 +305,16 @@ class Fleet:
         out = [head, "-" * len(head)]
         for r in rows:
             out.append(
-                f"{r.machine_key:<28} {(r.site or '—')[:22]:<22} "
+                f"{r.machine_key:<28} "
+                f"{((r.site or '—')[:21] + '*' if r.site_amended else (r.site or '—')[:22]):<22} "
                 f"{(r.worst.value if r.worst else '—'):<17} "
                 f"{r.stale_count:>5} {len(r.coverage.functions):>4}  "
                 f"{r.manifest.configuration_hash()[:12]}"
             )
+        if any(r.site_amended for r in rows):
+            out.append("")
+            out.append("* site amended since enrolment by a named person "
+                       "(the JSON rows show who, when, why, from -> to)")
         s = self.summary()
         out.append("")
         out.append(f"{s.machines} machine(s): {s.covered} covered, "

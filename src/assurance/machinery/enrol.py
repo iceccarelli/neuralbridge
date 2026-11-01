@@ -110,21 +110,23 @@ class EnrolmentError(AssuranceError):
     """The enrolment request cannot be read or cannot be made by this caller."""
 
 
-def require_person(actor: Actor | None) -> Actor:
+def require_person(actor: Actor | None, act: str = "enrolment") -> Actor:
     """Enrolment is a declaration, and only a named person makes one.
+
+    ``act`` names the declaration in the refusal (``amendment`` for an amended identity).
 
     Mirrors the rule the change workflow applies to human decisions (``Actor.kind`` must be
     ``person``; the name must be one a person could have), without importing that package.
     """
     if actor is None or not actor.identifier.strip():
         raise EnrolmentError(
-            "enrolment is a declaration and needs a named person (--actor / actor). "
-            "An unattributed enrolment is not recorded.")
+            f"{act} is a declaration and needs a named person (--actor / actor). "
+            f"An unattributed {act} is not recorded.")
     if actor.kind != "person":
         raise EnrolmentError(
-            f"enrolment needs a named person; actor {actor.identifier!r} is kind "
+            f"{act} needs a named person; actor {actor.identifier!r} is kind "
             f"{actor.kind!r}. Automation can collect and seal a manifest, but cannot declare "
-            "that a unit is enrolled.")
+            "that a unit is enrolled or what its identity is.")
     norm = unicodedata.normalize("NFKC", actor.identifier)
     if any(unicodedata.category(c) in ("Cf", "Cc", "Zl", "Zp") for c in norm) \
             or not any(c.isalnum() for c in norm):
@@ -135,7 +137,7 @@ def require_person(actor: Actor | None) -> Actor:
     if words and all(w in _RESERVED_NAMES for w in words):
         raise EnrolmentError(
             f"actor {actor.identifier!r} is what an automated actor is called, not who it "
-            "is; enrolment needs a named person.")
+            f"is; {act} needs a named person.")
     return actor
 
 
@@ -175,6 +177,11 @@ class EnrolmentReceipt:
     conflicts: tuple[dict[str, str], ...] = ()
     notes: tuple[str, ...] = ()
     pointer: str = ""
+    #: ``declared`` is the identity in force. When a named person has amended it since
+    #: enrolment, these say so: what was declared at enrolment, and each amendment (who,
+    #: when, why, from -> to), oldest first.
+    original_declared: dict[str, str] = field(default_factory=dict)
+    amendments: tuple[dict[str, Any], ...] = ()
 
     @property
     def refused(self) -> bool:
@@ -193,6 +200,9 @@ class EnrolmentReceipt:
             "configuration_hash": self.configuration_hash,
             "enrolled_configuration_hash": self.enrolled_configuration_hash,
             "declared": dict(self.declared),
+            "identity_amended": bool(self.amendments),
+            "original_declared": dict(self.original_declared),
+            "amendments": [dict(a) for a in self.amendments],
             "identity_basis": IDENTITY_BASIS,
             "manifest_id": self.manifest_id,
             "manifest_content_hash": self.manifest_content_hash,
@@ -242,6 +252,12 @@ class EnrolmentReceipt:
         shown = {k: v for k, v in self.declared.items() if v}
         if shown:
             lines.append("  declared      " + ", ".join(f"{k}={v}" for k, v in shown.items()))
+        for a in self.amendments:
+            for attr, ft in a["changes"].items():
+                lines.append(
+                    f"  amended       {attr}: {ft['from'] or '(not declared)'!r} -> "
+                    f"{ft['to']!r} by {a['by']} at {a['at']} (entry {a['entry']}): "
+                    f"{a['reason']}")
         if self.items_total:
             lines.append(f"  items         {self.items_total} "
                          f"({len(self.uncomparable_items)} carry no hash)")
@@ -407,13 +423,24 @@ def _against_existing(
     ledger: EvidenceLedger, manifest: SafetyManifest, declared: dict[str, str],
     config: str, entry: Any, body: dict[str, Any],
 ) -> EnrolmentReceipt:
+    from assurance.machinery.amend import effective_identity  # amend builds on this module
+
     key = manifest.machine.key
     enrolled_config = str(body.get("configuration_hash", ""))
+    # The identity in force is the enrolment plus its amendments, in order; the claim is
+    # compared with that, not with the first declaration alone.
+    ident = effective_identity(ledger, key, (entry, body))
+    in_force = dict(ident.effective) if ident else dict(body.get("declared", declared))
+    amended: dict[str, Any] = {}
+    if ident is not None and ident.amended:
+        amended = {"original_declared": dict(ident.original),
+                   "amendments": tuple(a.to_dict() for a in ident.amendments)}
     common: dict[str, Any] = {
         "machine_key": key,
         "configuration_hash": config,
         "enrolled_configuration_hash": enrolled_config,
-        "declared": dict(body.get("declared", declared)),
+        "declared": in_force,
+        **amended,
         "manifest_id": manifest.manifest_id,
         "manifest_content_hash": str(body.get("manifest_content_hash", "")),
         "manifest_entry": int(body.get("manifest_entry", 0)),
@@ -423,7 +450,7 @@ def _against_existing(
         "written": False,
         **_shape(manifest),
     }
-    conflicts = _conflicts(body, declared)
+    conflicts = _conflicts({"declared": in_force}, declared)
     if conflicts:
         return EnrolmentReceipt(
             status=IDENTITY_CONFLICT, conflicts=tuple(conflicts),
@@ -438,12 +465,14 @@ def _against_existing(
                      "<enrolled manifest> --observed <this manifest>` or `change assess "
                      "drift` (POST /v1/machinery/diff, POST /v1/change/assess/drift)."),
             **common)
-    notes = []
-    held = body.get("declared", {})
+    notes = [f"amendment record problem, not applied: {p}"
+             for p in (ident.problems if ident else ())]
+    held = in_force
     for attr in _ATTRIBUTES:
         if declared.get(attr) and not _text(held.get(attr, "")):
             notes.append(f"{attr} {declared[attr]!r} was not declared at enrolment and was "
-                         "not added; enrolment records are not amended")
+                         "not added by enrolling again; a named person adds it with "
+                         "`machinery amend-enrolment`")
     return EnrolmentReceipt(
         status=ALREADY_ENROLLED, notes=tuple(notes),
         coverage=_coverage_after(ledger, manifest), **common)
