@@ -90,8 +90,26 @@ def _ro_uri(path: Path) -> str:
     return f"{Path(path).resolve().as_uri()}?mode=ro"
 
 
+def _private_dir(path: Path) -> None:
+    """Create ``path`` (and parents) and make it 0700 NOW.
+
+    The umask is only the first line of defence: a default ACL on the parent, or a filesystem
+    that ignores the umask, hands a new directory group/world access anyway (observed: a
+    Codespace's /tmp gives 0756 under umask 077). An explicit chmod is not subject to either, and
+    a 0700 directory shuts everyone else out of whatever is created inside it.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
 def _snapshot(src: Path, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    _private_dir(dest.parent)
+    # Create the file 0600 before SQLite does: SQLite asks for 0644 and leaves the rest to the
+    # umask, which an ACL can override. An existing file is left to _tighten.
+    try:
+        os.close(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        pass
     # A short busy timeout on the source: each backup step then returns BUSY after about
     # a second instead of waiting out 30 s inside SQLite, so ``bounded`` below gets to
     # enforce BACKUP_DEADLINE at that granularity.
@@ -257,7 +275,7 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
         raise FileExistsError(f"{out_dir} already holds files; back up into an empty directory")
     previous = os.umask(0o077)
     try:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        _private_dir(out_dir)
         taken: list[str] = []
         pending = 0
         # Tenant ledgers first, the account list after them: a customer who signs up while the
