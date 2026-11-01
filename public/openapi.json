@@ -149,6 +149,52 @@
         "title": "AdvisoryFindingIn",
         "type": "object"
       },
+      "AmendEnrolmentIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor",
+            "type": "string"
+          },
+          "changes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 20,
+            "minProperties": 1,
+            "title": "Changes",
+            "type": "object"
+          },
+          "machine": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Machine",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machine",
+          "actor",
+          "reason",
+          "changes"
+        ],
+        "title": "AmendEnrolmentIn",
+        "type": "object"
+      },
       "AttestIn": {
         "additionalProperties": false,
         "description": "Three numbers the customer reads out of their own ledger.\n\nNothing else is accepted, and nothing else is wanted. The point of this\nendpoint is that the records stay where they are. In particular there is no\n``rotating`` flag: acknowledging that the signing key changed is the operator's\nact (``assurance attest sign --rotating``), and a tenant who could set it would\nswitch off the key-change guard on the log it shares with the operator.",
@@ -7157,6 +7203,80 @@
           }
         },
         "summary": "Enrol a machine: declare its identity, seal its baseline, get a receipt",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
+    "/v1/machinery/enrol/amend": {
+      "post": {
+        "description": "Change the declared ``site`` / ``owner`` of an enrolled machine, as a new record.\n\nThe enrolment is never rewritten: the amendment names it and the amendment before it, and\nthe previous value stays in the ledger. Same values as in force write nothing\n(`no_change`). The identity remains as declared, not authenticated to a physical unit.\nGated exactly like ``POST /v1/machinery/enrol``. No MCP tool: it is a named person's act.",
+        "operationId": "post_amend_enrolment_v1_machinery_enrol_amend_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmendEnrolmentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Amend Enrolment V1 Machinery Enrol Amend Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "`not_enrolled`, `unknown_attribute` or `key_change_refused` (the body carries the receipt), or `ledger_chain_unverified`. Nothing was written."
+          },
+          "422": {
+            "description": "`invalid_amendment`: the actor is not a named person, the reason is empty, or a value is empty or malformed."
+          }
+        },
+        "summary": "Amend a machine's declared site or owner, as a new record",
         "tags": [
           "machinery"
         ]
