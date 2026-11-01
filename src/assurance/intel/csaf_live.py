@@ -46,6 +46,7 @@ from typing import Any
 
 from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.intel.fetch import RequestHeaders, build_headers, fetch
+from assurance.intel.parsers import INTERIM_REFUSAL
 from assurance.intel.sources import SOURCES
 from assurance.intel.store import IntelStore, Observation
 from assurance.intel.transport import Transport, TransportError
@@ -85,6 +86,12 @@ class CsafRunReport:
     @property
     def rejected(self) -> int:
         return sum(o.disposition == "rejected" for o in self.observations) + len(self.refused)
+
+    @property
+    def interim_refused(self) -> int:
+        """Documents refused only because their tracking status was interim."""
+        return sum(o.disposition == "rejected" and o.reason == INTERIM_REFUSAL
+                   for o in self.observations)
 
     def counts(self) -> dict[str, int]:
         out = dict.fromkeys(("first", "changed", "unchanged", "rejected"), 0)
@@ -143,9 +150,13 @@ def _provider_key(url: str) -> str:
 def refresh_documents(
     store: IntelStore, urls: list[str], transport: Transport, *, allowed_hosts: Iterable[str],
     timeout: float = 30.0, max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
-    clock: Callable[[], datetime] = utc_now,
+    clock: Callable[[], datetime] = utc_now, allow_interim: bool = False,
 ) -> CsafRunReport:
-    """Fetch named CSAF document URLs; one observation each."""
+    """Fetch named CSAF document URLs; one observation each.
+
+    ``allow_interim`` is the operator's explicit option: ``interim`` documents are imported
+    (still unsigned, inspect-only); ``draft`` and every other refusal are unchanged.
+    """
     allowed = normalise_allow_hosts(allowed_hosts)
     if not urls:
         raise CsafRefusal("give at least one --url or a --provider-metadata-url")
@@ -159,7 +170,7 @@ def refresh_documents(
             break
         obs = fetch(store, "csaf", u, transport, headers=headers, timeout=timeout, clock=clock,
                     provenance={"provider": f"direct:{hosts[i]}", "listed_at": "",
-                                "mode": "direct-url"})
+                                "mode": "direct-url"}, allow_interim=allow_interim)
         report.observations.append(obs)
         report.bytes_fetched += obs.byte_length
         if obs.http_status in _STOP_STATUSES:
@@ -326,6 +337,7 @@ def refresh_provider(
     allowed_hosts: Iterable[str], max_documents: int = DEFAULT_MAX_DOCUMENTS,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES, timeout: float = 30.0,
     max_document_bytes: int | None = None, clock: Callable[[], datetime] = utc_now,
+    allow_interim: bool = False,
 ) -> CsafRunReport:
     """Fetch only the documents of one provider that are new or changed since the last run."""
     allowed = normalise_allow_hosts(allowed_hosts)
@@ -372,7 +384,7 @@ def refresh_provider(
                           f"{last_error}")
     report.listed = len(entries)
 
-    done = store.settled_listings(provider)
+    done = store.settled_listings(provider, allow_interim=allow_interim)
     pending = []
     for e in entries:
         have = done.get(e.url)
@@ -395,7 +407,7 @@ def refresh_provider(
                     max_bytes=cap, clock=clock,
                     provenance={"provider": provider, "listed_at": e.listed_at,
                                 "mode": "provider-metadata", "directory": _safe_label(directory),
-                                "publisher": publisher})
+                                "publisher": publisher}, allow_interim=allow_interim)
         report.observations.append(obs)
         report.bytes_fetched += obs.byte_length
         if obs.http_status in _STOP_STATUSES:
