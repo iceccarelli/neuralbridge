@@ -177,7 +177,8 @@ The offline kit never loads it and opens no socket; `ops cycle --dry-run` sends 
   The URL path of a chat webhook can itself be a bearer token: it is never printed or recorded,
   so keep `ops.json` mode 0600.
 * `on` defaults to both statuses. A quiet (`ok`) cycle sends nothing.
-* `format` is `"json"` only.
+* `format` is `"json"` (default), `"slack"`, `"teams"` or `"pagerduty"`; see **Formats** below.
+  `"servicenow_json"` is **not built** and is refused at config.
 
 **Payload** (an allow-list built from the record; step `detail`/`info`/`command`, key and backup
 paths, and ledger contents are never copied; finding text is neutralised, path-masked and
@@ -251,14 +252,105 @@ test would send (the signature masked as `<hmac of N bytes>`); only with `--live
 clearly labelled `status: "test"` message that contains no record contents. Exit `0` delivered,
 `1` failed, `2` could not run.
 
-**Pointing a vendor at it.** Slack, Teams, PagerDuty, ServiceNow and Jira each offer an inbound
-webhook or an events API with its own JSON shape. **No vendor integration is built or claimed, and
-no format adaptation for any of them exists.** This sends the generic JSON above, so such a tool
-accepts it only if it takes arbitrary JSON (for example a ServiceNow scripted REST endpoint, a Jira
-automation "incoming webhook" rule, or a small relay you operate that checks the signature and
-re-posts in the vendor's shape). Put the endpoint's host in `allow_host`; if it wants a token, put
-`Authorization: ...` in the variable named by `headers_env`. Whether a given vendor endpoint accepts
-the body has not been tested.
+#### Formats
+
+`format` only changes the *shape* of the body. Every format is built from the same allow-listed
+message above, so no extra data enters any vendor body, and the same neutralisation, path masking
+and truncation already applied to finding text hold. **ServiceNow: `servicenow_json` is not built.**
+For ServiceNow or Jira use `json` against an endpoint that takes arbitrary JSON, or a relay you
+operate. The operator names the host in `allow_host`; no vendor host is trusted by name.
+
+| `format` | body | what `secret_env` is | signature header |
+|---|---|---|---|
+| `json` | the generic body above | HMAC key | `X-NeuralBridge-Signature` |
+| `slack` | `{"text": ...}` | HMAC key | sent, but Slack does not check it |
+| `teams` | `{"text": ...}` | HMAC key | sent, but Teams does not check it |
+| `pagerduty` | Events API v2 enqueue body | **the PagerDuty routing key** | **none** |
+
+> **Auth asymmetry, read this.** For `json`, `slack` and `teams`, `secret_env` is an HMAC key and the
+> request is signed. Slack and Teams do **not** verify that signature: for them the webhook URL
+> *is* the credential (keep `ops.json` mode 0600; the path is never printed or recorded). The
+> signature only helps if you put a relay of your own in front. For `pagerduty`, `secret_env` names
+> the variable holding the **routing key** (PagerDuty's integration key), the key is sent only
+> inside the body PagerDuty requires, and **no HMAC header is sent**. The routing key is read at
+> send time and is never written to the record, the outbox, `ops status` or any log: the outbox
+> stores the routing-key-free canonical message and the PagerDuty body is rebuilt on each retry.
+
+Slack, `{"text": ...}` (`•` bullets, one per human action, Slack's `&amp; &lt; &gt;` escaping):
+
+```json
+{"text": "NeuralBridge ops example-ops: cycle flagged\nSteps: 2 total; not ok: watch.run:watch.json=flagged\nHuman actions: 1\n• watch.run:watch.json / ADV-2026-001: read new finding ADV-2026-001 ... Nothing was opened\nDrafted by software from an unsigned operator log; it decides nothing."}
+```
+
+Teams, `{"text": ...}` (plain text with `-` bullets; markdown punctuation is backslash-escaped):
+
+```json
+{"text": "NeuralBridge ops example-ops: cycle flagged\nSteps: 2 total; not ok: watch.run:watch.json=flagged\nHuman actions: 1\n- watch.run:watch.json / ADV-2026-001: read new finding ADV-2026-001 ... Nothing was opened\nDrafted by software from an unsigned operator log; it decides nothing."}
+```
+
+PagerDuty Events API v2:
+
+```json
+{"routing_key": "<from $secret_env>", "event_action": "trigger",
+ "dedup_key": "example-ops-20261102T031500Z:oncall",
+ "payload": {"summary": "NeuralBridge ops example-ops: cycle flagged; 1 human action(s): ...",
+             "source": "example-ops", "severity": "warning",
+             "custom_details": {"kind": "cycle", "cycle_id": "...", "status": "flagged",
+                                "steps": [], "human_actions": [], "human_actions_omitted": 0,
+                                "record_sha256": "<64 hex>", "not_established": "..."}}}
+```
+
+`severity` is `warning` for a `flagged` cycle and `error` for `degraded` (`info` for the
+`notify-test` event). `dedup_key` equals the `Idempotency-Key` (`<cycle_id>:<target name>`), so a
+retry updates the same alert instead of opening a second one. A `notify-test --live` to PagerDuty
+**does trigger a real event** (`info`, summary "TEST message"); resolve it afterwards.
+
+**Making text inert.** In step names, refs and action text: `@` becomes `@ ` (so `@channel`,
+`@here` and `<@U123>` notify nobody); `://` becomes `:/ /` and `www.` becomes `www .` (no
+auto-link). Slack: `&`, `<`, `>` are entity-escaped (this also defuses `<!channel>` and
+`<url|text>`) and `*`, `_`, `~` and the backtick are replaced by look-alike characters, because
+mrkdwn has no escape for them. Teams: backslash, backtick, `* _ [ ] ( ) < > & | ~ #` are
+backslash-escaped. Newlines in finding text were already turned into visible `\n`, so a finding
+cannot add bullets.
+
+**Size caps.** Slack and Teams text: 3000 characters (our cap). PagerDuty `summary`: 1024
+(Events API v2 limit). Over the cap, whole trailing bullets are dropped and the text says
+`… (N more)` (N counts human actions not shown, including any the payload already omitted); an
+over-long PagerDuty summary is cut and ends `… (N more)` (N counts characters). Nothing is cut
+silently.
+
+**Pointing a vendor at it.**
+
+* *Slack:* create an Incoming Webhook in your workspace; `url` is the `https://hooks.slack.com/...`
+  URL, `allow_host` is `hooks.slack.com`, `format` is `slack`. `secret_env` still needs a value
+  (any HMAC key; Slack ignores the header).
+* *Teams:* create a webhook / Workflows "post to channel when a webhook request is received" URL;
+  `allow_host` is that URL's exact host, `format` is `teams`. A Workflows flow may need its trigger
+  schema set to accept `{"text": ...}`.
+* *PagerDuty:* add an *Events API v2* integration to a service, copy its integration (routing)
+  key into the environment variable named by `secret_env`; `url` is
+  `https://events.pagerduty.com/v2/enqueue`, `allow_host` is `events.pagerduty.com`, `format` is
+  `pagerduty`. Do not put the key in `ops.json`.
+
+```json
+"notify": [
+  {"name": "oncall", "url": "https://events.pagerduty.com/v2/enqueue",
+   "allow_host": "events.pagerduty.com", "format": "pagerduty",
+   "on": ["degraded"], "secret_env": "NB_PAGERDUTY_ROUTING_KEY"},
+  {"name": "team-chat", "url": "https://hooks.slack.com/services/T000/B000/XXXX",
+   "allow_host": "hooks.slack.com", "format": "slack", "secret_env": "NB_NOTIFY_HMAC_SECRET"}
+]
+```
+
+`ops check` and `ops notify-test` (dry run) print the format and the body shape; the dry run shows
+the body with the routing key masked.
+
+**Verified against vendor docs only, not against a live account.** The Slack, Teams and PagerDuty
+bodies are built from each vendor's published request schema and checked by golden contract
+fixtures in `tests/test_ops_notify_formats.py`. No Slack workspace, Teams tenant or PagerDuty
+account was contacted, so whether a given endpoint accepts a body (a Teams Workflows trigger schema,
+an org-specific Slack restriction, a PagerDuty rate limit) is unknown until you run
+`ops notify-test --live` against it.
 
 **Not established by this.** That the receiver exists, authenticates the signature, or keeps the
 idempotency key (`ops check` makes no request); that a delivered (2xx) webhook was read by anyone,
