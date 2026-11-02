@@ -1,12 +1,15 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import AssuranceWorkspace from '../components/AssuranceWorkspace';
 
 export const metadata: Metadata = {
-  title: 'Assurance workspace | Industrial Autonomous Assurance',
-  description:
-    'Your fleet, its evidence freshness and your open change-assurance cases, read from the live Assurance API with your own key.',
-  alternates: { canonical: '/assurance' },
-  robots: { index: false },
+  ...buildMetadata({
+    title: 'Assurance workspace',
+    description:
+      'Your fleet, its evidence freshness and your open change-assurance cases, read from the live Assurance API with your own key.',
+    path: '/assurance',
+  }),
+  robots: { index: false, follow: true },
 };
 
 export default function AssurancePage() {

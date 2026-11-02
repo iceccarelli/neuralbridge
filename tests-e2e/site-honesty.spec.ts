@@ -25,9 +25,11 @@ async function sitemap(request: APIRequestContext) {
 }
 
 function jsonLd(html: string): Array<Record<string, any>> {
-  return [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)].map((m) =>
-    JSON.parse(m[1]),
-  );
+  // The layout emits one @graph (Organization + WebSite); flatten it so each node is one block.
+  return [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)].flatMap((m) => {
+    const data = JSON.parse(m[1]);
+    return Array.isArray(data['@graph']) ? data['@graph'] : [data];
+  });
 }
 
 test('the pricing cards render every plan feature, with no truncation, without JavaScript', async ({ request }) => {
@@ -57,7 +59,9 @@ test('Offer and Product structured data is on / only, monthly, and claims no ava
 
   for (const path of ['/privacy', '/contact', '/status', '/assurance', '/docs', '/solutions/manufacturer']) {
     const blocks = jsonLd(await (await request.get(path)).text());
-    expect(blocks.map((b) => b['@type']), `${path} carries only Organization`).toEqual(['Organization']);
+    // Organization + WebSite from the layout; the docs index adds its visible breadcrumb trail. No Offer anywhere else.
+    const expected = path === '/docs' ? ['Organization', 'WebSite', 'BreadcrumbList'] : ['Organization', 'WebSite'];
+    expect(blocks.map((b) => b['@type']).sort(), `${path} carries only ${expected.join(' + ')}`).toEqual([...expected].sort());
   }
 });
 

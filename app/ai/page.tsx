@@ -1,19 +1,14 @@
 import RepoLink from '../components/RepoLink';
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import AiWorkspace from '../components/AiWorkspace';
 
-export const metadata: Metadata = {
-  title: 'AI | Industrial Autonomous Assurance',
+export const metadata: Metadata = buildMetadata({
+  title: 'AI',
   description:
-    'The agent control plane: discover a connection, read it, plan a write, approve it, get a receipt. Without a paid key you can read the shared demo connection (read-only); Register and Cell can bind their own. Every fact cites the connection, tool, and timestamp that produced it — the LLM is never the system of record.',
-  alternates: { canonical: '/ai' },
-  openGraph: {
-    title: 'AI | Industrial Autonomous Assurance',
-    description: 'Discover, read, plan, approve, execute, verify. The shared demo connection is read-only; writes need your own bound connection on Register or Cell.',
-    url: '/ai',
-    type: 'website',
-  },
-};
+    'The agent control plane: discover a connection, read it, plan a write, approve it, get a receipt. The shared demo connection is read-only.',
+  path: '/ai',
+});
 
 export default function AiPage() {
   return (

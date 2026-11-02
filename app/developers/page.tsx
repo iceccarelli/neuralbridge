@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import RepoLink from '../components/RepoLink';
 import { IMAGES } from '../lib/images';
 import { ROUTES, TIER_LABEL } from '../lib/routes';
@@ -18,18 +19,12 @@ const ROUTE_COUNT = Object.entries(openapi.paths as Record<string, Record<string
   .filter(([path]) => path.startsWith('/v1/'))
   .reduce((n, [, item]) => n + Object.keys(item).filter((k) => METHODS.includes(k)).length, 0);
 
-export const metadata: Metadata = {
-  title: 'Developers | Industrial Autonomous Assurance',
+export const metadata: Metadata = buildMetadata({
+  title: 'Developers',
   description:
-    'The Assurance API: auth, base URL, a curated free-vs-paid route table checked by a test against the real OpenAPI schema of the service, and copy-paste curl/Python.',
-  alternates: { canonical: '/developers' },
-  openGraph: {
-    title: 'Developers | Industrial Autonomous Assurance',
-    description: 'Auth, routes, and examples for the Assurance API — checked against the real OpenAPI schema.',
-    url: '/developers',
-    type: 'website',
-  },
-};
+    'The Assurance API: auth, base URL, a curated free-vs-paid route table checked by a test against the real OpenAPI schema, and copy-paste curl and Python.',
+  path: '/developers',
+});
 
 export default function DevelopersPage() {
   return (
@@ -85,7 +80,7 @@ export default function DevelopersPage() {
             </p>
           </div>
           <p className="code-panel-label">Free, no key needed</p>
-          <pre className="code-panel">{`curl -X POST ${API_BASE || 'https://<your-deployment>'}/v1/spec/validate \\
+          <pre className="code-panel" tabIndex={0}>{`curl -X POST ${API_BASE || 'https://<your-deployment>'}/v1/spec/validate \\
   -H 'content-type: application/json' \\
   -d '{"track":"actively_exploited_vulnerability","stage":"early_warning","payload":{}}'`}</pre>
         </div>
@@ -109,7 +104,7 @@ export default function DevelopersPage() {
               (<code>assurance intel refresh --live</code>), never a route.
             </p>
           </div>
-          <div className="status-table-wrap">
+          <div className="status-table-wrap" tabIndex={0} role="region" aria-label="Table, scrolls sideways">
             <table className="status-table">
               <thead>
                 <tr>
@@ -146,7 +141,7 @@ export default function DevelopersPage() {
             </p>
           </div>
           <p className="code-panel-label">Python</p>
-          <pre className="code-panel">{`import httpx
+          <pre className="code-panel" tabIndex={0}>{`import httpx
 
 resp = httpx.post(
     "${API_BASE || 'https://<your-deployment>'}/v1/machine/verify",

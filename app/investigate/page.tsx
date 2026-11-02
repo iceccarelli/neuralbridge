@@ -1,17 +1,15 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import InvestigationWorkspace from '../components/InvestigationWorkspace';
 
 export const metadata: Metadata = {
-  title: 'Investigate | Industrial Autonomous Assurance',
-  description:
-    'The Machine Assurance Investigation: an enrolled machine’s configuration status, evidence staleness, intervention history and fleet impact in one place — Cell plan, calling the real API.',
-  alternates: { canonical: '/investigate' },
-  openGraph: {
-    title: 'Investigate | Industrial Autonomous Assurance',
-    description: 'One enrolled machine’s full evidence position, from the real API.',
-    url: '/investigate',
-    type: 'website',
-  },
+  ...buildMetadata({
+    title: 'Investigate',
+    description:
+      'One enrolled machine\'s configuration status, evidence staleness, intervention history and fleet impact in one place. Cell plan, calling the real API.',
+    path: '/investigate',
+  }),
+  robots: { index: false, follow: true },
 };
 
 export default function InvestigatePage() {

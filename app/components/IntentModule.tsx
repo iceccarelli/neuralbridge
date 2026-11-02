@@ -138,7 +138,7 @@ export default function IntentModule() {
       <RotatingImage
         slot={IMAGES['intent-fleet-advisory']}
         aspect="21/9"
-        sizes="100vw"
+        sizes="(max-width: 700px) 100vw, 1200px"
         className="pricing-media"
       />
       <label className="intent-label" htmlFor="intent-select">What are you trying to do?</label>
@@ -164,7 +164,7 @@ export default function IntentModule() {
             </p>
           ))}
         </div>
-        <div className="hero-code intent-output">{intent.output}</div>
+        <div className="hero-code intent-output" tabIndex={0} role="region" aria-label="Command output">{intent.output}</div>
       </div>
 
       <a className="btn btn-primary" href={`/solutions/${intent.solutionSlug}`}>
