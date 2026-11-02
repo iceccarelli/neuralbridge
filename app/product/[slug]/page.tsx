@@ -10,6 +10,7 @@ import {
   productHref,
 } from '../../lib/productPages';
 import { BY_ID, STATUS_LABEL, SURFACE_NAMES } from '../../lib/siteCapabilities';
+import { buildMetadata } from '../../lib/seo';
 import '../product.css';
 
 // Every page is generated from app/lib/productPages.ts: the words, the capability ids and the FAQ that
@@ -25,23 +26,14 @@ export async function generateMetadata({ params }: { params: ProductParams }): P
   const { slug } = await params;
   const page = getProductPage(slug);
   if (!page) return {};
-  const url = productHref(page.slug);
-  return {
+  // The shared helper keeps the canonical, OpenGraph and Twitter tags (and the social image)
+  // complete; titles here are already within the limit and unique, so they are used as written.
+  return buildMetadata({
     title: page.title,
+    absoluteTitle: true,
     description: page.description,
-    alternates: { canonical: url },
-    openGraph: {
-      title: page.title,
-      description: page.description,
-      url,
-      type: 'website',
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title: page.title,
-      description: page.description,
-    },
-  };
+    path: productHref(page.slug),
+  });
 }
 
 /** A string with `code` spans, as React nodes. */

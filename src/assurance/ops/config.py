@@ -16,14 +16,14 @@ from typing import Any
 
 from assurance.core.errors import AssuranceError
 
-__all__ = ["OpsConfig", "OpsConfigError", "SCHEMA", "load_config"]
+__all__ = ["NotifyCfg", "OpsConfig", "OpsConfigError", "SCHEMA", "load_config"]
 
 SCHEMA = "neuralbridge-ops/1"
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _CVE = re.compile(r"^CVE-\d{4}-\d{4,}$")
 _SOURCES = ("kev", "nvd", "epss")
 _TOP = {"schema", "ops_id", "data_dir", "record", "lock", "backup_dir", "max_cycle_age_hours",
-        "min_free_disk_mb", "intel", "watch", "attest"}
+        "min_free_disk_mb", "intel", "watch", "attest", "notify"}
 
 
 class OpsConfigError(AssuranceError):
@@ -59,6 +59,22 @@ class AttestCfg:
 
 
 @dataclass(frozen=True)
+class NotifyCfg:
+    """One outbound webhook. ``secret_env`` / ``headers_env`` are NAMES; values are read at send."""
+
+    name: str
+    url: str
+    allow_host: str
+    secret_env: str
+    on: tuple[str, ...] = ("flagged", "degraded")
+    headers_env: str | None = None
+    format: str = "json"
+
+    def __repr__(self) -> str:       # the URL path can itself be a bearer token (chat webhooks)
+        return f"NotifyCfg(name={self.name!r}, host={self.allow_host!r})"
+
+
+@dataclass(frozen=True)
 class OpsConfig:
     path: Path
     ops_id: str
@@ -71,10 +87,18 @@ class OpsConfig:
     intel: IntelCfg | None = None
     watch: tuple[WatchCfg, ...] = field(default_factory=tuple)
     attest: AttestCfg | None = None
+    notify: tuple[NotifyCfg, ...] = field(default_factory=tuple)
+
+    @property
+    def outbox(self) -> Path:
+        """Append-only JSONL of notifications that failed and are owed a retry."""
+        return Path(f"{self.record}.outbox.jsonl")
 
     def secret_env_names(self) -> list[str]:
         names = [s.api_key_env for s in (self.intel.sources if self.intel else ())
                  if s.api_key_env]
+        for n in self.notify:
+            names += [e for e in (n.secret_env, n.headers_env) if e]
         if self.attest and self.attest.passphrase_env:
             names.append(self.attest.passphrase_env)
         return names
@@ -116,6 +140,74 @@ def _number(value: Any, where: str, *, minimum: float) -> float:
             or value != value or value < minimum):
         raise _fail(f"{where} must be a number >= {minimum:g}")
     return float(value)
+
+
+_NOTIFY_ON = ("flagged", "degraded")
+_NAME = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+_HOST = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}"
+                   r"[a-z0-9])?)*$")
+_URL = re.compile(r"^https://([A-Za-z0-9.-]+)(?::443)?(?:[/?#][^\s\x00-\x1f\x7f]*)?$")
+# a value pasted where a NAME belongs: refused (never shown) when it has the shape of a key
+_SECRET_PREFIX = re.compile(r"^(sk|pk|rk|whsec|ghp|gho|xox[a-z]|AKIA|asr|eyJ|Bearer|Basic)[_\- ]?",
+                            re.IGNORECASE)
+
+
+def _notify_env(value: Any, where: str) -> str:
+    name = _env_name(value, where)
+    if _SECRET_PREFIX.match(name) and not name.isupper():
+        raise _fail(f"{where} looks like a secret value, not a variable name; the value was "
+                    "not shown. Put the secret in the environment and its NAME here")
+    return name
+
+
+def host_of(url: str) -> str | None:
+    """The lower-cased host of an ``https://host[:443]/...`` URL, else ``None``. No userinfo."""
+    m = _URL.fullmatch(url)
+    if not m:
+        return None
+    host = m.group(1).lower()
+    return host if _HOST.fullmatch(host) else None
+
+
+def _notify(raw: Any) -> tuple[NotifyCfg, ...]:
+    if not isinstance(raw, list):
+        raise _fail("notify must be a list")
+    out: list[NotifyCfg] = []
+    for i, item in enumerate(raw):
+        n = _obj(item, f"notify[{i}]", {"name", "url", "allow_host", "on", "secret_env",
+                                        "headers_env", "format"})
+        for req in ("name", "url", "allow_host", "secret_env"):
+            if req not in n:
+                raise _fail(f"notify[{i}].{req} is required")
+        name = n["name"]
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise _fail(f"notify[{i}].name must be 1-32 characters of letters, digits, '.', "
+                        "'_' or '-'")
+        if any(o.name == name for o in out):
+            raise _fail(f"notify[{i}].name duplicates an earlier target")
+        url, allow = n["url"], n["allow_host"]
+        # the URL itself may be a bearer token (chat webhooks): it is never echoed back
+        if not isinstance(url, str) or len(url) > 2048 or host_of(url) is None:
+            raise _fail(f"notify[{i}].url must be an https URL (no credentials, port 443 only); "
+                        "the value was not shown")
+        if not isinstance(allow, str) or not _HOST.fullmatch(allow):
+            raise _fail(f"notify[{i}].allow_host must be one exact lower-case host name")
+        if host_of(url) != allow:
+            raise _fail(f"notify[{i}].allow_host must equal the host of notify[{i}].url "
+                        "exactly (no wildcard, no sub-domain, no suffix)")
+        on = n.get("on", list(_NOTIFY_ON))
+        if (not isinstance(on, list) or not on or len(set(on)) != len(on)
+                or not all(isinstance(o, str) and o in _NOTIFY_ON for o in on)):
+            raise _fail(f"notify[{i}].on must be a non-empty list drawn from "
+                        f"{', '.join(_NOTIFY_ON)}")
+        if n.get("format", "json") != "json":
+            raise _fail(f"notify[{i}].format must be 'json' (no vendor format is built)")
+        out.append(NotifyCfg(
+            name=name, url=url, allow_host=allow, on=tuple(o for o in _NOTIFY_ON if o in on),
+            secret_env=_notify_env(n["secret_env"], f"notify[{i}].secret_env"),
+            headers_env=_notify_env(n["headers_env"], f"notify[{i}].headers_env")
+            if n.get("headers_env") is not None else None))
+    return tuple(out)
 
 
 def load_config(path: str | Path) -> OpsConfig:
@@ -205,4 +297,5 @@ def load_config(path: str | Path) -> OpsConfig:
                                     minimum=0.01),
         min_free_disk_mb=_number(top.get("min_free_disk_mb", 1024), "min_free_disk_mb",
                                  minimum=0),
-        intel=intel, watch=tuple(watches), attest=attest)
+        intel=intel, watch=tuple(watches), attest=attest,
+        notify=_notify(top["notify"]) if "notify" in top else ())

@@ -496,7 +496,7 @@ class _Page(HTMLParser):
             self._in_main += 1
         if tag == "h1":
             self.h1 += 1
-        if tag == "h2":
+        if tag == "h2" and self._in_main:
             self._cur_h2_id = a.get("id", "")
         if tag == "a" and self._in_main and a.get("href"):
             self.hrefs.append(a["href"])
@@ -520,7 +520,7 @@ class _Page(HTMLParser):
             self.dt.append("".join(self._buf).strip())
         if tag == "dd":
             self.dd.append("".join(self._buf).strip())
-        if tag == "h2":
+        if tag == "h2" and self._in_main:       # the footer's headings are not part of the page's outline
             self.h2.append((self._cur_h2_id, "".join(self._buf).strip()))
         if tag == "title":
             self.title = "".join(self._buf).strip()
@@ -575,7 +575,12 @@ def _built_page(dist: Path, slug: str) -> _Page:
 
 
 def _json_ld(page: _Page) -> list[dict]:
-    return [json.loads(block) for block in page.ld]
+    """Every JSON-LD node on the page; the layout's single @graph is flattened into its nodes."""
+    nodes: list[dict] = []
+    for block in page.ld:
+        data = json.loads(block)
+        nodes.extend(data["@graph"] if isinstance(data, dict) and "@graph" in data else [data])
+    return nodes
 
 
 def _route_exists(dist: Path, href: str) -> bool:
@@ -617,7 +622,7 @@ class TestBuiltPages:
         blocks = _json_ld(page)
         types = [b["@type"] for b in blocks]
         assert {"BreadcrumbList", "FAQPage"} <= set(types)
-        assert set(types) <= {"BreadcrumbList", "FAQPage", "Organization"}, types  # Organization is the layout's
+        assert set(types) <= {"BreadcrumbList", "FAQPage", "Organization", "WebSite"}, types  # the last two are the layout's
 
         def all_types(node) -> set[str]:
             if isinstance(node, dict):
@@ -626,7 +631,7 @@ class TestBuiltPages:
                 return {t for v in node for t in all_types(v)}
             return set()
 
-        mine = [b for b in blocks if b["@type"] != "Organization"]
+        mine = [b for b in blocks if b["@type"] not in {"Organization", "WebSite"}]   # the layout's graph
         assert all_types(mine) == {"BreadcrumbList", "ListItem", "FAQPage", "Question", "Answer"}
         crumb = next(b for b in blocks if b["@type"] == "BreadcrumbList")
         items = [(i["position"], i["name"], i["item"]) for i in crumb["itemListElement"]]

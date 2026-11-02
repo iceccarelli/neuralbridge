@@ -23,5 +23,15 @@
     "key": "/etc/assurance/keys/anchor.pem",
     "passphrase_env": "ASSURANCE_ATTEST_PASSPHRASE",
     "max_age_hours": 24
-  }
+  },
+  "notify": [
+    {
+      "name": "oncall",
+      "url": "https://hooks.example.invalid/neuralbridge",
+      "allow_host": "hooks.example.invalid",
+      "on": ["flagged", "degraded"],
+      "secret_env": "NB_NOTIFY_HMAC_SECRET",
+      "headers_env": "NB_NOTIFY_HEADERS"
+    }
+  ]
 }

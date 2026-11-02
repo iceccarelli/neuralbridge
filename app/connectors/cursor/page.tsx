@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../../lib/seo';
 import RepoLink from '../../components/RepoLink';
 import { IMAGES } from '../../lib/images';
 import RotatingImage from '../../components/RotatingImage';
@@ -6,17 +7,12 @@ import ImageryNote from '../../components/ImageryNote';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
-export const metadata: Metadata = {
-  title: 'Cursor connector | Industrial Autonomous Assurance',
-  description: 'Install assurance-mcp as a Cursor MCP server, or point Cursor at the real openapi.json — no account needed for free routes.',
-  alternates: { canonical: '/connectors/cursor' },
-  openGraph: {
-    title: 'Cursor connector | Industrial Autonomous Assurance',
-    description: 'Wire Cursor to the Assurance API — as an MCP server or via its OpenAPI schema.',
-    url: '/connectors/cursor',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Cursor connector',
+  description:
+    'Install assurance-mcp as a Cursor MCP server, or point Cursor at the real openapi.json — no account needed for free routes.',
+  path: '/connectors/cursor',
+});
 
 export default function CursorConnectorPage() {
   return (
@@ -68,11 +64,11 @@ export default function CursorConnectorPage() {
           <ol className="cli-steps">
             <li>
               <strong>Install the server.</strong>
-              <pre className="code-panel">{`pip install -e '.[assurance-mcp]'`}</pre>
+              <pre className="code-panel" tabIndex={0}>{`pip install -e '.[assurance-mcp]'`}</pre>
             </li>
             <li>
               <strong>Add it to Cursor's <code>mcp.json</code></strong> (Cursor Settings → MCP):
-              <pre className="code-panel">{`{
+              <pre className="code-panel" tabIndex={0}>{`{
   "mcpServers": {
     "assurance": {
       "command": "assurance-mcp",
@@ -108,13 +104,13 @@ export default function CursorConnectorPage() {
           <ol className="cli-steps">
             <li>
               <strong>Run the API locally, or use a deployment.</strong>
-              <pre className="code-panel">{`pip install -e '.[assurance-api]'
+              <pre className="code-panel" tabIndex={0}>{`pip install -e '.[assurance-api]'
 uvicorn assurance.api.service:app`}</pre>
             </li>
             <li>
               <strong>Point Cursor's OpenAPI/tool config at the schema.</strong> In Cursor's settings for custom
               tools or an OpenAPI-backed connector, use:
-              <pre className="code-panel">{`${API_BASE || 'http://localhost:8000'}/openapi.json`}</pre>
+              <pre className="code-panel" tabIndex={0}>{`${API_BASE || 'http://localhost:8000'}/openapi.json`}</pre>
             </li>
             <li>
               <strong>Call a free route with no key first.</strong> <code>POST /v1/spec/validate</code>,{' '}

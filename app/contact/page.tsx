@@ -1,18 +1,14 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import { Suspense } from 'react';
 import ContactForm from '../components/ContactForm';
 
-export const metadata: Metadata = {
-  title: 'Contact | Industrial Autonomous Assurance',
-  description: 'Talk to sales about Register or Cell, or reach the supplier feed program — one form, no CRM behind it yet.',
-  alternates: { canonical: '/contact' },
-  openGraph: {
-    title: 'Contact | Industrial Autonomous Assurance',
-    description: 'Talk to sales about Register or Cell, or reach the supplier feed program.',
-    url: '/contact',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Contact',
+  description:
+    'Talk to sales about Register or Cell, or reach the supplier feed program. One form that opens a pre-filled email in your own mail client; no CRM behind it yet.',
+  path: '/contact',
+});
 
 export default function ContactPage() {
   return (
@@ -28,7 +24,7 @@ export default function ContactPage() {
               Fill this in and it opens a pre-filled email in your own mail client.
             </p>
           </div>
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="contact-form-fallback" aria-hidden="true" />}>
             <ContactForm />
           </Suspense>
         </div>

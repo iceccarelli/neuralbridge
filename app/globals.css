@@ -10,9 +10,11 @@
   --surface: #ffffff;
   --surface-alt: #f5f7fa;
   --orange: #ec7211;
-  --orange-dark: #b35900;
-  --link: #0972d3;
-  --link-visited: #0972d3;
+  /* --orange-dark and --link are text colours on light surfaces: both are held at 4.5:1 or more
+     against --surface, --surface-alt and the pale badge fills (checked with axe-core). */
+  --orange-dark: #9c4d00;
+  --link: #0a68c0;
+  --link-visited: #0a68c0;
   --success: #067d68;
   --danger: #b23b1f;
   --max-width: 1280px;
@@ -810,7 +812,9 @@ img {
 }
 
 .hero-panel {
-  background: rgba(255, 255, 255, 0.04);
+  /* Solid, not rgba(255,255,255,.04): the same colour over the hero gradient, but a contrast
+     checker can resolve it (it cannot see through a gradient and falls back to white). */
+  background: #1f3147;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   padding: 1.4rem;
@@ -1502,7 +1506,7 @@ table.compare-table td.check {
 }
 
 .playground-output {
-  background: rgba(7, 12, 23, 0.5);
+  background: #0e1a2b; /* solid equivalent of rgba(7,12,23,.5) over the panel, so contrast is checkable */
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   padding: 0.85rem;
@@ -1738,16 +1742,17 @@ table.status-table tbody tr:last-child td {
 
 .footer-columns {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 2rem;
   padding: 2.75rem 0 1.5rem;
 }
 
-.footer-columns h4 {
+.footer-columns h2 {
   color: #ffffff;
   font-size: 0.82rem;
   margin: 0 0 0.9rem;
   letter-spacing: 0.02em;
+  font-weight: 700;
 }
 
 .footer-columns ul {
@@ -3105,4 +3110,98 @@ table.status-table tbody tr:last-child td {
   margin-top: 0.25rem;
   color: var(--ink-soft);
   line-height: 1.4;
+}
+
+
+/* ====================== ACCESSIBILITY HELPERS ====================== */
+/* Visible only on keyboard focus: the first tab stop on every page jumps past the header to <main id="top">. */
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 1000;
+  padding: 0.6rem 1rem;
+  background: var(--navy-900);
+  color: #ffffff;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+/* Text for assistive technology only (a heading that keeps the outline in order without a visible one). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Holds the contact form's place while the client-side form (useSearchParams) hydrates, so the footer
+   does not jump. Heights are the form's measured height at desktop and phone widths. */
+.contact-form-fallback {
+  min-height: 561px;
+}
+
+@media (max-width: 700px) {
+  .contact-form-fallback {
+    min-height: 680px;
+  }
+}
+
+/* A keyboard user can scroll a wide table or code sample only if it can take focus. */
+.status-table-wrap:focus-visible,
+.compare-table-wrap:focus-visible,
+.code-panel:focus-visible,
+.hero-code:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.docs-main {
+  min-width: 0;
+}
+
+/* .hero-panel-note is pale text for the navy hero; on a light section it was #cbd7e6 on white (1.45:1). */
+.hero-panel-note.panel-note-light {
+  color: var(--ink-soft);
+}
+
+.panel-note-light a {
+  color: var(--link);
+  text-decoration: underline;
+}
+
+.docs-breadcrumb ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.docs-breadcrumb li + li::before {
+  content: '/';
+  margin-right: 0.35rem;
+  color: var(--ink-soft);
+}
+
+.docs-breadcrumb a {
+  color: var(--link);
+}
+
+.docs-breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.docs-content pre:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }

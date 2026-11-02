@@ -1,21 +1,17 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import RepoLink from '../components/RepoLink';
 import { SALES } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
 
-export const metadata: Metadata = {
-  title: 'Applications | Industrial Autonomous Assurance',
-  description: 'Cobots, packaging lines, fleet advisory, the OEM register, and insurer evidence — each mapped to a real /v1 route and the plan that gates it.',
-  alternates: { canonical: '/applications' },
-  openGraph: {
-    title: 'Applications | Industrial Autonomous Assurance',
-    description: 'Five applications, each mapped to a real gated capability — not a roadmap slide.',
-    url: '/applications',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Applications',
+  description:
+    'Cobots, packaging lines, fleet advisory, the OEM register, and insurer evidence — each mapped to a real /v1 route and the plan that gates it.',
+  path: '/applications',
+});
 
 interface Application {
   slug: string;
@@ -106,6 +102,7 @@ export default function ApplicationsPage() {
 
       <section className="section" id="applications-grid">
         <div className="shell">
+          <h2 className="sr-only">The five applications</h2>
           <div className="tile-grid">
             {APPLICATIONS.map((appItem) => (
               <article className="tile" key={appItem.slug}>

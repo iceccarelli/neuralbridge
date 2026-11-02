@@ -1,22 +1,13 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import { SALES } from '../lib/links';
 
-export const metadata: Metadata = {
-  title: 'Privacy | Industrial Autonomous Assurance',
-  description: 'What this website collects: checked against the code, not asserted.',
-  alternates: { canonical: '/privacy' },
-  openGraph: {
-    title: 'Privacy | Industrial Autonomous Assurance',
-    description: 'What this website collects: checked against the code, not asserted.',
-    url: '/privacy',
-    type: 'website',
-  },
-  twitter: {
-    card: 'summary',
-    title: 'Privacy | Industrial Autonomous Assurance',
-    description: 'What this website collects: checked against the code, not asserted.',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Privacy',
+  description:
+    'What this website collects and stores in your browser, and what the free API endpoints, the offline kit and paid tiers do with data, checked against the code.',
+  path: '/privacy',
+});
 
 export default function PrivacyPage() {
   return (

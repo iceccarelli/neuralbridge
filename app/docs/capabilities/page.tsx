@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../../lib/seo';
+import Breadcrumbs from '../../components/Breadcrumbs';
 import DocsSidebar from '../../components/DocsSidebar';
 import {
   BY_ID,
@@ -14,12 +16,12 @@ import {
   type SurfaceName,
 } from '../../lib/siteCapabilities';
 
-export const metadata: Metadata = {
-  title: 'Capabilities by surface | Docs | Industrial Autonomous Assurance',
+export const metadata: Metadata = buildMetadata({
+  title: 'Capabilities by surface | Docs',
   description:
-    'Every capability, and which of the command line, the HTTP API and the MCP server offers it. Generated from the code; a missing surface says whether it is by design or planned.',
-  alternates: { canonical: '/docs/capabilities' },
-};
+    'Every capability, and whether the command line, the HTTP API and the MCP server offer it. Generated from the code; a gap says if it is by design or planned.',
+  path: '/docs/capabilities',
+});
 
 const SURFACE_HEADING: Record<SurfaceName, string> = { cli: 'CLI', api: 'HTTP API', mcp: 'MCP' };
 
@@ -74,6 +76,7 @@ export default function CapabilitiesPage() {
           <DocsSidebar activeHref="/docs/capabilities" editPath="src/assurance/capabilities.py" />
 
           <article className="docs-content">
+            <Breadcrumbs trail={[{ name: 'Home', path: '/' }, { name: 'Docs', path: '/docs' }, { name: 'Capabilities by surface', path: '/docs/capabilities' }]} />
             <h1>Capabilities by surface</h1>
             <p>
               One catalogue, <code>src/assurance/capabilities.py</code>, declares what this product can do and on which of
@@ -144,7 +147,7 @@ export default function CapabilitiesPage() {
             {SERVICES.map((service) => (
               <section key={service} id={`service-${service}`}>
                 <h3>{SERVICE_TITLE[service] ?? service}</h3>
-                <div className="status-table-wrap cap-table-wrap">
+                <div className="status-table-wrap cap-table-wrap" tabIndex={0} role="region" aria-label={`${SERVICE_TITLE[service] ?? service} capabilities, scrolls sideways`}>
                   <table className="cap-table">
                     <thead>
                       <tr>

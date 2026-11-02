@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../../lib/seo';
 import RepoLink from '../../components/RepoLink';
 import { IMAGES } from '../../lib/images';
 import { ROUTES, TIER_LABEL, type Tier } from '../../lib/routes';
@@ -84,17 +85,12 @@ function McpGap({ route }: { route: string }) {
   );
 }
 
-export const metadata: Metadata = {
-  title: 'MCP connector | Industrial Autonomous Assurance',
-  description: 'Two installable MCP servers — assurance-mcp for the Assurance API, neuralbridge-ai-mcp for the /ai control plane — pip install, no fake responses.',
-  alternates: { canonical: '/connectors/mcp' },
-  openGraph: {
-    title: 'MCP connector | Industrial Autonomous Assurance',
-    description: 'pip install -e ".[assurance-mcp]" or ".[neuralbridge-ai-mcp]" — real MCP servers over real APIs.',
-    url: '/connectors/mcp',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'MCP connector',
+  description:
+    'Two installable MCP servers — assurance-mcp for the Assurance API, neuralbridge-ai-mcp for the /ai control plane — pip install, no fake responses.',
+  path: '/connectors/mcp',
+});
 
 export default function McpConnectorPage() {
   return (
@@ -143,7 +139,7 @@ export default function McpConnectorPage() {
             <span className="eyebrow">Install</span>
             <h2>Install and run</h2>
           </div>
-          <pre className="code-panel">{`pip install -e '.[assurance-mcp]'
+          <pre className="code-panel" tabIndex={0}>{`pip install -e '.[assurance-mcp]'
 
 export ASSURANCE_API_URL=http://127.0.0.1:8000   # or a real deployment
 export ASSURANCE_API_KEY=...                      # optional — paid tools only
@@ -154,7 +150,7 @@ assurance-mcp`}</pre>
             <code>mcp.json</code>, shown on <a href="/connectors/cursor">the Cursor connector page</a>. For a
             generic MCP client, point it at the <code>assurance-mcp</code> command directly:
           </p>
-          <pre className="code-panel">{`{
+          <pre className="code-panel" tabIndex={0}>{`{
   "mcpServers": {
     "assurance": {
       "command": "assurance-mcp",
@@ -182,14 +178,14 @@ assurance-mcp`}</pre>
               never a faked success.
             </p>
           </div>
-          <pre className="code-panel">{`pip install -e '.[neuralbridge-ai-mcp]'
+          <pre className="code-panel" tabIndex={0}>{`pip install -e '.[neuralbridge-ai-mcp]'
 
 export NEURALBRIDGE_API_URL=http://127.0.0.1:8000/api/v1   # or a real deployment
 export NEURALBRIDGE_AI_API_KEY=...                           # optional — write tools only
 export NEURALBRIDGE_AI_ACTOR=your-agent-name                 # real identity for the audit trail
 
 neuralbridge-ai-mcp`}</pre>
-          <pre className="code-panel">{`{
+          <pre className="code-panel" tabIndex={0}>{`{
   "mcpServers": {
     "neuralbridge-ai": {
       "command": "neuralbridge-ai-mcp",
@@ -247,7 +243,7 @@ neuralbridge-ai-mcp`}</pre>
               <a href="/docs/capabilities">the capabilities page</a>.
             </p>
           </div>
-          <div className="status-table-wrap">
+          <div className="status-table-wrap" tabIndex={0} role="region" aria-label="Table, scrolls sideways">
             <table className="status-table">
               <thead>
                 <tr>

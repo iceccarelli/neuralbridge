@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { SOLUTIONS, getSolution } from '../../lib/solutions';
 import { IMAGES } from '../../lib/images';
+import { buildMetadata, fitDescription } from '../../lib/seo';
 import RotatingImage from '../../components/RotatingImage';
 import ImageryNote from '../../components/ImageryNote';
 
@@ -16,24 +17,12 @@ export async function generateMetadata({ params }: { params: SolutionParams }): 
   const { slug } = await params;
   const solution = getSolution(slug);
   if (!solution) return {};
-  const title = `${solution.role} | Industrial Autonomous Assurance`;
-  const url = `/solutions/${solution.slug}`;
-  return {
-    title,
-    description: solution.headline,
-    alternates: { canonical: url },
-    openGraph: {
-      title,
-      description: solution.headline,
-      url,
-      type: 'website',
-    },
-    twitter: {
-      card: 'summary_large_image',
-      title,
-      description: solution.headline,
-    },
-  };
+  // The page's own headline and lead, cut at a word boundary: no separate marketing sentence to drift.
+  return buildMetadata({
+    title: solution.role,
+    description: fitDescription(`${solution.headline} ${solution.lead}`),
+    path: `/solutions/${solution.slug}`,
+  });
 }
 
 export default async function SolutionPage({ params }: { params: SolutionParams }) {

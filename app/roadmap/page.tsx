@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import RepoLink from '../components/RepoLink';
 import { loadRootDoc } from '../lib/docs';
 import {
@@ -10,17 +11,12 @@ import {
   type SurfaceName,
 } from '../lib/siteCapabilities';
 
-export const metadata: Metadata = {
-  title: 'Roadmap | Industrial Autonomous Assurance',
-  description: 'What is planned and not yet built, read from the capability catalogue in the code — nothing is marked done unless it is gated in code and covered by tests.',
-  alternates: { canonical: '/roadmap' },
-  openGraph: {
-    title: 'Roadmap | Industrial Autonomous Assurance',
-    description: 'Planned gaps, each with the reason the catalogue records for it.',
-    url: '/roadmap',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Roadmap',
+  description:
+    'What is planned and not yet built, read from the capability catalogue in the code — nothing is marked done unless it is gated in code and covered by tests.',
+  path: '/roadmap',
+});
 
 const SURFACE_HEADING: Record<SurfaceName, string> = { cli: 'CLI', api: 'HTTP API', mcp: 'MCP' };
 

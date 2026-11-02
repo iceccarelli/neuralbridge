@@ -11,8 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
-__all__ = ["HostNotAllowed", "RedirectRefused", "ResponseTooLarge", "Transport",
-           "TransportError"]
+__all__ = ["HostNotAllowed", "PostTransport", "RedirectRefused", "ResponseTooLarge",
+           "Transport", "TransportError"]
 
 
 class TransportError(Exception):
@@ -44,4 +44,18 @@ class Transport(Protocol):
     """
 
     def get(self, url: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
+        ...
+
+
+class PostTransport(Protocol):
+    """``post(url, headers, body, timeout) -> (http status, raw body bytes)``.
+
+    Added for the operator's outbound notification path (``assurance.ops.notify``). Separate
+    from :class:`Transport` so that every existing GET-only implementation stays valid. The
+    same contract: a non-2xx status is returned, not raised; :class:`TransportError` only when
+    there is no response; a redirect is never followed.
+    """
+
+    def post(self, url: str, headers: Mapping[str, str], body: bytes, timeout: float
+             ) -> tuple[int, bytes]:
         ...

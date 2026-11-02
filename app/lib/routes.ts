@@ -112,6 +112,7 @@ export const ROUTES: RouteRow[] = [
 
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
   { method: 'POST', path: '/v1/supplier/advisory/withdraw', tier: 'supplier', summary: 'Withdraw an advisory with a signed withdrawal, verified under a key your account pinned; the original is kept' },
+  { method: 'POST', path: '/v1/supplier/advisory/key', tier: 'supplier', summary: 'Pin your own publishing public key in your own account, for the supplier id you publish as; recorded as declared by you, not proof of identity' },
 ];
 
 export const TIER_LABEL: Record<Tier, string> = {
@@ -150,7 +151,7 @@ export const CLI_DOMAINS: CliDomain[] = [
   { domain: 'report', verbs: ['build', 'demo'], summary: 'The fleet on one page (build) and a worked synthetic fleet (demo, invented data).', apiTier: 'cell' },
   { domain: 'capabilities', verbs: [], summary: 'Prints, and with --check verifies, the catalogue of what the CLI, API and MCP each offer.', apiTier: 'free' },
   { domain: 'billing', verbs: ['grant', 'issue-key', 'revoke-key', 'extend', 'end', 'list'], summary: 'Operator tooling for accounts provisioned outside Stripe. Works on the local account store; opens no socket and is not an HTTP route.' },
-  { domain: 'ops', verbs: ['cycle', 'status', 'check'], summary: 'Operator tooling a timer runs on the host: one cycle of the unattended steps (intel refresh only with --live, watch run, chain verify, anchor-all, backup and verify), a status of the last cycle, and a preflight. Not a hosted feature and not an HTTP route or MCP tool.' },
+  { domain: 'ops', verbs: ['cycle', 'status', 'check', 'notify-test'], summary: 'Operator tooling a timer runs on the host: one cycle of the unattended steps (intel refresh only with --live, watch run, chain verify, anchor-all, backup and verify), a status of the last cycle, a preflight, and an opt-in signed webhook that tells a person (a labelled test send is `notify-test`). Not a hosted feature and not an HTTP route or MCP tool.' },
   { domain: 'tenant', verbs: ['export', 'verify-export', 'delete'], summary: 'Operator tooling on the data volume: export one account (ledger, evidence bundle, attestation log, hashed manifest), verify the export, and plan or execute its removal after a verified export and a named person. Deletes nothing by default; not a hosted feature and not an HTTP route or MCP tool.' },
   { domain: 'bridge', verbs: ['art14'], summary: 'Assembles the Article 14 export from local case state — local only.' },
   { domain: 'collect', verbs: ['check-plan', 'probe', 'run'], summary: 'Finds the vendor tool’s own volatile headers before they produce a year of false drift alarms.' },
