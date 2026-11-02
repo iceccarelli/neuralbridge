@@ -1,4 +1,5 @@
-import { DEPLOY_BLOB, QUICKSTART, REPO, SALES, SRC } from './lib/links';
+import RepoLink from './components/RepoLink';
+import { ownerLink, QUICKSTART, repoSameAs, SALES, srcLink } from './lib/links';
 import structuredOffers from './lib/structured-offers.json';
 import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
@@ -143,8 +144,8 @@ const products = [
     badgeClass: 'source',
     name: 'Assurance API',
     body: 'FastAPI surface: plans and entitlements, the Article 14 register, machine verification, fleet and change assurance, Watch reports, read-only public-source intelligence (503 until the operator configures a store) and hosted supplier feeds. `GET /v1/plans` returns the pricing table generated from the entitlements the software enforces. Self-host with uvicorn today.',
-    href: `${SRC}/api`,
-    cta: 'View source',
+    href: srcLink('/api') ?? '/developers',
+    cta: srcLink('/api') ? 'View source' : 'Read the API reference',
     imageKey: 'card-api-assurance',
   },
 ] as const;
@@ -153,8 +154,18 @@ const products = [
 // route: /checkout/success, /assurance and /status are noindex and should carry no price markup.
 // Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
 // pins the numbers and the period to billing/plans.py.
+// The owner profile and repository URLs are added only when REPO_PUBLIC (lib/links.ts) is true.
+function withRepoLinks<T extends { creator: object }>(app: T) {
+  const owner = ownerLink();
+  return {
+    ...app,
+    creator: owner ? { ...app.creator, url: owner } : app.creator,
+    ...(repoSameAs().length ? { sameAs: repoSameAs() } : {}),
+  };
+}
+
 const structuredDataBlocks = [
-  structuredOffers.softwareApplication,
+  withRepoLinks(structuredOffers.softwareApplication),
   ...structuredOffers.products,
 ];
 
@@ -535,7 +546,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             configured), but it is not deployed to a public endpoint. Deploying it needs outbound access to Fly.io
             from wherever runs <code>fly deploy</code>, plus live Stripe keys &mdash; neither is available in the
             environment that built this page. See{' '}
-            <a href={`${REPO}/blob/main/src/assurance/api/billing_routes.py`} target="_blank" rel="noreferrer">the billing routes</a>{' '}
+            <RepoLink path="/blob/main/src/assurance/api/billing_routes.py" plain>the billing routes</RepoLink>{' '}
             and <a href="/docs/assurance/deploy">the deploy guide</a> for the exact
             remaining steps.
           </p>
@@ -590,9 +601,9 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
           <p className="pricing-note">
             Full detail, including what is <em>not</em> yet claimed, is in{' '}
-            <a href={`${REPO}#neuralbridge--the-platform-underneath`} target="_blank" rel="noreferrer">
+            <RepoLink path="#neuralbridge--the-platform-underneath" plain>
               the README
-            </a>.
+            </RepoLink>.
           </p>
         </div>
       </section>

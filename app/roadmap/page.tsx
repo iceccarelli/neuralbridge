@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO } from '../lib/links';
+import RepoLink from '../components/RepoLink';
 import { loadRootDoc } from '../lib/docs';
 import {
   CAPABILITIES,
@@ -52,9 +52,9 @@ export default function RoadmapPage() {
         <section className="section" style={{ paddingTop: '3rem' }}>
           <div className="shell docs-standalone">
             <article className="docs-content" dangerouslySetInnerHTML={{ __html: doc.html }} />
-            <a className="docs-nav-edit" href={`${REPO}/blob/main/${doc.editPath}`} target="_blank" rel="noreferrer">
+            <RepoLink path={`/blob/main/${doc.editPath}`} className="docs-nav-edit">
               Edit this page on GitHub ↗
-            </a>
+            </RepoLink>
           </div>
         </section>
       </main>

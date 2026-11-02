@@ -1,0 +1,8 @@
+# NeuralBridge — runtime of the Industrial Autonomous Assurance service image
+# (deploy/assurance/Dockerfile). Mirrors the `pip install` line there and the
+# [assurance-api] extra in pyproject.toml; keep the three in step.
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+httpx>=0.27.0
+cryptography>=42.0.0

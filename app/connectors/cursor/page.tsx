@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { REPO } from '../../lib/links';
+import RepoLink from '../../components/RepoLink';
 import { IMAGES } from '../../lib/images';
 import RotatingImage from '../../components/RotatingImage';
 import ImageryNote from '../../components/ImageryNote';
@@ -139,7 +139,7 @@ uvicorn assurance.api.service:app`}</pre>
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href="/connectors/mcp">Go to /connectors/mcp</a>
-            <a className="btn btn-outline" href={REPO} target="_blank" rel="noreferrer">Browse the source</a>
+            <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>
       </section>

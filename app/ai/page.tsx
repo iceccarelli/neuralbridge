@@ -1,3 +1,4 @@
+import RepoLink from '../components/RepoLink';
 import type { Metadata } from 'next';
 import AiWorkspace from '../components/AiWorkspace';
 
@@ -27,7 +28,7 @@ export default function AiPage() {
             read-only: without a key you can discover and read it (30 reads a day), and writes need your own
             connection bound on Register or Cell. Every result carries the
             connection, tool, timestamp and request id that produced it — nothing here is a fact the model made up.
-            (Local setup: <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/ai-local-setup.md">docs/ai-local-setup.md</a>.)
+            <RepoLink path="/blob/main/docs/ai-local-setup.md" plain>(Local setup: docs/ai-local-setup.md.)</RepoLink>
           </p>
         </div>
       </section>

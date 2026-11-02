@@ -44,12 +44,8 @@
     "description": "Evidence infrastructure for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230): a hash-chained record of what is on each machine, which checks were run against it, and when.",
     "creator": {
       "@type": "Person",
-      "name": "Vincenzo Grimaldi",
-      "url": "https://github.com/iceccarelli"
-    },
-    "sameAs": [
-      "https://github.com/iceccarelli/neuralbridge"
-    ]
+      "name": "Vincenzo Grimaldi"
+    }
   },
   "products": [
     {

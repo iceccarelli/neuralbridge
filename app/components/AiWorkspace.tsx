@@ -1,5 +1,6 @@
 'use client';
 
+import RepoLink from './RepoLink';
 import { useEffect, useRef, useState } from 'react';
 import { useSharedApiKey } from '../lib/apiKey';
 
@@ -330,7 +331,7 @@ export default function AiWorkspace() {
         <code>NEXT_PUBLIC_NEURALBRIDGE_API_URL</code> set. Run the platform API yourself —{' '}
         <code>uvicorn neuralbridge.main:app --factory</code> — and point <code>NEXT_PUBLIC_NEURALBRIDGE_API_URL</code>{' '}
         at it. See{' '}
-        <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/ai-local-setup.md">docs/ai-local-setup.md</a>.
+        <RepoLink path="/blob/main/docs/ai-local-setup.md" plain>docs/ai-local-setup.md</RepoLink>.
       </p>
     );
   }

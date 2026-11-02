@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { REPO, SALES } from '../lib/links';
+import RepoLink from '../components/RepoLink';
+import { SALES } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
@@ -134,7 +135,7 @@ export default function ApplicationsPage() {
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href={SALES}>Talk to sales</a>
-            <a className="btn btn-outline" href={REPO} target="_blank" rel="noreferrer">Browse the source</a>
+            <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>
       </section>

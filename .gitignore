@@ -90,3 +90,4 @@ site/
 # not authored here. CLAUDE.md is this repo's agent guidance. Do not enable experimental.agentFeedback
 # without a founder decision: it makes the generated file instruct agents to send reports to Vercel.
 AGENTS.md
+.next-repo-*/

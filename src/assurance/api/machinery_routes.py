@@ -35,6 +35,14 @@ from assurance.machinery.amend import amend_enrolment
 from assurance.machinery.divergence import compare
 from assurance.machinery.enrol import EnrolmentError, enrol_machine
 from assurance.machinery.intervention import Intervention
+from assurance.machinery.inventory import (
+    API_MAX_ROWS,
+    InventoryImportError,
+    LedgerChainUnverifiedError,
+    import_rows,
+    parse_functions,
+    rows_from_api,
+)
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import (
     UnknownFunctionError,
@@ -88,6 +96,23 @@ class EnrolIn(BaseModel):
     role: str = Field(default="", max_length=200)
     site: str | None = Field(default=None, max_length=200)
     owner: str | None = Field(default=None, max_length=200)
+
+
+class EnrolBatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Canonical machine dicts (``manufacturer, model, serial, site?, owner?, year?, country?,
+    #: items: [{name, version, supplier?, sha256?, kind?, implements?}]``). The CSV parsing and
+    #: column mapping stay on the caller's side (``assurance machinery import-inventory``).
+    rows: list[Any] = Field(min_length=1)
+    source_system: str = Field(min_length=1, max_length=200)
+    #: Required: enrolment is a declaration by a named person.
+    actor: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="", max_length=200)
+    #: The caller's claim about the file the rows came from; recorded as asserted, not checked.
+    file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+    export_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    functions: list[dict[str, Any]] | None = Field(default=None, max_length=100)
 
 
 class AmendEnrolmentIn(BaseModel):
@@ -264,6 +289,60 @@ def post_enrol(
             "error": receipt.status, "detail": receipt.pointer,
             "receipt": receipt.to_dict()})
     return receipt.to_dict()
+
+
+@machinery_router.post(
+    "/enrol/batch",
+    summary="Enrol many machines from canonical rows of an inventory export",
+    responses={
+        409: {"description": "`ledger_chain_unverified`: nothing was written."},
+        413: {"description": "`too_many_rows`: more rows than one request takes; split the "
+                             "batch. Nothing was written."},
+        422: {"description": "`invalid_enrolment`: the actor is not a named person, or the "
+                             "request is malformed. A bad ROW is not a 422: it is reported as "
+                             "`rejected` in the outcomes and the other rows proceed."},
+    },
+)
+def post_enrol_batch(
+    body: EnrolBatchIn,
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Enrol up to 200 machines through the same domain function as ``POST /enrol``.
+
+    Per-row outcomes are exactly enrol's (`enrolled`, `already_enrolled`,
+    `configuration_differs`, `identity_conflict`) plus `rejected` with a reason. The response
+    is 200 whenever the batch was processed, because some rows may have been written; read
+    `counts` and `outcomes`. The data is customer-provided and as declared: it is not collected
+    from the machines and no verification is run. Gated exactly like `POST /enrol`. No MCP
+    tool; no CSV upload (a server that parses arbitrary uploaded files is a larger attack
+    surface than one that takes canonical rows).
+    """
+    if len(body.rows) > API_MAX_ROWS:
+        raise HTTPException(status_code=413, detail={
+            "error": "too_many_rows", "limit": API_MAX_ROWS,
+            "detail": f"{len(body.rows)} rows exceeds the {API_MAX_ROWS} one request takes. "
+                      "Nothing was processed; split the batch or use "
+                      "`assurance machinery import-inventory`."})
+    actor = Actor(identifier=body.actor,
+                  role=sanitise_declared_role(body.role, default=""), kind="person")
+    from datetime import date as _date
+
+    try:
+        functions = parse_functions(body.functions)
+        export_date = _date.fromisoformat(body.export_date) if body.export_date else None
+        report = import_rows(
+            Path(""), rows_from_api(body.rows, functions), actor=actor,
+            source_system=body.source_system, export_date=export_date,
+            file_sha256=(body.file_sha256 or "").lower(),
+            file_sha256_basis="asserted by the caller, not checked",
+            functions=functions, channel="api", ledger=register.ledger)
+    except LedgerChainUnverifiedError as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "ledger_chain_unverified", "detail": str(exc)}) from exc
+    except (InventoryImportError, EnrolmentError, ValueError) as exc:
+        raise _bad(exc, "enrolment") from exc
+    return report.to_dict()
 
 
 @machinery_router.post(

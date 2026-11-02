@@ -111,6 +111,38 @@ python -m assurance intel refresh --source csaf --live --allow-host HOST --url h
 * Exit codes: 0 done, 1 something was rejected or refused, 2 could not run (no `--live`, no
   `--allow-host`, off-list host, unreadable metadata).
 
+### `--allow-interim` (operator option, off by default)
+
+Vendors such as Siemens ProductCERT publish ongoing advisories with `tracking.status: interim`.
+By default these are refused and recorded `rejected` with the exact reason
+`wrong_shape: tracking status is interim`; `refresh` and `ingest` end with
+`N interim document(s) refused; pass --allow-interim to import them as inspect-only`, and
+`intel history` repeats that count over the rows it lists.
+
+`intel refresh --source csaf --live ... --allow-interim` and `intel ingest --csaf FILE
+--allow-interim` (and `refresh_documents` / `refresh_provider` / `ingest_file` with
+`allow_interim=True`) admit `interim` documents and only those:
+
+* **`draft` stays refused** (`wrong_shape: tracking status is draft`). The importer's single
+  `allow_draft` switch treats draft and interim alike; this layer does not, because a draft is a
+  working copy the vendor has not published.
+* A document refused for any other reason (bad shape, no reference, nothing mappable, ...) is
+  still refused, with the importer's own reason; the option only removes the status check.
+* The tracking status is kept verbatim (`provenance.tracking.status == "interim"`), and the
+  provenance row carries `allow_interim: true` (a key in the existing append-only, trigger-guarded
+  `provenance.meta_json`; no schema change, so existing stores need no migration). A refused
+  interim document carries `interim_refused: true` so a later run with the option fetches it
+  again instead of treating it as dealt with. A re-read of the stored bytes (candidates, API,
+  watch) uses the recorded flag, so an interim payload without it is reported unreadable.
+* Its candidate carries the note `tracking status was interim when read; the vendor may revise
+  it` first in `notes`; the hosted `GET /v1/intel/candidates` and watch findings print `notes`
+  unchanged, so the note reaches both. The import is marked partial, as the importer does.
+* A later `final` revision of the same tracking id is `changed`, the interim observation stays in
+  history, and the candidate (built from the newest accepted observation) drops the note.
+* Trust is unchanged: `unsigned_inspect_only`, no automated consequence, a case still needs a
+  named person and the unsigned-import override. The watch has no such option: it only reads
+  the store.
+
 The tests use a contract fixture (an in-memory provider on `csaf.example.invalid`); they are not
 live integration. Each fetch of a ROLIE provider re-downloads its whole feed (no conditional
 GET yet).

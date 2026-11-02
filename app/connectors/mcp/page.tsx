@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { SRC } from '../../lib/links';
+import RepoLink from '../../components/RepoLink';
 import { IMAGES } from '../../lib/images';
 import { ROUTES, TIER_LABEL, type Tier } from '../../lib/routes';
 import RotatingImage from '../../components/RotatingImage';
@@ -202,8 +202,8 @@ neuralbridge-ai-mcp`}</pre>
   }
 }`}</pre>
           <p>
-            See <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/ai-local-setup.md">
-            docs/ai-local-setup.md</a> for standing up a local Postgres to point this at.
+            For standing up a local Postgres to point this at, see{' '}
+            <RepoLink path="/blob/main/docs/ai-local-setup.md" plain>docs/ai-local-setup.md</RepoLink>.
           </p>
         </div>
       </section>
@@ -311,7 +311,7 @@ neuralbridge-ai-mcp`}</pre>
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href="/developers">Go to /developers</a>
-            <a className="btn btn-outline" href={`${SRC}/mcp`} target="_blank" rel="noreferrer">Browse the source</a>
+            <RepoLink path="/tree/main/src/assurance/mcp" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>
       </section>

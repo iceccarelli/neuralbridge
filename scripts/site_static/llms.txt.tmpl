@@ -1,0 +1,117 @@
+# Industrial Autonomous Assurance (NeuralBridge)
+
+> Evidence infrastructure for machines whose software can hurt someone. A
+> hash-chained record of what is on each machine, which checks were run against it, and
+> when — built for two EU regulatory clocks: CRA Article 14 (Reg. (EU)
+> 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230).
+
+## What this is
+
+NeuralBridge/Industrial Autonomous Assurance verifies and records evidence
+for industrial machines: Declaration of Conformity validation, machine
+safety verification (ISO/TS 15066 separation checks), Machinery Regulation
+Annex III manifests and passports, fleet advisory matching, and a
+hash-chained ledger for audit trails. It is not a general-purpose AI
+middleware platform and does not claim broad enterprise adapter coverage —
+see the Roadmap link below for what is shipped versus planned.
+
+## Pricing (three tiers)
+
+Re-checking someone else's evidence needs no account. Declaration,
+evidence-bundle, passport and attestation checks are not metered. The file
+verifier (POST /v1/evidence/verify, and /verify on this site) allows 20 a day per
+address; manifest diff allows 10 a day. Register and Cell have no daily cap on
+either.
+
+- **Validator** — Free, no card, no account required. Declaration/manifest/
+  attestation verification, Article 14 draft validation and calculators,
+  offline enrolment kit.
+- **Register** — €390/month. Everything in Validator, plus the Article 14
+  register (both regulatory clocks; cases are not metered — no per-case cap
+  or charge) and a hash-chained ledger with verifiable export.
+- **Cell** — €1,290/month. Everything in Register, plus machine safety
+  verification, Annex III manifests/passports, fleet advisory fan-out, change-assurance
+  cases, and counter-signed head attestation (which needs a service signing key that is
+  not configured on any deployment today).
+- Prices are launch hypotheses, not validated with paying customers.
+- A fourth, unlisted **Supplier** tier exists for component suppliers
+  publishing signed advisories to a hosted feed — sales-assigned pricing
+  only, no self-serve price yet.
+
+## Honesty note for agents
+
+Checkout (Buy → Stripe → success page) and the live plans API are real code
+paths, but they only activate once the founder finishes deploying the
+hosted API (Fly.io) and setting `NEXT_PUBLIC_ASSURANCE_API_URL`. Until then
+this site correctly shows its offline/fallback state — that is by design,
+not a bug. Do not report Register/Cell purchase as available unless you
+have independently confirmed the live API responds.
+
+## Key URLs
+
+- Homepage: https://neuralbridge.io/
+- Pricing: https://neuralbridge.io/#pricing
+- Solutions (by buyer role):
+  - Manufacturer: https://neuralbridge.io/solutions/manufacturer
+  - Plant operator: https://neuralbridge.io/solutions/plant-operator
+  - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
+  - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
+  - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
+- Documentation: https://neuralbridge.io/docs (renders the product's docs/
+  and deploy/assurance/ markdown on-site)
+- Developers / API reference: https://neuralbridge.io/developers
+- Applications (by capability, each mapped to a real gated route):
+  https://neuralbridge.io/applications
+- CLI (python -m assurance, the real command tree):
+  https://neuralbridge.io/cli
+- Capabilities by surface (122 capabilities over 89 HTTP routes, 102 CLI commands in
+  19 domains and 43 MCP tools; each capability with its CLI, API and MCP surfaces, and
+  for every surface it lacks whether that is by design or planned; generated from the
+  code, not written by hand): https://neuralbridge.io/docs/capabilities and, as JSON,
+  https://neuralbridge.io/capabilities.json
+- Connectors: https://neuralbridge.io/connectors/cursor and
+  https://neuralbridge.io/connectors/mcp
+- Browser REST console (paste an API key, call real /v1 routes):
+  https://neuralbridge.io/console
+- AI control plane (discover a connection, read it, plan a write, approve,
+  get a receipt — READ is free/rate-limited and, on the Validator tier,
+  runs against the shared demo connection, which is read-only; WRITE and
+  binding your own connection require a Register or Cell key):
+  https://neuralbridge.io/ai
+- Contact / sales: https://neuralbridge.io/contact
+- OpenAPI 3 schema (real, generated from the FastAPI app, not hand-written):
+  https://neuralbridge.io/openapi.json
+- Structured agent descriptor (JSON sibling of this file):
+  https://neuralbridge.io/.well-known/agent.json
+@repo - Source repository: https://github.com/iceccarelli/neuralbridge
+- Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
+- Security policy (how to report a vulnerability): https://neuralbridge.io/security
+- Deploy checklist (a static founder checklist of what is left before this
+  takes real money; it does not probe a live service):
+  https://neuralbridge.io/status
+- Privacy: https://neuralbridge.io/privacy
+
+## Public-source intelligence
+
+`assurance intel` records CISA KEV, NVD, EPSS and CSAF files as provenance-stamped,
+append-only observations. Fetching a feed (`intel refresh --live`) and recording a file
+(`intel ingest`) are operator commands on the operator's own machine. The hosted
+`/v1/intel/*` routes and the four `intel_*` MCP tools only read that store: they answer
+503 until the operator sets `ASSURANCE_INTEL_STORE`, never an empty list. A CVE no recorded
+source mentions is reported unknown, never clear, and absence from KEV is not evidence that
+a vulnerability is not exploited. Nothing is deployed today.
+
+## For AI agents evaluating or integrating with this product
+
+The free Validator playground on the homepage accepts a real Declaration/
+manifest payload and returns real validation issues — no account needed.
+`GET /v1/plans` on a deployed instance returns this same pricing table,
+generated from the entitlements enforced in
+`src/assurance/billing/plans.py`. If a capability is not gated in code, it
+is not sold — that is a hard invariant of this codebase.
+
+Auth is one header: `X-API-Key: <key>`. A missing key is a 401; a valid key
+on the wrong plan is a 402 (never a 403) with a structured JSON body naming
+the required plan and the exact remedy — safe to parse and act on
+automatically. Fetch /openapi.json for the full, current route/schema list
+rather than trusting a cached description of it.

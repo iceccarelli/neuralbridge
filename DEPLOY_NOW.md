@@ -188,6 +188,13 @@ set the site correctly shows its honest offline/fallback state; that is by
 design. A Vercel preview URL changes per deployment unless you use a stable alias;
 whichever origin you use must also be in `ASSURANCE_ALLOWED_ORIGINS` (§2).
 
+The site links to the source repository only when `NEXT_PUBLIC_REPO_PUBLIC` is
+exactly `true` (build-time; unset or anything else means no repository links, which
+is right while the repository is private). Leave it unset for every deployment
+until a public release; if you do flip it, also run
+`NEXT_PUBLIC_REPO_PUBLIC=true python scripts/export_site_static.py` so
+`public/llms.txt` and `public/.well-known/agent.json` agree.
+
 ## 5. Kill the stale `neuralbridge.vercel.app` project
 
 Vercel-dashboard-only work; no PR can do it. Find the old "v0 Human-like Neural

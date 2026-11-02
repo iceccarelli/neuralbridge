@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from assurance.core.identity import utc_now
-from assurance.intel.parsers import PARSER_VERSION, FeedRejected, parser_for
+from assurance.intel.parsers import INTERIM_REFUSAL, PARSER_VERSION, FeedRejected, parser_for
 from assurance.intel.sources import SOURCES, Source, resolve_source
 from assurance.intel.store import IntelStore, Observation
 from assurance.intel.transport import (
@@ -70,16 +70,29 @@ def ingest_bytes(
     store: IntelStore, source_id: str, raw: bytes, *, url: str, locator: str, via: str,
     http_status: int | None, retrieved_at: datetime | None = None, max_bytes: int | None = None,
     reason_prefix: str = "", provenance: dict[str, Any] | None = None,
+    allow_interim: bool = False,
 ) -> Observation:
-    """Parse ``raw`` and record the outcome, accepted or rejected."""
+    """Parse ``raw`` and record the outcome, accepted or rejected.
+
+    ``allow_interim`` (csaf only) admits ``interim`` documents and is recorded in the
+    observation's provenance row, so a reader can see it was in force.
+    """
+    if allow_interim and source_id != "csaf":
+        raise ValueError("allow_interim applies to csaf only")
+    if allow_interim:
+        provenance = {**(provenance or {"provider": "operator-file", "listed_at": "",
+                                        "mode": "file"}), "allow_interim": True}
     source = SOURCES[source_id]
     cap = max_bytes or source.max_bytes
     sha = hashlib.sha256(raw).hexdigest()
     when = retrieved_at or utc_now()
     try:
-        parsed = parser_for(source_id)(raw, cap)
+        parsed = parser_for(source_id, allow_interim=allow_interim)(raw, cap)
     except FeedRejected as exc:
         log.info("intel: %s rejected (%s)", source_id, str(exc).split(":", 1)[0])
+        if provenance is not None and str(exc) == INTERIM_REFUSAL:
+            # So a later run with the option does not skip this document as "dealt with".
+            provenance = {**provenance, "interim_refused": True}
         return store.append(
             source=source_id, url=url, locator=locator, via=via, retrieved_at=when,
             http_status=http_status, byte_length=len(raw), sha256=sha,
@@ -95,7 +108,8 @@ def ingest_bytes(
 
 
 def ingest_file(store: IntelStore, source_id: str, path: str | Path, *,
-                retrieved_at: datetime | None = None, url: str | None = None) -> Observation:
+                retrieved_at: datetime | None = None, url: str | None = None,
+                allow_interim: bool = False) -> Observation:
     """Record a local file as an observation of ``source_id``. Opens no socket.
 
     The series URL is the source's canonical URL (a file of the KEV catalogue is the next
@@ -109,17 +123,22 @@ def ingest_file(store: IntelStore, source_id: str, path: str | Path, *,
         raw = handle.read(source.max_bytes + 1)
     return ingest_bytes(store, source_id, raw, url=url or source.url or f"file:{p.name}",
                         locator=f"file:{p.name}", via="file", http_status=None,
-                        retrieved_at=retrieved_at)
+                        retrieved_at=retrieved_at, allow_interim=allow_interim)
 
 
 def fetch(
     store: IntelStore, source: str, url: str, transport: Transport, *,
     headers: Mapping[str, str] | None = None, timeout: float = 30.0,
     max_bytes: int | None = None, clock: Callable[[], datetime] = utc_now,
-    provenance: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None, allow_interim: bool = False,
 ) -> Observation:
     """One GET through the injected transport, recorded whatever happens."""
     src = resolve_source(source)
+    if allow_interim and src.id != "csaf":
+        raise ValueError("allow_interim applies to csaf only")
+    if allow_interim:
+        provenance = {**(provenance or {"provider": "operator", "listed_at": ""}),
+                      "allow_interim": True}
     if src.url and not url.startswith(src.url):
         raise ValueError(f"{url!r} is not a {src.id} URL")
     when = clock()
@@ -140,7 +159,7 @@ def fetch(
                          _settle(provenance, permanent=permanent))
     return ingest_bytes(store, src.id, raw, url=url, locator=url, via="network",
                         http_status=status, retrieved_at=when, max_bytes=max_bytes,
-                        provenance=provenance)
+                        provenance=provenance, allow_interim=allow_interim)
 
 
 def _settle(provenance: dict[str, Any] | None, *, permanent: bool) -> dict[str, Any] | None:

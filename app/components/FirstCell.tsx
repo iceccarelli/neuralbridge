@@ -1,5 +1,6 @@
 'use client';
 
+import RepoLink from './RepoLink';
 import { useState } from 'react';
 import { CELL_VERIFY_FIXTURE } from '../lib/cellVerifyFixture';
 
@@ -100,9 +101,9 @@ export default function FirstCell({ apiBase, apiKey }: { apiBase: string; apiKey
       </div>
       <p style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
         The same check <code>POST /v1/machine/verify</code> runs from{' '}
-        <a href="https://github.com/iceccarelli/neuralbridge/blob/main/tests/test_assurance_machine.py">
+        <RepoLink path="/blob/main/tests/test_assurance_machine.py" plain>
           tests/test_assurance_machine.py
-        </a>
+        </RepoLink>
         , called live from this page against a bundled sample run (a clean SSM pass — see{' '}
         <code>app/lib/cellVerifyFixture.ts</code> for exactly what it sends). Paste your Cell key above and press the
         button: this compares that recorded run against its declared safety envelope for real, using the real

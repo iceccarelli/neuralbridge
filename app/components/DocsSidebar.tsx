@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { DOCS_NAV } from '../lib/docs';
-import { REPO } from '../lib/links';
+import RepoLink from './RepoLink';
 
 /** The docs navigation, shared by the markdown pages and the generated capabilities page. */
 export default function DocsSidebar({ activeHref, editPath }: { activeHref: string; editPath: string }) {
@@ -26,9 +26,9 @@ export default function DocsSidebar({ activeHref, editPath }: { activeHref: stri
           )}
         </div>
       ))}
-      <a className="docs-nav-link docs-nav-edit" href={`${REPO}/blob/main/${editPath}`} target="_blank" rel="noreferrer">
+      <RepoLink path={`/blob/main/${editPath}`} className="docs-nav-link docs-nav-edit">
         Edit this page on GitHub ↗
-      </a>
+      </RepoLink>
     </nav>
   );
 }

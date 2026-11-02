@@ -114,3 +114,10 @@ def nvd_doc(*cves: dict) -> dict:
     return {"resultsPerPage": len(cves), "startIndex": 0, "totalResults": len(cves),
             "format": "NVD_CVE", "version": "2.0", "timestamp": "2026-10-31T00:00:00.000",
             "vulnerabilities": [{"cve": copy.deepcopy(c)} for c in cves]}
+
+
+def csaf_doc_with_status(tracking_id: str, status: str, **kw: str) -> dict:
+    """A SYNTHETIC CSAF advisory whose tracking.status is ``status`` (verbatim)."""
+    doc = csaf_doc(tracking_id, **kw)
+    doc["document"]["tracking"]["status"] = status
+    return doc

@@ -26,9 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements/base.txt requirements/prod.txt ./
-RUN pip install --no-cache-dir -r base.txt -r prod.txt
+# Install Python dependencies from the hash-pinned lock (requirements/prod.lock, generated
+# by scripts/lock.sh for Python 3.11 = this base image). The lock installs with pip's own
+# --require-hashes; that exact invocation was verified in a Python 3.11 venv, but this
+# Dockerfile has NOT been built (no Docker daemon was available when it was changed).
+# Documented fallback, the previous unpinned install (resolves newer versions over time):
+#   COPY requirements/base.txt requirements/prod.txt ./
+#   RUN pip install --no-cache-dir -r base.txt -r prod.txt
+COPY requirements/prod.lock ./
+RUN pip install --no-cache-dir --require-hashes --no-deps -r prod.lock
 
 # Copy application source
 COPY src/ /app/src/
@@ -37,8 +43,9 @@ COPY pyproject.toml README.md ./
 # Copy built dashboard
 COPY --from=dashboard-builder /app/dashboard/dist /app/static/dashboard
 
-# Install the package
-RUN pip install --no-cache-dir -e .
+# Install the package itself only; every dependency is already pinned by the lock above
+# (--no-deps keeps pip from resolving anything new).
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Copy configuration examples
 COPY examples/ /app/examples/

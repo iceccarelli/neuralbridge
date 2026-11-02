@@ -96,6 +96,10 @@ _OPS = ("operator tooling a timer runs on the host: it works on the data volume,
         "and the backup directory, and it can reach the network only through the operator's own "
         "`--live`; a request or a tool is not offered any of those")
 
+_TENANT = ("operator tooling on the data volume: it reads one account's ledger and attestation log "
+           "and, only with a verified export and a named person's confirmation, unlinks them; "
+           "a request or a tool is not offered a way to export or destroy a tenant's files")
+
 CAPABILITIES: tuple[Capability, ...] = (
     # --- Article 14: CRA vulnerability and incident reporting ---------------------------------
     _c("art14.signal", "Open a case with the first thing anyone heard",
@@ -188,6 +192,12 @@ CAPABILITIES: tuple[Capability, ...] = (
        "machinery enrol", "POST /v1/machinery/enrol",
        gaps={"mcp": _d("enrolment is a named person's declaration of identity; an agent is not "
                        "offered a way to make it (and it writes the ledger of record)")}),
+    _c("machinery.import_inventory",
+       "Enrol many machines from an inventory export file (a file importer, not a connector)",
+       "machinery import-inventory", "POST /v1/machinery/enrol/batch",
+       gaps={"mcp": _d("bulk enrolment is a named person's declaration of identity from the "
+                       "customer's own file; an agent is not offered a way to make it (and it "
+                       "writes the ledger of record)")}),
     _c("machinery.amend_enrolment", "Amend a machine's declared site or owner, as a new record",
        "machinery amend-enrolment", "POST /v1/machinery/enrol/amend",
        gaps={"mcp": _d("an amendment is a named person's declaration of identity; an agent is "
@@ -351,6 +361,17 @@ CAPABILITIES: tuple[Capability, ...] = (
        "ops status", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
     _c("ops.check", "Preflight the ops config and host; lists what it does not check",
        "ops check", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
+
+    # --- tenant: export and offboard one customer account (operator tooling) -------------------
+    _c("tenant.export", "Export one account's ledger, evidence bundle and attestation log into "
+       "a manifest-hashed directory",
+       "tenant export", gaps={"api": _d(_TENANT), "mcp": _d(_TENANT)}),
+    _c("tenant.verify_export", "Re-hash a tenant export against its manifest and re-verify the "
+       "copied chain",
+       "tenant verify-export", gaps={"api": _d(_TENANT), "mcp": _d(_TENANT)}),
+    _c("tenant.delete", "Plan an account's removal; with --execute, a verified export and a "
+       "named person, unlink exactly the planned files and record a tombstone",
+       "tenant delete", gaps={"api": _d(_TENANT), "mcp": _d(_TENANT)}),
 
     # --- billing: operator tooling for accounts provisioned outside Stripe ---------------------
     _c("billing.grant", "Create a manual-pilot account and print its API key once",

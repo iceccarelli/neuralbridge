@@ -58,7 +58,7 @@ from assurance.fleet.advisory import (
     fold_text,
 )
 from assurance.fleet.csaf import advisory_from_csaf, is_plain_version_token
-from assurance.intel.parsers import ParsedFeed, parser_for
+from assurance.intel.parsers import INTERIM_STATUS_NOTE, ParsedFeed, parser_for
 from assurance.intel.sources import SOURCES
 from assurance.intel.store import IntelStore, Observation
 
@@ -123,8 +123,12 @@ def _reparse(store: IntelStore, obs: Observation) -> ParsedFeed | None:
     body = store.body(obs.sha256)
     if body is None:
         return None
+    # A CSAF document imported under --allow-interim is re-read under the same recorded option
+    # (and no other): the provenance row, not the caller, says it was in force.
+    prov = store.provenance(obs.seq) if obs.source == "csaf" else None
     try:
-        return parser_for(obs.source)(body, SOURCES[obs.source].max_bytes)
+        return parser_for(obs.source, allow_interim=bool(prov and prov.get("allow_interim"))
+                          )(body, SOURCES[obs.source].max_bytes)
     except Exception:  # noqa: BLE001 - an unreadable payload is reported, not guessed at
         return None
 
@@ -274,13 +278,16 @@ def build_report(store: IntelStore, *, cve_ids: list[str] | None = None) -> Inte
 
     for obs, doc, _cves in csaf:
         try:
-            imported = advisory_from_csaf(doc)
+            tracking = doc.get("document", {}).get("tracking", {})
+            interim = str(tracking.get("status", "")).strip().casefold() == "interim"
+            imported = advisory_from_csaf(doc, allow_draft=interim)
         except AdvisoryError:
             unreadable.append(obs.seq)
             continue
         candidates.append(Candidate(
             imported.advisory, "csaf", "unsigned_inspect_only",
-            obs.citation(imported.advisory.advisory_id), imported.notes,
+            obs.citation(imported.advisory.advisory_id),
+            ((INTERIM_STATUS_NOTE,) if interim else ()) + tuple(imported.notes),
             tuple(d.product_id + ": " + d.reason for d in
                   (imported.advisory.import_record.dropped if imported.advisory.import_record
                    else ()))))

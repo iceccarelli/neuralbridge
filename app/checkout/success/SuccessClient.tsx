@@ -1,5 +1,6 @@
 'use client';
 
+import RepoLink from '../../components/RepoLink';
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { QUICKSTART, SALES } from '../../lib/links';
@@ -293,9 +294,9 @@ export default function CheckoutSuccessClient() {
                   already has this key pasted in (this tab&apos;s session storage only) and calls the real{' '}
                   <code>POST /v1/cases/&#123;case_id&#125;/signal</code> from your browser — no shell needed. Prefer
                   curl? The exact command is in{' '}
-                  <a href="https://github.com/iceccarelli/neuralbridge/blob/main/docs/buyer-journey.md">
+                  <RepoLink path="/blob/main/docs/buyer-journey.md" plain>
                     docs/buyer-journey.md
-                  </a>{' '}
+                  </RepoLink>{' '}
                   (see also <a href={QUICKSTART}>the quickstart</a> for the rest of the API).
                 </p>
               </div>

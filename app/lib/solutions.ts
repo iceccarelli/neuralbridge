@@ -1,4 +1,4 @@
-import { DEPLOY_BLOB, QUICKSTART, REPO, SALES } from './links';
+import { DOCS, QUICKSTART, repoLink, SALES } from './links';
 import { COUNTS } from './siteCapabilities';
 
 export interface SolutionPage {
@@ -129,7 +129,9 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'The assurance MCP server', body: `${COUNTS.mcp_tools} tools over the Assurance API: reads, verifications and a few case-working writes. Closing, rejecting or deferring a case, and every key or trust change, have no tool, by design.`, href: '/docs/capabilities' },
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },
-    secondaryCta: { label: 'Read the README', href: `${REPO}#readme`, external: true },
+    secondaryCta: repoLink('#readme')
+      ? { label: 'Read the README', href: repoLink('#readme') as string, external: true }
+      : { label: 'Read the docs', href: DOCS },
     images: { hero: 'solution-aiops-hero', supporting: ['solution-aiops-mcp-gateway', 'solution-aiops-dashboard-unwired'] },
   },
 ];

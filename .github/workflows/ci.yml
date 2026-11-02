@@ -46,6 +46,15 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      # The repo-link gate builds the site twice (flag off, flag on); the Python test job has no
+      # node_modules, so it skips there and this step is where it runs.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      # --noconftest: tests/conftest.py imports FastAPI, which this job does not install; this test
+      # needs only pytest, node and the repo (checked in a clean environment: 16 passed, 0 skipped).
+      - run: python -m pytest tests/test_site_repo_links.py -q -o addopts="" -p no:cacheprovider -rs --noconftest
 
   # ── Unit Tests ─────────────────────────────────────────────
   test:
@@ -142,6 +151,28 @@ jobs:
         with:
           name: sbom
           path: sbom.json
+
+  # ── Lock drift (NON-GATING, additive) ──────────────────────
+  # Checks that requirements/*.lock still equal what uv resolves from requirements/*.txt,
+  # keeping the already-pinned versions (scripts/lock.sh --check). It is a separate job that
+  # no other job `needs`, and continue-on-error keeps a drift from turning the run red, so it
+  # cannot break the existing checks (lint, site, test, security, docker). Nothing installs
+  # from the lock here: the test and docker jobs still use the .txt files, except the root
+  # Dockerfile, which now installs from requirements/prod.lock. Read the job result in the
+  # log; it is advisory until a maintainer decides to make it required.
+  lock-drift:
+    name: Lock drift (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install "uv==0.11.32"
+      - name: Check requirements/*.lock against requirements/*.txt
+        run: scripts/lock.sh --check
 
   # ── Dashboard Build ────────────────────────────────────────
   dashboard:

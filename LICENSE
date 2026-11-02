@@ -1,21 +1,49 @@
-MIT License
+NeuralBridge Proprietary Licence
 
-Copyright (c) 2026 NeuralBridge Authors
+Copyright (c) 2026 Vincenzo Ceccarelli Grimaldi. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. NO LICENCE IS GRANTED.
+   This repository, and everything in it (source code, documentation, tests, fixtures,
+   website, configuration, data, and any other material), is proprietary. Nothing in it is
+   open source. Viewing a copy, or having technical access to one, grants no right of any
+   kind.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. WHAT IS NOT PERMITTED WITHOUT PRIOR WRITTEN PERMISSION.
+   Unless the copyright holder has given you a separate written agreement that says so, you
+   may not: use, run, copy, reproduce, modify, adapt, translate, merge, publish, distribute,
+   sublicense, sell, rent, lend, host, or make available to others (including as a hosted
+   service); create derivative works; extract or reuse any part of it, including to train,
+   fine-tune or evaluate a machine-learning model; or remove or alter this notice.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+3. SEPARATE AGREEMENTS.
+   Any right to use the software (for example under a customer, evaluation, or contribution
+   agreement) exists only if it is set out in a written agreement signed by the copyright
+   holder, and only to the extent that agreement says. Such an agreement is not implied by
+   publication, by a website, by a pricing page, by an API, or by any other conduct.
+
+4. CONTRIBUTIONS.
+   Contributions are not accepted unless the contributor and the copyright holder have signed
+   a written assignment or licence covering them first. Nothing submitted without one is
+   accepted into this repository.
+
+5. EARLIER VERSIONS.
+   Earlier versions of this repository were published under the MIT Licence. That grant is not
+   withdrawn for copies lawfully obtained under it, but it applies only to those earlier
+   versions as published. It does not apply to this version or to any later version.
+
+6. THIRD-PARTY COMPONENTS.
+   Third-party software and data that this repository depends on or quotes remain under their
+   own licences and terms, which this notice does not change. Public-source datasets that the
+   software can fetch (for example CISA KEV, NVD, FIRST EPSS and vendor CSAF advisories) remain
+   subject to their publishers' terms.
+
+7. NO WARRANTY; LIMITATION OF LIABILITY.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+   OR IN CONNECTION WITH THE SOFTWARE OR ITS USE. THE SOFTWARE IS EVIDENCE TOOLING, NOT A
+   CERTIFICATION, A CONFORMITY ASSESSMENT OR A SAFETY DETERMINATION.
+
+8. CONTACT.
+   Requests for permission: https://neuralbridge.io/contact
