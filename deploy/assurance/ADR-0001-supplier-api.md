@@ -56,6 +56,9 @@ the kind of drift the rest of this codebase refuses to allow.
   entitlement (`require_supplier` in `deps.py`, same 401/402 pattern as
   `require_machine` and `require_attestation`). Appends a validated,
   chain-consistent signed record to `<ASSURANCE_SUPPLIER_FEEDS>/<account_id>.jsonl`.
+- `POST /v1/supplier/advisory/withdraw` — same `supplier_publish` gate. Appends a
+  signed withdrawal as the next record; unlike publish it verifies the signature,
+  under a key the account pinned for that supplier (see SUPPLIER.md).
 - `GET /v1/supplier/feed/{account_id}` — free, no account, forever. Serves
   the raw NDJSON feed. The audience for a supplier's advisory is every
   integrator who might be affected, not a paying subscriber — same reasoning

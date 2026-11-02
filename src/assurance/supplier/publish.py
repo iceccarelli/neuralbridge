@@ -72,6 +72,7 @@ __all__ = [
     "SignedAdvisory",
     "SupplierIdentity",
     "fetch_feed",
+    "locate_withdrawal",
     "publish",
     "verify_feed",
     "withdraw",
@@ -449,6 +450,21 @@ def withdraw(
         return _withdraw_locked(advisory_id, reason, identity, key, feed, rotating, now)
 
 
+def locate_withdrawal(
+    history: Iterable[SignedAdvisory], advisory_id: str,
+) -> tuple[SignedAdvisory | None, SignedAdvisory | None]:
+    """The record a withdrawal of ``advisory_id`` would supersede, and any earlier withdrawal.
+
+    ``(None, None)`` when the feed never carried the advisory. One definition of
+    "standing", used by the CLI's :func:`withdraw` and by the hosted withdrawal route.
+    """
+    items = list(history)
+    target = next((r for r in items
+                   if r.advisory_id == advisory_id and not r.is_withdrawal), None)
+    earlier = next((r for r in items if r.withdraws == advisory_id), None)
+    return target, earlier
+
+
 def _withdraw_locked(
     advisory_id: str,
     reason: str,
@@ -460,13 +476,12 @@ def _withdraw_locked(
 ) -> SignedAdvisory:
     sequence, previous, history = _next(feed, identity, key, rotating)
 
-    target = next((r for r in history
-                   if r.advisory_id == advisory_id and not r.is_withdrawal), None)
+    target, earlier = locate_withdrawal(history, advisory_id)
     if target is None:
         raise PublishError(
             f"{advisory_id} is not in this feed, so there is nothing to withdraw."
         )
-    if any(r.withdraws == advisory_id for r in history):
+    if earlier is not None:
         raise PublishError(f"{advisory_id} has already been withdrawn.")
 
     record = SignedAdvisory(

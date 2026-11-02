@@ -111,6 +111,7 @@ export const ROUTES: RouteRow[] = [
   { method: 'GET', path: '/v1/intel/candidates', tier: 'cell', summary: 'Unsigned advisory candidates the model can represent, plus what it cannot (not_representable) and NVD-versus-vendor conflicts' },
 
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
+  { method: 'POST', path: '/v1/supplier/advisory/withdraw', tier: 'supplier', summary: 'Withdraw an advisory with a signed withdrawal, verified under a key your account pinned; the original is kept' },
 ];
 
 export const TIER_LABEL: Record<Tier, string> = {

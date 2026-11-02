@@ -17,8 +17,9 @@ invariants ``assurance.supplier.publish.publish()`` enforces — and appends it 
 a feed file that anyone can read without an account, because the value of a
 supplier's advisory is in how many integrators can find it, not in how few.
 
-It does **not** verify the signature: it holds no supplier's public key and
-must not be asked to vouch for one. A reader verifies the feed against a key
+Publishing does **not** verify the signature: it holds no supplier's public key and
+must not be asked to vouch for one. (A withdrawal does: it is accepted only under a
+key the account pinned for that supplier, see ``post_withdrawal``.) A reader verifies the feed against a key
 whose fingerprint they obtained by a route that is not this feed
 (``assurance supplier verify``). Nothing in this module meters or charges for
 reading a feed.
@@ -36,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.deps import Machine, Supplying, get_register, supplier_feeds_dir
+from assurance.attest.keys import SigningKeyError, VerifyingKey
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc
@@ -46,6 +48,7 @@ from assurance.supplier.publish import (
     PublishError,
     SignedAdvisory,
     _parse_feed_text,
+    locate_withdrawal,
 )
 from assurance.supplier.trust import (
     TRUST_STATEMENT,
@@ -126,24 +129,54 @@ def _check_signature_shape(signature: str) -> None:
             f"decodes to {len(raw)}.")
 
 
-@supplier_router.post(
-    "/advisory",
-    response_model=dict,
-    status_code=status.HTTP_201_CREATED,
-    summary="Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
-)
-def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) -> dict[str, Any]:
-    """Host an advisory you signed locally.
+def _require_chain(history: list[SignedAdvisory], record: SignedAdvisory,
+                   account_id: str) -> None:
+    """The feed's chain rules, shared by publish and withdraw (one supplier, the next
+    sequence, the current head as predecessor). Call it under ``feed.locked()``."""
+    if not history:
+        if record.sequence != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "sequence_mismatch",
+                    "detail": f"this is a new feed; the first record must be sequence 1, got {record.sequence}.",
+                },
+            )
+        return
+    previous = history[-1]
+    if previous.supplier.supplier_id != record.supplier.supplier_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "supplier_identity_mismatch",
+                "detail": f"this account's feed already belongs to "
+                f"{previous.supplier.supplier_id!r}; this record is signed as "
+                f"{record.supplier.supplier_id!r}. One feed, one supplier.",
+            },
+        )
+    if record.sequence != previous.sequence + 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "sequence_mismatch",
+                "detail": f"expected sequence {previous.sequence + 1}, got "
+                f"{record.sequence}. Read GET /v1/supplier/feed/{account_id} "
+                "and publish on top of its last record.",
+            },
+        )
+    if record.previous != previous.content_hash():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "chain_mismatch",
+                "detail": "this record's `previous` does not match the current "
+                "feed head — it was built against a stale copy of the feed.",
+            },
+        )
 
-    This checks structure and the feed's chain (sequence, predecessor hash, one
-    supplier per feed, no repeated advisory id) and refuses what it cannot parse.
-    It does not verify the signature: it holds no supplier key. Readers verify
-    the feed against a key fingerprint they obtained from you by another route.
-    """
-    assert principal.account is not None  # Supplying guarantees this
-    feed_path = supplier_feeds_dir() / f"{principal.account.id}.jsonl"
-    feed = AdvisoryFeed(feed_path)
 
+def _read_signed_record(body: AdvisoryIn) -> SignedAdvisory:
+    """Body to a structurally valid, signature-shaped record, or the 413/422 that refuses it."""
     payload = body.model_dump()
     size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     if size > MAX_RECORD_BYTES:
@@ -165,58 +198,42 @@ def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) 
         )
     _check_signature_shape(record.signature)
     _check_shape(record)
+    return record
+
+
+@supplier_router.post(
+    "/advisory",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+    summary="Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
+)
+def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) -> dict[str, Any]:
+    """Host an advisory you signed locally.
+
+    This checks structure and the feed's chain (sequence, predecessor hash, one
+    supplier per feed, no repeated advisory id) and refuses what it cannot parse.
+    It does not verify the signature: it holds no supplier key. Readers verify
+    the feed against a key fingerprint they obtained from you by another route.
+    """
+    assert principal.account is not None  # Supplying guarantees this
+    feed_path = supplier_feeds_dir() / f"{principal.account.id}.jsonl"
+    feed = AdvisoryFeed(feed_path)
+
+    record = _read_signed_record(body)
 
     # Read, check and append are one step. Two POSTs for the same sequence must
     # not both pass the check: an append-only chain cannot be un-forked.
     with feed.locked():
         history = feed.read()
-        if history:
-            previous = history[-1]
-            if previous.supplier.supplier_id != record.supplier.supplier_id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "supplier_identity_mismatch",
-                        "detail": f"this account's feed already belongs to "
-                        f"{previous.supplier.supplier_id!r}; this record is signed as "
-                        f"{record.supplier.supplier_id!r}. One feed, one supplier.",
-                    },
-                )
-            if record.sequence != previous.sequence + 1:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "sequence_mismatch",
-                        "detail": f"expected sequence {previous.sequence + 1}, got "
-                        f"{record.sequence}. Read GET /v1/supplier/feed/{principal.account.id} "
-                        "and publish on top of its last record.",
-                    },
-                )
-            if record.previous != previous.content_hash():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "chain_mismatch",
-                        "detail": "this record's `previous` does not match the current "
-                        "feed head — it was built against a stale copy of the feed.",
-                    },
-                )
-            if any(h.advisory_id == record.advisory_id and not h.is_withdrawal
-                   for h in history):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "duplicate_advisory_id",
-                        "detail": f"{record.advisory_id} was already published at "
-                        f"sequence {next(h.sequence for h in history if h.advisory_id == record.advisory_id)}.",
-                    },
-                )
-        elif record.sequence != 1:
+        _require_chain(history, record, principal.account.id)
+        if any(h.advisory_id == record.advisory_id and not h.is_withdrawal
+               for h in history):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
-                    "error": "sequence_mismatch",
-                    "detail": f"this is a new feed; the first record must be sequence 1, got {record.sequence}.",
+                    "error": "duplicate_advisory_id",
+                    "detail": f"{record.advisory_id} was already published at "
+                    f"sequence {next(h.sequence for h in history if h.advisory_id == record.advisory_id)}.",
                 },
             )
         if feed_path.exists() and feed_path.stat().st_size >= MAX_FEED_BYTES:
@@ -231,6 +248,110 @@ def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) 
         "advisory_id": record.advisory_id,
         "feed_url": f"/v1/supplier/feed/{principal.account.id}",
     }
+
+
+def _refused(error: str, detail: str, code: int = status.HTTP_403_FORBIDDEN) -> HTTPException:
+    return HTTPException(status_code=code, detail={"error": error, "detail": detail})
+
+
+def _verify_under_pinned_key(record: SignedAdvisory, store: SupplierTrustStore) -> None:
+    """The record must verify under a key THIS account pinned for THIS supplier.
+
+    The fingerprint a record names selects which pin to try; it never grants trust.
+    A key that is unpinned, revoked, retired or not yet in force at ``published_at``,
+    or a signature that does not verify, is a 403 and nothing is written.
+    """
+    problems = store.integrity_problems()
+    if problems:
+        raise _refused("supplier_trust_store_unhealthy",
+                       "the account's trust store does not verify, so no key in it can be "
+                       "relied on: " + "; ".join(problems[:2]))
+    pin = next((p for p in store.pins(record.supplier.supplier_id)
+                if p.fingerprint == record.key_fingerprint), None)
+    if pin is None:
+        raise _refused(
+            "supplier_key_not_pinned",
+            f"no key with fingerprint {record.key_fingerprint!r} is pinned for supplier "
+            f"{record.supplier.supplier_id!r} in this account "
+            "(POST /v1/supplier/trust/pin). A withdrawal is accepted only under a "
+            "key that was pinned by a route other than the record itself.")
+    when = parse_utc(record.published_at)
+    in_force = pin.in_force_at(when)
+    if in_force != "trusted":
+        raise _refused("supplier_key_not_in_force",
+                       f"the pinned key {pin.fingerprint} is {in_force} at {record.published_at}.")
+    try:
+        valid = record.verified_by(VerifyingKey.from_pem(pin.public_key_pem))
+    except (PublishError, SigningKeyError, ValueError) as exc:
+        raise _unprocessable("malformed_signature", str(exc)) from exc
+    if not valid:
+        raise _refused("signature_invalid",
+                       "the signature does not verify under the pinned key for this record: "
+                       "it was altered after signing, or signed by a different key.")
+
+
+@supplier_router.post(
+    "/advisory/withdraw",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+    summary="Withdraw an advisory of your hosted feed with a signed withdrawal (Supplier tier)",
+)
+def post_withdrawal(
+    body: AdvisoryIn, response: Response, principal: Annotated[Principal, Supplying],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Host a withdrawal you signed locally (`assurance supplier withdraw` on a copy of the feed).
+
+    Unlike publish, this verifies the signature, under the key your account pinned for
+    the supplier: a withdrawal changes what readers believe stands. The original
+    advisory is never edited or removed; the withdrawal is appended as the next record.
+    A repeat for an advisory already withdrawn is a 200 that writes nothing.
+    """
+    assert principal.account is not None  # Supplying guarantees this
+    record = _read_signed_record(body)
+    if not record.is_withdrawal:
+        raise _unprocessable(
+            "not_a_withdrawal",
+            "this record does not withdraw anything (`withdraws` is empty); "
+            "POST /v1/supplier/advisory publishes an advisory.")
+    if not record.withdrawal_reason.strip():
+        raise _unprocessable("withdrawal_needs_reason",
+                             "a withdrawal needs a reason: customers acted on the original.")
+    store = account_trust_store(principal, register)
+    _verify_under_pinned_key(record, store)
+
+    feed_path = supplier_feeds_dir() / f"{principal.account.id}.jsonl"
+    not_in_feed = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+        "error": "advisory_not_in_feed",
+        "detail": f"{record.withdraws!r} is not carried by this account's hosted feed."})
+    if not feed_path.exists():
+        raise not_in_feed
+    feed = AdvisoryFeed(feed_path)
+    with feed.locked():
+        history = feed.read()
+        target, earlier = locate_withdrawal(history, record.withdraws)
+        if target is None:
+            raise not_in_feed
+        if earlier is not None:
+            response.status_code = status.HTTP_200_OK
+            return {"state": "already_withdrawn", "advisory_id": record.withdraws,
+                    "sequence": earlier.sequence, "written": False,
+                    "feed_url": f"/v1/supplier/feed/{principal.account.id}"}
+        if record.advisory != target.advisory:
+            raise _unprocessable(
+                "withdrawal_content_mismatch",
+                "the withdrawal must carry the advisory it withdraws unchanged "
+                "(`assurance supplier withdraw` does this).")
+        _require_chain(history, record, principal.account.id)
+        if feed_path.stat().st_size >= MAX_FEED_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={"error": "feed_full",
+                        "detail": f"this feed has reached {MAX_FEED_BYTES} bytes."})
+        feed.append(record)
+    return {"state": "withdrawn", "advisory_id": record.withdraws,
+            "sequence": record.sequence, "written": True,
+            "feed_url": f"/v1/supplier/feed/{principal.account.id}"}
 
 
 @supplier_router.get(

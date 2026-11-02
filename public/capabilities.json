@@ -2616,8 +2616,10 @@
       "service": "supplier",
       "surfaces": {
         "api": {
-          "reason": "the hosted feed has no withdrawal route",
-          "status": "planned"
+          "names": [
+            "POST /v1/supplier/advisory/withdraw"
+          ],
+          "status": "available"
         },
         "cli": {
           "names": [
@@ -2916,16 +2918,16 @@
     ]
   },
   "counts": {
-    "api_routes": 89,
+    "api_routes": 90,
     "capabilities": 122,
     "cli_commands": 102,
     "cli_domains": 19,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
-        "available": 83,
+        "available": 84,
         "by_design": 38,
-        "planned": 1
+        "planned": 0
       },
       "cli": {
         "available": 104,

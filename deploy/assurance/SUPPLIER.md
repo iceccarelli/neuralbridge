@@ -77,6 +77,32 @@ assurance supplier withdraw CTRL-2026-11 \
 it; deleting it leaves them holding a change nobody can explain, which is worse
 than the wrong advisory was. A withdrawal is a publication.
 
+### Withdrawing from a hosted feed
+
+| Method and path | Gate | What it does |
+|---|---|---|
+| `POST /v1/supplier/advisory` | Supplier tier (401 without a key, 402 without the tier) | Host a record you signed locally. Structure and chain are checked; the signature is not. |
+| `POST /v1/supplier/advisory/withdraw` | Same | Host a signed **withdrawal** of an advisory your feed carries. |
+| `GET /v1/supplier/feed/{account_id}` | None | The feed, as written. |
+
+The hosted withdrawal is the same act as `assurance supplier withdraw`, and the
+server never holds your private key. Fetch your feed, run `assurance supplier
+withdraw` against that copy (it signs the next record and chains it to the
+head), and POST the last line of the copy as the body. The route differs from
+publish in one way: it **verifies the signature**, under a key your account has
+pinned for your supplier id (`POST /v1/supplier/trust/pin`, or assigned by us
+when the Supplier tier is set up; the fingerprint a record names only chooses
+which pin to try). An unsigned record is 422; an unpinned, revoked or retired key,
+a foreign key or an altered record is 403; an advisory the feed does not carry is
+404 `advisory_not_in_feed`; a stale `sequence` or `previous` is 409. A repeat for
+an advisory already withdrawn is a 200 that writes nothing.
+
+The original advisory is never edited or deleted. The withdrawal is a new record
+that supersedes it; the feed shows both, the withdrawal carrying `withdraws` and
+`withdrawal_reason`. Readers (`trust/evaluate`, the watch) report the advisory as
+withdrawn only when they verify the withdrawal under a key *they* pinned. There
+is no MCP tool: a withdrawal is a named supplier's signed act.
+
 ## For an integrator
 
 ```bash
