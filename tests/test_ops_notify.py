@@ -103,8 +103,10 @@ def hdr(call: dict, name: str) -> str:
     return {k.lower(): v for k, v in call["headers"].items()}[name.lower()]
 
 
-def independent_hmac(secret: str, body: bytes) -> str:
-    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+def independent_hmac(secret: str, body: bytes, ts: str | int) -> str:
+    """HMAC-SHA256 over "<timestamp>." + body, recomputed here, not via notify.sign."""
+    return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body,
+                                hashlib.sha256).hexdigest()
 
 
 def fake_doc(status="flagged", actions=(), steps=()) -> dict:
@@ -125,7 +127,7 @@ def test_the_signature_verifies_against_an_independent_hmac_of_the_exact_body(
     assert code == 1 and len(fx.calls) == 1 and hosts == [HOST]
     call = fx.calls[0]
     assert call["url"] == URL
-    assert hdr(call, "X-NeuralBridge-Signature") == independent_hmac(SECRET, call["body"])
+    assert hdr(call, "X-NeuralBridge-Signature") == independent_hmac(SECRET, call["body"], hdr(call, "X-NeuralBridge-Timestamp"))
     assert hdr(call, "Content-Type") == "application/json"
     uuid.UUID(hdr(call, "X-NeuralBridge-Delivery"))
     payload = json.loads(call["body"])
@@ -144,8 +146,8 @@ def test_the_signature_verifies_against_an_independent_hmac_of_the_exact_body(
 
 def test_a_wrong_secret_does_not_verify():
     body = b'{"a":1}'
-    assert independent_hmac("one", body) != notify.sign("two", body)
-    assert independent_hmac("one", body) == notify.sign("one", body)
+    assert independent_hmac("one", body, 1700000000) != notify.sign("two", body, 1700000000)
+    assert independent_hmac("one", body, 1700000000) == notify.sign("one", body, 1700000000)
 
 
 def test_the_payload_carries_no_secret_path_ledger_or_step_detail(
@@ -368,7 +370,7 @@ def test_5xx_is_retried_then_owed_then_delivered_next_cycle_with_the_same_key(
     assert code == 0                                         # quiet cycle; the retry still goes
     sent = {k.lower(): v for k, v in op2.requests[0][1].items()}
     assert sent["idempotency-key"] == first_key and op2.bodies[0] == first_body
-    assert sent["x-neuralbridge-signature"] == independent_hmac(SECRET, first_body)
+    assert sent["x-neuralbridge-signature"] == independent_hmac(SECRET, first_body, sent["x-neuralbridge-timestamp"])
     n2 = site.cycles()[-1]["notifications"][0]
     assert (n2["status"], n2["attempts"], n2["retry"]) == ("delivered", 2, True)
     assert notify.outbox_state(load_config(site.cfg_path)) == {"open": [], "abandoned": []}
@@ -573,7 +575,8 @@ def test_notify_test_is_a_dry_run_unless_live_and_masks_the_signature(
                            "--target", "oncall"])
     out = capsys.readouterr().out
     assert code == 0 and fx.calls == [] and "DRY RUN" in out
-    assert re.search(r"sha256=<hmac of \d+ bytes>", out)
+    assert re.search(r"sha256=<hmac of '<timestamp>\.' \+ \d+ body bytes>", out)
+    assert "X-NeuralBridge-Timestamp:" in out
     for needle in (SECRET, TOKEN, URL_TOKEN):
         assert needle not in out
     assert '"status":"test"' in out and "TEST message" in out
@@ -595,7 +598,7 @@ def test_notify_test_live_sends_a_labelled_test_without_record_contents(
     payload = json.loads(call["body"])
     assert payload["kind"] == "test" and payload["status"] == "test"
     assert "steps" not in payload and "human_actions" not in payload
-    assert hdr(call, "X-NeuralBridge-Signature") == independent_hmac(SECRET, call["body"])
+    assert hdr(call, "X-NeuralBridge-Signature") == independent_hmac(SECRET, call["body"], hdr(call, "X-NeuralBridge-Timestamp"))
     assert not outbox(site).exists()                         # a test is never retried
 
 

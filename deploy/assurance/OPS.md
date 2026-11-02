@@ -207,34 +207,54 @@ truncated):
 separators) **without** its `notifications` field, which cannot cover its own outcome. The body is
 sent as canonical JSON, so the bytes you verify are the bytes that were signed.
 
-**Headers**: `X-NeuralBridge-Signature: sha256=<hex>` (HMAC-SHA256 of the exact body bytes with
-the secret), `X-NeuralBridge-Delivery: <uuid>` (new per attempt), `Idempotency-Key:
-<cycle_id>:<target name>` (the same for every retry of that message), plus your `headers_env`
-lines.
+**Headers**: `X-NeuralBridge-Timestamp: <unix seconds at send>` and
+`X-NeuralBridge-Signature: sha256=<hex>`, where the signature is HMAC-SHA256, keyed with the
+secret, over the bytes `"<timestamp>." + <exact body bytes>`. `X-NeuralBridge-Delivery: <uuid>`
+(new per attempt), `Idempotency-Key: <cycle_id>:<target name>` (the same for every retry of that
+message), plus your `headers_env` lines. A retry has the same body and key but a **new timestamp
+and signature**. PagerDuty has neither header (it authenticates by routing key and de-duplicates
+on `dedup_key`).
 
-**Verify in a receiver** (compare in constant time; reject on mismatch; use the raw bytes, not
-re-serialised JSON):
+**Verify in a receiver** (use the raw bytes, not re-serialised JSON; compare in constant time;
+reject if the timestamp is not plain digits or `|now - timestamp| > 300` seconds, which stops a
+captured request being replayed later):
 
 ```python
-import hashlib, hmac
+import hashlib, hmac, time
 
-def valid(secret: bytes, raw_body: bytes, header: str) -> bool:
-    expected = "sha256=" + hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header)
+def valid(secret: bytes, raw_body: bytes, signature: str, timestamp: str,
+          now: float | None = None, window_s: int = 300) -> bool:
+    if not timestamp.isascii() or not timestamp.isdigit() or len(timestamp) > 12:
+        return False
+    if abs((time.time() if now is None else now) - int(timestamp)) > window_s:
+        return False
+    expected = "sha256=" + hmac.new(
+        secret, timestamp.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 ```
 
 ```sh
-# body.json holds the raw request body; SIG is the X-NeuralBridge-Signature value
-expected="sha256=$(openssl dgst -sha256 -hmac "$SECRET" < body.json | sed 's/^.* //')"
-[ "$expected" = "$SIG" ] && echo valid || echo INVALID
+# body.json holds the raw request body; TS is X-NeuralBridge-Timestamp, SIG is
+# X-NeuralBridge-Signature. Also check by hand that |$(date +%s) - TS| <= 300.
+expected="sha256=$( (printf '%s.' "$TS"; cat body.json) | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"
+[ "$expected" = "$SIG" ] && [ $(( $(date +%s) - TS )) -le 300 ] \
+  && [ $(( TS - $(date +%s) )) -le 300 ] && echo valid || echo INVALID
 ```
 
 (`-hmac "$SECRET"` puts the secret on a command line, visible to other local users; use it only
-for an ad-hoc check, not in a long-lived script.) Deduplicate on `Idempotency-Key`.
+for an ad-hoc check, not in a long-lived script.) Deduplicate on `Idempotency-Key`. The timestamp
+only limits replay to the window; it does not make a message exactly-once.
+
+**Path masking is a heuristic.** `human_actions` text comes from the operator's own findings. It is
+neutralised, truncated and path-masked, not redacted: anything path-like (absolute, `./`, `../`
+or `a/b` relative, `~/`, Windows drive and UNC paths, anything containing `tenants/acc_`, any token
+ending `.key .pem .db .jsonl .sqlite .p12 .pfx`) becomes `<path>`, a quoted path is masked whole,
+and an unquoted path containing a space is masked token by token. It over-masks on purpose and can
+still miss a secret written as ordinary words. Do not put secrets in finding text.
 
 **Delivery semantics.** A 2xx is `delivered`. 429 and 5xx are retried inside one attempt with
 backoff, honouring `Retry-After` up to 30 s (a longer wait is not waited out). A failure is
-appended to `<record>.outbox.jsonl` (append-only, mode 0600; it holds the message body, which is
+appended to `<record>.outbox.jsonl` (append-only inside its live window, mode 0600; at the start of each cycle items that were delivered or abandoned more than 30 days ago are dropped by an atomic rewrite, open items never are; it holds the message body, which is
 the minimal payload above) and **retried at the next cycle with the same body and the same
 `Idempotency-Key`**; after 5 attempts it is marked `abandoned` and shown by `ops status`. This is
 at-least-once: a receiver can see a message twice. A target whose `secret_env` (or `headers_env`)
@@ -248,7 +268,7 @@ sent whatever the current cycle's status.
 **Check and test.** `ops check` validates the `notify` block (https, host equality, whether each
 environment variable is set in *this* shell, a warning for a token-like URL) and lists what it does
 not check. `python -m assurance ops notify-test --config ops.json --target oncall` prints what a
-test would send (the signature masked as `<hmac of N bytes>`); only with `--live` does it POST a
+test would send (the signature masked as `<hmac of '<timestamp>.' + N body bytes>`); only with `--live` does it POST a
 clearly labelled `status: "test"` message that contains no record contents. Exit `0` delivered,
 `1` failed, `2` could not run.
 

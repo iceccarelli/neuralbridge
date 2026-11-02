@@ -3,7 +3,9 @@
 What this is: after ``ops cycle`` finishes, for every configured ``notify`` target whose ``on``
 list contains the cycle's status, POST one small JSON body (status, step names and statuses, the
 human-action strings the record already holds, the record's SHA-256) to an HTTPS endpoint the
-operator named. The body is signed with HMAC-SHA256 over the exact bytes sent. Enterprise
+operator named. The body is signed with HMAC-SHA256 over ``"<unix seconds>." + body`` (the
+timestamp travels in ``X-NeuralBridge-Timestamp``; a receiver rejects a stale one, see
+:func:`signature_fresh`). Enterprise
 ticketing, chat and on-call tools accept an authenticated inbound webhook; this is the generic
 sender; ``format`` may also shape the same message for Slack, Teams or PagerDuty
 (``assurance.ops.formats``, contract-checked against vendor docs only, never a live account).
@@ -20,7 +22,8 @@ Hard rules kept here:
 * the payload is built from an allow-list of record fields. Step ``detail``/``info``/``command``,
   key file paths, backup directories and ledger contents are never copied; text that came from a
   finding is neutralised, path-masked and truncated; the secret and extra headers are scrubbed by
-  value before signing;
+  value before signing. Path masking is a HEURISTIC (see :func:`mask_paths`): ``human_actions``
+  text is operator-derived, so it is neutralised and truncated, not guaranteed redacted;
 * secrets (the HMAC key, ``headers_env`` lines) are read from the environment at send time and
   held in memory only. They are never written to the record, the outbox, stdout/stderr or an
   exception; an error is recorded as its CLASS name only;
@@ -37,6 +40,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -55,9 +59,17 @@ TIMEOUT_S = 10.0
 _MAX_ACTIONS = 50
 _RESERVED = {"content-type", "content-length", "host", "idempotency-key", "user-agent",
              "accept-encoding", "x-neuralbridge-signature", "x-neuralbridge-delivery",
-             "transfer-encoding", "connection"}
+             "transfer-encoding", "connection", "x-neuralbridge-timestamp"}
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-_PATH = re.compile(r"(?<![\w/<.])/[A-Za-z0-9._~-]+(?:/[^\s'\"`,;:)\]]*)?")
+#: Files that are secrets or stores whatever directory they are named in.
+_SENSITIVE_EXT = (".key", ".pem", ".db", ".jsonl", ".sqlite", ".p12", ".pfx")
+_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+_QUOTED = re.compile(r"""(['"`])([^'"`\n]{1,300}?)\1""")
+_TRIM_L = "([{<'\"`"
+_TRIM_R = ".,;:)]}>'\"`!?"
+REPLAY_WINDOW_S = 300
+OUTBOX_RETENTION_DAYS = 30
 _NOT_ESTABLISHED = ("A webhook delivery is not acknowledgement by a person. This message is "
                     "drafted by software from an unsigned operator log; it decides nothing.")
 
@@ -76,8 +88,48 @@ def make_transport(allow_host: str) -> Transport:
 # --------------------------------------------------------------------------------------------
 # the payload
 # --------------------------------------------------------------------------------------------
+def _is_pathlike(core: str) -> bool:
+    if not core or _URL.match(core):
+        return False
+    low = core.lower()
+    return ("/" in core or "\\" in core or low.startswith(("~", "\\\\"))
+            or bool(_DRIVE.match(core)) or "tenants/acc_" in low
+            or low.endswith(_SENSITIVE_EXT))
+
+
+def _mask_token(match: re.Match[str]) -> str:
+    token = match.group(0)
+    start, end = 0, len(token)
+    while start < end and token[start] in _TRIM_L:
+        start += 1
+    while end > start and token[end - 1] in _TRIM_R:
+        end -= 1
+    core = token[start:end]
+    if not _is_pathlike(core):
+        return token
+    return token[:start] + "<path>" + token[end:]
+
+
+def mask_paths(text: str) -> str:
+    """Replace anything path-like with ``<path>``. Deliberately over-masks.
+
+    Masked: absolute and relative (``./``, ``../``, ``a/b``) POSIX paths, ``~`` paths, Windows
+    drive and UNC paths, anything containing ``tenants/acc_``, and any token ending in
+    ``.key .pem .db .jsonl .sqlite .p12 .pfx``. A quoted span that looks like a path is masked
+    whole (so a space inside quotes does not leak the tail). Unquoted paths with a space are
+    masked token by token (``/var/lib/my keys/svc.key`` -> ``<path> <path>``): masking runs
+    through the end of each whitespace-delimited token, never past it. URLs are left alone, and
+    so is prose with no separator. LIMIT: this is a heuristic, not redaction; ``human_actions``
+    text is operator-derived and is neutralised and truncated, so an operator must not put
+    secrets in it.
+    """
+    text = _QUOTED.sub(lambda m: m.group(1) + "<path>" + m.group(1)
+                       if _is_pathlike(m.group(2).strip()) else m.group(0), text)
+    return re.sub(r"\S+", _mask_token, text)
+
+
 def _clip(value: object, limit: int) -> str:
-    text = _PATH.sub("<path>", neutralise(value))
+    text = mask_paths(neutralise(value))
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
@@ -130,9 +182,28 @@ def encode(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def sign(secret: str, body: bytes) -> str:
-    """``sha256=<hex>``: HMAC-SHA256 of the exact body bytes."""
-    return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+def sign(secret: str, body: bytes, timestamp: int) -> str:
+    """``sha256=<hex>``: HMAC-SHA256 of ``b"<unix seconds>." + body`` (exact body bytes).
+
+    Binding the timestamp means a captured body+signature cannot be replayed with a fresh
+    timestamp; the receiver also rejects an old one (:func:`signature_fresh`).
+    """
+    message = str(int(timestamp)).encode("ascii") + b"." + body
+    return "sha256=" + hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def signature_fresh(timestamp_header: str, now: float, window_s: int = REPLAY_WINDOW_S) -> bool:
+    """Receiver-side replay check: ``|now - ts| <= window`` and ``ts`` is plain digits."""
+    if not re.fullmatch(r"[0-9]{1,12}", timestamp_header or ""):
+        return False
+    return abs(now - int(timestamp_header)) <= window_s
+
+
+def verify(secret: str, body: bytes, signature: str, timestamp_header: str, now: float,
+           window_s: int = REPLAY_WINDOW_S) -> bool:
+    """What a receiver does: fresh timestamp, then constant-time compare of the HMAC."""
+    return (signature_fresh(timestamp_header, now, window_s)
+            and hmac.compare_digest(sign(secret, body, int(timestamp_header)), signature))
 
 
 # --------------------------------------------------------------------------------------------
@@ -208,7 +279,9 @@ def _headers(target: NotifyCfg, secret: str, extra: Mapping[str, str], req: form
     out = {**extra, **req.headers, "Content-Type": req.content_type,
            "X-NeuralBridge-Delivery": delivery_id, "Idempotency-Key": key}
     if target.format in formats.SIGNED_FORMATS:      # PagerDuty authenticates by routing key
-        out["X-NeuralBridge-Signature"] = sign(secret, req.body)
+        ts = int(utc_now().timestamp())      # fresh per attempt: a retry is not a replay
+        out["X-NeuralBridge-Timestamp"] = str(ts)
+        out["X-NeuralBridge-Signature"] = sign(secret, req.body, ts)
     return out
 
 
@@ -300,6 +373,54 @@ def outbox_state(cfg: OpsConfig) -> dict[str, list[dict[str, Any]]]:
             for st in ("open", "abandoned")}
 
 
+def compact_outbox(path: Path, now: datetime | None = None,
+                   retention_days: int = OUTBOX_RETENTION_DAYS) -> int:
+    """Drop every line of a delivered or abandoned item last touched over ``retention_days`` ago.
+
+    Open items are never dropped, nor is anything inside the window, nor a line that cannot be
+    read (kept verbatim). Inside the window the file is append-only; compaction only runs at
+    the start of a cycle, which holds the single-writer lock, and replaces the file atomically
+    (temp file in the same directory, fsync, ``os.replace``). Returns the number of items
+    dropped. A problem is never raised: the outbox is then left as it was.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    cutoff = format_utc((now or utc_now()) - timedelta(days=retention_days))
+    parsed: list[tuple[str, dict[str, Any] | None]] = []
+    for line in raw.splitlines():
+        try:
+            doc = json.loads(line)
+        except ValueError:
+            doc = None
+        parsed.append((line, doc if isinstance(doc, dict) and isinstance(doc.get("key"), str)
+                       else None))
+    items = _fold([d for _, d in parsed if d is not None])
+    drop = {k for k, it in items.items()
+            if it["state"] in ("delivered", "abandoned")
+            and isinstance(it.get("last_at"), str) and it["last_at"] < cutoff}
+    if not drop:
+        return 0
+    kept = [line for line, d in parsed if d is None or d["key"] not in drop]
+    tmp = path.with_name(path.name + ".compact.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, ("\n".join(kept) + "\n" if kept else "").encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return 0
+    return len(drop)
+
+
 def _log(path: Path, **fields: Any) -> None:
     rec.append(path, {**fields, "at": format_utc(utc_now())})
 
@@ -319,6 +440,7 @@ def deliver(cfg: OpsConfig, doc: Mapping[str, Any], *,
     by_name = {t.name: t for t in cfg.notify}
     secrets = _secret_strings(cfg, env)
     entries: list[dict[str, Any]] = []
+    compact_outbox(cfg.outbox)
 
     def run(target: NotifyCfg, message: Mapping[str, Any], key: str) -> _Result | None:
         try:
@@ -408,7 +530,9 @@ def dry_run_request(cfg: OpsConfig, target: NotifyCfg, environ: Mapping[str, str
     body = req.body
     headers = [f"Content-Type: {req.content_type}"]
     if target.format in formats.SIGNED_FORMATS:
-        headers.append(f"X-NeuralBridge-Signature: sha256=<hmac of {len(body)} bytes>")
+        headers.append("X-NeuralBridge-Timestamp: <unix seconds at send>")
+        headers.append(f"X-NeuralBridge-Signature: sha256=<hmac of '<timestamp>.' + {len(body)} "
+                       "body bytes>")
     else:
         headers.append("(no X-NeuralBridge-Signature: this format authenticates by its routing "
                        "key)")

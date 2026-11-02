@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,13 +39,14 @@ from typing import Any
 from assurance.intel.fetch import build_headers, fetch, ingest_file
 from assurance.intel.parsers import INTERIM_REFUSAL
 from assurance.intel.sources import SOURCES, epss_url, nvd_url, resolve_source
-from assurance.intel.store import IntelStore, Observation
+from assurance.intel.store import IntelStore, IntelStoreError, Observation
 from assurance.intel.view import build_report
 
 __all__ = ["build_parser", "main"]
 
 EXIT_REJECTED = 1
 EXIT_COULD_NOT_RUN = 2
+_READ_VERBS = frozenset({"history", "show", "candidates"})
 
 
 _ALLOW_INTERIM_HELP = (
@@ -271,7 +273,7 @@ def _tracking_text(prov: dict[str, Any] | None) -> str:
 
 def _history(args: argparse.Namespace) -> int:
     source = resolve_source(args.source).id if args.source else None
-    store = IntelStore(args.store)
+    store = IntelStore.open_existing(args.store)
     rows = store.observations(source=source, limit=args.limit)
     if args.json:
         out = []
@@ -294,7 +296,7 @@ def _history(args: argparse.Namespace) -> int:
 
 
 def _show(args: argparse.Namespace) -> int:
-    store = IntelStore(args.store)
+    store = IntelStore.open_existing(args.store)
     if args.cve:
         report = build_report(store, cve_ids=[args.cve])
         data: Any = report.enrichments[0].to_dict()
@@ -336,7 +338,7 @@ def _cve_text(e: dict[str, Any]) -> str:
 
 
 def _candidates(args: argparse.Namespace) -> int:
-    report = build_report(IntelStore(args.store))
+    report = build_report(IntelStore.open_existing(args.store))
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
         for c in report.candidates:
@@ -361,8 +363,18 @@ def _candidates(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return {"ingest": _ingest, "refresh": _refresh, "history": _history, "show": _show,
-            "candidates": _candidates}[args.cmd](args)
+    handler = {"ingest": _ingest, "refresh": _refresh, "history": _history, "show": _show,
+               "candidates": _candidates}[args.cmd]
+    if args.cmd not in _READ_VERBS:
+        return handler(args)
+    try:
+        return handler(args)
+    except (IntelStoreError, sqlite3.Error, TypeError, ValueError) as exc:
+        # A missing, foreign or damaged store is "could not read", never "nothing known".
+        why = (str(exc) if isinstance(exc, IntelStoreError)
+               else f"{type(exc).__name__}: the store could not be read")
+        print(f"error: {why}\nNothing was concluded from this store.", file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
 
 
 if __name__ == "__main__":

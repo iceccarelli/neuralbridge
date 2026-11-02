@@ -140,7 +140,7 @@ def test_no_new_data_enters_any_vendor_body(site):
 def test_json_slack_teams_still_hmac_sign_the_exact_body(site, fmt):
     _, t, _ = send(site, fmt, doc_with(ACTION))
     c = t.calls[0]
-    assert hdr(c, "x-neuralbridge-signature") == independent_hmac(SECRET, c["body"])
+    assert hdr(c, "x-neuralbridge-signature") == independent_hmac(SECRET, c["body"], hdr(c, "x-neuralbridge-timestamp"))
 
 
 def test_pagerduty_sends_no_signature_header_and_the_key_is_only_in_the_body(site):
@@ -243,7 +243,7 @@ def test_a_failed_send_is_owed_with_the_minimal_message_and_retried_with_the_sam
         assert b["dedup_key"] == hdr(first, "idempotency-key") and b["routing_key"] == RKEY
         assert "x-neuralbridge-signature" not in {k.lower() for k in again["headers"]}
     else:
-        assert hdr(again, "x-neuralbridge-signature") == independent_hmac(SECRET, again["body"])
+        assert hdr(again, "x-neuralbridge-signature") == independent_hmac(SECRET, again["body"], hdr(again, "x-neuralbridge-timestamp"))
 
 
 def test_the_routing_key_is_in_no_record_status_log_or_outbox_even_on_failure(site):
@@ -322,7 +322,7 @@ def test_notify_test_live_chat_formats_sign_and_say_test(site, fmt):
     notify.send_test(cfg, cfg.notify[0], transport_factory=lambda h: t, environ=env_for(fmt))
     c = t.calls[0]
     assert "TEST message" in json.loads(c["body"])["text"]
-    assert hdr(c, "x-neuralbridge-signature") == independent_hmac(SECRET, c["body"])
+    assert hdr(c, "x-neuralbridge-signature") == independent_hmac(SECRET, c["body"], hdr(c, "x-neuralbridge-timestamp"))
 
 
 def test_check_shows_the_format_and_warns_on_a_wrong_length_routing_key(site, monkeypatch,

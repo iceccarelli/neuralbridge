@@ -2,9 +2,6 @@ site_name: Industrial Autonomous Assurance
 site_url: https://iceccarelli.github.io/neuralbridge/
 site_description: Evidence infrastructure for machines whose software can hurt someone — CRA Article 14 and Machinery Regulation Annex III 1.1.9.
 site_author: Industrial Autonomous Assurance
-repo_name: iceccarelli/neuralbridge
-repo_url: https://github.com/iceccarelli/neuralbridge
-edit_uri: edit/main/docs/
 copyright: Copyright &copy; 2026 Industrial Autonomous Assurance
 theme:
   name: material
