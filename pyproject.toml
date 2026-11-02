@@ -38,7 +38,7 @@ dependencies = [
     "alembic>=1.13.0",
     "redis>=5.0.0",
     "cryptography>=42.0.0",
-    "pyjwt>=2.8.0",
+    "pyjwt>=2.15.0",
     "httpx>=0.27.0",
     "pyyaml>=6.0.1",
     "structlog>=24.1.0",
@@ -50,7 +50,6 @@ dependencies = [
     "jinja2>=3.1.3",
     "python-multipart>=0.0.9",
     "passlib[bcrypt]>=1.7.4",
-    "python-jose[cryptography]>=3.3.0",
 ]
 
 [project.optional-dependencies]
@@ -155,6 +154,7 @@ ignore = [
 "src/assurance/machine/cli.py" = ["T20"]
 "src/assurance/machinery/cli.py" = ["T20"]
 "src/assurance/fleet/cli.py" = ["T20"]
+"src/assurance/check/cli.py" = ["T20"]
 "src/assurance/collect/cli.py" = ["T20"]
 "src/assurance/report/cli.py" = ["T20"]
 "src/assurance/bridge/cli.py" = ["T20"]

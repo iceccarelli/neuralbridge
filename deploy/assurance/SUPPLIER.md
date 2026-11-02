@@ -77,6 +77,32 @@ assurance supplier withdraw CTRL-2026-11 \
 it; deleting it leaves them holding a change nobody can explain, which is worse
 than the wrong advisory was. A withdrawal is a publication.
 
+### Withdrawing from a hosted feed
+
+| Method and path | Gate | What it does |
+|---|---|---|
+| `POST /v1/supplier/advisory` | Supplier tier (401 without a key, 402 without the tier) | Host a record you signed locally. Structure and chain are checked; the signature is not. |
+| `POST /v1/supplier/advisory/withdraw` | Same | Host a signed **withdrawal** of an advisory your feed carries. |
+| `GET /v1/supplier/feed/{account_id}` | None | The feed, as written. |
+
+The hosted withdrawal is the same act as `assurance supplier withdraw`, and the
+server never holds your private key. Fetch your feed, run `assurance supplier
+withdraw` against that copy (it signs the next record and chains it to the
+head), and POST the last line of the copy as the body. The route differs from
+publish in one way: it **verifies the signature**, under a key your account has
+pinned for your supplier id (`POST /v1/supplier/trust/pin`, or assigned by us
+when the Supplier tier is set up; the fingerprint a record names only chooses
+which pin to try). An unsigned record is 422; an unpinned, revoked or retired key,
+a foreign key or an altered record is 403; an advisory the feed does not carry is
+404 `advisory_not_in_feed`; a stale `sequence` or `previous` is 409. A repeat for
+an advisory already withdrawn is a 200 that writes nothing.
+
+The original advisory is never edited or deleted. The withdrawal is a new record
+that supersedes it; the feed shows both, the withdrawal carrying `withdraws` and
+`withdrawal_reason`. Readers (`trust/evaluate`, the watch) report the advisory as
+withdrawn only when they verify the withdrawal under a key *they* pinned. There
+is no MCP tool: a withdrawal is a named supplier's signed act.
+
 ## For an integrator
 
 ```bash
@@ -101,6 +127,30 @@ refusal, exit 2, nothing computed. A change to a safety system driven by an
 advisory that does not verify is precisely what signing is for. `--unsigned-anyway`
 exists, prints the reason in full, and records it in the output, because
 sometimes you have to proceed and everyone downstream should know you did.
+
+### A supplier that re-issued its feed: `supplier trust baseline`
+
+Each pass remembers the newest record of a feed it trusted, so a feed cut back or swapped for an
+older copy is not trusted. A supplier that *legitimately* re-issued its feed no longer extends
+that history and stays untrusted until a named person accepts the new one:
+
+```bash
+assurance supplier trust baseline --ledger account.db --feed reissued.jsonl \
+    --actor m.braun --reason "ControlCo re-issued its feed after the key ceremony" [--json]
+```
+
+This is the same function as `POST /v1/supplier/trust/feed-baseline` (`--json` prints that
+body: the new `baseline`, the `previous` one, and the `note`). It is a trust decision, so it is
+a CLI and API act with no MCP tool, and it writes one entry to the account's trust store: the
+`--ledger` must already exist (nothing is created) and be the account's own, never a shared one.
+`--feed -` reads standard input.
+
+It accepts a feed only if that feed **would be trusted**: signatures valid under a key already
+pinned for this supplier, an intact chain. The head is read from the feed, never typed, and
+`--public-key` (an unpinned key) can show signatures are valid but never makes a feed eligible.
+It pins no key and trusts nothing that was not already trusted. Exit codes: 0 the baseline was
+reset; 1 refused (the feed would not be trusted, the store's integrity is in question, or no
+reason was given), nothing written; 2 an unreadable feed or ledger.
 
 ## Why the feed is a chain
 

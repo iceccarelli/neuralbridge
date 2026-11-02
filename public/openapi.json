@@ -8543,6 +8543,84 @@
         ]
       }
     },
+    "/v1/supplier/advisory/withdraw": {
+      "post": {
+        "description": "Host a withdrawal you signed locally (`assurance supplier withdraw` on a copy of the feed).\n\nUnlike publish, this verifies the signature, under the key your account pinned for\nthe supplier: a withdrawal changes what readers believe stands. The original\nadvisory is never edited or removed; the withdrawal is appended as the next record.\nA repeat for an advisory already withdrawn is a 200 that writes nothing.",
+        "operationId": "post_withdrawal_v1_supplier_advisory_withdraw_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/assurance__api__supplier_routes__AdvisoryIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Withdrawal V1 Supplier Advisory Withdraw Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw an advisory of your hosted feed with a signed withdrawal (Supplier tier)",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
     "/v1/supplier/feed/{supplier_account_id}": {
       "get": {
         "operationId": "get_feed_v1_supplier_feed__supplier_account_id__get",

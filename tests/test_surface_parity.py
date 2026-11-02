@@ -851,6 +851,108 @@ def test_intel_candidates_cli_api_and_mcp_name_the_same_advisories(intel_world, 
     assert via_cli["unreadable_observations"] == via_api["unreadable_observations"] == []
 
 
+# ------------------------------------------------------------------ the Machine Assurance Check
+def _no_clock(doc: dict[str, Any]) -> dict[str, Any]:
+    """The whole answer, but for the moment it was assessed."""
+    return {k: v for k, v in doc.items() if k != "assessed_at"}
+
+
+def _check_inputs(world: World) -> tuple[str, list[tuple[str, dict[str, Any]]]]:
+    """The machine key, and three advisories against this world's own manifest: one that names
+    its first item by hash (a match), one that names nothing it runs, one that is half a
+    translation (so 'no match' must not read as clear)."""
+    from assurance.machinery.manifest import SafetyManifest
+
+    key = SafetyManifest.from_dict(world.manifest).machine.key
+    item = world.manifest["items"][0]
+
+    def adv(advisory_id: str, supplier: str, name: str, version: str, digest: str,
+            **extra: Any) -> dict[str, Any]:
+        return {"advisory_id": advisory_id, "issued_by": supplier,
+                "issued_at": "2026-09-12T08:00:00Z", "title": "t", "summary": "s",
+                "severity": "safety_relevant", "reference": "https://x.example/a",
+                "affected": [{"supplier": supplier, "name": name,
+                              "versions": [version] if version else [],
+                              "content_hashes": [digest]}], **extra}
+
+    partial = adv("PARITY-3", "Nobody GmbH", "Unrelated gizmo", "1.0", "c" * 64, import_record={
+        "origin": "csaf_import", "trust": "unsigned_inspect_only", "partial": True,
+        "dropped": [], "severity_source": "defaulted_by_importer", "tlp": "",
+        "tracking_status": "draft", "document_category": "", "document_date": "",
+        "notes": [], "partial_reasons": ["draft status"]})
+    return key, [
+        ("match", adv("PARITY-1", item["supplier"], item["name"], item["version"],
+                      item["content_hash"])),
+        ("no match", adv("PARITY-2", item["supplier"], item["name"], "9.9.9", "d" * 64)),
+        ("partial", partial)]
+
+
+def test_check_services_cli_api_and_mcp_agree(world, monkeypatch):
+    from_cli = cli_json(world, "check", "services", "--json")
+    api = world.client.get("/v1/check/services")
+    assert api.status_code == 200
+    via_mcp = mcp_body(mcp(monkeypatch, world, "services"))
+    assert from_cli == api.json() == via_mcp
+    assert {s["service_id"] for s in from_cli["services"]} == {
+        "machine_assurance_check", "fleet_machine_assurance"}
+
+
+def test_check_machine_cli_api_and_mcp_agree(world, monkeypatch):
+    _, advisories = _check_inputs(world)
+    m = world.root / "m.json"
+    m.write_text(json.dumps(world.manifest), encoding="utf-8")
+    verdicts = set()
+    for label, adv in advisories:
+        a = world.root / "a.json"
+        a.write_text(json.dumps(adv), encoding="utf-8")
+        from_cli = cli_json(world, "check", "machine", m, "--advisory", a, "--json")
+        api = world.client.post("/v1/check/machine",
+                                json={"manifest": world.manifest, "advisory": adv})
+        assert api.status_code == 200, (label, api.text)
+        via_mcp = mcp_body(mcp(monkeypatch, world, "machine_assurance_check",
+                               manifest=world.manifest, advisory=adv))
+        assert _no_clock(from_cli) == _no_clock(api.json()) == _no_clock(via_mcp), label
+        assert from_cli["checks_skipped"], label            # "not established" is never dropped
+        verdicts.add(from_cli["verdict"])
+    # the three inputs really exercise three different answers, not one repeated
+    assert len(verdicts) == 3, verdicts
+
+
+def test_check_fleet_machine_cli_api_and_mcp_agree(world, monkeypatch, live_api):
+    key, advisories = _check_inputs(world)
+    trust = live_api.root / "recorder-trust.json"             # the server's own recorder trust
+    for label, adv in [("no advisory", None), *advisories]:
+        argv: list[Any] = ["check", "fleet-machine", "--ledger", world.cli_ledger,
+                           "--machine-key", key, "--recorder-trust", trust, "--json"]
+        payload: dict[str, Any] = {"machine_key": key}
+        if adv is not None:
+            a = world.root / "a.json"
+            a.write_text(json.dumps(adv), encoding="utf-8")
+            argv += ["--advisory", a]
+            payload["advisory"] = adv
+        from_cli = cli_json(world, *argv)
+        api = world.client.post("/v1/check/fleet-machine", json=payload)
+        assert api.status_code == 200, (label, api.text)
+        via_mcp = mcp_body(mcp(monkeypatch, world, "fleet_machine_assurance", **payload))
+        assert from_cli["enrolled"] is True, label
+        assert _no_clock(from_cli) == _no_clock(api.json()) == _no_clock(via_mcp), label
+
+
+def test_fleet_advisory_check_cli_and_api_agree(world):
+    """No MCP tool by design (an advisory is third-party content); CLI and API are one function."""
+    _, advisories = _check_inputs(world)
+    m = world.root / "m.json"
+    m.write_text(json.dumps(world.manifest), encoding="utf-8")
+    for label, adv in advisories:
+        a = world.root / "a.json"
+        a.write_text(json.dumps(adv), encoding="utf-8")
+        from_cli = cli_json(world, "fleet", "advisory-check", a, "--manifest", m, "--json")
+        api = world.client.post("/v1/fleet/advisory/check",
+                                json={"advisory": adv, "manifest": world.manifest})
+        assert api.status_code == 200, (label, api.text)
+        assert from_cli == api.json(), label
+
+
 # ------------------------------------------------------------------ the catalogue's promise
 #: capability id -> the parity test above that exercises it, for each surface set it declares.
 EXERCISED = {
@@ -876,6 +978,11 @@ EXERCISED = {
     "fleet.value": ("cli", "api", "mcp"),
     "supplier.trust_list": ("cli", "api", "mcp"),
     "supplier.trust_check": ("cli", "api", "mcp"),
+    "check.services": ("cli", "api", "mcp"),
+    "check.machine": ("cli", "api", "mcp"),
+    "check.fleet_machine": ("cli", "api", "mcp"),
+    # no MCP tool by design (an advisory is third-party content): CLI and API only
+    "fleet.advisory_check": ("cli", "api"),
     # no CLI verb by design (the CLI form is the local `watch status` / an HTTP-only key route):
     "fleet.observations": ("api", "mcp"),
     "attest.service_key": ("api", "mcp"),

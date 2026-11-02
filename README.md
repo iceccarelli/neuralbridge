@@ -49,9 +49,9 @@ and of the other offline commands. It is not true of the hosted service below,
 which needs an account and a key.)
 
 `pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
-this project declares 22 core dependencies unconditionally (fastapi, sqlalchemy,
+this project declares 21 core dependencies unconditionally (fastapi, sqlalchemy,
 asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
-platform, and the extra adds nothing to them: `cryptography` is already one of the 22 core
+platform, and the extra adds nothing to them: `cryptography` is already one of the 21 core
 dependencies, so the extra is a label, not a smaller install. The offline kit imports
 `cryptography` and nothing else outside the standard library.
 

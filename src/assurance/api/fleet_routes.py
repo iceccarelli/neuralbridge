@@ -27,9 +27,10 @@ from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_regist
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
-from assurance.fleet.advisory import ComponentAdvisory, match_item
+from assurance.fleet.advisory import ComponentAdvisory
+from assurance.fleet.advisory_check import BARE_REQUEST_BODY_PROVENANCE, check_one_machine
 from assurance.fleet.declaration import DeclarationOfConformity, check_declaration
-from assurance.fleet.impact import advisory_provenance, assess_impact
+from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger
@@ -138,61 +139,7 @@ def advisory_check(
     advisory = _advisory(body.advisory)
     manifest = _manifest(body.manifest)
 
-    matches = []
-    for item in manifest.items:
-        matched = match_item(advisory, item)
-        if matched is None:
-            continue
-        basis, detail = matched
-        matches.append({
-            "item_id": item.item_id,
-            "item_name": item.name,
-            "item_version": item.version,
-            "basis": basis.value,
-            "confidence": basis.confidence,
-            "needs_a_human": basis.needs_a_human,
-            "detail": detail,
-            "implements": list(item.implements),
-        })
-
-    skipped = [
-        "this compares one advisory against one manifest. It says nothing about "
-        "any other machine, and it does not assess whether the safety evidence for "
-        "the affected functions still stands — that needs the ledger.",
-    ]
-    if not advisory.publishes_hashes:
-        skipped.append(
-            f"{advisory.issued_by} published no artefact hashes, so any match here "
-            "rests on a version label.")
-    record = advisory.import_record
-    if record is not None:
-        skipped.append(
-            "this advisory is an unsigned CSAF import: nobody has authenticated it.")
-        if record.partial:
-            skipped.append(
-                "this advisory is a PARTIAL translation (not imported: "
-                + (", ".join(record.dropped_ids) or "; ".join(record.partial_reasons))
-                + "), so 'not affected' here is not a statement that nothing is affected.")
-    unhashed = [i.item_id for i in manifest.uncomparable_items]
-    if unhashed:
-        skipped.append(
-            "item(s) " + ", ".join(unhashed) + " carry no hash, so an affected "
-            "component hiding in them would not be found.")
-
-    result = {
-        "advisory_id": advisory.advisory_id,
-        "issued_by": advisory.issued_by,
-        "severity": advisory.severity.value,
-        "reference": advisory.reference,
-        "machine": manifest.machine.key,
-        "affected": bool(matches),
-        "matches": matches,
-        "remedy": advisory.remedy,
-        "checks_skipped": skipped,
-        "provenance": advisory_provenance(advisory, _BARE_ADVISORY),
-        "advisory_import": record.to_dict() if record is not None else None,
-        "incomplete": bool(record is not None and record.partial),
-    }
+    result = check_one_machine(advisory, manifest)
     meter.commit(response)
     return result
 
@@ -247,15 +194,7 @@ def advisory_impact(
     return assess_impact(advisory, fleet, provenance=_BARE_ADVISORY).to_dict()
 
 
-#: An advisory handed over as a JSON body has no signature to check and no key to
-#: pin. It can be assessed; it is not a trusted supplier statement.
-_BARE_ADVISORY = {
-    "source": "request_body", "trust_state": "unauthenticated_input",
-    "trust_basis": "none", "signature_state": "none",
-    "automated_consequences_permitted": False, "inspect_only": True,
-    "override": None, "implications_reviewed": False,
-    "trust_statement": TRUST_STATEMENT,
-}
+_BARE_ADVISORY = BARE_REQUEST_BODY_PROVENANCE
 
 
 def evaluate_signed_feed(

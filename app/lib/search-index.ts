@@ -1,5 +1,6 @@
 import { DOCS, repoLink, srcLink } from './links';
 import { SOLUTIONS } from './solutions';
+import { PRODUCT_PAGES, productHref } from './productPages';
 
 export type SearchGroup = 'Products' | 'Solutions' | 'Docs';
 
@@ -26,6 +27,12 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Attest', group: 'Products', href: `/docs/assurance/attest`, blurb: 'Counter-signed head attestation; catches deletion, not just editing.' },
   { title: 'Offline enrolment kit', group: 'Products', href: `/docs/assurance/kit`, blurb: 'Your ledger, your disk. No account, no upload.' },
   { title: 'Assurance API', group: 'Products', href: srcLink('/api') ?? '/developers', blurb: 'FastAPI surface for billing and entitlements.', external: srcLink('/api') !== null },
+  ...PRODUCT_PAGES.map((p) => ({
+    title: `${p.name}: how it works`,
+    group: 'Products' as const,
+    href: productHref(p.slug),
+    blurb: p.intent,
+  })),
   ...SOLUTIONS.map((s) => ({
     title: s.role,
     group: 'Solutions' as const,

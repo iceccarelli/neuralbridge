@@ -49,20 +49,38 @@ Windows/macOS; a `docker build` of any image.
 
 ## 3. Dependency advisories in the locked sets
 
-`pip-audit 2.10.1 -r requirements/<lock> --require-hashes` (queries the PyPI advisory service;
-results change daily, re-run before relying on them):
+Command (pip-audit 2.10.1, installed in a scratch venv; it queries the PyPI advisory service, so
+results change daily and must be re-run before relying on them):
+`pip-audit -r requirements/<lock> --require-hashes --disable-pip`
 
-| Lock | Result |
-|---|---|
-| `assurance-service.lock` | no known vulnerabilities |
-| `prod.lock`, `test.lock` | `python-jose 3.5.0` PYSEC-2026-4298 (CVE-2026-85394 / GHSA-3qf3-8w2g-rqmx), HMAC initialisation accepts DER-encoded asymmetric public keys; `ecdsa 0.19.2` (a dependency of python-jose) PYSEC-2026-1325 (CVE-2024-23342 / GHSA-wj6h-64fc-37mp), Minerva timing attack on P-256 signing |
+| Lock | 2026-11-02, before | 2026-11-02, after |
+|---|---|---|
+| `assurance-service.lock` | no known vulnerabilities | no known vulnerabilities |
+| `prod.lock` | `python-jose 3.5.0` PYSEC-2026-4298 (CVE-2026-85394 / GHSA-3qf3-8w2g-rqmx); `ecdsa 0.19.2` PYSEC-2026-1325 (CVE-2024-23342 / GHSA-wj6h-64fc-37mp), listed twice | no known vulnerabilities |
+| `test.lock` | same three findings | no known vulnerabilities |
 
-pip-audit lists **no fixed version** for either, so nothing was bumped. `python-jose` is imported
-only by `src/neuralbridge/security/auth.py` (the platform, not the assurance service), where it
-signs and verifies with a configured secret key and a configurable algorithm
-(`settings.jwt_algorithm`); whether the advisory is exploitable in a given deployment depends on
-that setting and was not analysed. The CI `security` job runs `safety check -r requirements/base.txt
-|| true`, so it never fails on a finding and does not scan the lock.
+What changed: `python-jose[cryptography]` was removed from `requirements/base.txt` and
+`pyproject.toml`; `src/neuralbridge/security/auth.py` now uses PyJWT, which was already a declared
+dependency (floor raised from `>=2.8.0` to `>=2.15.0`; the locks pin 2.15.1). The floor is 2.15.0
+because the OSV database (queried 2026-11-02) lists PyJWT advisories fixed as late as 2.15.0; 2.15.0 and
+2.15.1 had no known vulnerabilities in that query, while 2.10.1 had 32. `prod.lock` and
+`test.lock` were regenerated with `scripts/lock.sh`; the only differences are the removal of
+`python-jose`, `ecdsa`, `rsa`, `pyasn1` and `six` (nothing else in the locked set required them),
+and `scripts/lock.sh --check` reports no drift. pip-audit listed no fixed version of either
+advisory, so removal, not a bump, was the only remedy.
+
+Scope and limits. Before the change, `neuralbridge.security.auth` was imported by no module under
+`src/` (only by `tests/test_security.py`), and `neuralbridge.main` did not import it; in the
+installed environment python-jose used its `cryptography` backend and `ecdsa` was not imported.
+Those facts are why the exposure was assessed as not reachable from the shipped application; they
+are not a claim about code outside this repository. `auth.py` now also pins the accepted algorithm
+to the configured one, rejects a token whose header names another algorithm or `none`, requires
+`exp` and `sub`, and `Settings` refuses a non-HMAC `jwt_algorithm` and an HMAC secret that looks
+like PEM, SSH or DER key material (`tests/test_security_jwt_hardening.py`). That is hardening of
+one module, not an audit of the platform's authentication, and a clean pip-audit means only that
+the advisory database lists nothing for the pinned versions today. The assurance service never
+used python-jose. The CI `security` job still runs `safety check -r requirements/base.txt || true`,
+so it never fails on a finding and does not scan the lock.
 
 ## 4. SBOM
 

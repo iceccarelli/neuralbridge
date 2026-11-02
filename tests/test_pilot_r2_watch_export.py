@@ -179,7 +179,7 @@ class TestPublicCopyIsConsistent:
     def test_the_extra_is_not_said_to_add_cryptography(self, rel):
         text = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
         assert "adds only `cryptography`" not in text
-        assert "adds nothing" in text and "already one of the 22 core dependencies" in text
+        assert "adds nothing" in text and "already one of the 21 core dependencies" in text
 
     def test_valid_evidence_is_gone_from_the_shipped_surface(self):
         hits = []

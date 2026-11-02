@@ -1,6 +1,7 @@
 import type { MetadataRoute } from 'next';
 import { SOLUTIONS } from './lib/solutions';
 import { listDocSlugs } from './lib/docs';
+import { PRODUCT_PAGES, productHref } from './lib/productPages';
 
 const SITE_URL = 'https://neuralbridge.io';
 
@@ -28,6 +29,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...SOLUTIONS.map((s) => ({
       url: `${SITE_URL}/solutions/${s.slug}`,
 
+      changeFrequency: 'monthly' as const,
+      priority: 0.8,
+    })),
+    ...PRODUCT_PAGES.map((p) => ({
+      url: `${SITE_URL}${productHref(p.slug)}`,
       changeFrequency: 'monthly' as const,
       priority: 0.8,
     })),
