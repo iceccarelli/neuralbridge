@@ -92,6 +92,16 @@ def test_the_tier_tables_here_cover_every_read_only_tool() -> None:
     assert not set(REGISTER) & set(CELL)
 
 
+def _without_clock(node: Any) -> Any:
+    """``node`` with the keys that only record WHEN a bundle was produced removed, at any depth."""
+    clock = {"exported_at", "attested_at", "generated_at"}
+    if isinstance(node, dict):
+        return {k: _without_clock(v) for k, v in node.items() if k not in clock}
+    if isinstance(node, list):
+        return [_without_clock(v) for v in node]
+    return node
+
+
 # ------------------------------------------------------------------ success, live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", sorted(READ_ONLY_TOOLS))
@@ -109,7 +119,11 @@ async def test_a_tool_returns_what_its_route_returns(world, monkeypatch, tool) -
     assert reply["status"] == direct.status_code, (tool, reply, direct.text)
     assert reply["status"] < 500
     if direct.headers.get("content-type", "").startswith("application/json"):
-        if tool not in ("ledger_verify", "value_position", "fleet_observations", "art14_register"):
+        if tool == "art14_export":
+            # An export is stamped with the time it was made (exported_at, and the attestation's own
+            # time), and two calls can straddle a second boundary: compare everything else exactly.
+            assert _without_clock(reply["body"]) == _without_clock(direct.json()), tool
+        elif tool not in ("ledger_verify", "value_position", "fleet_observations", "art14_register"):
             # (those carry a clock reading that can differ between two calls)
             assert reply["body"] == direct.json(), tool
     if tool in ("attest_verify", "fleet_declaration_check"):
