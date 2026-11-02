@@ -16,6 +16,8 @@ What it enforces, at the network boundary, before and during every request:
 * 429 and 5xx (and connection failures) are retried with exponential backoff, honouring
   ``Retry-After`` (seconds or HTTP-date). A ``Retry-After`` longer than ``max_wait`` is not
   waited out: the last response is returned so the caller records it;
+* ``post`` (the operator's outbound notifications) obeys every rule above and, in addition,
+  follows NO redirect at all (a POST body is never replayed elsewhere);
 * headers are never logged or put in an exception message.
 """
 
@@ -97,6 +99,14 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow nothing: used for POST, whose body must never be replayed to another URL."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any,
+                         newurl: str) -> Any:
+        raise RedirectRefused(f"redirect (status {code}) was not followed")
+
+
 def check_url_or_refuse(url: str, allowed: Iterable[str]) -> str:
     try:
         return check_url(url, allowed)
@@ -119,38 +129,50 @@ class UrllibTransport:
         self._sleep = sleep
         self._opener = opener or urllib.request.build_opener(
             _SameHostRedirect(self.allowed_hosts))
+        self._post_opener = opener or urllib.request.build_opener(_NoRedirect())
 
     def __repr__(self) -> str:
         return f"UrllibTransport(hosts={sorted(self.allowed_hosts)!r})"
 
     def get(self, url: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
+        return self._request("GET", url, headers, None, timeout)
+
+    def post(self, url: str, headers: Mapping[str, str], body: bytes, timeout: float
+             ) -> tuple[int, bytes]:
+        """POST ``body`` as-is. Same host rules, retries and size cap; never follows a redirect."""
+        return self._request("POST", url, headers, body, timeout)
+
+    def _request(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
+                 timeout: float) -> tuple[int, bytes]:
         check_url(url, self.allowed_hosts)
         wire = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity", **dict(headers)}
         attempt = 0
         while True:
-            status, body, retry_after, failure = self._once(url, wire, timeout)
+            status, resp, retry_after, failure = self._once(url, wire, timeout, method, body)
             if failure is None and status not in RETRY_STATUSES:
-                return status, body
+                return status, resp
             if attempt >= self.retries:
                 if failure is not None:
                     raise TransportError(f"request failed after {attempt + 1} attempts: "
                                          f"{failure}")
-                return status, body
+                return status, resp
             delay = self.backoff * (2 ** attempt)
             if retry_after is not None:
                 if retry_after > self.max_wait:
-                    return status, body           # told to wait longer than we will
+                    return status, resp           # told to wait longer than we will
                 delay = retry_after
             log.info("intel: retry %d for status %s in %.1fs", attempt + 1,
                      status if failure is None else "error", delay)
             self._sleep(min(delay, self.max_wait))
             attempt += 1
 
-    def _once(self, url: str, headers: dict[str, str], timeout: float
-              ) -> tuple[int, bytes, float | None, str | None]:
-        request = urllib.request.Request(url, headers=headers, method="GET")  # noqa: S310
+    def _once(self, url: str, headers: dict[str, str], timeout: float, method: str = "GET",
+              body: bytes | None = None) -> tuple[int, bytes, float | None, str | None]:
+        request = urllib.request.Request(  # noqa: S310
+            url, data=body, headers=headers, method=method)
+        opener = self._opener if method == "GET" else self._post_opener
         try:
-            response = self._opener.open(request, timeout=timeout)
+            response = opener.open(request, timeout=timeout)
         except RedirectRefused:
             raise
         except urllib.error.HTTPError as exc:

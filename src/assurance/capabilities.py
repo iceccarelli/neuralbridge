@@ -363,6 +363,9 @@ CAPABILITIES: tuple[Capability, ...] = (
        "ops status", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
     _c("ops.check", "Preflight the ops config and host; lists what it does not check",
        "ops check", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
+    _c("ops.notify_test", "Show (dry) or, with --live, send one labelled TEST webhook to a "
+       "configured notify target",
+       "ops notify-test", gaps={"api": _d(_OPS), "mcp": _d(_OPS)}),
 
     # --- tenant: export and offboard one customer account (operator tooling) -------------------
     _c("tenant.export", "Export one account's ledger, evidence bundle and attestation log into "

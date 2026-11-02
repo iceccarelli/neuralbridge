@@ -8,6 +8,7 @@ preflight says the configuration is usable, not that the operation is sound.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 from pathlib import Path
@@ -32,6 +33,19 @@ NOT_CHECKED = (
     "The clock of this host, which every timestamp in the cycle record depends on.",
     "The hosted API process itself (this does not call it), and Postgres (not required).",
 )
+
+
+NOTIFY_NOT_CHECKED = (
+    "That the notification receiver exists: no request is made here, so a typo in a URL path or "
+    "a dead webhook looks the same as a good one until `ops notify-test --live`.",
+    "That the receiver authenticates the signature or the extra headers (nothing here knows "
+    "what it does with them), or that it keeps the Idempotency-Key.",
+    "That anyone reads the channel it feeds. A delivered webhook is not acknowledgement by a "
+    "person; only a named human's act is.",
+    "That a secret in an environment variable is the right secret, or how it is stored: only "
+    "that the variable is set in THIS shell (a timer's environment may differ).",
+)
+_TOKENISH = re.compile(r"[A-Za-z0-9_-]{24,}")
 
 
 def _nearest_existing(path: Path) -> Path:
@@ -161,6 +175,44 @@ def run_check(cfg: OpsConfig) -> dict[str, Any]:
         elif data.is_dir():
             add("attest.key_apart_from_data", "ok", "the key file is outside the data directory")
 
+    # -- notify ------------------------------------------------------------------------------
+    if not cfg.notify:
+        add("notify", "info", "no notify target is configured: nobody is told by this tool; "
+            "`ops status` is the only signal")
+    for t in cfg.notify:
+        label = f"notify.{t.name}"
+        add(f"{label}.url", "ok", f"https, host {t.allow_host} equals allow_host exactly")
+        path = t.url.split(t.allow_host, 1)[1]
+        if "?" in path or _TOKENISH.search(path):
+            add(f"{label}.url_secret", "warn", "the URL path or query holds a long token-like "
+                "part: the URL itself may be a bearer secret. Keep the config file private "
+                "(mode 0600); it is never printed or recorded")
+        add(f"{label}.on", "ok", "tells a person when a cycle is " + " or ".join(t.on))
+        env_names = [(t.secret_env, "secret_env")] + (
+            [(t.headers_env, "headers_env")] if t.headers_env else [])
+        for env_name, what in env_names:
+            value = os.environ.get(env_name, "")
+            if not value:
+                add(f"{label}.{what}", "warn", f"${env_name} is not set in this environment: "
+                    "this target would be SKIPPED ('secret_env not set'), not sent")
+            elif what == "secret_env" and len(value.encode("utf-8")) < 16:
+                add(f"{label}.{what}", "warn", f"${env_name} is set but shorter than 16 bytes "
+                    "(the value is not shown)")
+            else:
+                add(f"{label}.{what}", "ok", f"${env_name} is set (value not shown)")
+        if t.headers_env and os.environ.get(t.headers_env):
+            from assurance.ops.notify import parse_header_lines
+
+            try:
+                parse_header_lines(os.environ[t.headers_env])
+            except ValueError as exc:
+                add(f"{label}.headers_env_format", "fail", f"${t.headers_env}: {exc} (expected "
+                    "'Name: value' lines, no reserved names); the value is not shown")
+    if cfg.notify and cfg.path.exists() and os.name == "posix" \
+            and stat.S_IMODE(cfg.path.stat().st_mode) & 0o044:
+        add("notify.config_mode", "warn", "the ops config names webhook URLs (which may be "
+            "bearer secrets) and is readable by group/other")
+
     # -- backup, disk, record ----------------------------------------------------------------
     bdir = cfg.backup_dir
     anc = _nearest_existing(bdir)
@@ -205,6 +257,7 @@ def run_check(cfg: OpsConfig) -> dict[str, Any]:
     add("postgres", "info", "Postgres is not required by the cycle and was not checked")
 
     failed = [c for c in checks if c["status"] == "fail"]
-    return {"ok": not failed, "checks": checks, "not_checked": list(NOT_CHECKED),
+    return {"ok": not failed, "checks": checks,
+            "not_checked": list(NOT_CHECKED) + (list(NOTIFY_NOT_CHECKED) if cfg.notify else []),
             "note": "This inspected configuration and the filesystem only. Nothing was run, "
                     "signed, backed up or changed."}

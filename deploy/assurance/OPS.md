@@ -15,6 +15,7 @@ page covers what *runs unattended* and how to keep it healthy. The pieces:
 | `python -m assurance ops cycle` | one cycle of the non-human steps, recorded as one JSON line | `src/assurance/ops/` |
 | `python -m assurance ops status` | last cycle, its age, the human actions it left | same |
 | `python -m assurance ops check` | preflight of the config and the host | same |
+| `python -m assurance ops notify-test` | dry-run or `--live` TEST webhook to a `notify` target | same |
 | examples | config, cron, systemd service + timer, compose | `deploy/assurance/ops/` |
 
 ## 1. Reproducible install
@@ -147,6 +148,125 @@ reader elsewhere notices.
 value (environment variable *names* only). Copying, reviewing and enabling them is the operator's
 act. The cycle takes an exclusive `flock` on `<record>.lock`; a second cycle exits 2 with
 `cycle already running` and writes nothing.
+
+### Telling a person
+
+Without this, the cycle record is read only if someone runs `ops status`. An optional `notify`
+list in `ops.json` makes the **hosted/operator** cycle POST one small signed JSON message to an
+HTTPS endpoint you name when a cycle is `flagged` or `degraded`. It is **off** unless configured.
+The offline kit never loads it and opens no socket; `ops cycle --dry-run` sends nothing.
+
+```json
+"notify": [{
+  "name": "oncall",
+  "url": "https://hooks.example.invalid/neuralbridge",
+  "allow_host": "hooks.example.invalid",
+  "on": ["flagged", "degraded"],
+  "secret_env": "NB_NOTIFY_HMAC_SECRET",
+  "headers_env": "NB_NOTIFY_HEADERS"
+}]
+```
+
+* `url` must be `https` (no credentials, port 443). `allow_host` is **required** and must equal
+  the URL's host exactly (no wildcard, no sub-domain); the sender refuses any other host and
+  follows **no** redirect on a POST.
+* `secret_env` is the **name** of an environment variable holding the HMAC key; `headers_env`
+  (optional) names one holding extra header lines, one `Name: value` per line, e.g.
+  `Authorization: Bearer ...`. The values are read at send time and never written to the record,
+  the outbox, stdout/stderr or an error message. A name that looks like a pasted key is refused.
+  The URL path of a chat webhook can itself be a bearer token: it is never printed or recorded,
+  so keep `ops.json` mode 0600.
+* `on` defaults to both statuses. A quiet (`ok`) cycle sends nothing.
+* `format` is `"json"` only.
+
+**Payload** (an allow-list built from the record; step `detail`/`info`/`command`, key and backup
+paths, and ledger contents are never copied; finding text is neutralised, path-masked and
+truncated):
+
+```json
+{
+  "schema": "neuralbridge-ops-notify/1",
+  "kind": "cycle",
+  "cycle_id": "example-ops-20261102T031500Z",
+  "ops_id": "example-ops",
+  "started_at": "2026-11-02T03:15:00Z",
+  "finished_at": "2026-11-02T03:17:41Z",
+  "status": "flagged",
+  "steps": [{"name": "watch.run:watch.json", "status": "flagged"},
+            {"name": "ledger.verify", "status": "ok"}],
+  "human_actions": [{"step": "watch.run:watch.json", "ref": "ADV-2026-001",
+                     "action": "read new finding ADV-2026-001 (watch w1); ... Nothing was opened"}],
+  "human_actions_omitted": 0,
+  "record_sha256": "<64 hex>",
+  "not_established": "A webhook delivery is not acknowledgement by a person. ..."
+}
+```
+
+`record_sha256` is the SHA-256 of the cycle record as canonical JSON (sorted keys, compact
+separators) **without** its `notifications` field, which cannot cover its own outcome. The body is
+sent as canonical JSON, so the bytes you verify are the bytes that were signed.
+
+**Headers**: `X-NeuralBridge-Signature: sha256=<hex>` (HMAC-SHA256 of the exact body bytes with
+the secret), `X-NeuralBridge-Delivery: <uuid>` (new per attempt), `Idempotency-Key:
+<cycle_id>:<target name>` (the same for every retry of that message), plus your `headers_env`
+lines.
+
+**Verify in a receiver** (compare in constant time; reject on mismatch; use the raw bytes, not
+re-serialised JSON):
+
+```python
+import hashlib, hmac
+
+def valid(secret: bytes, raw_body: bytes, header: str) -> bool:
+    expected = "sha256=" + hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header)
+```
+
+```sh
+# body.json holds the raw request body; SIG is the X-NeuralBridge-Signature value
+expected="sha256=$(openssl dgst -sha256 -hmac "$SECRET" < body.json | sed 's/^.* //')"
+[ "$expected" = "$SIG" ] && echo valid || echo INVALID
+```
+
+(`-hmac "$SECRET"` puts the secret on a command line, visible to other local users; use it only
+for an ad-hoc check, not in a long-lived script.) Deduplicate on `Idempotency-Key`.
+
+**Delivery semantics.** A 2xx is `delivered`. 429 and 5xx are retried inside one attempt with
+backoff, honouring `Retry-After` up to 30 s (a longer wait is not waited out). A failure is
+appended to `<record>.outbox.jsonl` (append-only, mode 0600; it holds the message body, which is
+the minimal payload above) and **retried at the next cycle with the same body and the same
+`Idempotency-Key`**; after 5 attempts it is marked `abandoned` and shown by `ops status`. This is
+at-least-once: a receiver can see a message twice. A target whose `secret_env` (or `headers_env`)
+is not set is `skipped: secret_env not set`; the other targets are still sent. The cycle record
+gains a `notifications` list (per target: `delivered`/`failed`/`skipped`, HTTP status, attempts,
+delivery id, error *class* only, and whether it was a retry of an earlier cycle). **A failed
+notification never changes the cycle's exit code or hides its result**, and `ops status` lists
+recent failures, owed retries and abandoned messages. A retry of a message from an earlier cycle is
+sent whatever the current cycle's status.
+
+**Check and test.** `ops check` validates the `notify` block (https, host equality, whether each
+environment variable is set in *this* shell, a warning for a token-like URL) and lists what it does
+not check. `python -m assurance ops notify-test --config ops.json --target oncall` prints what a
+test would send (the signature masked as `<hmac of N bytes>`); only with `--live` does it POST a
+clearly labelled `status: "test"` message that contains no record contents. Exit `0` delivered,
+`1` failed, `2` could not run.
+
+**Pointing a vendor at it.** Slack, Teams, PagerDuty, ServiceNow and Jira each offer an inbound
+webhook or an events API with its own JSON shape. **No vendor integration is built or claimed, and
+no format adaptation for any of them exists.** This sends the generic JSON above, so such a tool
+accepts it only if it takes arbitrary JSON (for example a ServiceNow scripted REST endpoint, a Jira
+automation "incoming webhook" rule, or a small relay you operate that checks the signature and
+re-posts in the vendor's shape). Put the endpoint's host in `allow_host`; if it wants a token, put
+`Authorization: ...` in the variable named by `headers_env`. Whether a given vendor endpoint accepts
+the body has not been tested.
+
+**Not established by this.** That the receiver exists, authenticates the signature, or keeps the
+idempotency key (`ops check` makes no request); that a delivered (2xx) webhook was read by anyone,
+let alone acted on: it is not acknowledgement by a person, and awareness, a case and its closure
+remain a named person's decisions; that a webhook that was never retried or was abandoned is
+anything but a gap in who was told; that the host's clock, DNS or egress firewall let it through.
+Customer ledger contents are never sent: only the strings already in the cycle record's
+`human_actions` (advisory ids, machine serials, step names) leave the host.
 
 ## 3. Upgrade
 
@@ -282,6 +402,8 @@ This tooling and this runbook do **not** establish:
 - That a machine is safe, that a case is closed or that anyone decided anything: `ok` means a step's
   own exit code was 0.
 - That the clock of the host is right.
+- That a notification target exists, authenticates or is read by anyone; webhook delivery is not
+  acknowledgement by a person ("Telling a person").
 - That the Python dependencies at install time match any earlier install (no lock exists).
 - Anything about legal or regulatory status. No step here says a machine, a filing or an organisation
   complies with anything.
