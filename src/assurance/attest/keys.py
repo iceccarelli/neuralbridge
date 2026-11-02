@@ -39,9 +39,9 @@ except ImportError as _exc:  # pragma: no cover - environment, not logic
         "kit imports, and it is here because writing a signature scheme by hand "
         "would be the worst decision in this repository. (Installing the project "
         "instead, `pip install -e '.[assurance-attest]'` from the checkout, also "
-        "works but installs all 22 core dependencies of the NeuralBridge "
+        "works but installs all 21 core dependencies of the NeuralBridge "
         "middleware, `neuralbridge-middleware`: the extra adds nothing, because "
-        "`cryptography` is already one of the 22 core dependencies.)"
+        "`cryptography` is already one of the 21 core dependencies.)"
     ) from _exc
 
 from assurance.core.errors import AssuranceError

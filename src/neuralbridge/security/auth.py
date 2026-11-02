@@ -5,7 +5,7 @@ NeuralBridge — Multi-Strategy Authentication Module.
 This module provides a robust, production-quality authentication system supporting
 multiple strategies: OAuth2, API keys, JWT tokens, basic auth, and client
 certificates. It is designed for integration with FastAPI and leverages best-practice
-libraries like Pydantic, python-jose, and passlib.
+libraries like Pydantic, PyJWT, and passlib.
 
 Key Features:
 - OAuth2 Password Bearer Flow: Securely handle user login and token issuance.
@@ -22,18 +22,18 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+import jwt
 import structlog
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
-from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field, ValidationError
 
-from neuralbridge.config import Settings, get_settings
+from neuralbridge.config import Settings, check_hmac_secret, get_settings
 
 # Initialize logger and settings
 logger = structlog.get_logger(__name__)
@@ -172,10 +172,11 @@ class AuthHandler:
         """
         to_encode = data.copy()
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(UTC) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
+        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM)
         encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
         return str(encoded_jwt)
 
@@ -189,11 +190,26 @@ class AuthHandler:
         Returns:
             The decoded token payload if validation is successful, otherwise None.
         """
+        # A misconfigured secret/algorithm is an operator error, not a bad token: raise.
+        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM)
         try:
-            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            # The algorithm comes from configuration, never from the token. Reject any
+            # token whose header names a different one (this also rejects "none")
+            # before a key is touched.
+            header = jwt.get_unverified_header(token)
+            if header.get("alg") != JWT_ALGORITHM:
+                logger.warning("JWT rejected: header algorithm mismatch")
+                return None
+            payload = jwt.decode(
+                token,
+                JWT_SECRET_KEY,
+                algorithms=[JWT_ALGORITHM],
+                options={"require": ["exp", "sub"]},
+            )
             return TokenPayload(**payload)
-        except (JWTError, ValidationError) as e:
-            logger.warn("JWT decoding failed", error=str(e), token=token)
+        except (jwt.PyJWTError, ValidationError) as e:
+            # The token itself is never logged.
+            logger.warning("JWT decoding failed", error=type(e).__name__)
             return None
 
 

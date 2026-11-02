@@ -12,13 +12,68 @@ are first-class citizens so that compliance is never an afterthought.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: The only JWT algorithms this platform will sign or verify with. HMAC only: there is no
+#: asymmetric (RS*/ES*/PS*) signing path, and "none" is never accepted.
+ALLOWED_JWT_ALGORITHMS: frozenset[str] = frozenset({"HS256", "HS384", "HS512"})
+
+_ASYMMETRIC_KEY_MARKERS = ("-----begin", "ssh-rsa", "ssh-ed25519", "ecdsa-sha2")
+
+
+def check_hmac_secret(secret: str, algorithm: str) -> None:
+    """Raise ``ValueError`` unless ``algorithm`` is an allowed HMAC algorithm and
+    ``secret`` does not look like asymmetric key material.
+
+    An HMAC secret that is really a PEM/DER/SSH public key is the algorithm-confusion
+    shape: anyone who knows the (public) key can forge tokens. The message never
+    includes the secret.
+    """
+    if algorithm not in ALLOWED_JWT_ALGORITHMS:
+        raise ValueError(
+            f"jwt_algorithm must be one of {sorted(ALLOWED_JWT_ALGORITHMS)} (HMAC only); "
+            f"got {algorithm!r}"
+        )
+    lowered = secret.lstrip().lower()
+    if any(m in lowered for m in _ASYMMETRIC_KEY_MARKERS):
+        raise ValueError(
+            "jwt_secret_key looks like PEM/SSH asymmetric key material; refusing to use "
+            "it as an HMAC secret"
+        )
+    candidates = [secret.encode("utf-8", "surrogatepass")]
+    try:  # raw DER bytes that were decoded as latin-1 text
+        candidates.append(secret.encode("latin-1"))
+    except UnicodeEncodeError:
+        pass
+    try:
+        candidates.append(base64.b64decode(secret, validate=True))
+    except (binascii.Error, ValueError):
+        pass
+    from cryptography.hazmat.primitives.serialization import (
+        load_der_private_key,
+        load_der_public_key,
+    )
+
+    for raw in candidates:
+        for loader in (load_der_public_key, lambda d: load_der_private_key(d, None)):
+            try:
+                loader(raw)
+                parsed = True
+            except Exception:  # noqa: BLE001 - any parse failure means "not a key"
+                parsed = False
+            if parsed:
+                raise ValueError(
+                    "jwt_secret_key parses as DER asymmetric key material; refusing to use "
+                    "it as an HMAC secret"
+                )
 
 
 class Environment(StrEnum):
@@ -115,6 +170,11 @@ class Settings(BaseSettings):
         if upper not in allowed:
             raise ValueError(f"log_level must be one of {allowed}")
         return upper
+
+    @model_validator(mode="after")
+    def _validate_jwt_hmac_config(self) -> Settings:
+        check_hmac_secret(self.jwt_secret_key, self.jwt_algorithm)
+        return self
 
 
 def get_settings(**overrides: Any) -> Settings:
