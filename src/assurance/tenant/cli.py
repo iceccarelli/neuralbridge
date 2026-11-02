@@ -109,8 +109,13 @@ def _print_verify(r: dict[str, Any]) -> None:
 
 def _print_plan(plan: dict[str, Any]) -> None:
     print(f"PLAN (nothing was removed) for {plan['account_id']}")
-    if plan["already_removed"]:
-        print("  already removed: none of the account's files exist")
+    if plan["state"] == "already_removed":
+        print(f"  already removed: the deletion marker exists (deleted "
+              f"{neutralise(str(plan['removed_at']))} by {neutralise(str(plan['removed_by']))}); "
+              "none of the account's files exist")
+    elif plan["state"] == "no_such_account_data":
+        print("  no such account data on this host: none of its files exist and there is no "
+              "deletion marker (the id was never used here, or it is wrong)")
     for f in plan["would_remove"]:
         print(f"  would remove  {f['path']}  ({f['size']} bytes)")
     _lines("Deliberately NOT removed:", plan["not_removed"])
@@ -134,6 +139,7 @@ def _print_done(r: dict[str, Any]) -> None:
         print(f"  removed  {f['path']}  ({f['size']} bytes)")
     t = r["tombstone"]
     print(f"  tombstone: operator ledger entry {t['seq']} ({t['content_hash'][:16]})")
+    print(f"  marker: {r['marker']} (the API now answers 410 for this account)")
     print(f"  accounts.db: {r['accounts_db']}")
     _lines("Deliberately NOT removed:", r["not_removed"])
     _lines("NOT established:", r["not_established"])

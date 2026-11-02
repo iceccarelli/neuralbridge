@@ -93,17 +93,61 @@ Then:
 * the account's attestation-log lock can be taken, so a running `attest anchor-all` is not raced
   (otherwise exit 2, nothing removed).
 
-It then unlinks exactly: the tenant ledger, its `-wal`/`-shm`/`-journal` if present, the
-attestation log, and the log's `.lock`, each by exact name. No recursive delete and no glob.
-Finally it appends a `tenant.deletion` entry to the operator ledger: account id, time, actor,
-the export manifest's sha256, head hash, record count, ledger id and the names and sizes of the
-removed files. It contains no customer record contents. If the tombstone cannot be appended
-after the files are gone, the command exits 2 and prints what to record by hand.
+The head comparison and the removal happen under the ledger's own writer lock
+(`BEGIN IMMEDIATE`, the lock every API append takes), taken BEFORE the head is read and held
+across every unlink. A record the API appends at the last moment therefore either lands before
+the comparison (the head differs: refused with "export again", nothing removed) or cannot land
+at all. Before the lock is released an `INSERT` trigger is committed to the ledger so that a
+writer that was already waiting for the file fails instead of being told "stored" while writing
+into an unlinked file. If the lock cannot be taken (a writer is busy) the command exits 2 and
+removes nothing.
 
-A second run reports `already removed` (exit 1) and changes nothing.
+It then writes the deletion marker (below) and unlinks exactly: the tenant ledger, its
+`-wal`/`-shm`/`-journal` if present, the attestation log, and the log's `.lock`, each by exact
+name. No recursive delete and no glob. Finally it appends a `tenant.deletion` entry to the
+operator ledger: account id, deletion time and actor (from the real clock and the `--actor`
+of the delete, never from the export), the export manifest's sha256, and the head hash, record
+count and ledger id that `verify-export` compared with the copied ledger (each re-checked for
+type and length), plus the names and sizes of the removed files. Nothing else is copied out of
+the manifest: its `exported_at` and `actor` are unbound text and are not read. The tombstone
+contains no customer record contents. If the tombstone cannot be appended after the files are
+gone, the command exits 2 and prints what to record by hand. If an unlink fails after the
+marker is written the command exits 2 with "THE DELETION IS INCOMPLETE": the API already
+refuses the account; finish by hand and record it.
+
+A second run reports `already removed` (exit 1) and changes nothing. The plan tells the cases
+apart: `already removed` means the deletion marker exists (it shows when and by whom);
+`no such account data on this host` means no file and no marker, i.e. the id never existed
+here or is wrong.
+
+### The deletion marker and what the API does
+
+`--execute` leaves `tenants/<acc>.deleted` (mode 0600; JSON with the account id, time, actor and
+the export manifest's sha256, no customer data) where the ledger was. While it exists:
+
+* every API route that opens the account's ledger answers **410**
+  `{"error": "account_data_deleted", "detail": "this account's ledger was removed by an operator
+  on <date>; contact the operator"}`, decided before any ledger is opened, so the ledger is
+  never silently recreated empty under a new ledger id. The key still authenticates (401/402
+  behave as before for everyone else, and the operator account is unaffected);
+* `attest anchor-all` skips and reports the account (and never creates a ledger or log for it).
+  A ledger file that reappears under a marker is reported as an anomaly (exit 1), not anchored;
+* `tenant export` of the account is refused ("already removed").
+
+There is no command to undelete. An operator lifts the marker only by deleting the file by hand
+(for example after restoring the ledger from a backup); the next request opens whatever is at
+the ledger path. A symlink or unreadable marker also counts as present.
+
+The marker does not close the account: `accounts.db`, the API key, billing and Stripe are still
+operator steps (close the subscription, revoke the keys) done outside this tool.
 
 A ledger whose chain is broken can be offboarded only from an export taken with
 `--accept-damaged` and with `--accept-damaged` repeated on `delete`.
+
+The export directory is opened once without following links (`O_DIRECTORY|O_NOFOLLOW`) and
+every file is created relative to that open directory, so swapping the path for a symlink
+afterwards cannot redirect the export. (Where `/proc/self/fd` does not exist the export only
+verifies at the end that the path is still the directory it opened.)
 
 ### Not removed
 

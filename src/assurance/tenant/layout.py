@@ -8,6 +8,7 @@ globs, lists a directory or follows a symbolic link.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -18,11 +19,16 @@ from assurance.attest.anchor_all import layout as _data_layout
 from assurance.core.errors import AssuranceError
 
 __all__ = ["AccountFiles", "TenantError", "account_files", "check_account_id", "plain_file",
-           "sha256_file", "OPERATOR_LEDGER_NAME"]
+           "sha256_file", "OPERATOR_LEDGER_NAME", "MARKER_SUFFIX", "MARKER_SCHEMA",
+           "read_marker"]
 
 OPERATOR_LEDGER_NAME = "art14-register.db"
 _ACCOUNT_ID = re.compile(r"acc_[0-9a-f]{16}")
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
+#: ``tenants/<acc>.deleted``: written by ``tenant delete --execute``; the API answers 410 for
+#: the account while it exists, and only deleting the file by hand lifts it.
+MARKER_SUFFIX = ".deleted"
+MARKER_SCHEMA = "neuralbridge-tenant-deleted/1"
 
 
 class TenantError(AssuranceError):
@@ -54,6 +60,23 @@ def plain_file(path: Path) -> bool:
     return True
 
 
+def read_marker(path: Path) -> dict[str, object] | None:
+    """The marker's fields, ``{}`` if it exists but cannot be read, ``None`` if absent.
+
+    A marker that is a symlink or unreadable still counts as present (fail closed).
+    """
+    if not os.path.lexists(path):
+        return None
+    try:
+        info = os.lstat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 8192:
+            return {}
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
 def sha256_file(path: Path) -> tuple[str, int]:
     digest, size = hashlib.sha256(), 0
     with path.open("rb") as handle:
@@ -75,6 +98,9 @@ class AccountFiles:
     log_exists: bool
     log_lock: Path
     log_lock_exists: bool
+    #: ``tenants/<acc>.deleted`` (present at all, even as a link or unreadable)
+    marker: Path
+    marker_exists: bool
 
     def planned(self) -> list[Path]:
         """Exactly the files a deletion would remove, in removal order. Only existing ones.
@@ -100,9 +126,11 @@ def account_files(data_dir: str | Path, account_id: str) -> AccountFiles:
         raise TenantError(str(exc), exit_code=2) from exc
     ledger = tenants / f"{account_id}.db"
     sidecars = tuple(p for s in _SQLITE_SIDECARS if plain_file(p := Path(f"{ledger}{s}")))
+    marker = tenants / f"{account_id}{MARKER_SUFFIX}"
     log = logs / f"{account_id}.jsonl"
     lock = Path(f"{log}.lock")
     return AccountFiles(
         account_id=account_id, data_dir=Path(data_dir), ledger=ledger,
         ledger_exists=plain_file(ledger), sidecars=sidecars, log=log,
-        log_exists=plain_file(log), log_lock=lock, log_lock_exists=plain_file(lock))
+        log_exists=plain_file(log), log_lock=lock, log_lock_exists=plain_file(lock),
+        marker=marker, marker_exists=os.path.lexists(marker))
