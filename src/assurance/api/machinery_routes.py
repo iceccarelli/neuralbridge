@@ -25,7 +25,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.declared_actor import sanitise_declared_role
+from assurance.api.declared_actor import require_declared_name, sanitise_declared_role
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
@@ -169,7 +169,7 @@ def _declared_actor(body: ManifestIn | InterventionIn) -> Actor | None:
     """
     if not body.actor:
         return None
-    return Actor(identifier=body.actor,
+    return Actor(identifier=require_declared_name(body.actor),
                  role=sanitise_declared_role(body.role, default=""), kind="person")
 
 
@@ -505,7 +505,7 @@ def passport(
     manifest = _manifest(body.manifest)
     built = build_passport(
         register.ledger, manifest,
-        actor=Actor(identifier=body.actor,
+        actor=Actor(identifier=require_declared_name(body.actor),
                     role=sanitise_declared_role(body.role), kind="person"),
         seal=body.seal,
         recorder_trust=reader_recorder_trust(),

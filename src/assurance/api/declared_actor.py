@@ -23,7 +23,11 @@ from __future__ import annotations
 
 import unicodedata
 
-__all__ = ["DEFAULT_ROLE", "MAX_DECLARED_ROLE", "sanitise_declared_role"]
+from fastapi import HTTPException
+
+from assurance.core.actor_names import actor_grammar_problem
+
+__all__ = ["DEFAULT_ROLE", "MAX_DECLARED_ROLE", "require_declared_name", "sanitise_declared_role"]
 
 DEFAULT_ROLE = "verification engineer"
 MAX_DECLARED_ROLE = 80
@@ -43,3 +47,20 @@ def sanitise_declared_role(role: str, *, default: str = DEFAULT_ROLE) -> str:
     text = text.replace(";", " ").replace("=", " ")
     text = " ".join(text.split())[:MAX_DECLARED_ROLE].strip()
     return text or default
+
+
+def require_declared_name(name: str) -> str:
+    """The caller-typed actor name, or a 422 if it could imitate the server's grammar.
+
+    Roles are reduced (above); a *name* is refused instead, because it is sealed as the
+    actor's identifier and also read back as "who": ``=``, ``;``, parentheses, invisible
+    characters, stray whitespace and over-long names are told to the caller and nothing is
+    recorded (``assurance.core.actor_names`` has the rules, shared with the CLI and the
+    domain functions). Returns the name unchanged.
+    """
+    problem = actor_grammar_problem(name)
+    if problem:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid_actor",
+            "detail": f"the actor name cannot be recorded: {problem}. Nothing was recorded."})
+    return name

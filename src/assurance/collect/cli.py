@@ -23,8 +23,8 @@ from pathlib import Path
 from assurance.collect.collector import collect
 from assurance.collect.plan import CollectionPlan
 from assurance.collect.volatility import probe
+from assurance.core.actor_names import checked_person
 from assurance.core.errors import AssuranceError
-from assurance.core.evidence import Actor
 from assurance.core.identity import parse_utc
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.manifest import HashSource, ManifestSource
@@ -151,7 +151,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "as-declared baseline is built from a release, not read off a machine.")
     result = collect(
         plan, args.root, serial=args.serial,
-        taken_by=Actor(identifier=args.actor, role=args.role, kind="person"),
+        taken_by=checked_person(args.actor, args.role),
         site=args.site, country=args.country, year=args.year,
         manifest_id=args.manifest_id,
         source=ManifestSource.AS_DECLARED if args.as_declared

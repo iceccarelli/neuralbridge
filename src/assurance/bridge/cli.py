@@ -22,6 +22,7 @@ from pathlib import Path
 
 from assurance.bridge.art14 import BridgeError, draft_from_advisory, open_case
 from assurance.change.service import named_person_problem
+from assurance.core.actor_names import actor_grammar_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.text import neutralise
@@ -103,6 +104,10 @@ def _cmd_art14(args: argparse.Namespace) -> int:
         if advisory.import_record is not None:
             role += "; unsigned import accepted: " + " ".join(
                 neutralise(args.reason).split())[:200]
+        problem = actor_grammar_problem(who)
+        if problem:
+            raise BridgeError(f"the actor {who[:60]!r} cannot be recorded: {problem}. "
+                              "Nothing was recorded.")
         actor = Actor(identifier=who, role=role, kind="person")
         case_id, sealed = open_case(register, draft, actor)
         opened = f"{case_id}: {len(sealed)} record(s) sealed"
