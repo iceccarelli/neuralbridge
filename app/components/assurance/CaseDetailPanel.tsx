@@ -344,7 +344,7 @@ export default function CaseDetailPanel({
             </div>
 
             <h4>History — what happened, when, and who</h4>
-            <div className="aw-scroll">
+            <div className="aw-scroll" tabIndex={0} role="region" aria-label="Case history table, scrolls sideways">
               <table className="aw-table" data-testid="case-history" data-who={whoState}>
                 <thead>
                   <tr>
@@ -510,7 +510,7 @@ export default function CaseDetailPanel({
                     <h4>Answer a human question</h4>
                     <label>
                       Question
-                      <select value={question || c.human_decisions_required[0]} onChange={(e) => setQuestion(e.target.value)}>
+                      <select title={question || c.human_decisions_required[0]} value={question || c.human_decisions_required[0]} onChange={(e) => setQuestion(e.target.value)}>
                         {c.human_decisions_required.map((q) => (
                           <option key={q} value={q}>
                             {q}
@@ -552,7 +552,7 @@ export default function CaseDetailPanel({
                     </p>
                     <label>
                       Re-verification entry
-                      <select value={entry || c.required_reverifications[0]} onChange={(e) => setEntry(e.target.value)}>
+                      <select title={entry || c.required_reverifications[0]} value={entry || c.required_reverifications[0]} onChange={(e) => setEntry(e.target.value)}>
                         {c.required_reverifications.map((q) => (
                           <option key={q} value={q}>
                             {q}

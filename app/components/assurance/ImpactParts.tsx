@@ -96,7 +96,7 @@ export function ClassificationTable({ report }: { report: ImpactReport }) {
       {rows.length === 0 ? (
         <p className="aw-note">No machine was classified: no machine is enrolled in this ledger.</p>
       ) : (
-        <div className="aw-scroll">
+        <div className="aw-scroll" tabIndex={0} role="region" aria-label="Per-machine classification table, scrolls sideways">
           <table className="aw-table" data-testid="classification-table">
             <thead>
               <tr>

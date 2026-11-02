@@ -129,25 +129,27 @@ export default function EnrolReceiptView({ receipt }: { receipt: EnrolReceipt })
 
       <h3>Coverage of each safety function</h3>
       {coverage.length > 0 ? (
-        <table className="aw-table" data-testid="enrol-coverage">
-          <thead>
-            <tr>
-              <th scope="col">Function</th>
-              <th scope="col">Coverage (as the server reads it back from your ledger)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {coverage.map(([fn, cov]) => (
-              <tr key={fn} data-coverage={cov}>
-                <th scope="row">{fn}</th>
-                <td>
-                  <code>{cov}</code>
-                  {cov === 'never_verified' && ' — no verification has been recorded for this function'}
-                </td>
+        <div className="aw-scroll" tabIndex={0} role="region" aria-label="Coverage of each safety function table, scrolls sideways">
+          <table className="aw-table" data-testid="enrol-coverage">
+            <thead>
+              <tr>
+                <th scope="col">Function</th>
+                <th scope="col">Coverage (as the server reads it back from your ledger)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {coverage.map(([fn, cov]) => (
+                <tr key={fn} data-coverage={cov}>
+                  <th scope="row">{fn}</th>
+                  <td>
+                    <code>{cov}</code>
+                    {cov === 'never_verified' && ' — no verification has been recorded for this function'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <p className="aw-note" data-testid="enrol-coverage">No coverage was returned with this receipt.</p>
       )}
