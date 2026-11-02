@@ -709,3 +709,17 @@ class TestBuiltPages:
         for slug in SLUGS:
             raw = (built / "server" / "app" / "product" / f"{slug}.html").read_text(encoding="utf-8")
             assert "github.com/iceccarelli" not in raw
+
+
+def test_llms_txt_lists_every_product_page():
+    """The machine-readable index must not lag the pages (public/llms.txt is generated from
+    scripts/site_static/llms.txt.tmpl by scripts/export_site_static.py)."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    slugs = re.findall(r"slug: '([a-z0-9-]+)'", (root / "app/lib/productPages.ts").read_text("utf-8"))
+    assert len(slugs) == 11, slugs
+    llms = (root / "public/llms.txt").read_text("utf-8")
+    missing = [s for s in slugs if f"https://neuralbridge.io/product/{s}" not in llms]
+    assert missing == [], f"public/llms.txt does not list: {missing} (run scripts/export_site_static.py)"
