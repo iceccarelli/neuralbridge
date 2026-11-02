@@ -500,3 +500,99 @@ This tooling and this runbook do **not** establish:
 - Anything about legal or regulatory status. No step here says a machine, a filing or an organisation
   complies with anything.
 - Postgres, the `/ai` control plane and the website are outside this runbook.
+
+## 8. What we measured
+
+One run of `scripts/bench_scale.py` on one machine, before and after three fixes (below). These are
+measurements of this code on this host, not a capacity statement.
+
+**Machine.** 2026-11-02; 4 vCPU Intel Xeon @ 2.10 GHz, 16 GB RAM, Python 3.13.18, Linux 6.18 in a
+VM; disk type not probed. The host was shared with other jobs: the 1-minute load average was
+3 to 12 during the baseline and 5 to 9 during the "after" run, so absolute seconds are noisy (the
+same append loop ran at 3.5 and 6.3 ms per append in two runs of unchanged code). Read the shape
+(the exponent) before the seconds. Data is synthetic: each machine is one manifest plus one
+enrolment record (2 ledger entries, about 4.4 KB each on disk), two items, one declared safety
+function, no verifications and no open cases.
+
+**Fleet size N (machines), seconds, before -> after.** "Before" is commit `c505cc6` unmodified.
+
+| operation | N=100 | N=500 | N=2000 | slope before -> after |
+|---|---|---|---|---|
+| `machinery import-inventory` (CLI) | 3.3 -> 1.4 | 44.9 -> 9.1 | 577.7 -> 26.5 | 1.72 -> 0.98 |
+| `POST /v1/machinery/enrol/batch`, 200 rows per request | 2.6 -> 1.4 | 36.4 -> 8.0 | 493.5 -> 35.2 | 1.74 -> 1.08 |
+| `fleet list` (CLI) | 0.43 -> 0.28 | 4.0 -> 1.6 | 22.4 -> 5.3 | 1.32 -> 0.99 |
+| `GET /v1/fleet/machines` | 0.58 -> 0.39 | 3.2 -> 1.5 | 18.2 -> 5.2 | 1.15 -> 0.86 |
+| `report build` (CLI) | 0.49 -> 0.31 | 2.9 -> 1.6 | 18.4 -> 5.7 | 1.21 -> 0.98 |
+| `GET /v1/fleet/report` | 0.85 -> 0.32 | 3.7 -> 1.3 | 20.7 -> 5.1 | 1.06 -> 0.92 |
+| `machinery coverage` (one machine) | 0.02 | 0.12 | 0.43 | 1.01 -> 0.96 |
+| `change list` (CLI / API, no cases) | 0.04 / 0.01 | 0.06 / 0.08 | 0.19 / 0.27 | 0.6 / 0.4 -> 0.5 / 1.0 |
+| `watch run --dry-run`, N targets | 0.49 | 2.0 | 7.0 | 0.81 -> 0.89 |
+| `ops cycle` (backup, verify, anchor-all) | 0.27 | 0.81 | 2.98 | 0.73 -> 0.80 |
+
+The slope is the log-log fit of time against N over the three sizes (1.0 is linear, 2.0 is
+quadratic). It includes process start-up and per-call fixed cost, so it understates growth at
+small N. Peak resident memory of the largest read cases was 129 MB at N=2000 (17.5 MB database).
+
+**Ledger size (entries), seconds.** Linear in every case (slopes 0.9 to 1.05); unchanged by the fixes.
+
+| operation | 1,000 | 10,000 | 50,000 |
+|---|---|---|---|
+| append, one writer, whole loop | 3.5 to 6.3 | 50 to 80 | 184 to 231 |
+| `verify_chain` | 0.06 | 0.65 | 2.3 |
+| `export` | 0.08 | 0.78 | 3.2 |
+| `verify_report` | 0.08 | 0.65 | 2.5 |
+| enrol one machine (it verifies the chain first) | 0.06 | 0.54 | 2.4 |
+
+Tenant export of a 10,000-entry ledger: 2.2 s, 22 MB written, 117 MB peak. The whole
+50,000-entry case (build, verify, export, read everything) peaked at 408 MB; the export bundle is
+built in memory. Intel store with 3,000 observations
+(750 repeats of the four repo fixtures): ingest 21 s in total, `intel history` 0.28 s,
+`intel candidates` 0.01 s; the repeats are the same bodies, so the candidate set did not grow and
+that figure does not show how candidates scale with distinct advisories.
+
+**Write throughput is bounded by one SQLite file with one writer.** Every append is its own
+transaction with `synchronous=FULL` (an fsync), and a tenant ledger has exactly one writer. On
+this host that was **125 to 290 appends per second** (3.5 to 8 ms each; it varied with host load,
+not with ledger size). A machine enrolment is two appends, so one tenant's enrolment ceiling here
+is about 60 to 145 machines per second before any other work; the measured 2,000-machine import
+(4,001 entries) took 26.5 s, about 150 entries per second. Two tenants write to two files and do
+not share this bound; one tenant's concurrent writers queue on its file. Raising it would mean
+weakening the commit guarantee or batching commits, and neither was done.
+
+**What changed.** 1) The batch importer verified the whole chain before every row (O(rows x
+entries)); it now walks the chain in full once before the first row, checks the head it holds
+plus everything appended since before each row, and walks in full again after the batch record
+(`BatchChain` in `machinery/enrol.py`). A broken chain is still refused up front with nothing
+written; an old record edited mid-batch is found by the closing walk, not by each row, and the
+import then fails with `ledger_chain_unverified` (409 on the API) although earlier rows were
+written. `enrol_machine` without a `BatchChain`
+(`machinery enrol`, `POST /v1/machinery/enrol`) still walks the whole chain per call.
+2) `subject = ? AND kind = ?` queries were answered from the kind index and scanned every row of
+that kind (one scan per machine: fleet reads, enrolment, the compare-and-swap in `append`); they
+now use the subject index (`+kind`, no schema change, no migration, same rows in the same order).
+3) Nothing else was changed: the 60 s `ASSURANCE_CHAIN_RECHECK_SECONDS` window and the full
+verification before `READY_TO_CLOSE` are as before, and no hash or serialisation format moved.
+
+**Still linear by design.** Any read that must vouch for the chain walks it (about 55 microseconds
+per entry, so 0.2 s for a 2,000-machine fleet), and a fleet read costs about 2.5 ms per machine in
+separate ledger reads. These grow in proportion to the fleet, not faster.
+
+**What this does NOT establish.**
+
+- Not a capacity or latency guarantee, and not a statement about any other hardware, disk, Python
+  or load. One host, one run per size, a shared and noisy machine, disk type unknown.
+- Synthetic data only: machines with two items and no verifications, no open change cases, no
+  amendments, one site-per-20 pattern. A real fleet with many verifications per machine, large
+  manifests or many cases will cost more per machine; none was measured.
+- No concurrency test: one reader or writer at a time. Two writers on one ledger, many tenants at
+  once, lock contention and the hosted process model were not measured.
+- No network: the API cases use an in-process ASGI client. Latency over a network, TLS, a proxy or
+  the hosted volume was not measured.
+- Nothing about sizes above 2,000 machines or 50,000 entries, or about Postgres-backed parts.
+- The "before" figures come from two runs on a busier host; the speed-ups quoted are the order of
+  magnitude, not a precise ratio.
+
+To repeat: `PYTHONPATH=src python scripts/bench_scale.py --out result.json` (about 20 minutes;
+`--sizes`, `--ledger-sizes` and `--only` narrow it). `tests/test_scale_smoke.py` and
+`tests/test_assurance_batch_chain.py` guard against a return to quadratic behaviour; they are not
+performance claims.
