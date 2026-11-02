@@ -61,7 +61,9 @@ results change daily and must be re-run before relying on them):
 
 What changed: `python-jose[cryptography]` was removed from `requirements/base.txt` and
 `pyproject.toml`; `src/neuralbridge/security/auth.py` now uses PyJWT, which was already a declared
-dependency (floor raised from `>=2.8.0` to `>=2.10.1`; the locks pin 2.15.1). `prod.lock` and
+dependency (floor raised from `>=2.8.0` to `>=2.15.0`; the locks pin 2.15.1). The floor is 2.15.0
+because the OSV database (queried 2026-11-02) lists PyJWT advisories fixed as late as 2.15.0; 2.15.0 and
+2.15.1 had no known vulnerabilities in that query, while 2.10.1 had 32. `prod.lock` and
 `test.lock` were regenerated with `scripts/lock.sh`; the only differences are the removal of
 `python-jose`, `ecdsa`, `rsa`, `pyasn1` and `six` (nothing else in the locked set required them),
 and `scripts/lock.sh --check` reports no drift. pip-audit listed no fixed version of either
