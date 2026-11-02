@@ -220,7 +220,7 @@ export default function FleetPanel({
               nothing wrong.
             </p>
           ) : (
-            <div className="aw-scroll">
+            <div className="aw-scroll" tabIndex={0} role="region" aria-label="Fleet table, scrolls sideways">
               <table className="aw-table" data-testid="fleet-table">
                 <thead>
                   <tr>
@@ -294,7 +294,7 @@ export default function FleetPanel({
                     These machines appear only in Watch reports, as attempts that did not produce a manifest here (for
                     example a machine that could not be collected on its first run).
                   </p>
-                  <div className="aw-scroll">
+                  <div className="aw-scroll" tabIndex={0} role="region" aria-label="Watch-only machines table, scrolls sideways">
                     <table className="aw-table" data-testid="obs-extra-table">
                       <thead>
                         <tr>

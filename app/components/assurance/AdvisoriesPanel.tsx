@@ -154,7 +154,7 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
         Counts are per machine and item. Assessed {report.assessed_at}.
       </p>
       {report.exposures.length > 0 && (
-        <div className="aw-scroll">
+        <div className="aw-scroll" tabIndex={0} role="region" aria-label="Exposure table, scrolls sideways">
           <table className="aw-table" data-testid="exposure-table">
             <thead>
               <tr>
@@ -401,7 +401,7 @@ export default function AdvisoriesPanel({
       {parsedOk && (
         <>
           <Provenance parsed={parsedOk} source={source} />
-          <div className="aw-scroll">
+          <div className="aw-scroll" tabIndex={0} role="region" aria-label="Advisory records table, scrolls sideways">
             <table className="aw-table" data-testid="adv-records">
               <thead>
                 <tr>

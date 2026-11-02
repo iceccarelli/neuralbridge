@@ -3021,7 +3021,7 @@ table.status-table tbody tr:last-child td {
 /* /assurance workspace — tokens only, no new hues. */
 .aw section { margin-top: 2rem; }
 .aw h2 { margin: 0 0 0.5rem; }
-.aw-scroll { overflow-x: auto; }
+.aw-scroll { overflow-x: auto; max-width: 100%; }
 .aw-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .aw-table th, .aw-table td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .aw-table th { color: var(--ink-soft); font-weight: 600; }
@@ -3030,7 +3030,10 @@ table.status-table tbody tr:last-child td {
 .aw-link { background: none; border: 0; padding: 0; color: var(--link); text-decoration: underline; cursor: pointer; font: inherit; }
 .aw-note { color: var(--ink-soft); font-size: 0.85rem; max-width: 72ch; }
 .aw-detail { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1.25rem; }
-.aw-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1.5rem; }
+.aw-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr)); gap: 1.5rem; }
+.aw-cols > *, .aw-detail { min-width: 0; }
+/* A <select> is as wide as its longest option unless capped; case questions are long sentences. */
+.aw-actions select, .aw-detail details select, .aw-field select { display: block; width: 100%; max-width: 32rem; }
 .aw-actions label, .aw-detail details label { display: block; margin: 0.5rem 0; }
 .aw-actions input, .aw-actions textarea, .aw-detail details input, .aw-detail details textarea { display: block; width: 100%; max-width: 32rem; }
 .aw-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }

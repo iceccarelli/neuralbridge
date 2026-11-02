@@ -33,7 +33,7 @@ export default function CasesPanel({
               No cases. A case opens when Watch or an assessment finds a change or advisory.
             </p>
           ) : (
-            <div className="aw-scroll">
+            <div className="aw-scroll" tabIndex={0} role="region" aria-label="Cases table, scrolls sideways">
               <table className="aw-table" data-testid="case-table">
                 <thead>
                   <tr>

@@ -187,28 +187,30 @@ export default function IntelReportView({ report }: { report: IntelCve }) {
         {src.observations.length === 0 ? (
           <p className="aw-note">No accepted observation exists in the store.</p>
         ) : (
-          <table className="aw-table">
-            <thead>
-              <tr>
-                <th scope="col">Observation</th>
-                <th scope="col">Source</th>
-                <th scope="col">Retrieved</th>
-                <th scope="col">sha256</th>
-              </tr>
-            </thead>
-            <tbody>
-              {src.observations.map((o) => (
-                <tr key={o.seq} data-testid="intel-observation">
-                  <td>#{o.seq}</td>
-                  <td>{o.source}</td>
-                  <td>{o.retrieved_at}</td>
-                  <td>
-                    <code>{o.sha256}</code>
-                  </td>
+          <div className="aw-scroll" tabIndex={0} role="region" aria-label="Sources consulted table, scrolls sideways">
+            <table className="aw-table">
+              <thead>
+                <tr>
+                  <th scope="col">Observation</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Retrieved</th>
+                  <th scope="col">sha256</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {src.observations.map((o) => (
+                  <tr key={o.seq} data-testid="intel-observation">
+                    <td>#{o.seq}</td>
+                    <td>{o.source}</td>
+                    <td>{o.retrieved_at}</td>
+                    <td>
+                      <code>{o.sha256}</code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {src.sources_without_an_accepted_observation.length > 0 && (
           <p data-testid="intel-missing-sources">

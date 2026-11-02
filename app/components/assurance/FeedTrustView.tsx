@@ -53,7 +53,7 @@ export function FeedStates({ t }: { t: FeedTrust }) {
   const conflicts = t.conflicting_advisories;
   return (
     <div data-testid="feed-trust">
-      <div className="aw-scroll">
+      <div className="aw-scroll" tabIndex={0} role="region" aria-label="Feed states table, scrolls sideways">
         <table className="aw-table" data-testid="feed-states">
           <thead>
             <tr>
@@ -137,7 +137,7 @@ export function FeedStates({ t }: { t: FeedTrust }) {
       {t.records.length > 0 && (
         <details>
           <summary>Per record: signature and key state</summary>
-          <div className="aw-scroll">
+          <div className="aw-scroll" tabIndex={0} role="region" aria-label="Per-record trust table, scrolls sideways">
             <table className="aw-table" data-testid="record-trust-table">
               <thead>
                 <tr>
