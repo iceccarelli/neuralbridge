@@ -6,7 +6,9 @@ import type { CaseQueue, Fleet, Me, Observations } from '../lib/assuranceApi';
 import AdvisoriesPanel from './assurance/AdvisoriesPanel';
 import CaseDetailPanel from './assurance/CaseDetailPanel';
 import CasesPanel from './assurance/CasesPanel';
+import EnrolPanel from './assurance/EnrolPanel';
 import FleetPanel from './assurance/FleetPanel';
+import IntelPanel from './assurance/IntelPanel';
 import InterventionPanel from './assurance/InterventionPanel';
 import { Refusal } from './assurance/PanelFrame';
 import PlanPanel from './assurance/PlanPanel';
@@ -101,6 +103,16 @@ export default function AssuranceWorkspace() {
           void queue.reload();
         }}
       />
+      <EnrolPanel
+        apiKey={key}
+        actor={actor}
+        setActor={setActor}
+        onChanged={() => {
+          void fleet.reload();
+          void obs.reload();
+        }}
+      />
+      <IntelPanel apiKey={key} />
       <PlanPanel apiKey={key} me={me} />
     </div>
   );
