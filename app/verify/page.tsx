@@ -1,19 +1,14 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import EvidenceVerifier from '../components/EvidenceVerifier';
 import { repoLink } from '../lib/links';
 
-export const metadata: Metadata = {
-  title: 'Check an evidence file | Industrial Autonomous Assurance',
+export const metadata: Metadata = buildMetadata({
+  title: 'Check an evidence file',
   description:
-    'Drop in a ledger export, a machine verification bundle or a signed head attestation log and see exactly which facts a check established, what is taken on trust and what was not checked. Free, no account, nothing stored.',
-  alternates: { canonical: '/verify' },
-  openGraph: {
-    title: 'Check an evidence file | Industrial Autonomous Assurance',
-    description: 'Free, no account, stores nothing: what can and cannot be established from an evidence file you were handed.',
-    url: '/verify',
-    type: 'website',
-  },
-};
+    'Drop in a ledger export, machine verification bundle or signed head attestation log and see which facts a check established. Free, no account, nothing stored.',
+  path: '/verify',
+});
 
 export default function VerifyPage() {
   return (
@@ -115,14 +110,14 @@ export default function VerifyPage() {
             </p>
           </div>
           <p className="code-panel-label">{repoLink() ? 'From a checkout of the source' : 'From a copy of the source'}</p>
-          <pre className="code-panel">{`${repoLink() ? `git clone ${repoLink()}.git && cd neuralbridge` : 'cd neuralbridge   # your copy of the source'}
+          <pre className="code-panel" tabIndex={0}>{`${repoLink() ? `git clone ${repoLink()}.git && cd neuralbridge` : 'cd neuralbridge   # your copy of the source'}
 pip install cryptography && export PYTHONPATH=src
 python -m assurance evidence verify export.json                 # ledger export: completeness NOT checked
 python -m assurance evidence verify export.json --public-key issuer.pub   # ...checked against its signed head (exit 0 only if anchored)
 python -m assurance machine check bundle.json                   # machine bundle
 python -m assurance machine check bundle.json --recorder-trust recorder-trust.json   # ...re-assess its recorder attestation under YOUR keys
 python -m assurance attest verify --log attestations.jsonl --public-key issuer.pub`}</pre>
-          <p className="hero-panel-note" style={{ maxWidth: '72ch' }}>
+          <p className="hero-panel-note panel-note-light" style={{ maxWidth: '72ch' }}>
             Where the file comes from: a Register or Cell account downloads a case export from the{' '}
             <a href="/assurance">workspace</a> (<code>GET /v1/cases/&#123;id&#125;/export</code>). The same free check
             is <code>POST /v1/evidence/verify</code>, listed on <a href="/developers">/developers</a>: send the file

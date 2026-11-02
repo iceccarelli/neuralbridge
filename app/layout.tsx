@@ -1,20 +1,21 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import Header from './Header';
 import CookieConsent from './components/CookieConsent';
 import CookiePreferencesLink from './components/CookiePreferencesLink';
 import RepoLink from './components/RepoLink';
-import { DOCS, ownerLink, repoLink, repoSameAs } from './lib/links';
+import { DOCS, ownerLink, repoLink } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
+import { BRAND, SITE_URL, jsonLdString, siteGraph } from './lib/seo';
 import './globals.css';
 
-const SITE_URL = 'https://neuralbridge.io';
-
+// Only site-wide defaults live here. The title, description, canonical and social tags are per page
+// (buildMetadata in app/lib/seo.ts): anything set here would be inherited by a page that sets none,
+// and a canonical or og:url of "/" on the 404 page would be wrong.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: 'Industrial Autonomous Assurance | CRA Article 14 & Machinery Regulation evidence',
-  description:
-    'Evidence infrastructure for machines whose software can hurt someone. A hash-chained record of what is on each machine, which checks were run against it, and when — built for CRA Article 14 (Reg. 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. 2023/1230). Free Validator tier, paid Register and Cell plans.',
+  title: BRAND,
+  applicationName: BRAND,
   keywords: [
     'CRA Article 14',
     'Cyber Resilience Act evidence',
@@ -29,46 +30,26 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: 'Vincenzo Grimaldi', ...(ownerLink() ? { url: ownerLink() as string } : {}) }],
   creator: 'Vincenzo Grimaldi',
-  publisher: 'Industrial Autonomous Assurance',
-  alternates: { canonical: '/', languages: { 'x-default': '/' } },
-  openGraph: {
-    title: 'Industrial Autonomous Assurance',
-    description: 'A hash-chained record of what is on each machine, which checks were run against it, and when. Evidence for CRA Art. 14 and Machinery Regulation Annex III 1.1.9 processes, kept in a record instead of a spreadsheet.',
-    url: `${SITE_URL}/`,
-    siteName: 'Industrial Autonomous Assurance',
-    locale: 'en_GB',
-    type: 'website',
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'Industrial Autonomous Assurance',
-    description: 'Evidence infrastructure for machines whose software can hurt someone. Re-checking someone else’s evidence is free.',
-  },
+  publisher: BRAND,
 };
 
-const organizationData = {
-  '@context': 'https://schema.org',
-  '@type': 'Organization',
-  name: 'Industrial Autonomous Assurance',
-  url: `${SITE_URL}/`,
-  founder: {
-    '@type': 'Person',
-    name: 'Vincenzo Grimaldi',
-    ...(ownerLink() ? { url: ownerLink() } : {}),
-  },
-  ...(repoSameAs().length ? { sameAs: repoSameAs() } : {}),
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: '#0f1b2d',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
+        <a className="skip-link" href="#top">Skip to main content</a>
         <div className="site-chrome">
           <Header />
 
           {children}
 
-          <section className="footer-cta">
+          <section className="footer-cta" aria-label="Start free">
             <div className="shell footer-cta-inner">
               <span>Re-check a Declaration, evidence bundle or passport for free — no account.</span>
               <a className="btn btn-primary" href="/#pricing">Start free</a>
@@ -78,7 +59,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <footer className="site-footer">
             <div className="shell footer-columns">
               <div>
-                <h4>Industrial Autonomous Assurance</h4>
+                <h2>Industrial Autonomous Assurance</h2>
                 <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
                   Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
                   else&apos;s evidence needs no account. The file verifier allows 20 a day per address and manifest
@@ -87,7 +68,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Products</h4>
+                <h2>Products</h2>
                 <ul>
                   <li><a href="/#products">Validator (free)</a></li>
                   <li><a href="/#pricing">Register — &euro;390/mo</a></li>
@@ -104,7 +85,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Solutions</h4>
+                <h2>Solutions</h2>
                 <ul>
                   {SOLUTIONS.map((s) => (
                     <li key={s.slug}><a href={`/solutions/${s.slug}`}>{s.role}</a></li>
@@ -113,7 +94,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Regulation &amp; evidence</h4>
+                <h2>Regulation &amp; evidence</h2>
                 <ul>
                   <li><a href="/docs">CRA Article 14</a></li>
                   <li><a href="/docs/assurance/machinery">Machinery Reg. Annex III 1.1.9</a></li>
@@ -123,7 +104,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Developers</h4>
+                <h2>Developers</h2>
                 <ul>
                   <li><a href={DOCS}>Documentation</a></li>
                   <li><a href="/developers">API reference</a></li>
@@ -141,7 +122,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h4>Legal</h4>
+                <h2>Legal</h2>
                 <ul>
                   <li><a href="/privacy">Privacy</a></li>
                   <li><CookiePreferencesLink className="footer-link-button" /></li>
@@ -162,7 +143,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationData) }}
+          dangerouslySetInnerHTML={{ __html: jsonLdString(siteGraph()) }}
         />
       </body>
     </html>

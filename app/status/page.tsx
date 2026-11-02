@@ -1,10 +1,14 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import RepoLink from '../components/RepoLink';
 
 export const metadata: Metadata = {
-  title: 'Deploy checklist | Industrial Autonomous Assurance',
-  description: 'A static founder checklist of the deploy steps between this build and a sellable deployment. It does not probe any live service; only the first item reflects the configuration of this build.',
-  alternates: { canonical: '/status' },
+  ...buildMetadata({
+    title: 'Deploy checklist',
+    description:
+      'A static founder checklist of the deploy steps between this build and a sellable deployment. It does not probe any live service.',
+    path: '/status',
+  }),
   robots: { index: false, follow: true },
 };
 

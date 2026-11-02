@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import RepoLink from './components/RepoLink';
 import { ownerLink, QUICKSTART, repoSameAs, SALES, srcLink } from './lib/links';
 import structuredOffers from './lib/structured-offers.json';
 import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
+import { buildMetadata } from './lib/seo';
 import { IMAGES } from './lib/images';
 import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
@@ -11,6 +13,14 @@ import RotatingImage from './components/RotatingImage';
 import ImageryNote from './components/ImageryNote';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
+
+export const metadata: Metadata = buildMetadata({
+  title: 'Industrial Autonomous Assurance | CRA Art. 14 evidence',
+  absoluteTitle: true,
+  description:
+    'A hash-chained record of what is on each machine, which checks ran against it, and when. Evidence for CRA Article 14 and Machinery Regulation Annex III 1.1.9.',
+  path: '/',
+});
 
 const trustStrip = [
   {
@@ -221,7 +231,7 @@ export default function IndustrialAutonomousAssuranceSite() {
             </div>
             <div className="hero-panel">
               <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-              <div className="hero-code">{`pip install cryptography && export PYTHONPATH=src
+              <div className="hero-code" tabIndex={0} role="region" aria-label="Command example">{`pip install cryptography && export PYTHONPATH=src
 python -m assurance kit init plant/
 python -m assurance kit check plant/kit.json
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
@@ -452,7 +462,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
 
           <PricingPlans />
 
-          <div className="compare-table-wrap">
+          <div className="compare-table-wrap" tabIndex={0} role="region" aria-label="Comparison table, scrolls sideways">
             <table className="compare-table">
               <thead>
                 <tr>
@@ -576,7 +586,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             sizes="100vw"
             className="pricing-media"
           />
-          <div className="status-table-wrap">
+          <div className="status-table-wrap" tabIndex={0} role="region" aria-label="Status table, scrolls sideways">
             <table className="status-table">
               <thead>
                 <tr>

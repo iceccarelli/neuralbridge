@@ -1,17 +1,13 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import Console from '../components/Console';
 
-export const metadata: Metadata = {
-  title: 'Console | Industrial Autonomous Assurance',
-  description: 'A browser REST console for the Assurance API — paste an API key, call real /v1 routes. No shell, no websocket, no fake success.',
-  alternates: { canonical: '/console' },
-  openGraph: {
-    title: 'Console | Industrial Autonomous Assurance',
-    description: 'Paste an API key, call the real Assurance API routes from your browser.',
-    url: '/console',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'Console',
+  description:
+    'A browser REST console for the Assurance API — paste an API key, call real /v1 routes. No shell, no websocket, no fake success.',
+  path: '/console',
+});
 
 export default function ConsolePage() {
   return (
