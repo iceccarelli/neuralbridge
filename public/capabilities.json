@@ -2306,6 +2306,27 @@
       "title": "Run one operator cycle (intel refresh with --live, watch, anchor, backup + verify) and append its record"
     },
     {
+      "id": "ops.notify_test",
+      "service": "ops",
+      "surfaces": {
+        "api": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "ops notify-test"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "operator tooling a timer runs on the host: it works on the data volume, the signing key and the backup directory, and it can reach the network only through the operator's own `--live`; a request or a tool is not offered any of those",
+          "status": "by_design"
+        }
+      },
+      "title": "Show (dry) or, with --live, send one labelled TEST webhook to a configured notify target"
+    },
+    {
       "id": "ops.status",
       "service": "ops",
       "surfaces": {
@@ -2903,6 +2924,7 @@
     "ops": [
       "check",
       "cycle",
+      "notify-test",
       "status"
     ],
     "report": [
@@ -2935,24 +2957,24 @@
   },
   "counts": {
     "api_routes": 90,
-    "capabilities": 122,
-    "cli_commands": 107,
+    "capabilities": 123,
+    "cli_commands": 108,
     "cli_domains": 20,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
         "available": 84,
-        "by_design": 38,
+        "by_design": 39,
         "planned": 0
       },
       "cli": {
-        "available": 109,
+        "available": 110,
         "by_design": 12,
         "planned": 1
       },
       "mcp": {
         "available": 42,
-        "by_design": 80,
+        "by_design": 81,
         "planned": 0
       }
     }
