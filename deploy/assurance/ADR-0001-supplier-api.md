@@ -59,6 +59,9 @@ the kind of drift the rest of this codebase refuses to allow.
 - `POST /v1/supplier/advisory/withdraw` — same `supplier_publish` gate. Appends a
   signed withdrawal as the next record; unlike publish it verifies the signature,
   under a key the account pinned for that supplier (see SUPPLIER.md).
+- Time: the withdraw route judges key validity at server receipt time, not the
+  signer-typed `published_at`; publish and withdraw reject a `published_at` that
+  goes backwards on the feed or is more than 5 minutes ahead (422). See SUPPLIER.md.
 - `POST /v1/supplier/advisory/key` — same `supplier_publish` gate. Lets a supplier
   account pin only its own publishing public key, for the supplier id its hosted
   feed already carries, into its own account ledger (the same trust store as

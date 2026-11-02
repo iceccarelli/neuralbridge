@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ..attest.keys import SigningKeyError, VerifyingKey
@@ -593,6 +593,35 @@ def _chain_problems(items: list[SignedAdvisory]) -> list[str]:
     return problems
 
 
+#: Same allowance the hosting route gives a signer's clock.
+PUBLISHED_AT_SKEW = timedelta(minutes=5)
+
+
+def _time_problems(items: list[SignedAdvisory], now: datetime) -> list[str]:
+    """A feed's record times never go backwards and none is ahead of the reader's clock.
+
+    A feed file carries no receipt time, so this is all a reader can say about time;
+    it is added to the chain problems. Unparseable times are reported per record
+    elsewhere and skipped here.
+    """
+    problems: list[str] = []
+    previous: tuple[int, datetime] | None = None
+    for r in items:
+        try:
+            when = parse_utc(r.published_at)
+        except ValueError:
+            continue
+        if when > now + PUBLISHED_AT_SKEW:
+            problems.append(f"record {r.sequence}: published_at {r.published_at!r} is in the "
+                            "future of this reader's clock")
+        if previous is not None and when < previous[1]:
+            problems.append(f"record {r.sequence}: published_at {r.published_at!r} is earlier "
+                            f"than record {previous[0]}'s — record times never go backwards, so "
+                            "a signer may have back-dated it to fall inside a key's validity")
+        previous = (r.sequence, when)
+    return problems
+
+
 def _advisory_hash(record: SignedAdvisory) -> str:
     return content_hash_of(record.advisory)
 
@@ -672,6 +701,7 @@ def evaluate_feed(
             signature_valid_under_candidate=candidate_ok if pin is None else None))
 
     chain_problems = _chain_problems(items)
+    chain_problems.extend(_time_problems(items, now or utc_now()))
     # A valid chain cannot show that the newest records were cut off or an older copy
     # was served. A reader that remembers the highest sequence (and that record's
     # hash) can: a shorter or rewritten feed is not an intact chain.

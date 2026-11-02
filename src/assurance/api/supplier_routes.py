@@ -31,6 +31,7 @@ import base64
 import binascii
 import json
 import re
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -40,7 +41,7 @@ from assurance.api.deps import Machine, Supplying, get_register, supplier_feeds_
 from assurance.attest.keys import SigningKeyError, VerifyingKey
 from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
-from assurance.core.identity import parse_utc
+from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.fleet.advisory import ComponentAdvisory
 from assurance.supplier.baseline import accept_feed_baseline
 from assurance.supplier.publish import (
@@ -69,6 +70,8 @@ MAX_RECORD_BYTES = 256 * 1024
 MAX_FEED_BYTES = 16 * 1024 * 1024
 #: An Ed25519 signature is 64 bytes. A shape check, not a verification.
 _SIGNATURE_BYTES = 64
+#: How far ahead of the server's clock a signer's `published_at` may run (clock skew).
+PUBLISHED_AT_SKEW = timedelta(minutes=5)
 _PARSE_ERRORS = (AssuranceError, KeyError, TypeError, ValueError, AttributeError)
 
 
@@ -83,6 +86,12 @@ class AdvisoryIn(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
+
+
+def server_now() -> datetime:
+    """The server's receipt clock. Key validity is judged at THIS time, never at the
+    signer-typed ``published_at``. Tests replace it; nothing in a request can."""
+    return utc_now()
 
 
 def _unprocessable(error: str, detail: str) -> HTTPException:
@@ -131,9 +140,16 @@ def _check_signature_shape(signature: str) -> None:
 
 
 def _require_chain(history: list[SignedAdvisory], record: SignedAdvisory,
-                   account_id: str) -> None:
+                   account_id: str, now: datetime | None = None) -> None:
     """The feed's chain rules, shared by publish and withdraw (one supplier, the next
-    sequence, the current head as predecessor). Call it under ``feed.locked()``."""
+    sequence, the current head as predecessor, `published_at` not before the previous
+    record's and not ahead of the server). Call it under ``feed.locked()``."""
+    received = now if now is not None else server_now()
+    if parse_utc(record.published_at) > received + PUBLISHED_AT_SKEW:
+        raise _unprocessable(
+            "published_at_in_future",
+            f"published_at {record.published_at!r} is ahead of the server clock "
+            f"(allowed skew {int(PUBLISHED_AT_SKEW.total_seconds() // 60)} minutes).")
     if not history:
         if record.sequence != 1:
             raise HTTPException(
@@ -174,6 +190,11 @@ def _require_chain(history: list[SignedAdvisory], record: SignedAdvisory,
                 "feed head — it was built against a stale copy of the feed.",
             },
         )
+    if parse_utc(record.published_at) < parse_utc(previous.published_at):
+        raise _unprocessable(
+            "published_at_not_monotonic",
+            f"published_at {record.published_at!r} is earlier than the previous record's "
+            f"{previous.published_at!r}. A feed's record times never go backwards.")
 
 
 def _read_signed_record(body: AdvisoryIn) -> SignedAdvisory:
@@ -221,12 +242,13 @@ def post_advisory(body: AdvisoryIn, principal: Annotated[Principal, Supplying]) 
     feed = AdvisoryFeed(feed_path)
 
     record = _read_signed_record(body)
+    received_at = server_now()
 
     # Read, check and append are one step. Two POSTs for the same sequence must
     # not both pass the check: an append-only chain cannot be un-forked.
     with feed.locked():
         history = feed.read()
-        _require_chain(history, record, principal.account.id)
+        _require_chain(history, record, principal.account.id, received_at)
         if any(h.advisory_id == record.advisory_id and not h.is_withdrawal
                for h in history):
             raise HTTPException(
@@ -255,11 +277,13 @@ def _refused(error: str, detail: str, code: int = status.HTTP_403_FORBIDDEN) -> 
     return HTTPException(status_code=code, detail={"error": error, "detail": detail})
 
 
-def _verify_under_pinned_key(record: SignedAdvisory, store: SupplierTrustStore) -> None:
+def _verify_under_pinned_key(record: SignedAdvisory, store: SupplierTrustStore,
+                             received_at: datetime) -> None:
     """The record must verify under a key THIS account pinned for THIS supplier.
 
     The fingerprint a record names selects which pin to try; it never grants trust.
-    A key that is unpinned, revoked, retired or not yet in force at ``published_at``,
+    A key that is unpinned, revoked, retired or not yet in force at the server's RECEIPT time
+    (``received_at``; the signer-typed ``published_at`` is never used for this),
     or a signature that does not verify, is a 403 and nothing is written.
     """
     problems = store.integrity_problems()
@@ -276,11 +300,11 @@ def _verify_under_pinned_key(record: SignedAdvisory, store: SupplierTrustStore) 
             f"{record.supplier.supplier_id!r} in this account "
             "(POST /v1/supplier/trust/pin). A withdrawal is accepted only under a "
             "key that was pinned by a route other than the record itself.")
-    when = parse_utc(record.published_at)
-    in_force = pin.in_force_at(when)
+    in_force = pin.in_force_at(received_at)
     if in_force != "trusted":
         raise _refused("supplier_key_not_in_force",
-                       f"the pinned key {pin.fingerprint} is {in_force} at {record.published_at}.")
+                       f"the pinned key {pin.fingerprint} is {in_force} at {format_utc(received_at)} "
+                       "(judged when the server received the record, not at its published_at).")
     try:
         valid = record.verified_by(VerifyingKey.from_pem(pin.public_key_pem))
     except (PublishError, SigningKeyError, ValueError) as exc:
@@ -319,7 +343,8 @@ def post_withdrawal(
         raise _unprocessable("withdrawal_needs_reason",
                              "a withdrawal needs a reason: customers acted on the original.")
     store = account_trust_store(principal, register)
-    _verify_under_pinned_key(record, store)
+    received_at = server_now()
+    _verify_under_pinned_key(record, store, received_at)
 
     feed_path = supplier_feeds_dir() / f"{principal.account.id}.jsonl"
     not_in_feed = HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
@@ -343,7 +368,7 @@ def post_withdrawal(
                 "withdrawal_content_mismatch",
                 "the withdrawal must carry the advisory it withdraws unchanged "
                 "(`assurance supplier withdraw` does this).")
-        _require_chain(history, record, principal.account.id)
+        _require_chain(history, record, principal.account.id, received_at)
         if feed_path.stat().st_size >= MAX_FEED_BYTES:
             raise HTTPException(
                 status_code=413,

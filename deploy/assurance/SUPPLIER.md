@@ -103,6 +103,24 @@ that supersedes it; the feed shows both, the withdrawal carrying `withdraws` and
 withdrawn only when they verify the withdrawal under a key *they* pinned. There
 is no MCP tool: a withdrawal is a named supplier's signed act.
 
+### Time and key validity
+
+A signer's `published_at` is a claim, not a clock. The hosting routes judge whether
+a key is in force at the **server's receipt time**, never at the `published_at` in
+the record; otherwise whoever holds a retired key could back-date a withdrawal to
+before the retirement. Publish and withdraw also refuse (422) a `published_at`
+earlier than the previous record's on the feed (`published_at_not_monotonic`) or
+more than 5 minutes ahead of the server (`published_at_in_future`). Records made
+by `assurance supplier publish` / `withdraw` stamp the current time and pass.
+
+Readers (`trust/evaluate`, the watch, `supplier verify`) only have the feed file,
+which carries no receipt time. They apply the same monotonic and not-in-the-future
+rules (a violation is a chain problem and the feed is untrusted) and the key's
+retirement against `published_at`. That still allows: a record stamped between the
+previous record's time and now, by a key retired after that stamp. The hosting
+route prevents this at write time; a reader of a feed from elsewhere cannot, and
+should pin the feed head (`trust baseline`) so later insertions are noticed.
+
 ### Pinning your own key
 
 A Supplier-tier account can pin its own publishing key, so a withdrawal can be
