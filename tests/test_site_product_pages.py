@@ -728,3 +728,15 @@ def test_llms_txt_lists_every_product_page():
     llms = (root / "public/llms.txt").read_text("utf-8")
     missing = [s for s in slugs if f"https://neuralbridge.io/product/{s}" not in llms]
     assert missing == [], f"public/llms.txt does not list: {missing} (run scripts/export_site_static.py)"
+
+
+class TestBareProductPath:
+    def test_slash_product_redirects_permanently_to_the_category_page(self, built):
+        """/product has no page of its own: it must not be a 404, and it must go where the sitemap,
+        the breadcrumbs and the navigation already point."""
+        manifest = json.loads((built / "routes-manifest.json").read_text("utf-8"))
+        hits = [r for r in manifest.get("redirects", []) if r.get("source") == "/product"]
+        assert len(hits) == 1, manifest.get("redirects")
+        assert hits[0]["destination"] == f"/product/{CATEGORY}", hits[0]
+        assert hits[0].get("statusCode") == 308, hits[0]          # permanent
+        assert (built / "server" / "app" / "product" / f"{CATEGORY}.html").exists()
