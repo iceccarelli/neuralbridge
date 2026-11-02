@@ -42,6 +42,7 @@ from typing import Any
 
 from ..collect.collector import collect
 from ..collect.plan import CollectionPlan
+from ..core.actor_names import actor_grammar_problem, declared_role_problem
 from ..core.errors import AssuranceError
 from ..core.evidence import Actor, Evidence, Origin, ValidationState
 from ..core.identity import format_utc, utc_now
@@ -226,6 +227,9 @@ class KitConfig:
                 "prepared_by is empty. An unattributed record is not evidence — "
                 "the first question anybody asks of a finding is who looked."
             )
+        _problem = actor_grammar_problem(self.prepared_by) or declared_role_problem(self.role)
+        if _problem:
+            raise KitError(f"prepared_by / role cannot be recorded: {_problem}.")
         if not self.machines:
             raise KitError("no machines listed; there is nothing to enrol.")
         seen: set[str] = set()

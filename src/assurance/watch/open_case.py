@@ -28,6 +28,7 @@ from assurance.change.service import (
     named_person_problem,
 )
 from assurance.change.store import CaseStore
+from assurance.core.actor_names import declared_role_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import utc_now
@@ -101,13 +102,9 @@ def _age_warnings(sub: IntelSubscription, now: datetime) -> tuple[str, ...]:
 
 def role_problem(role: str) -> str:
     """Why ``role`` cannot be recorded as a person's declared role, or ``""``."""
-    if not role.strip():
-        return "opening a case needs the person's role"
-    if "=" in role or ";" in role:
-        # The change service reads `attribution=...` tokens out of the role string; a
-        # caller-typed role must not be able to imitate one.
-        return "the role is free text and may not contain '=' or ';'"
-    return ""
+    # The change service reads `attribution=...` tokens out of the role string; a
+    # caller-typed role must not be able to imitate one (shared rule, NFKC-aware).
+    return declared_role_problem(role, required=True)
 
 
 def _actor(name: str, role: str) -> Actor:
@@ -118,12 +115,9 @@ def _actor(name: str, role: str) -> Actor:
         raise OpenCaseRefusedError(
             f"opening a case needs a named person; {name!r} is not one ({problem}). "
             "Nothing was opened.")
-    if not role.strip():
-        raise OpenCaseRefusedError("opening a case needs the person's role (--role). "
-                              "Nothing was opened.")
-    if role_problem(role):
-        raise OpenCaseRefusedError("the role is free text and may not contain '=' or ';'. "
-                              "Nothing was opened.")
+    problem = role_problem(role)
+    if problem:
+        raise OpenCaseRefusedError(f"{problem} (--role). Nothing was opened.")
     return Actor(identifier=name.strip(), role=role.strip(), kind="person")
 
 

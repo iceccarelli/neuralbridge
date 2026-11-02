@@ -35,11 +35,10 @@ complete. Software drafts the receipt; a named human makes the declaration.
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
+from assurance.core.actor_names import actor_name_problem, declared_role_problem
 from assurance.core.errors import AssuranceError, LedgerConflictError
 from assurance.core.evidence import (
     Actor,
@@ -127,17 +126,14 @@ def require_person(actor: Actor | None, act: str = "enrolment") -> Actor:
             f"{act} needs a named person; actor {actor.identifier!r} is kind "
             f"{actor.kind!r}. Automation can collect and seal a manifest, but cannot declare "
             "that a unit is enrolled or what its identity is.")
-    norm = unicodedata.normalize("NFKC", actor.identifier)
-    if any(unicodedata.category(c) in ("Cf", "Cc", "Zl", "Zp") for c in norm) \
-            or not any(c.isalnum() for c in norm):
+    problem = actor_name_problem(actor.identifier)
+    if problem:
         raise EnrolmentError(
-            f"actor {actor.identifier!r} is not a name a person could have "
-            "(invisible characters or no letter or digit).")
-    words = [w for w in re.findall(r"[^\W_]+", norm.casefold()) if not w.isdigit()]
-    if words and all(w in _RESERVED_NAMES for w in words):
-        raise EnrolmentError(
-            f"actor {actor.identifier!r} is what an automated actor is called, not who it "
-            f"is; {act} needs a named person.")
+            f"actor {actor.identifier[:60]!r} is not a name a person could have "
+            f"({problem}); {act} needs a named person. Nothing was recorded.")
+    role_problem = declared_role_problem(actor.role)
+    if role_problem:
+        raise EnrolmentError(f"{act}: {role_problem}. Nothing was recorded.")
     return actor
 
 

@@ -42,8 +42,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from assurance.attest.keys import SigningKey, VerifyingKey
+from assurance.core.actor_names import checked_person
 from assurance.core.errors import AssuranceError
-from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.bundle import (
     MachineSubjectError,
@@ -284,7 +284,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     bundle = build_bundle(
         envelope, trace,
-        actor=Actor(identifier=args.actor, role=args.role, kind="person"),
+        actor=checked_person(args.actor, args.role),
         limits=limits, limits_reviews=reviews, review_trust=trust,
         recorder_attestations=attestations, recorder_trust=recorder_trust,
         machine_serial=args.machine_serial, ledger=ledger, subject=args.subject,

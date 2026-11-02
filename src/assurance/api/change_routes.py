@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
-from assurance.api.declared_actor import sanitise_declared_role
+from assurance.api.declared_actor import require_declared_name, sanitise_declared_role
 from assurance.api.deps import Machine, get_register
 from assurance.api.fleet_routes import SignedFeedIn, evaluate_signed_feed
 from assurance.api.intel_routes import _open_store, _read_failed
@@ -132,6 +132,13 @@ def _actor(name: str, role: str, principal: Principal, *, human: bool = False,
     if (human or named) and not name.strip():
         raise HTTPException(status_code=422, detail={
             "error": "actor_required", "detail": "name the person taking this step."})
+    if not name.strip():
+        name = ""        # a blank name is no name: it is never sealed as an identifier
+    if name:
+        # The server's attribution grammar (`attribution=`, `operator=`, `;`, parentheses)
+        # is only ever written by this function. A typed name that carries it is refused,
+        # not cleaned: the caller is told, and nothing is recorded.
+        require_declared_name(name)
     basis = "declared_open_mode" if open_mode else "declared_by_account_key"
     return Actor(
         identifier=name or "operator",

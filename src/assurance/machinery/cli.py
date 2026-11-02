@@ -42,6 +42,7 @@ import json
 import sys
 from pathlib import Path
 
+from assurance.core.actor_names import checked_person
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
@@ -65,7 +66,9 @@ __all__ = ["build_parser", "main"]
 
 
 def _actor(args: argparse.Namespace) -> Actor:
-    return Actor(identifier=args.actor, role=getattr(args, "role", ""), kind="person")
+    # The shared grammar rule (assurance.core.actor_names): a typed name or role may not
+    # carry the server's attribution tokens. Refused, not cleaned.
+    return checked_person(args.actor, getattr(args, "role", "") or "")
 
 
 def build_parser() -> argparse.ArgumentParser:

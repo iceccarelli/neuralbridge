@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ...core.actor_names import actor_grammar_problem, declared_role_problem
 from ...core.errors import AssuranceError
 from ...core.evidence import Actor
 from ...core.identity import format_utc, parse_utc, utc_now
@@ -53,6 +54,9 @@ def _actor(args: argparse.Namespace) -> Actor:
             "made the call is part of the fact."
         )
     identifier, _, role = args.by.partition(":")
+    problem = actor_grammar_problem(identifier.strip()) or declared_role_problem(role.strip())
+    if problem:
+        raise SystemExit(f"error: --by cannot be recorded: {problem}. Nothing was recorded.")
     return Actor(identifier=identifier.strip(), role=role.strip())
 
 

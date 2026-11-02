@@ -37,6 +37,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ..core.actor_names import actor_grammar_problem
 from ..core.identity import format_utc, utc_now
 from ..core.sqlite import enable_wal, retry_locked
 from .metering import (
@@ -1686,6 +1687,11 @@ class AccountStore:
             raise ValueError("role must be 'contributor' or 'decider'")
         if not name.strip():
             raise ValueError("an operator needs a name")
+        # The operator's name becomes the identifier of everything this operator's key
+        # seals, beside the server's own `operator=`/`attribution=` tokens.
+        _problem = actor_grammar_problem(name.strip())
+        if _problem:
+            raise ValueError(f"the operator name cannot be used: {_problem}")
         op_id = _new_id("op")
         with self._txn() as db:
             if db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone() is None:

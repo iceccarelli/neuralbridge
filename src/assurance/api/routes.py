@@ -32,7 +32,7 @@ from ..security.art14.model import (
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
 from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
-from .declared_actor import sanitise_declared_role
+from .declared_actor import require_declared_name, sanitise_declared_role
 from .deps import (
     Metered,
     MeterTicket,
@@ -89,7 +89,7 @@ def _actor(payload: ActorIn) -> Actor:
     imitate the ``operator=``/``key=``/``attribution=`` tokens other routes write.
     An undeclared role stays empty.
     """
-    return Actor(identifier=payload.identifier,
+    return Actor(identifier=require_declared_name(payload.identifier),
                  role=sanitise_declared_role(payload.role, default=""), kind=payload.kind)
 
 
