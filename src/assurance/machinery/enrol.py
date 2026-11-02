@@ -57,6 +57,7 @@ from assurance.machinery.record import (
 from assurance.machinery.staleness import VerificationRecord, assess_coverage
 
 __all__ = [
+    "BatchChain",
     "ENROLMENT_KIND",
     "ENROLMENT_SCHEMA",
     "EnrolmentError",
@@ -367,6 +368,62 @@ def _coverage_after(ledger: EvidenceLedger, manifest: SafetyManifest) -> dict[st
 # -- the domain function ---------------------------------------------------
 
 
+class BatchChain:
+    """A chain verified in full once, for a batch writer that enrols many machines in a row.
+
+    :func:`enrol_machine` walks the whole chain before every enrolment, which is the right
+    cost for one machine and an O(n) charge per row for a batch (a 500-row import then
+    verifies a growing chain 500 times). A batch holds one of these instead:
+
+    * :meth:`begin` is a FULL walk (``verify_chain_head``) and is how a batch makes one: a
+      batch cannot start on a chain nobody walked, and a broken chain refuses here. (The
+      constructor takes a head and trusts it; only a caller that has just walked the chain
+      itself should use it.)
+    * before each row, :meth:`check` re-reads the head the batch last verified and verifies
+      every record appended since (the batch's own previous row, or anyone else's), in full;
+    * :meth:`finish` is a second FULL walk, which the batch must call after its last row.
+
+    What this does not do between :meth:`begin` and :meth:`finish`: re-read records older
+    than the batch's own head. An in-place edit of an old record during the batch is
+    therefore seen by :meth:`finish`, not by each row. Nothing here is a cache with a time
+    window; it is bound to this one object, this one batch, and the head it walked.
+    """
+
+    def __init__(self, ledger: EvidenceLedger, head_seq: int, head_link: str) -> None:
+        self._ledger = ledger
+        self._seq = head_seq
+        self._link = head_link
+
+    @classmethod
+    def begin(cls, ledger: EvidenceLedger, *, error: type[AssuranceError] = EnrolmentError,
+              nothing: str = "enrolled") -> BatchChain:
+        """Walk the whole chain. Raises ``error`` (nothing written) when it does not verify."""
+        problems, seq, link = ledger.verify_chain_head()
+        if problems:
+            raise error(f"the ledger chain does not verify, so nothing was {nothing}: "
+                        + "; ".join(problems[:3]))
+        return cls(ledger, seq, link)
+
+    def check(self, ledger: EvidenceLedger) -> None:
+        """Verify the head this batch holds and everything after it; advance the head."""
+        if ledger is not self._ledger:
+            raise EnrolmentError("this chain check belongs to another ledger. "
+                                 "Nothing was written.")
+        problems, seq, link = ledger.verify_since(self._seq, self._link)
+        if problems:
+            raise EnrolmentError(
+                "the ledger chain does not verify, so nothing was enrolled: "
+                + "; ".join(problems[:3]))
+        self._seq, self._link = seq, link
+
+    def finish(self) -> list[str]:
+        """The closing FULL walk. Returns the problems found (empty when the chain verifies)."""
+        problems, seq, link = self._ledger.verify_chain_head()
+        if not problems:
+            self._seq, self._link = seq, link
+        return problems
+
+
 def enrol_machine(
     ledger: EvidenceLedger,
     manifest: SafetyManifest,
@@ -374,8 +431,14 @@ def enrol_machine(
     actor: Actor | None,
     site: str | None = None,
     owner: str | None = None,
+    batch_chain: BatchChain | None = None,
 ) -> EnrolmentReceipt:
     """Enrol one machine into ``ledger`` and return an honest receipt.
+
+    ``batch_chain`` is for the batch importer only (see :class:`BatchChain`): the chain was
+    verified in full when the batch began and is verified in full again when it ends, and
+    each row checks the head and what was appended since. Without it (every other caller)
+    this walks the whole chain, as always.
 
     Raises :class:`EnrolmentError` when the actor is not a named person, when the
     ledger chain does not verify, when an existing enrolment record is damaged, or when
@@ -387,11 +450,14 @@ def enrol_machine(
     declared = _declared(manifest, site, owner)
     config = manifest.configuration_hash()
 
-    ok, problems = ledger.verify_chain()
-    if not ok:
-        raise EnrolmentError(
-            "the ledger chain does not verify, so nothing was enrolled: "
-            + "; ".join(problems[:3]))
+    if batch_chain is not None:
+        batch_chain.check(ledger)
+    else:
+        ok, problems = ledger.verify_chain()
+        if not ok:
+            raise EnrolmentError(
+                "the ledger chain does not verify, so nothing was enrolled: "
+                + "; ".join(problems[:3]))
 
     for _ in range(2):
         existing = enrolment_of(ledger, key)
