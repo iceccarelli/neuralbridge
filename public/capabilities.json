@@ -1338,8 +1338,10 @@
           "status": "available"
         },
         "cli": {
-          "reason": "no CLI verb",
-          "status": "planned"
+          "names": [
+            "check fleet-machine"
+          ],
+          "status": "available"
         },
         "mcp": {
           "names": [
@@ -1361,8 +1363,10 @@
           "status": "available"
         },
         "cli": {
-          "reason": "no CLI verb",
-          "status": "planned"
+          "names": [
+            "check machine"
+          ],
+          "status": "available"
         },
         "mcp": {
           "names": [
@@ -1384,8 +1388,10 @@
           "status": "available"
         },
         "cli": {
-          "reason": "no CLI verb",
-          "status": "planned"
+          "names": [
+            "check services"
+          ],
+          "status": "available"
         },
         "mcp": {
           "names": [
@@ -1543,8 +1549,10 @@
           "status": "available"
         },
         "cli": {
-          "reason": "no CLI verb for the stateless one-machine form",
-          "status": "planned"
+          "names": [
+            "fleet advisory-check"
+          ],
+          "status": "available"
         },
         "mcp": {
           "reason": "an advisory is third-party content; only a person acts on it",
@@ -2415,8 +2423,10 @@
           "status": "available"
         },
         "cli": {
-          "reason": "no CLI verb",
-          "status": "planned"
+          "names": [
+            "supplier trust baseline"
+          ],
+          "status": "available"
         },
         "mcp": {
           "reason": "a trust decision a named person makes",
@@ -2751,6 +2761,11 @@
       "show",
       "waive-reverification"
     ],
+    "check": [
+      "fleet-machine",
+      "machine",
+      "services"
+    ],
     "collect": [
       "check-plan",
       "probe",
@@ -2761,6 +2776,7 @@
     ],
     "fleet": [
       "advisory",
+      "advisory-check",
       "declaration",
       "declare",
       "import-csaf",
@@ -2826,8 +2842,8 @@
   "counts": {
     "api_routes": 88,
     "capabilities": 118,
-    "cli_commands": 98,
-    "cli_domains": 18,
+    "cli_commands": 103,
+    "cli_domains": 19,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
@@ -2836,9 +2852,9 @@
         "planned": 1
       },
       "cli": {
-        "available": 100,
+        "available": 105,
         "by_design": 12,
-        "planned": 6
+        "planned": 1
       },
       "mcp": {
         "available": 42,

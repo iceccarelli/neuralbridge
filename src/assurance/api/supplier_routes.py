@@ -40,6 +40,7 @@ from assurance.billing.accounts import Principal
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc
 from assurance.fleet.advisory import ComponentAdvisory
+from assurance.supplier.baseline import accept_feed_baseline
 from assurance.supplier.publish import (
     FEED_FORMAT,
     AdvisoryFeed,
@@ -539,25 +540,10 @@ def post_feed_baseline(
     records, error = load_feed_records(body)
     if error:
         raise _unprocessable("unreadable_feed", error)
-    # min_sequence=0: judge the feed on its own merits, not against the baseline being
-    # replaced, or a re-issued feed could never be accepted.
-    trust = evaluate_feed(records, store, expect_supplier=body.expect_supplier,
-                          candidate_key=_candidate(body.candidate_public_key_pem),
-                          min_sequence=0)
-    if not trust.policy_satisfied or not records:
-        raise _trust_refusal(SupplierTrustError(
-            "this feed would not be trusted (" + trust.trust_state + "), so it cannot "
-            "become the baseline. Pin the supplier's key and supply a feed that verifies."))
-    head = records[-1]
-    previous = store.feed_head(trust.supplier_id)
     try:
-        store.reset_feed_head(trust.supplier_id, head.sequence, head.content_hash(),
-                              actor=who, reason=body.reason)
+        return accept_feed_baseline(
+            store, records, expect_supplier=body.expect_supplier,
+            candidate_key=_candidate(body.candidate_public_key_pem),
+            actor=who, reason=body.reason)
     except SupplierTrustError as exc:
         raise _trust_refusal(exc) from exc
-    return {"baseline": {"supplier_id": trust.supplier_id, "sequence": head.sequence,
-                         "head_hash": head.content_hash()},
-            "previous": ({"sequence": previous[0], "head_hash": previous[1]}
-                         if previous else None),
-            "note": "Later passes are compared with this head. It does not make an "
-                    "untrusted feed trusted, and it moves no key."}

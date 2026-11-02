@@ -2,6 +2,7 @@
 
     list        every machine in the ledger, worst coverage first
     advisory    fan a component advisory out across the fleet
+    advisory-check  is this ONE machine affected by this advisory? (no ledger, nothing sealed)
     import-csaf translate a CSAF 2.0 advisory into this product's advisory format
     declare     bind a Declaration of Conformity to the configuration in front of you
     declaration check a declaration against what the machine runs today
@@ -17,7 +18,11 @@ was NOT assessed: only the configuration was compared, which is not a pass); 3 I
 not a pass: for ``advisory``, nothing matched but at least one advisory is a partial
 translation of its source (``import-csaf`` dropped an affected product), so "nothing
 matched" is not "nothing is affected"; for ``list`` and ``declaration``, no gaps, but the
-cover rests only on evidence below ``validated``.
+cover rests only on evidence below ``validated``. ``advisory-check`` follows the same codes:
+0 nothing matched and nothing was left uncompared; 1 the advisory matches an item; 3 nothing
+matched, but the answer is not a clear ("not established") because the advisory is a partial
+translation or a manifest item carries no hash, so an affected component could be hiding in it;
+2 an unreadable or invalid input.
 """
 
 from __future__ import annotations
@@ -79,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="why (recorded in the ledger)")
     ad.add_argument("--ledger", required=True, type=Path)
     ad.add_argument("--json", action="store_true")
+
+    ac = verbs.add_parser(
+        "advisory-check",
+        help="is this one machine affected by this advisory (stateless; no ledger)")
+    ac.add_argument("advisory", help="the advisory as JSON, or - for standard input")
+    ac.add_argument("--manifest", required=True,
+                    help="the machine's safety manifest as JSON, or - for standard input")
+    ac.add_argument("--json", action="store_true")
 
     ic = verbs.add_parser(
         "import-csaf",
@@ -314,6 +327,51 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_advisory_check(args: argparse.Namespace) -> int:
+    """The same function as ``POST /v1/fleet/advisory/check``; reads and writes no ledger."""
+    from assurance.check.inputs import InputError, one_stdin, read_json_object
+    from assurance.fleet.advisory_check import check_one_machine
+
+    one_stdin(advisory=args.advisory, manifest=args.manifest)
+    advisory_doc = read_json_object(args.advisory, "advisory")
+    manifest_doc = read_json_object(args.manifest, "manifest")
+    try:
+        advisory = ComponentAdvisory.from_dict(advisory_doc)
+    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+        raise InputError(f"the advisory is not a valid advisory: {exc}") from exc
+    try:
+        manifest = SafetyManifest.from_dict(manifest_doc)
+    except (AssuranceError, KeyError, ValueError, TypeError) as exc:
+        raise InputError(f"the manifest is not a valid safety manifest: {exc}") from exc
+
+    result = check_one_machine(advisory, manifest)
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        verdict = "AFFECTED" if result["affected"] else (
+            "NOT ESTABLISHED" if _advisory_check_unsettled(result, manifest) else "no match")
+        print(f"{neutralise(result['advisory_id'])} ({neutralise(result['issued_by'])}, "
+              f"{result['severity']}) against {neutralise(result['machine'])}: {verdict}")
+        for m in result["matches"]:
+            flag = "  (needs a person)" if m["needs_a_human"] else ""
+            print(f"  {neutralise(m['item_id'])} {neutralise(m['item_name'])} "
+                  f"{neutralise(m['item_version'])}: {m['basis']}{flag}")
+            print(f"    {neutralise(m['detail'])}")
+        if result["remedy"]:
+            print(f"  remedy: {neutralise(result['remedy'])}")
+        print("\n  not established:")
+        for c in result["checks_skipped"]:
+            print(f"    - {neutralise(c)}")
+    if result["affected"]:
+        return 1
+    return 3 if _advisory_check_unsettled(result, manifest) else 0
+
+
+def _advisory_check_unsettled(result: dict, manifest: SafetyManifest) -> bool:
+    """No match, but not a clear: a partial translation, or an item with no hash to compare."""
+    return bool(result["incomplete"] or manifest.uncomparable_items)
+
+
 def _cmd_import_csaf(args: argparse.Namespace) -> int:
     if args.out is not None:
         try:
@@ -426,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "list": _cmd_list,
         "advisory": _cmd_advisory,
+        "advisory-check": _cmd_advisory_check,
         "import-csaf": _cmd_import_csaf,
         "declare": _cmd_declare,
         "declaration": _cmd_declaration,
