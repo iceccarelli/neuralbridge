@@ -40,7 +40,8 @@ from assurance.core.identity import format_utc
 from assurance.core.sqlite import enable_wal
 from assurance.intel.parsers import ParsedFeed
 
-__all__ = ["DISPOSITIONS", "SCHEMA_VERSION", "IntelStore", "IntelStoreError", "Observation"]
+__all__ = ["DISPOSITIONS", "SCHEMA_VERSION", "IntelStore", "IntelStoreError", "Observation",
+           "ReadOnlyIntelStore"]
 
 SCHEMA_VERSION = 1
 DISPOSITIONS = ("first", "changed", "unchanged", "rejected")
@@ -178,6 +179,17 @@ class IntelStore:
             for statement in _split(_SCHEMA):
                 db.execute(statement)
             db.execute(f"PRAGMA application_id={_APP_ID}")
+
+    @classmethod
+    def open_existing(cls, path: str | Path, *, label: str | None = None) -> IntelStore:
+        """Open an EXISTING store for reading only. Never creates, never writes.
+
+        A mistyped ``--store`` must not turn into a fresh empty store that then reads as
+        "nothing known". Missing, empty or foreign files are refused with
+        :class:`IntelStoreError`. ``label`` replaces the path in messages (the HTTP routes
+        must not echo the server's path).
+        """
+        return ReadOnlyIntelStore(path, label=label)
 
     # -- plumbing ---------------------------------------------------------
     def _connect(self, create: bool = False) -> sqlite3.Connection:
@@ -352,7 +364,10 @@ class IntelStore:
             row = db.execute("SELECT body FROM blobs WHERE sha256=?", (sha256,)).fetchone()
         if not row:
             return None
-        body = bytes(row["body"])
+        raw = row["body"]
+        if not isinstance(raw, (bytes, memoryview)):
+            return None     # a payload rewritten as TEXT/INTEGER/NULL is unreadable, not a crash
+        body = bytes(raw)
         return body if hashlib.sha256(body).hexdigest() == sha256 else None
 
     def latest_accepted(self, source: str | None = None) -> list[Observation]:
@@ -371,6 +386,46 @@ class IntelStore:
         """
         return [o for o in self.observations(after_seq=after_seq)
                 if o.disposition in ("first", "changed")]
+
+
+class ReadOnlyIntelStore(IntelStore):
+    """An :class:`IntelStore` that cannot write and cannot create.
+
+    ``IntelStore.__init__`` creates the file and runs the schema in a write transaction, which a
+    read path must never do. This opens SQLite with ``mode=ro`` and ``query_only`` and refuses
+    ``append``, so the only operations reachable are reads.
+    """
+
+    def __init__(self, path: str | Path, *, label: str | None = None) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        what = label or str(self.path)
+        if not self.path.is_file():
+            raise IntelStoreError(
+                f"{what} does not exist. Nothing was read, and no store was created.")
+        try:
+            with self._read() as db:
+                app_id = db.execute("PRAGMA application_id").fetchone()[0]
+                if app_id != _APP_ID:
+                    raise IntelStoreError(f"{what} is not an intel observation store.")
+                db.execute("SELECT seq FROM observations LIMIT 1").fetchall()
+                db.execute("SELECT sha256 FROM blobs LIMIT 1").fetchall()
+        except sqlite3.Error as exc:
+            raise IntelStoreError(
+                f"{what} could not be opened as an intel observation store "
+                f"({type(exc).__name__}).") from exc
+
+    def _connect(self, create: bool = False) -> sqlite3.Connection:
+        if create:
+            raise IntelStoreError("this store is read-only")
+        db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0,
+                             isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA query_only=ON")
+        return db
+
+    def append(self, *args: Any, **kwargs: Any) -> Observation:
+        raise IntelStoreError("this store is read-only")
 
 
 def _split(script: str) -> Sequence[str]:

@@ -111,11 +111,8 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://iceccarelli.github.io/neuralbridge/"
-Documentation = "https://iceccarelli.github.io/neuralbridge/"
-Repository = "https://github.com/iceccarelli/neuralbridge"
-Issues = "https://github.com/iceccarelli/neuralbridge/issues"
-Changelog = "https://github.com/iceccarelli/neuralbridge/releases"
+Homepage = "https://neuralbridge.io"
+Documentation = "https://neuralbridge.io/docs"
 
 [project.scripts]
 neuralbridge = "neuralbridge.main:cli"

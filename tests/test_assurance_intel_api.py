@@ -391,8 +391,8 @@ def test_there_is_no_ingest_or_refresh_route_and_no_write_method(live_api):
 
 
 def test_the_read_only_store_refuses_to_write_even_if_asked(store_path):
-    from assurance.api.intel_routes import _ReadOnlyIntelStore
     from assurance.intel.store import IntelStoreError
+    from assurance.intel.store import ReadOnlyIntelStore as _ReadOnlyIntelStore
 
     ro = _ReadOnlyIntelStore(store_path)
     with pytest.raises(IntelStoreError):

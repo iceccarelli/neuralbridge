@@ -109,7 +109,7 @@ def _open(sub: IntelSubscription) -> tuple[IntelStore | None, FeedOutcome | None
             return None, _problem_outcome(
                 sub, "empty", f"intel store {path} is an empty file; nothing has been "
                 f"recorded in it. {blind}")
-        return IntelStore(path), None
+        return IntelStore.open_existing(path), None
     except (AssuranceError, sqlite3.Error, OSError) as exc:
         return None, _problem_outcome(
             sub, "unreadable", f"intel store {path} could not be opened: {exc}. {blind}")
