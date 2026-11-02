@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from assurance.attest.custody import key_file_problems
-from assurance.attest.keys import SigningKey, SigningKeyError
+from assurance.attest.keys import SigningKey, SigningKeyError, UnsafeSigningKeyError
 from assurance.attest.trustlist import summarise, trust_file_problems
 from assurance.machine.recorder_attestation import RecorderTrust
 
@@ -125,6 +125,10 @@ def _load_key(pem: str | None, path: str | None, passphrase: str,
             return SigningKey.from_pem(pem, passphrase=passphrase)
         assert path is not None
         return SigningKey.load(path, passphrase=passphrase, label="the key file")
+    except UnsafeSigningKeyError:
+        report.add("key.load", "fail", "the key file is not safe to use (see key.permissions); "
+                   "the service would answer 503 attestation_key_unsafe")
+        return None
     except SigningKeyError as exc:
         text = str(exc).lower()
         if "encrypted and no passphrase" in text:

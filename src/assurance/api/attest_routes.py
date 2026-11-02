@@ -75,7 +75,12 @@ from assurance.attest.attestation import (
     attest,
     verify_log,
 )
-from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
+from assurance.attest.keys import (
+    SigningKey,
+    SigningKeyError,
+    UnsafeSigningKeyError,
+    VerifyingKey,
+)
 from assurance.billing.accounts import AccountStore, Principal
 
 __all__ = [
@@ -174,6 +179,16 @@ def _service_key() -> SigningKey:
     try:
         return SigningKey.load(
             path, passphrase=os.environ.get(_PASSPHRASE_ENV, ""), label=_KEY_FILE_LABEL)
+    except UnsafeSigningKeyError as exc:
+        # Present but not safe to sign with (mode, owner, symlink, writable directory).
+        # Distinct from "no key" so an operator can tell; the text carries no path.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "attestation_key_unsafe", "detail": str(exc),
+                    "remedy": "Fix the key file's custody (owner-only mode 0600, owned by "
+                              "the service account, in a directory only that account can "
+                              "write); `assurance attest preflight` names the problem."},
+        ) from exc
     except SigningKeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -322,7 +337,7 @@ class VerifyIn(BaseModel):
 @attest_router.get(
     "/key",
     summary="The public key this service counter-signs with. No account needed.",
-    responses={503: {"description": "`no_attestation_key_configured` or "
+    responses={503: {"description": "`no_attestation_key_configured`, `attestation_key_unsafe` or "
                                     "`attestation_key_unusable`: the service has no usable "
                                     "signing key. The message never names a server path."}},
 )

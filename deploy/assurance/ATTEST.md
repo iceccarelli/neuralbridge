@@ -289,6 +289,10 @@ With no key configured, every signing route returns **503** with
 a key that appears when first needed, on the machine that needs it, is not a
 second party.
 
+A key file that is present but unsafe (group/other access, a symlink, another account's
+file, or a directory group/other can write) is refused too: **503** with
+`attestation_key_unsafe`, distinct from `no_attestation_key_configured`.
+
 ## What none of this establishes
 
 * **That the public key belongs to whom you think.** A signature is worth

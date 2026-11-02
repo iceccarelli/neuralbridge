@@ -35,6 +35,7 @@ from assurance.attest.custody import (
 )
 from assurance.attest.keys import SigningKeyError
 from assurance.attest.preflight import KEY_PEM_ENV, TRUST_ENV, run_preflight
+from assurance.attest.trustlist import load_trust
 from assurance.core.evidence import Actor, Evidence, Origin
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import (
@@ -82,7 +83,7 @@ def assert_no_key_material(path: Path, *texts: str) -> None:
         for line in body:
             assert line not in text
         # the raw 32-byte seed, as hex, is the other way it could be shown
-        raw = SigningKey.load(path).private.private_bytes(
+        raw = SigningKey.load(path, check_permissions=False).private.private_bytes(
             serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
             serialization.NoEncryption())
         assert raw.hex() not in text
@@ -836,3 +837,154 @@ class TestPreflight:
                              "--expect-fingerprint", "0" * 16, "--must-be-revoked", "1" * 16)
         assert code == 1
         assert_no_key_material(priv, out, err)
+
+
+# ---------------------------------------------------------------------------------------
+# concurrent trust-list writers: a revocation must never be lost to a racing add
+# ---------------------------------------------------------------------------------------
+RACE_WORKERS = 8
+RACE_ROUNDS = 6
+
+
+def _race_worker(index, trust, revoke_fps, add_files, barrier, queue) -> None:
+    """Alternate revoke / add over the one shared file; report what returned success."""
+    from assurance.attest.trustlist import add_recorder, revoke_recorder
+    from assurance.machine.recorder_attestation import RecorderAttestationError
+
+    done: list[tuple[str, str]] = []
+    barrier.wait()
+    for step in range(2):
+        try:
+            if (index + step) % 2 == 0:
+                revoke_recorder(trust, revoke_fps[index], effective="2026-06-01")
+                done.append(("revoked", revoke_fps[index]))
+            else:
+                pub, fp = add_files[index]
+                add_recorder(trust, pub, label=f"racer {index}",
+                             provenance=frozenset({"bench"}), expected_fingerprint=fp)
+                done.append(("added", fp))
+        except RecorderAttestationError as exc:
+            done.append(("error", str(exc)))
+    queue.put(done)
+
+
+def _public_file(work: Path, name: str) -> tuple[str, str]:
+    key = SigningKey.generate().verifying
+    path = work / f"{name}.pub"
+    path.write_text(key.pem())
+    return str(path), key.fingerprint
+
+
+def _race_once(tmp_path: Path, round_no: int) -> list[str]:
+    import multiprocessing
+
+    from assurance.attest.trustlist import add_recorder, create_trust_file
+
+    work = tmp_path / f"race{round_no}"
+    work.mkdir()
+    trust = work / "trust" / "recorder-trust.json"
+    create_trust_file(trust)
+
+    seeded = [_public_file(work, f"seed{i}") for i in range(RACE_WORKERS)]
+    for i, (pub, fp) in enumerate(seeded):
+        add_recorder(trust, pub, label=f"seed {i}", provenance=frozenset({"bench"}),
+                     expected_fingerprint=fp)
+    fresh = [_public_file(work, f"new{i}") for i in range(RACE_WORKERS)]
+    revoke_fps = [fp for _, fp in seeded]
+
+    ctx = multiprocessing.get_context("fork")
+    barrier, queue = ctx.Barrier(RACE_WORKERS), ctx.Queue()
+    procs = [ctx.Process(target=_race_worker,
+                         args=(i, str(trust), revoke_fps, fresh, barrier, queue))
+             for i in range(RACE_WORKERS)]
+    for proc in procs:
+        proc.start()
+    results = [queue.get(timeout=120) for _ in procs]
+    for proc in procs:
+        proc.join(timeout=30)
+
+    outcomes = [item for done in results for item in done]
+    errors = [text for kind, text in outcomes if kind == "error"]
+    assert not errors, errors
+    final = {r.fingerprint: r for r in load_trust(trust).recorders}
+    lost = []
+    for kind, fp in outcomes:
+        if kind == "revoked" and not (fp in final and final[fp].revoked):
+            lost.append(f"revocation of {fp} was reported successful but is not in the file")
+        if kind == "added" and fp not in final:
+            lost.append(f"add of {fp} was reported successful but is not in the file")
+    return lost
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+class TestTrustListWritersAreSerialised:
+    def test_no_successful_revocation_or_add_is_lost_across_real_processes(self, tmp_path):
+        lost: list[str] = []
+        for round_no in range(RACE_ROUNDS):
+            lost += _race_once(tmp_path, round_no)
+        assert not lost, lost
+
+    def test_a_held_lock_blocks_a_writer_rather_than_letting_it_overwrite(
+            self, tmp_path, monkeypatch):
+        import fcntl
+
+        from assurance.attest import trustlist
+        from assurance.attest.trustlist import add_recorder, create_trust_file
+        from assurance.machine.recorder_attestation import RecorderAttestationError
+
+        trust = tmp_path / "trust" / "t.json"
+        create_trust_file(trust)
+        before = trust.read_bytes()
+        pub, fp = _public_file(tmp_path, "k")
+        monkeypatch.setattr(trustlist, "LOCK_TIMEOUT_SECONDS", 0.2)
+        lock_fd = os.open(str(trust) + ".lock", os.O_RDWR)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            with pytest.raises(RecorderAttestationError, match="another process is changing"):
+                add_recorder(trust, pub, label="x", provenance=frozenset({"bench"}),
+                             expected_fingerprint=fp)
+            assert trust.read_bytes() == before, "it wrote without holding the lock"
+        finally:
+            os.close(lock_fd)
+        add_recorder(trust, pub, label="x", provenance=frozenset({"bench"}),
+                     expected_fingerprint=fp)                       # free again: succeeds
+
+    def test_the_lock_file_is_private_and_a_symlinked_lock_is_refused(self, tmp_path):
+        from assurance.attest.trustlist import add_recorder, create_trust_file
+        from assurance.machine.recorder_attestation import RecorderAttestationError
+
+        trust = tmp_path / "trust" / "t.json"
+        create_trust_file(trust)
+        lock = Path(str(trust) + ".lock")
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+        lock.unlink()
+        victim = tmp_path / "victim"
+        victim.write_text("keep")
+        lock.symlink_to(victim)
+        pub, fp = _public_file(tmp_path, "k")
+        before = trust.read_bytes()
+        with pytest.raises(RecorderAttestationError, match="symbolic link"):
+            add_recorder(trust, pub, label="x", provenance=frozenset({"bench"}),
+                         expected_fingerprint=fp)
+        assert victim.read_text() == "keep" and trust.read_bytes() == before
+
+    def test_create_still_refuses_an_existing_list_and_revoke_never_rewrites_the_date(
+            self, tmp_path):
+        from assurance.attest.trustlist import (
+            add_recorder,
+            create_trust_file,
+            revoke_recorder,
+        )
+        from assurance.machine.recorder_attestation import RecorderAttestationError
+
+        trust = tmp_path / "trust" / "t.json"
+        create_trust_file(trust)
+        with pytest.raises(RecorderAttestationError, match="already exists"):
+            create_trust_file(trust)
+        pub, fp = _public_file(tmp_path, "k")
+        add_recorder(trust, pub, label="x", provenance=frozenset({"bench"}),
+                     expected_fingerprint=fp)
+        revoke_recorder(trust, fp, effective="2026-06-01")
+        with pytest.raises(RecorderAttestationError, match="not rewritten"):
+            revoke_recorder(trust, fp, effective="2026-07-01")
+        assert load_trust(trust).recorders[0].revoked_on == "2026-06-01"

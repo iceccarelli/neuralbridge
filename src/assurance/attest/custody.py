@@ -17,14 +17,17 @@ fingerprints only.
 
 from __future__ import annotations
 
-import os
-import stat
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
 from assurance.attest.attestation import HeadAttestation, LogVerdict, verify_log
-from assurance.attest.keys import SigningKeyError, VerifyingKey
+from assurance.attest.keys import (
+    SigningKeyError,
+    UnsafeSigningKeyError,
+    VerifyingKey,
+    private_key_file_problems,
+)
 
 __all__ = [
     "key_file_problems",
@@ -32,42 +35,23 @@ __all__ = [
     "verify_log_across_rotation",
 ]
 
-#: Any permission bit for group or other. A private key file allows none.
-_LOOSE = stat.S_IRWXG | stat.S_IRWXO
-
-
 def key_file_problems(path: str | Path) -> list[str]:
     """Why this private key file is not safe to use, or ``[]`` if it is.
 
-    A symlink is refused outright (so the file that is checked is the file that is read),
-    the target must be a regular file, and neither group nor other may have any access.
-    Not checkable off POSIX, which is said rather than passed.
+    The same rule :meth:`SigningKey.load` enforces (one implementation, in ``keys``):
+    judged from an ``O_NOFOLLOW`` descriptor, owner-only regular file, in a directory
+    that group and other cannot write. Not checkable off POSIX, which is said.
     """
-    p = Path(path)
-    try:
-        info = os.lstat(p)
-    except FileNotFoundError:
-        return [f"{p} does not exist"]
-    except OSError as exc:
-        return [f"{p} cannot be inspected ({type(exc).__name__})"]
-    if stat.S_ISLNK(info.st_mode):
-        return [f"{p} is a symbolic link; point at the key file itself, so the file that is "
-                "checked is the file that is read"]
-    if not stat.S_ISREG(info.st_mode):
-        return [f"{p} is not a regular file"]
-    if os.name != "posix":
-        return [f"{p}: file permissions cannot be checked on this platform"]
-    if info.st_mode & _LOOSE:
-        return [f"{p} has mode {stat.S_IMODE(info.st_mode):04o}; a private key must be "
-                "readable by its owner alone (chmod 600)"]
-    return []
+    return private_key_file_problems(path)
 
 
 def require_private_key_file(path: str | Path) -> None:
-    """Raise :class:`SigningKeyError` unless the key file is owner-only."""
+    """Raise :class:`UnsafeSigningKeyError` unless the key file is safe to load."""
     problems = key_file_problems(path)
     if problems:
-        raise SigningKeyError("; ".join(problems))
+        if len(problems) == 1 and problems[0].endswith("does not exist"):
+            raise SigningKeyError("; ".join(problems))
+        raise UnsafeSigningKeyError("; ".join(problems))
 
 
 class _KeySet:
