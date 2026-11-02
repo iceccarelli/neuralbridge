@@ -32,6 +32,7 @@ _DOMAINS = {
     "attest": "assurance.attest.cli",
     "kit": "assurance.kit.cli",
     "supplier": "assurance.supplier.cli",
+    "check": "assurance.check.cli",
     "change": "assurance.change.cli",
     "evidence": "assurance.evidence.cli",
     "intel": "assurance.intel.cli",

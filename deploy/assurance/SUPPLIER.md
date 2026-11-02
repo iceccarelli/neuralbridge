@@ -128,6 +128,30 @@ advisory that does not verify is precisely what signing is for. `--unsigned-anyw
 exists, prints the reason in full, and records it in the output, because
 sometimes you have to proceed and everyone downstream should know you did.
 
+### A supplier that re-issued its feed: `supplier trust baseline`
+
+Each pass remembers the newest record of a feed it trusted, so a feed cut back or swapped for an
+older copy is not trusted. A supplier that *legitimately* re-issued its feed no longer extends
+that history and stays untrusted until a named person accepts the new one:
+
+```bash
+assurance supplier trust baseline --ledger account.db --feed reissued.jsonl \
+    --actor m.braun --reason "ControlCo re-issued its feed after the key ceremony" [--json]
+```
+
+This is the same function as `POST /v1/supplier/trust/feed-baseline` (`--json` prints that
+body: the new `baseline`, the `previous` one, and the `note`). It is a trust decision, so it is
+a CLI and API act with no MCP tool, and it writes one entry to the account's trust store: the
+`--ledger` must already exist (nothing is created) and be the account's own, never a shared one.
+`--feed -` reads standard input.
+
+It accepts a feed only if that feed **would be trusted**: signatures valid under a key already
+pinned for this supplier, an intact chain. The head is read from the feed, never typed, and
+`--public-key` (an unpinned key) can show signatures are valid but never makes a feed eligible.
+It pins no key and trusts nothing that was not already trusted. Exit codes: 0 the baseline was
+reset; 1 refused (the feed would not be trusted, the store's integrity is in question, or no
+reason was given), nothing written; 2 an unreadable feed or ledger.
+
 ## Why the feed is a chain
 
 Each record names the content hash of the one before it.

@@ -7,6 +7,7 @@ and it is the part that gets more valuable with every machine enrolled.
 ```bash
 assurance fleet list      --ledger register.db
 assurance fleet advisory  advisory.json --ledger register.db
+assurance fleet advisory-check advisory.json --manifest manifest.json    # one machine, no ledger
 assurance fleet declare   manifest.json --doc-id DOC-0412 --issued-by "..." \
                           --legislation "Regulation (EU) 2023/1230" --out doc.json
 assurance fleet declaration doc.json --manifest manifest.json --ledger register.db
@@ -34,6 +35,30 @@ is covered only at community, 2 when the ledger chain does not verify. Each row 
 Worst first, because that is the order somebody reads it in. Every row comes
 from the same `assess_coverage` that answers one machine — this is aggregation,
 not new inference, and that is deliberate.
+
+## One machine, no ledger: `fleet advisory-check`
+
+```bash
+assurance fleet advisory-check advisory.json --manifest manifest.json [--json]
+cat manifest.json | assurance fleet advisory-check advisory.json --manifest -
+```
+
+The stateless form of the question: is *this* machine, as its manifest describes it, touched by
+*this* advisory? It is the same function as `POST /v1/fleet/advisory/check` (`--json` prints that
+route's response body), reads and writes no ledger and creates no file, and either input may be
+`-` for standard input (one of them). The match basis is always printed: `hash` settles it,
+`version` rests on a label, `hash_mismatch` is neither affected nor clear.
+
+Exit codes: 0 nothing matched and nothing was left uncompared; 1 the advisory matches an item;
+2 an input that is unreadable, empty, not JSON or not a valid advisory or manifest (nothing was
+checked); 3 **not established**, not a pass: nothing matched, but the advisory is a partial
+translation, or a manifest item carries no hash so an affected component could be hiding in it.
+
+What it does not establish is printed under `not established:` (and returned as
+`checks_skipped`): it says nothing about any other machine, nothing about whether the safety
+evidence still stands (that needs the ledger: `check fleet-machine`, or `fleet advisory`), and
+nothing about an advisory nobody has authenticated: a file you were handed is third-party
+content, so the result is marked `unauthenticated_input`.
 
 ## The choke point
 

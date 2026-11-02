@@ -8,9 +8,12 @@
     fetch      download a hosted feed (GET /v1/supplier/feed/{id}) to a local
                file — the path a ``watch`` config's ``feed:`` field names
     trust      the account's pinned supplier keys, kept in its own ledger:
-               pin | rotate | revoke | list | check | override. ``check`` says,
-               state by state, what a feed is: readable, signature valid, key
-               pinned for THIS supplier, chain intact. It never says "verified"
+               pin | rotate | revoke | list | check | override | baseline.
+               ``check`` says, state by state, what a feed is: readable,
+               signature valid, key pinned for THIS supplier, chain intact. It
+               never says "verified". ``baseline`` accepts a re-issued feed that
+               WOULD be trusted as the new rollback baseline (a trust decision;
+               it moves no key and trusts nothing that was not already trusted)
 
 Exit codes: 0 fine, 1 a finding — a bad signature, a gap, a feed that must not
 be acted on — and 2 the command could not run.
@@ -184,6 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
     to.add_argument("--actor", required=True)
     to.add_argument("--reason", required=True)
 
+    tb = tv.add_parser(
+        "baseline",
+        help="accept a re-issued, trusted feed as the new rollback baseline")
+    tb.add_argument("--ledger", required=True, type=Path,
+                    help="the ACCOUNT's evidence ledger; it must already exist (nothing is "
+                         "created)")
+    tb.add_argument("--feed", required=True,
+                    help="the re-issued feed (one JSON record per line), or - for stdin")
+    tb.add_argument("--expect-supplier", default="")
+    tb.add_argument("--public-key", type=Path, default=None,
+                    help="an UNPINNED key to test signatures against; it can show that "
+                         "signatures are valid, never that they are trusted, so it cannot "
+                         "make a feed eligible to be the baseline")
+    tb.add_argument("--actor", required=True)
+    tb.add_argument("--reason", required=True)
+    tb.add_argument("--json", action="store_true",
+                    help="print the body POST /v1/supplier/trust/feed-baseline returns")
+
     return p
 
 
@@ -337,9 +358,47 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trust_baseline(args: argparse.Namespace) -> int:
+    """Same function as ``POST /v1/supplier/trust/feed-baseline``. Writes ONE trust-store
+    entry to a ledger that must already exist; an untrusted feed is refused (exit 1)."""
+    from assurance.check.inputs import InputError
+    from assurance.supplier.baseline import accept_feed_baseline
+
+    if str(args.feed) == "-":
+        text = sys.stdin.read()
+    else:
+        try:
+            text = Path(args.feed).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise InputError(f"cannot read the feed ({args.feed}): "
+                             f"{getattr(exc, 'strerror', None) or 'not UTF-8 text'}") from exc
+    try:
+        records = _parse_feed_text(text, source="the submitted feed")
+    except (PublishError, AssuranceError, KeyError, TypeError, ValueError,
+            AttributeError) as exc:
+        raise InputError(f"unreadable feed: {exc or repr(exc)}") from exc
+    candidate = VerifyingKey.from_file(args.public_key) if args.public_key else None
+    store = SupplierTrustStore(EvidenceLedger.open_existing(args.ledger))
+    done = accept_feed_baseline(
+        store, records, expect_supplier=args.expect_supplier, candidate_key=candidate,
+        actor=args.actor, reason=args.reason)
+    if args.json:
+        print(json.dumps(done, indent=2, sort_keys=True))
+        return 0
+    base, prev = done["baseline"], done["previous"]
+    print(f"baseline for {base['supplier_id']} is now record {base['sequence']} "
+          f"({base['head_hash'][:16]})")
+    print("  previous: " + (f"record {prev['sequence']} ({prev['head_hash'][:16]})"
+                            if prev else "none was remembered"))
+    print(f"  {done['note']}")
+    return 0
+
+
 def _cmd_trust(args: argparse.Namespace) -> int:
     from assurance.core.identity import parse_utc
 
+    if args.trust_command == "baseline":
+        return _cmd_trust_baseline(args)
     store = SupplierTrustStore(EvidenceLedger(args.ledger))
     cmd = args.trust_command
     if cmd == "pin":
