@@ -6,7 +6,6 @@ import base64
 import hashlib
 import hmac
 import json
-import time
 from datetime import timedelta
 
 import jwt as pyjwt
@@ -48,7 +47,7 @@ def _public_pem_and_der():
     return pem, der
 
 
-CLAIMS = {"sub": "alice", "exp": int(time.time()) + 600}
+CLAIMS = {"sub": "alice", "exp": 4102444800}  # 2100-01-01: never expires during a test run
 
 
 class TestNormalOperation:
@@ -57,6 +56,13 @@ class TestNormalOperation:
         payload = handler.decode_token(token)
         assert payload is not None and payload.sub == "alice"
         assert [str(r) for r in payload.roles] == ["Admin"]
+
+    def test_hand_forged_token_with_the_right_secret_is_accepted(self, handler):
+        # Control for the rejection tests below: the _forge helper itself produces a token
+        # the verifier accepts, so those rejections are about the guards, not the helper.
+        token = _forge({"alg": "HS256", "typ": "JWT"}, CLAIMS, SECRET.encode())
+        payload = handler.decode_token(token)
+        assert payload is not None and payload.sub == "alice"
 
     def test_expired_token_rejected(self, handler):
         token = handler.create_access_token({"sub": "alice"}, expires_delta=timedelta(seconds=-5))
