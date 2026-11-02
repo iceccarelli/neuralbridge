@@ -6715,7 +6715,7 @@
             "description": "Successful Response"
           },
           "503": {
-            "description": "`no_attestation_key_configured` or `attestation_key_unusable`: the service has no usable signing key. The message never names a server path."
+            "description": "`no_attestation_key_configured`, `attestation_key_unsafe` or `attestation_key_unusable`: the service has no usable signing key. The message never names a server path."
           }
         },
         "summary": "The public key this service counter-signs with. No account needed.",

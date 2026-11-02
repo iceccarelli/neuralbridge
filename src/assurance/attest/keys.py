@@ -22,8 +22,10 @@ wrong, and no room for a curve or a padding mode to be selected badly.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,11 +48,111 @@ except ImportError as _exc:  # pragma: no cover - environment, not logic
 
 from assurance.core.errors import AssuranceError
 
-__all__ = ["SigningKeyError", "SigningKey", "VerifyingKey"]
+__all__ = [
+    "SigningKeyError", "UnsafeSigningKeyError", "SigningKey", "VerifyingKey",
+    "open_private_key_file", "private_key_file_problems",
+]
 
 
 class SigningKeyError(AssuranceError):
     """A key is missing, malformed, or being stored somewhere it must not be."""
+
+
+class UnsafeSigningKeyError(SigningKeyError):
+    """The key file is present but its custody is unsafe (mode, owner, link, directory).
+
+    Distinct from "missing" or "unreadable" so a service can tell an operator which it is
+    (``attestation_key_unsafe``). The message names the problem class and the file's
+    basename (or the caller's label); never a full path, never key bytes.
+    """
+
+
+#: Any permission bit for group or other. A private key file allows none.
+_LOOSE = stat.S_IRWXG | stat.S_IRWXO
+#: Write access for group or other on the directory that holds the key.
+_DIR_WRITABLE = stat.S_IWGRP | stat.S_IWOTH
+_MAX_KEY_BYTES = 64 * 1024
+
+
+def _inspect_key_fd(fd: int, dir_fd: int, name: str) -> list[str]:
+    """The one rule, applied to an already-open key descriptor and its parent directory.
+
+    Everything is judged from descriptors, so the file that is checked is the file that is
+    read (no path is resolved between the check and the read). Sticky world-writable
+    directories such as ``/tmp`` are not accepted: a service key does not live there.
+    """
+    euid = os.geteuid()
+    problems: list[str] = []
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        problems.append(f"{name} is not a regular file")
+        return problems
+    if info.st_uid not in (euid, 0):
+        problems.append(f"{name} is owned by another account; a private key must be owned "
+                        "by the account that runs the service (or root)")
+    if info.st_mode & _LOOSE:
+        problems.append(f"{name} has mode {stat.S_IMODE(info.st_mode):04o}; a private key "
+                        "must be readable by its owner alone (chmod 600)")
+    dinfo = os.fstat(dir_fd)
+    if dinfo.st_mode & _DIR_WRITABLE:
+        problems.append(f"the directory holding {name} is writable by group or other (a "
+                        "sticky shared directory such as /tmp is not acceptable either); "
+                        "put the key in a directory only its owner can write (chmod 700)")
+    if dinfo.st_uid not in (euid, 0):
+        problems.append(f"the directory holding {name} is owned by another account")
+    return problems
+
+
+def open_private_key_file(
+    path: str | Path, *, label: str | None = None,
+) -> tuple[int | None, list[str]]:
+    """Open a private key file for reading and judge it, from the open descriptor.
+
+    Returns ``(fd, [])`` when safe (the caller reads from *fd* and closes it) or
+    ``(None, problems)``. A symlink as the final component is refused by ``O_NOFOLLOW``.
+    This is the single implementation behind :meth:`SigningKey.load`,
+    ``custody.key_file_problems`` and ``attest preflight``.
+    """
+    p = Path(path)
+    name = label or p.name or "the key file"
+    if os.name != "posix":
+        return None, [f"{name}: file permissions cannot be checked on this platform"]
+    parent = str(p.parent) if str(p.parent) else "."
+    try:
+        dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None, [f"{name} does not exist"]
+    except OSError as exc:
+        return None, [f"{name} cannot be inspected ({type(exc).__name__})"]
+    fd: int | None = None
+    try:
+        try:
+            fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | getattr(
+                os, "O_NONBLOCK", 0), dir_fd=dir_fd)
+        except FileNotFoundError:
+            return None, [f"{name} does not exist"]
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return None, [f"{name} is a symbolic link; point at the key file itself, so "
+                              "the file that is checked is the file that is read"]
+            return None, [f"{name} cannot be opened ({type(exc).__name__})"]
+        problems = _inspect_key_fd(fd, dir_fd, name)
+        if problems:
+            return None, problems         # the finally below closes fd
+        ok_fd, fd = fd, None
+        return ok_fd, []
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(dir_fd)
+
+
+def private_key_file_problems(path: str | Path, *, label: str | None = None) -> list[str]:
+    """Why this key file is not safe to use, or ``[]``. Opens, judges, closes; reads nothing."""
+    fd, problems = open_private_key_file(path, label=label)
+    if fd is not None:
+        os.close(fd)
+    return problems
 
 
 def _fingerprint(public_bytes: bytes) -> str:
@@ -161,14 +263,36 @@ class SigningKey:
     @classmethod
     def load(
         cls, path: str | Path, *, passphrase: str = "", label: str | None = None,
+        check_permissions: bool = True,
     ) -> SigningKey:
-        """Load a key file. *label* names it in errors: a server passes one so that
-        no message it sends to a client contains a filesystem path."""
+        """Load a key file, refusing unsafe custody. *label* names it in errors: a server
+        passes one so that no message it sends to a client contains a filesystem path
+        (without one, only the file's basename is named).
+
+        The file is opened ``O_NOFOLLOW`` and judged with ``fstat`` on the open
+        descriptor, then read from that same descriptor: a regular file, owned by the
+        running account (or root), no group/other access, in a directory neither group
+        nor other can write. Anything else raises :class:`UnsafeSigningKeyError`.
+
+        ``check_permissions=False`` exists for test fixtures only; no deployment path
+        passes it and there is deliberately no environment switch.
+        """
         p = Path(path)
-        name = label or str(p)
-        if not p.exists():
-            raise SigningKeyError(f"{name} does not exist.")
-        return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=name)
+        name = label or p.name or "the key file"
+        if not check_permissions:
+            if not p.exists():
+                raise SigningKeyError(f"{name} does not exist.")
+            return cls.from_pem(p.read_bytes(), passphrase=passphrase, where=name)
+        fd, problems = open_private_key_file(p, label=label)
+        if fd is None:
+            if len(problems) == 1 and problems[0].endswith("does not exist"):
+                raise SigningKeyError(f"{name} does not exist.")
+            raise UnsafeSigningKeyError("; ".join(problems))
+        with os.fdopen(fd, "rb") as handle:
+            data = handle.read(_MAX_KEY_BYTES + 1)
+        if len(data) > _MAX_KEY_BYTES:
+            raise SigningKeyError(f"{name} is too large to be a key file.")
+        return cls.from_pem(data, passphrase=passphrase, where=name)
 
     def save(
         self, path: str | Path, *, passphrase: str = "", ledger: str | Path | None = None,
