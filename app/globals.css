@@ -3065,6 +3065,18 @@ table.status-table tbody tr:last-child td {
 .aw-kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0; font-size: 0.9rem; }
 .aw-kv dt { color: var(--ink-soft); }
 .aw-kv dd { margin: 0; }
+/* Enrolment receipt and intelligence lookup. State is carried by a word and a border style as well
+   as colour; nothing here is green, because neither panel states a good outcome about a machine. */
+.aw-result:focus { outline: 2px solid var(--link); outline-offset: 2px; }
+.aw-receipt, .aw-intel { margin: 0.75rem 0; padding: 0.75rem 1rem; border: 1px solid var(--border); border-left: 4px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--surface-alt); }
+.aw-receipt[data-state="refused"] { border-left-color: var(--danger); border-left-style: double; }
+.aw-receipt h3, .aw-intel h3 { font-size: 1rem; margin: 1rem 0 0.25rem; }
+.aw-receipt code, .aw-intel code, .aw-cite { overflow-wrap: anywhere; }
+.aw-cite { display: block; color: var(--ink-soft); font-size: 0.8rem; }
+.aw-intel-summary { padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-left: 4px solid var(--ink-soft); border-radius: var(--radius-sm); background: var(--surface); }
+.aw-intel-summary[data-state="unknown"] { border-left-color: var(--danger); border-left-style: dashed; }
+.aw-intel-row[data-state="unchecked"], .aw-intel-row[data-state="unavailable"], .aw-intel-row[data-state="unknown"] { border-left: 4px dashed var(--ink-soft); padding-left: 0.75rem; }
+.aw-store-banner { border-left-style: double; }
 
 /* ====================== IMAGERY DISCLOSURE ====================== */
 .imagery-note {

@@ -5,7 +5,8 @@ list contains the cycle's status, POST one small JSON body (status, step names a
 human-action strings the record already holds, the record's SHA-256) to an HTTPS endpoint the
 operator named. The body is signed with HMAC-SHA256 over the exact bytes sent. Enterprise
 ticketing, chat and on-call tools accept an authenticated inbound webhook; this is the generic
-sender. No vendor format is built.
+sender; ``format`` may also shape the same message for Slack, Teams or PagerDuty
+(``assurance.ops.formats``, contract-checked against vendor docs only, never a live account).
 
 What it is not: delivery is not acknowledgement by a person; nothing here decides, opens a case
 or closes anything. It lives ONLY in the hosted/operator ``ops`` path, is off unless a ``notify``
@@ -41,6 +42,7 @@ from typing import Any
 
 from assurance.core.identity import format_utc, utc_now
 from assurance.core.text import neutralise
+from assurance.ops import formats
 from assurance.ops import record as rec
 from assurance.ops.config import NotifyCfg, OpsConfig
 
@@ -201,19 +203,28 @@ class _Result:
     error_class: str | None
 
 
-def _headers(secret: str, extra: Mapping[str, str], body: bytes, key: str, delivery_id: str
-             ) -> dict[str, str]:
-    return {**extra, "Content-Type": "application/json",
-            "X-NeuralBridge-Signature": sign(secret, body),
-            "X-NeuralBridge-Delivery": delivery_id, "Idempotency-Key": key}
+def _headers(target: NotifyCfg, secret: str, extra: Mapping[str, str], req: formats.Rendered,
+             key: str, delivery_id: str) -> dict[str, str]:
+    out = {**extra, **req.headers, "Content-Type": req.content_type,
+           "X-NeuralBridge-Delivery": delivery_id, "Idempotency-Key": key}
+    if target.format in formats.SIGNED_FORMATS:      # PagerDuty authenticates by routing key
+        out["X-NeuralBridge-Signature"] = sign(secret, req.body)
+    return out
 
 
-def _post(transport: Transport, target: NotifyCfg, body: bytes, key: str, secret: str,
-          extra: Mapping[str, str]) -> _Result:
+def _render(target: NotifyCfg, message: Mapping[str, Any], key: str, secret: str
+            ) -> formats.Rendered:
+    """The vendor body, built at send time so a routing key is never persisted."""
+    return formats.render(target.format, message, key=key,
+                          routing_key=secret if target.format == "pagerduty" else None)
+
+
+def _post(transport: Transport, target: NotifyCfg, req: formats.Rendered, key: str,
+          secret: str, extra: Mapping[str, str]) -> _Result:
     delivery_id = str(uuid.uuid4())
     try:
-        status, _ = transport.post(target.url, _headers(secret, extra, body, key, delivery_id),
-                                   body, TIMEOUT_S)
+        status, _ = transport.post(target.url, _headers(target, secret, extra, req, key,
+                                                        delivery_id), req.body, TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 - a delivery problem is recorded, never raised
         status_attr = getattr(exc, "status", None)
         if type(exc).__name__ == "ResponseTooLarge" and isinstance(status_attr, int) \
@@ -309,12 +320,13 @@ def deliver(cfg: OpsConfig, doc: Mapping[str, Any], *,
     secrets = _secret_strings(cfg, env)
     entries: list[dict[str, Any]] = []
 
-    def run(target: NotifyCfg, body: bytes, key: str) -> _Result | None:
+    def run(target: NotifyCfg, message: Mapping[str, Any], key: str) -> _Result | None:
         try:
             secret, extra = _credentials(target, env)
         except _Unusable:
             return None
-        return _post(factory(target.allow_host), target, body, key, secret, extra)
+        return _post(factory(target.allow_host), target, _render(target, message, key, secret),
+                     key, secret, extra)
 
     # 1. owed from earlier cycles (same body, same Idempotency-Key)
     for it in _fold(_read_outbox(cfg.outbox)).values():
@@ -327,7 +339,16 @@ def deliver(cfg: OpsConfig, doc: Mapping[str, Any], *,
             entries.append(_entry(name, cid, "failed", None, it["attempts"], retry=True,
                                   reason="target no longer configured", abandoned=True))
             continue
-        res = run(target, str(it["body"]).encode("utf-8"), key)
+        try:
+            message = json.loads(str(it["body"]))
+            if not isinstance(message, dict):
+                raise ValueError
+        except ValueError:
+            _log(cfg.outbox, o="abandoned", key=key, reason="corrupt_body")
+            entries.append(_entry(name, cid, "failed", None, it["attempts"], retry=True,
+                                  reason="stored message unreadable", abandoned=True))
+            continue
+        res = run(target, message, key)
         if res is None:
             entries.append(_entry(name, cid, "skipped", None, it["attempts"], retry=True,
                                   reason=_why_unusable(target, env)))
@@ -346,11 +367,11 @@ def deliver(cfg: OpsConfig, doc: Mapping[str, Any], *,
     wanted = [t for t in cfg.notify if str(doc.get("status")) in t.on]
     if wanted:
         payload = rec.scrub(build_payload(doc), secrets)
-        body = encode(payload)
+        body = encode(payload)       # the vendor-free canonical message: this is what is stored
         cid = payload["cycle_id"]
         for target in wanted:
             key = f"{cid}:{target.name}"
-            res = run(target, body, key)
+            res = run(target, payload, key)
             if res is None:
                 entries.append(_entry(target.name, cid, "skipped", None, 0, retry=False,
                                       reason=_why_unusable(target, env)))
@@ -381,15 +402,22 @@ def dry_run_request(cfg: OpsConfig, target: NotifyCfg, environ: Mapping[str, str
                     ) -> dict[str, Any]:
     """What a live test would send, with every secret masked. Reads the environment, sends nothing."""
     env = os.environ if environ is None else environ
-    body = encode(build_test_payload(cfg, target))
-    headers = ["Content-Type: application/json",
-               f"X-NeuralBridge-Signature: sha256=<hmac of {len(body)} bytes>",
-               "X-NeuralBridge-Delivery: <uuid, new per attempt>",
-               f"Idempotency-Key: test-{cfg.ops_id}:{target.name}:<uuid>"]
+    key = f"test-{cfg.ops_id}:{target.name}:<uuid>"
+    req = formats.render(target.format, build_test_payload(cfg, target), key=key,
+                         routing_key="<routing key from $" + target.secret_env + ": not shown>")
+    body = req.body
+    headers = [f"Content-Type: {req.content_type}"]
+    if target.format in formats.SIGNED_FORMATS:
+        headers.append(f"X-NeuralBridge-Signature: sha256=<hmac of {len(body)} bytes>")
+    else:
+        headers.append("(no X-NeuralBridge-Signature: this format authenticates by its routing "
+                       "key)")
+    headers += ["X-NeuralBridge-Delivery: <uuid, new per attempt>", f"Idempotency-Key: {key}"]
     if target.headers_env:
         headers.append(f"<extra header lines from ${target.headers_env}: names and values not "
                        "shown>")
-    return {"method": "POST", "host": target.allow_host, "url": "<the configured URL: path not "
+    return {"method": "POST", "format": target.format, "body_shape": formats.body_shape(
+        target.format), "host": target.allow_host, "url": "<the configured URL: path not "
             "shown, it may be a bearer token>", "headers": headers,
             "body": body.decode("utf-8"),
             "secret_env_set": bool(env.get(target.secret_env)),
@@ -407,9 +435,8 @@ def send_test(cfg: OpsConfig, target: NotifyCfg, *,
     except _Unusable as exc:
         return {"status": "skipped", "reason": str(exc), "http_status": None, "attempts": 0,
                 "delivery_id": None, "error_class": None}
-    body = encode(build_test_payload(cfg, target))
     key = f"test-{cfg.ops_id}:{target.name}:{uuid.uuid4()}"
-    res = _post((transport_factory or make_transport)(target.allow_host), target, body, key,
-                secret, extra)
+    res = _post((transport_factory or make_transport)(target.allow_host), target,
+                _render(target, build_test_payload(cfg, target), key, secret), key, secret, extra)
     return {"status": "delivered" if res.ok else "failed", "http_status": res.http_status,
             "attempts": 1, "delivery_id": res.delivery_id, "error_class": res.error_class}

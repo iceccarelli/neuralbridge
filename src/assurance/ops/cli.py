@@ -140,7 +140,7 @@ def _cmd_cycle(args: argparse.Namespace) -> int:
                 print(f"             {neutralise(s['command'])}")
             for t in cfg.notify:
                 print(f"  [notify  ] {t.name}: would be told on {'/'.join(t.on)} (host "
-                      f"{t.allow_host}); nothing is sent in a dry run")
+                      f"{t.allow_host}, format {t.format}); nothing is sent in a dry run")
         return 0
     fd = _lock(cfg.lock)
     if fd is None:
@@ -311,7 +311,8 @@ def _cmd_notify_test(args: argparse.Namespace) -> int:
             print(json.dumps({"dry_run": True, **shown}, indent=2, sort_keys=True))
         else:
             print(f"{cfg.ops_id} - DRY RUN: nothing was sent. A live test would be:")
-            print(f"  POST to host {shown['host']}")
+            print(f"  POST to host {shown['host']}, format {shown['format']}: "
+                  f"{shown['body_shape']}")
             for h in shown["headers"]:
                 print(f"  {neutralise(h)}")
             print(f"  body: {shown['body']}")

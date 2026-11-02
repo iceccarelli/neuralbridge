@@ -224,7 +224,8 @@ def test_the_extra_header_value_never_reaches_the_record_output_outbox_or_an_err
     (lambda t: t.pop("secret_env"), "secret_env"),
     (lambda t: t.update(on=["ok"]), "notify[0].on"),
     (lambda t: t.update(on=[]), "notify[0].on"),
-    (lambda t: t.update(format="slack"), "format"),
+    (lambda t: t.update(format="servicenow_json"), "format"),
+    (lambda t: t.update(format="xml"), "format"),
     (lambda t: t.update(colour="red"), "unknown key"),
     (lambda t: t.update(secret_env="sk_live_abcdefghijklmnop"),  # noqa: S106
      "secret_env"),
@@ -320,10 +321,11 @@ def test_429_retry_after_is_honoured_and_bounded():
 
 
 def test_a_response_larger_than_the_cap_does_not_hide_a_2xx_delivery():
-    cfg_t = type("T", (), {"url": URL, "name": "n"})()
+    cfg_t = type("T", (), {"url": URL, "name": "n", "format": "json"})()
     big = UrllibTransport(allowed_hosts=[HOST], opener=PostOpener(Resp(b"x" * 100)),
                           max_bytes=10, sleep=lambda s: None)
-    res = notify._post(big, cfg_t, b"{}", "k", SECRET, {})
+    res = notify._post(big, cfg_t, notify.formats.Rendered(b"{}", "application/json", {}), "k",
+                        SECRET, {})
     assert res.ok and res.http_status == 200
 
 
