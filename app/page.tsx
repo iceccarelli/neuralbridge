@@ -3,6 +3,7 @@ import { ownerLink, QUICKSTART, repoSameAs, SALES, srcLink } from './lib/links';
 import structuredOffers from './lib/structured-offers.json';
 import { PLATFORM_STATUS } from './lib/platformStatus';
 import { SOLUTIONS } from './lib/solutions';
+import { PRODUCT_PAGES, productHref } from './lib/productPages';
 import { IMAGES } from './lib/images';
 import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
@@ -396,6 +397,33 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <span className="tile-link-arrow" aria-hidden>→</span>
                 </a>
               </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* HOW IT WORKS: the /product pages, generated from app/lib/productPages.ts */}
+      <section className="section" id="workflow">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">How it works</span>
+            <h2>Machine evidence goes stale when the machine changes. One page per question.</h2>
+            <p>
+              Each page below follows a real workflow through the commands, routes and tools that exist, says what it
+              does not establish, and names who decides.
+            </p>
+          </div>
+          <div className="solutions-grid">
+            {PRODUCT_PAGES.map((page) => (
+              <a className="solution-card" href={productHref(page.slug)} key={page.slug}>
+                <span className="solution-role">{page.kicker}</span>
+                <h3>{page.name}</h3>
+                <p>{page.intent}</p>
+                <span className="tile-link" style={{ marginTop: '0.75rem' }}>
+                  <span className="tile-link-label">Read the workflow</span>
+                  <span className="tile-link-arrow" aria-hidden>{'→'}</span>
+                </span>
+              </a>
             ))}
           </div>
         </div>

@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from 'react';
 import RepoLink from './components/RepoLink';
 import { DOCS, repoLink, SALES, srcLink } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
+import { CATEGORY_SLUG, PRODUCT_PAGES, productHref } from './lib/productPages';
 import SearchOverlay from './components/SearchOverlay';
 
 type MenuKey = 'products' | 'solutions' | 'pricing' | 'resources';
-type ProductsPane = 'plans' | 'engines' | 'platform';
+type ProductsPane = 'plans' | 'engines' | 'platform' | 'product';
 type MobileView = 'root' | 'products' | 'solutions' | 'resources';
 
 const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: string; blurb: string; href: string; external?: boolean }[] }> = {
@@ -41,6 +42,13 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
       { name: 'Investigate', blurb: 'An enrolled machine’s configuration, evidence, interventions and fleet impact in one place.', href: '/investigate' },
       { name: 'AI (agent control plane)', blurb: 'Discover a connection, read it, plan a write, approve, get a receipt.', href: '/ai' },
     ],
+  },
+  // The workflow pages (app/lib/productPages.ts): the category page first, then one page per question.
+  product: {
+    label: 'Product',
+    cards: [...PRODUCT_PAGES]
+      .sort((a, b) => Number(b.slug === CATEGORY_SLUG) - Number(a.slug === CATEGORY_SLUG))
+      .map((p) => ({ name: p.name, blurb: p.intent, href: productHref(p.slug) })),
   },
 };
 
@@ -387,6 +395,11 @@ export default function Header() {
               <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo</a>
               <a className="mobile-drill-item" href="/#products" onClick={() => setMobileOpen(false)}>All engines</a>
               <a className="mobile-drill-item" href="/#platform" onClick={() => setMobileOpen(false)}>Platform</a>
+              {PRODUCT_PAGES.map((p) => (
+                <a className="mobile-drill-item" href={productHref(p.slug)} key={p.slug} onClick={() => setMobileOpen(false)}>
+                  {p.name}
+                </a>
+              ))}
             </>
           )}
           {mobileView === 'solutions' && (
