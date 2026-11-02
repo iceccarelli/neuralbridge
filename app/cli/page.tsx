@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { buildMetadata } from '../lib/seo';
 import RepoLink from '../components/RepoLink';
 import { IMAGES } from '../lib/images';
 import { CLI_DOMAINS, TIER_LABEL } from '../lib/routes';
@@ -6,17 +7,12 @@ import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
 import { COUNTS } from '../lib/siteCapabilities';
 
-export const metadata: Metadata = {
-  title: 'CLI | Industrial Autonomous Assurance',
-  description: 'Install the assurance CLI, the real domain/verb tree checked against --help, and which commands map to the hosted API vs. stay offline.',
-  alternates: { canonical: '/cli' },
-  openGraph: {
-    title: 'CLI | Industrial Autonomous Assurance',
-    description: 'python -m assurance — the real command tree, and what each domain maps to.',
-    url: '/cli',
-    type: 'website',
-  },
-};
+export const metadata: Metadata = buildMetadata({
+  title: 'CLI',
+  description:
+    'Install the assurance CLI, the real domain/verb tree checked against --help, and which commands map to the hosted API vs. stay offline.',
+  path: '/cli',
+});
 
 export default function CliPage() {
   return (
@@ -50,7 +46,7 @@ export default function CliPage() {
             <p>No account, no upload — every domain reads and writes local files unless it explicitly names an API call below.</p>
           </div>
           <p className="code-panel-label">Install and check</p>
-          <pre className="code-panel">{`pip install cryptography && export PYTHONPATH=src   # from a checkout; nothing else to install
+          <pre className="code-panel" tabIndex={0}>{`pip install cryptography && export PYTHONPATH=src   # from a checkout; nothing else to install
 python -m assurance                     # lists every domain
 python -m assurance kit init plant/     # a runnable kit
 python -m assurance kit check plant/kit.json`}</pre>
@@ -78,7 +74,7 @@ python -m assurance kit check plant/kit.json`}</pre>
               store that produces, answering 503 until the operator sets <code>ASSURANCE_INTEL_STORE</code>.
             </p>
           </div>
-          <div className="status-table-wrap">
+          <div className="status-table-wrap" tabIndex={0} role="region" aria-label="Table, scrolls sideways">
             <table className="status-table">
               <thead>
                 <tr>
