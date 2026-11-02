@@ -112,6 +112,7 @@ export const ROUTES: RouteRow[] = [
 
   { method: 'POST', path: '/v1/supplier/advisory', tier: 'supplier', summary: 'Publish a signed advisory to your hosted feed' },
   { method: 'POST', path: '/v1/supplier/advisory/withdraw', tier: 'supplier', summary: 'Withdraw an advisory with a signed withdrawal, verified under a key your account pinned; the original is kept' },
+  { method: 'POST', path: '/v1/supplier/advisory/key', tier: 'supplier', summary: 'Pin your own publishing public key in your own account, for the supplier id you publish as; recorded as declared by you, not proof of identity' },
 ];
 
 export const TIER_LABEL: Record<Tier, string> = {

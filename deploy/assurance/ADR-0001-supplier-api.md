@@ -59,6 +59,13 @@ the kind of drift the rest of this codebase refuses to allow.
 - `POST /v1/supplier/advisory/withdraw` — same `supplier_publish` gate. Appends a
   signed withdrawal as the next record; unlike publish it verifies the signature,
   under a key the account pinned for that supplier (see SUPPLIER.md).
+- `POST /v1/supplier/advisory/key` — same `supplier_publish` gate. Lets a supplier
+  account pin only its own publishing public key, for the supplier id its hosted
+  feed already carries, into its own account ledger (the same trust store as
+  `/trust/pin` and `/trust/rotate`; a second key is a rotation that retires the old
+  one, never deletes it). A private key is refused unread. The pin is the account's
+  own declaration ("as declared by this account"), not evidence of real-world
+  identity; it never affects another tenant and never trusts another supplier.
 - `GET /v1/supplier/feed/{account_id}` — free, no account, forever. Serves
   the raw NDJSON feed. The audience for a supplier's advisory is every
   integrator who might be affected, not a paying subscriber — same reasoning

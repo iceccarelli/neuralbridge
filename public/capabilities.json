@@ -2436,6 +2436,27 @@
       "title": "Sign an advisory into a feed"
     },
     {
+      "id": "supplier.self_pin",
+      "service": "supplier",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/supplier/advisory/key"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "reason": "`supplier trust pin` pins into a local ledger offline; the hosted self-pin is the account's declaration about its own key and has no offline form",
+          "status": "by_design"
+        },
+        "mcp": {
+          "reason": "key custody and identity are a named person's decision",
+          "status": "by_design"
+        }
+      },
+      "title": "Pin your own publishing public key in your own account (as declared by you)"
+    },
+    {
       "id": "supplier.trust_baseline",
       "service": "supplier",
       "surfaces": {
@@ -2934,25 +2955,25 @@
     ]
   },
   "counts": {
-    "api_routes": 90,
-    "capabilities": 122,
+    "api_routes": 91,
+    "capabilities": 123,
     "cli_commands": 107,
     "cli_domains": 20,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
-        "available": 84,
+        "available": 85,
         "by_design": 38,
         "planned": 0
       },
       "cli": {
         "available": 109,
-        "by_design": 12,
+        "by_design": 13,
         "planned": 1
       },
       "mcp": {
         "available": 42,
-        "by_design": 80,
+        "by_design": 81,
         "planned": 0
       }
     }

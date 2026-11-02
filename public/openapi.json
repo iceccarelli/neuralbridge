@@ -1836,6 +1836,41 @@
         "title": "RunSummaryIn",
         "type": "object"
       },
+      "SelfPinIn": {
+        "additionalProperties": true,
+        "description": "Extra fields are collected, then refused by name: a supplier id here is a 422,\nand the value of an unexpected field is never echoed (it could be a private key).",
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "effective_at": {
+            "default": "",
+            "title": "Effective At",
+            "type": "string"
+          },
+          "effective_from": {
+            "default": "",
+            "title": "Effective From",
+            "type": "string"
+          },
+          "public_key_pem": {
+            "default": "",
+            "title": "Public Key Pem",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "SelfPinIn",
+        "type": "object"
+      },
       "SeparationIn": {
         "additionalProperties": false,
         "description": "The six inputs an integrator already has written down somewhere.",
@@ -8538,6 +8573,84 @@
           }
         },
         "summary": "Publish a signed advisory to your hosted feed (Supplier tier); readers verify the signature",
+        "tags": [
+          "supplier"
+        ]
+      }
+    },
+    "/v1/supplier/advisory/key": {
+      "post": {
+        "description": "Pin the public key this account publishes with, for the supplier id it publishes as.\n\nSame Supplier-tier gate as publish. It calls the same trust store as\n``/trust/pin`` and ``/trust/rotate`` and can only name this account's own\nsupplier id. It is the account holder's declaration, not proof of identity,\nand never trusts another supplier. A repeat of the active key is a 200 that\nwrites nothing; a different key while one is active is a rotation and needs\n``effective_at``; the old key is retired, never deleted. Revocation stays on\n``/trust/revoke`` (Machine tier).",
+        "operationId": "post_self_pin_v1_supplier_advisory_key_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfPinIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Self Pin V1 Supplier Advisory Key Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin your own publishing public key in your own account (Supplier tier; as declared by you)",
         "tags": [
           "supplier"
         ]

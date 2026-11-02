@@ -355,6 +355,130 @@ def post_withdrawal(
             "feed_url": f"/v1/supplier/feed/{principal.account.id}"}
 
 
+SELF_PIN_STATEMENT = (
+    "Pinned as declared by this account. This records that the account holder says "
+    "this is the key it publishes with; it is not evidence of the supplier's "
+    "real-world identity. It affects only what this account's own feed verification "
+    "accepts (for example a withdrawal under POST /v1/supplier/advisory/withdraw), "
+    "never another account's trust, and it does not trust any other supplier's feed."
+)
+
+
+class SelfPinIn(BaseModel):
+    """Extra fields are collected, then refused by name: a supplier id here is a 422,
+    and the value of an unexpected field is never echoed (it could be a private key)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    #: PUBLIC key, PEM. Deliberately unconstrained here so a validation error can
+    #: never echo what was sent; size and shape are checked in the route.
+    public_key_pem: str = ""
+    #: From when the key covers records. Omitted: from the beginning (as `trust/pin`).
+    effective_from: str = ""
+    #: Only for a rotation (a different key is already active): when the old one retires.
+    effective_at: str = ""
+    actor: str = Field(default="", max_length=200)
+    reason: str = Field(default="", max_length=1000)
+
+
+def _own_supplier_id(account_id: str) -> str:
+    """The supplier id this account publishes as: the one its hosted feed already carries.
+
+    Taken from the feed (one feed, one supplier, see ``_require_chain``), never from
+    the request. An account that has not published yet has no identity to pin to.
+    """
+    path = supplier_feeds_dir() / f"{account_id}.jsonl"
+    history = AdvisoryFeed(path).read() if path.exists() else []
+    if not history:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "error": "no_supplier_identity",
+            "detail": "this account has not published, so it has no supplier id yet. "
+                      "Publish a first record (POST /v1/supplier/advisory), then pin "
+                      "the key that signed it."})
+    return history[0].supplier.supplier_id
+
+
+@supplier_router.post(
+    "/advisory/key",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+    summary="Pin your own publishing public key in your own account (Supplier tier; as declared by you)",
+)
+def post_self_pin(
+    body: SelfPinIn, response: Response, principal: Annotated[Principal, Supplying],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """Pin the public key this account publishes with, for the supplier id it publishes as.
+
+    Same Supplier-tier gate as publish. It calls the same trust store as
+    ``/trust/pin`` and ``/trust/rotate`` and can only name this account's own
+    supplier id. It is the account holder's declaration, not proof of identity,
+    and never trusts another supplier. A repeat of the active key is a 200 that
+    writes nothing; a different key while one is active is a rotation and needs
+    ``effective_at``; the old key is retired, never deleted. Revocation stays on
+    ``/trust/revoke`` (Machine tier).
+    """
+    assert principal.account is not None  # Supplying guarantees this
+    pem = body.public_key_pem
+    extras = dict(body.model_extra or {})
+    if "PRIVATE" in pem.upper() or any(
+            "PRIVATE" in json.dumps(v, default=str).upper() for v in extras.values()):
+        raise _unprocessable(
+            "private_key_refused",
+            "That looks like a private key. It was not read or kept. Only the PUBLIC "
+            "key goes here; if this was a real key, treat it as exposed and replace it.")
+    if extras:
+        raise _unprocessable(
+            "unexpected_fields",
+            "unexpected field(s): " + ", ".join(sorted(map(str, extras))) + ". The supplier id "
+            "is the one this account publishes as and cannot be named in the request.")
+    if not pem.strip() or len(pem) > 4096:
+        raise _unprocessable("invalid_public_key",
+                             "public_key_pem must be one Ed25519 public key in PEM (at most 4096 characters).")
+    store = account_trust_store(principal, register)
+    who = _actor(body.actor, principal)
+    try:
+        fingerprint = VerifyingKey.from_pem(pem).fingerprint
+    except (SigningKeyError, ValueError):
+        raise _unprocessable("invalid_public_key",
+                             "not a usable Ed25519 public key in PEM form.") from None
+    supplier_id = _own_supplier_id(principal.account.id)
+    try:
+        start = parse_utc(body.effective_from) if body.effective_from.strip() else None
+        retire_at = parse_utc(body.effective_at) if body.effective_at.strip() else None
+    except ValueError as exc:
+        raise _unprocessable("invalid_effective_time", str(exc)) from exc
+
+    active = [p for p in store.pins(supplier_id) if p.status == "active"]
+    same = next((p for p in active if p.fingerprint == fingerprint), None)
+    if same is not None:
+        response.status_code = status.HTTP_200_OK
+        return {"state": "already_pinned", "written": False, "pin": same.to_dict(),
+                "supplier_id": supplier_id, "statement": SELF_PIN_STATEMENT}
+    via = (f"declared by account {principal.account.id} through "
+           "POST /v1/supplier/advisory/key (self-pin)")
+    try:
+        if active:
+            if retire_at is None:
+                raise _unprocessable(
+                    "rotation_needs_effective_at",
+                    f"key {active[0].fingerprint} is already pinned for {supplier_id}; a "
+                    "different key is a rotation. Send `effective_at` (when the old key "
+                    "retires); it stays on record as retired.")
+            pin = store.rotate(supplier_id, pem, retire_fingerprint=active[0].fingerprint,
+                               effective_at=retire_at, actor=who, obtained_via=via,
+                               reason=body.reason)
+            state = "rotated"
+        else:
+            pin = store.pin(supplier_id, pem, actor=who, obtained_via=via,
+                            effective_from=start, reason=body.reason)
+            state = "pinned"
+    except SupplierTrustError as exc:
+        raise _trust_refusal(exc) from exc
+    return {"state": state, "written": True, "pin": pin.to_dict(),
+            "supplier_id": supplier_id, "statement": SELF_PIN_STATEMENT}
+
+
 @supplier_router.get(
     "/feed/{supplier_account_id}",
     summary="Read a hosted supplier feed (no account needed)",

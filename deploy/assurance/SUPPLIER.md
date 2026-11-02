@@ -83,6 +83,7 @@ than the wrong advisory was. A withdrawal is a publication.
 |---|---|---|
 | `POST /v1/supplier/advisory` | Supplier tier (401 without a key, 402 without the tier) | Host a record you signed locally. Structure and chain are checked; the signature is not. |
 | `POST /v1/supplier/advisory/withdraw` | Same | Host a signed **withdrawal** of an advisory your feed carries. |
+| `POST /v1/supplier/advisory/key` | Same | Pin **your own** public key in your own account (see below). |
 | `GET /v1/supplier/feed/{account_id}` | None | The feed, as written. |
 
 The hosted withdrawal is the same act as `assurance supplier withdraw`, and the
@@ -90,9 +91,8 @@ server never holds your private key. Fetch your feed, run `assurance supplier
 withdraw` against that copy (it signs the next record and chains it to the
 head), and POST the last line of the copy as the body. The route differs from
 publish in one way: it **verifies the signature**, under a key your account has
-pinned for your supplier id (`POST /v1/supplier/trust/pin`, or assigned by us
-when the Supplier tier is set up; the fingerprint a record names only chooses
-which pin to try). An unsigned record is 422; an unpinned, revoked or retired key,
+pinned for your supplier id (`POST /v1/supplier/advisory/key`, below; the
+fingerprint a record names only chooses which pin to try). An unsigned record is 422; an unpinned, revoked or retired key,
 a foreign key or an altered record is 403; an advisory the feed does not carry is
 404 `advisory_not_in_feed`; a stale `sequence` or `previous` is 409. A repeat for
 an advisory already withdrawn is a 200 that writes nothing.
@@ -102,6 +102,34 @@ that supersedes it; the feed shows both, the withdrawal carrying `withdraws` and
 `withdrawal_reason`. Readers (`trust/evaluate`, the watch) report the advisory as
 withdrawn only when they verify the withdrawal under a key *they* pinned. There
 is no MCP tool: a withdrawal is a named supplier's signed act.
+
+### Pinning your own key
+
+A Supplier-tier account can pin its own publishing key, so a withdrawal can be
+verified without anyone else pinning it for you. `POST /v1/supplier/advisory/key`
+takes the PUBLIC key (`public_key_pem`) and optionally `effective_from`, `reason`.
+It is gated like publish (401 without a key, 402 without the Supplier tier), needs
+a key issued to an individual operator with the `decider` role (a named person,
+as for every trust decision), and pins only for the supplier id your hosted feed
+already carries: publish a first record first, otherwise 409
+`no_supplier_identity`. You cannot name a supplier id; the field is refused.
+
+Limits, stated plainly:
+
+- The pin is **as declared by this account**. It records that you say this is your
+  key. It is not evidence of your real-world identity, and the response says so.
+- It changes only what **your own account's** verification accepts. It never
+  affects another account, and it does not let you trust anyone else's feed; pin
+  other suppliers through `/v1/supplier/trust/pin` (Machine tier).
+- A private key is refused unread (422 `private_key_refused`) and never echoed;
+  if it was real, treat it as exposed.
+- The same key again is a 200 that writes nothing. A different key while one is
+  active is a rotation: send `effective_at`; the old key is retired from then on
+  and stays on record. Revocation is not offered here (`/v1/supplier/trust/revoke`
+  is Machine tier).
+- The operator account is refused (403 `supplier_trust_is_per_account`).
+- No MCP tool and no CLI wrapper: key custody is a named person's act; offline use
+  keeps `assurance supplier trust pin`.
 
 ## For an integrator
 

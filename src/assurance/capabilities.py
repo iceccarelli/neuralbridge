@@ -293,6 +293,11 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("supplier.withdraw", "Sign a withdrawal of an advisory",
        "supplier withdraw", "POST /v1/supplier/advisory/withdraw",
        gaps={"mcp": _d("withdrawing an advisory is a named supplier's signed act")}),
+    _c("supplier.self_pin", "Pin your own publishing public key in your own account (as declared by you)",
+       api="POST /v1/supplier/advisory/key",
+       gaps={"cli": _d("`supplier trust pin` pins into a local ledger offline; the hosted self-pin is "
+                       "the account's declaration about its own key and has no offline form"),
+             "mcp": _d("key custody and identity are a named person's decision")}),
     _c("supplier.verify", "Check a feed file before acting on it", "supplier verify",
        gaps={"api": _d("`POST /v1/supplier/trust/evaluate` is the hosted form, under pinned keys"),
              "mcp": _d(_LOCAL_FILE + "; the MCP form of judging a feed is `supplier_trust_check`")}),
