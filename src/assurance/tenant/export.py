@@ -25,7 +25,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -187,12 +187,76 @@ def _prepare_out(out: Path, files_dirs: tuple[Path, ...]) -> bool:
     return True
 
 
+#: Test seam: called once the output directory is open, before anything is written to it.
+_AFTER_PREPARE_OUT: Callable[[Path], None] | None = None
+#: Test seam: called after the destination was validated and before it is opened.
+_BEFORE_OPEN_OUT: Callable[[Path], None] | None = None
+
+
+def _open_out_dir(out: Path, create: bool,
+                  files_dirs: tuple[Path, ...]) -> tuple[int, Path]:
+    """Create (if needed) and OPEN the destination without following a link.
+
+    Returns ``(fd, base)``. Every file is created under ``base``, which is ``/proc/self/fd/N``
+    where that exists, so a symlink swapped in for *out* after this point cannot redirect a
+    write. Where it does not exist ``base`` is *out* itself and :func:`_assert_still_there`
+    checks at the end that it is still the directory that was opened.
+    """
+    if _BEFORE_OPEN_OUT is not None:
+        _BEFORE_OPEN_OUT(out)
+    if create:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        os.mkdir(out, 0o700)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(out, flags)
+    except OSError as exc:
+        raise TenantError(f"{out} cannot be opened as a directory without following a link "
+                          f"({exc.strerror}). Nothing was exported.", exit_code=2) from exc
+    try:
+        os.fchmod(fd, 0o700)
+        proc = Path(f"/proc/self/fd/{fd}")
+        if proc.is_dir():
+            real = Path(os.path.realpath(proc))
+            for d in files_dirs:
+                root = Path(os.path.realpath(d))
+                if real == root or root in real.parents:
+                    raise TenantError(f"{out} is inside the live data ({d}); name a directory "
+                                      "elsewhere.", exit_code=2)
+        else:
+            proc = out
+        if os.listdir(fd):
+            raise TenantError(f"{out} is not empty. An export goes into a new, empty directory "
+                              "so nothing is mixed with an earlier one.", exit_code=2)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, proc
+
+
+def _assert_still_there(out: Path, fd: int, base: Path) -> None:
+    """Only needed where there is no /proc: the path must still be the opened directory."""
+    if base != out:
+        return
+    try:
+        same = os.path.samestat(os.fstat(fd), os.lstat(out))
+    except OSError:
+        same = False
+    if not same:
+        raise TenantError(f"{out} was replaced while the export was written; nothing was "
+                          "exported.", exit_code=2)
+
+
 def export_account(data_dir: str | Path, account_id: str, out: str | Path, *, actor: str,
                    accept_damaged: bool = False, lock_timeout: float = 10.0) -> dict[str, Any]:
     """Write the export; return the manifest. Raises ``TenantError`` (nothing written) to refuse."""
     if not actor or not actor.strip():
         raise TenantError("--actor is required: an export records who took it.", exit_code=2)
     files = account_files(data_dir, account_id)
+    if files.marker_exists:
+        raise TenantError(f"{account_id} is already removed: its deletion marker "
+                          f"{files.marker.name} exists, so there is nothing to export. "
+                          "Nothing was exported and none was created.")
     if not files.ledger_exists:
         raise TenantError(f"no ledger exists for {account_id} under {data_dir}. Nothing was "
                           "exported and none was created.")
@@ -213,11 +277,13 @@ def export_account(data_dir: str | Path, account_id: str, out: str | Path, *, ac
               "manifest will say so.")
 
     created: list[Path] = []
+    out_fd: int | None = None
+    base = out_dir
     try:
-        if create:
-            out_dir.mkdir(parents=True)
-        os.chmod(out_dir, 0o700)
-        ledger_copy = out_dir / LEDGER_FILE
+        out_fd, base = _open_out_dir(out_dir, create, (tenants, files.log.parent))
+        if _AFTER_PREPARE_OUT is not None:
+            _AFTER_PREPARE_OUT(out_dir)
+        ledger_copy = base / LEDGER_FILE
         _create_private_file(ledger_copy)
         created.append(ledger_copy)
         try:
@@ -237,8 +303,8 @@ def export_account(data_dir: str | Path, account_id: str, out: str | Path, *, ac
             log = AttestationLog(files.log, label=f"the attestation log for {account_id}")
             with log.locked(timeout=lock_timeout):
                 data = files.log.read_bytes()
-            _write_private(out_dir / LOG_FILE, data)
-            created.append(out_dir / LOG_FILE)
+            _write_private(base / LOG_FILE, data)
+            created.append(base / LOG_FILE)
             log_records = sum(1 for line in data.splitlines() if line.strip())
 
         facts = inspect_ledger(ledger_copy, want_bundle=True)
@@ -246,27 +312,32 @@ def export_account(data_dir: str | Path, account_id: str, out: str | Path, *, ac
             raise TenantError("the snapshot does not verify (the ledger changed while it was "
                               "copied); nothing was exported. Retry.")
         if facts["bundle"] is not None:
-            _write_private(out_dir / BUNDLE_FILE, json.dumps(
+            _write_private(base / BUNDLE_FILE, json.dumps(
                 facts["bundle"], indent=2, sort_keys=True).encode("utf-8"))
-            created.append(out_dir / BUNDLE_FILE)
-        _write_private(out_dir / VERIFY_FILE, _VERIFY_TEXT.encode("utf-8"))
-        created.append(out_dir / VERIFY_FILE)
+            created.append(base / BUNDLE_FILE)
+        _write_private(base / VERIFY_FILE, _VERIFY_TEXT.encode("utf-8"))
+        created.append(base / VERIFY_FILE)
 
-        manifest = _manifest(account_id, facts, out_dir, actor, accept_damaged,
+        manifest = _manifest(account_id, facts, base, actor, accept_damaged,
                              has_bundle=facts["bundle"] is not None, log_records=log_records)
-        _write_private(out_dir / MANIFEST_NAME, (json.dumps(
+        _write_private(base / MANIFEST_NAME, (json.dumps(
             manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        _assert_still_there(out_dir, out_fd, base)
         return manifest
     except BaseException:
         for path in created:
             path.unlink(missing_ok=True)
-        (out_dir / MANIFEST_NAME).unlink(missing_ok=True)
+        if out_fd is not None:      # only a directory this call opened and found empty
+            (base / MANIFEST_NAME).unlink(missing_ok=True)
         if create:
             try:
                 out_dir.rmdir()
             except OSError:
                 pass
         raise
+    finally:
+        if out_fd is not None:
+            os.close(out_fd)
 
 
 def _manifest(account_id: str, facts: dict[str, Any], out_dir: Path, actor: str,

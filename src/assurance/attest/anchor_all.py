@@ -70,6 +70,9 @@ DEFAULT_MAX_AGE_HOURS = 24.0
 
 #: The same shape ``assurance.api.deps`` accepts for an account id.
 _LEDGER_NAME = re.compile(r"(acc_[0-9a-f]{16})\.db")
+#: ``tenant delete --execute`` leaves ``<acc>.deleted`` where the ledger was: the account is
+#: reported and skipped, and no ledger or log is ever created for it.
+_MARKER_NAME = re.compile(r"(acc_[0-9a-f]{16})\.deleted")
 #: SQLite's own companions of a ledger file; they are not ledgers and are not reported.
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 
@@ -218,8 +221,16 @@ def _enumerate(tenants: Path) -> tuple[list[tuple[str, Path]], list[LedgerOutcom
     skipped: list[LedgerOutcome] = []
     if not tenants.is_dir():
         return found, skipped
-    for name in sorted(os.listdir(tenants)):
+    names = sorted(os.listdir(tenants))
+    marked = {m.group(1) for n in names if (m := _MARKER_NAME.fullmatch(n))}
+    for name in names:
         path = tenants / name
+        gone = _MARKER_NAME.fullmatch(name)
+        if gone is not None:
+            skipped.append(LedgerOutcome(
+                name, "skipped", "deleted by an operator (deletion marker); no ledger or log "
+                "is created or anchored for it", account_id=gone.group(1)))
+            continue
         match = _LEDGER_NAME.fullmatch(name)
         if match is None:
             base = next((name[: -len(s)] for s in _SQLITE_SIDECARS if name.endswith(s)), None)
@@ -227,6 +238,12 @@ def _enumerate(tenants: Path) -> tuple[list[tuple[str, Path]], list[LedgerOutcom
                 continue
             skipped.append(LedgerOutcome(name, "skipped", "not an account ledger name "
                                          "(acc_ + 16 lowercase hex + .db); not touched"))
+            continue
+        if match.group(1) in marked:
+            skipped.append(LedgerOutcome(
+                name, "skipped", "this account has a deletion marker but a ledger file exists "
+                "again; not anchored, not touched. An operator must decide what it is",
+                account_id=match.group(1), anomaly=True))
             continue
         ok, why = _is_plain_file(path)
         if not ok:

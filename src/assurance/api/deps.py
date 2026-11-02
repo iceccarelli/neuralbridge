@@ -225,6 +225,30 @@ def tenant_ledger_path(account_id: str) -> Path:
     return path
 
 
+def _deletion_notice(path: Path) -> dict[str, str] | None:
+    """The 410 body for an account whose ledger an operator removed, else ``None``.
+
+    ``tenant delete --execute`` leaves ``<acc>.deleted`` beside where the ledger was. Any
+    marker, even a link or an unreadable file, counts (fail closed); only deleting the file by
+    hand lifts it. Nothing of the account's data is in the answer.
+    """
+    marker = path.with_suffix(".deleted")
+    if not os.path.lexists(marker):
+        return None
+    when = "an unrecorded date"
+    try:
+        doc = json.loads(marker.read_text(encoding="utf-8")) \
+            if marker.stat().st_size <= 8192 else {}
+        raw = doc.get("deleted_at") if isinstance(doc, dict) else None
+        if isinstance(raw, str) and re.fullmatch(r"[0-9TZ:.+\-]{10,40}", raw):
+            when = raw
+    except (OSError, ValueError, RecursionError):
+        pass
+    return {"error": "account_data_deleted",
+            "detail": f"this account's ledger was removed by an operator on {when}; "
+                      "contact the operator"}
+
+
 # A ledger object holds no open connection (each operation connects and
 # closes), so a cache entry costs a path and a lock. The bound exists only to
 # stop an unbounded number of accounts pinning memory; it is generous so that
@@ -386,6 +410,12 @@ def get_register(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "invalid_account_id"},
         ) from exc
+    notice = _deletion_notice(path)       # BEFORE any ledger open: never recreate a ledger
+    if notice is not None:
+        # Do not keep a ledger object across the marker: if an operator lifts it by hand and
+        # restores the file, the next request must open the restored file afresh.
+        _tenant_register_for.cache_clear()
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=notice)
     return _tenant_register_for(str(path))
 
 
