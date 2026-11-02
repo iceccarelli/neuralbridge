@@ -1,5 +1,6 @@
 import { DOCS, QUICKSTART, repoLink, SALES } from './links';
 import { COUNTS } from './siteCapabilities';
+import { productHref } from './productPages';
 
 export interface SolutionPage {
   slug: string;
@@ -36,6 +37,8 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Declarations bound to a configuration hash', body: 'The Cell tier binds a Declaration of Conformity to a configuration hash, so drift becomes a checkable date.', href: `/docs/assurance/fleet` },
       { title: 'Fleet advisory fan-out', body: 'One supplier advisory matched against every enrolled serial by hash, then version, then name — never version-range arithmetic.', href: `/docs/assurance/fleet` },
       { title: 'A signed supplier advisory can open a case', body: 'An advisory in a feed signed under a key your account pinned can open a change-assurance case without a named person; unsigned content cannot. Closing the case stays a named person’s decision.', href: `/docs/assurance/change` },
+      { title: 'The workflow for Annex III 1.1.9 evidence', body: 'Identify the safety-relevant software, record each intervention, and see which verifications it made stale, step by step.', href: productHref('machinery-regulation-evidence') },
+      { title: 'Advisories and fleet impact', body: 'How a supplier advisory is matched to enrolled machines by hash, and why a vendor advisory describes a product, not what you installed.', href: productHref('supplier-advisory-fleet-impact') },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
     secondaryCta: { label: 'Talk to sales', href: SALES },
@@ -59,6 +62,8 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'The staleness join', body: 'A sign-off from February, a firmware change in March, and the named safety functions whose evidence stopped applying — dated, not argued.', href: `/docs/assurance/machinery` },
       { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that refuses every outbound socket during a run.', href: `/docs/assurance/kit` },
       { title: 'Enrolment you can amend, not rewrite', body: 'A named person declares a machine’s identity and a baseline is sealed with a receipt. A changed site or owner is a new, chained record; the original is never rewritten.', href: `/docs/assurance/machinery` },
+      { title: 'The cycle from enrolment to passport', body: 'Enrol, seal a manifest, verify, detect change, find stale evidence, re-verify and record the intervention.', href: productHref('continuous-machine-assurance') },
+      { title: 'What the offline kit does and does not do', body: 'Who it is for, what the socket guard records, and the limits it states about itself.', href: productHref('offline-assurance-kit') },
     ],
     primaryCta: { label: 'Run the offline kit', href: QUICKSTART },
     secondaryCta: { label: 'See pricing', href: '/#pricing' },
@@ -81,6 +86,7 @@ export const SOLUTIONS: SolutionPage[] = [
     proof: [
       { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — free, no account.', href: '/#products' },
       { title: 'Both deadline clocks, computed correctly', href: '/docs/capabilities#service-art14', body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
+      { title: 'Article 14 clocks, step by step', body: 'Awareness, triage reasoning and the deadline clocks, with the filing left to the manufacturer.', href: productHref('cra-article-14') },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
     secondaryCta: { label: 'See the Register plan', href: '/#pricing' },
@@ -104,6 +110,8 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Free to re-check, by design', body: 'Declaration check, bundle re-verification, passport check and attestation verification are not metered in code, so the buyer or auditor is never the paying customer. The file verifier and manifest diff carry small daily allowances.', href: '/#pricing' },
       { title: 'Counter-signed head attestation', body: 'A signature over the ledger head by a key the operator does not hold — the one thing that catches a ledger that was quietly shortened.', href: `/docs/assurance/attest` },
       { title: 'Completeness against a signed anchor', body: 'A ledger export checked with the signer’s public key and an attestation log can show that nothing up to the anchored head was removed (records after it are covered by no signature); without an anchor the check reports completeness as not checked, never as a pass.', href: `/docs/assurance/attest` },
+      { title: 'What a signature proves and does not', body: 'Counter-signed heads, anchors and the key ceremony, which is prepared and not performed.', href: productHref('evidence-attestation') },
+      { title: 'The evidence ledger', body: 'What a hash chain detects, what it cannot, and how anchors and completeness reporting address it.', href: productHref('machine-evidence-ledger') },
     ],
     primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
     secondaryCta: { label: 'Read how attestation works', href: `/docs/assurance/attest` },
@@ -127,6 +135,8 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'The platform status table', body: 'The README’s status table, word for word — a test compares the site’s rows with it.', href: '/#platform' },
       { title: 'MCP gateway', body: 'Tool listing and invocation for AI agents, sitting underneath the assurance API.', href: '/#platform' },
       { title: 'The assurance MCP server', body: `${COUNTS.mcp_tools} tools over the Assurance API: reads, verifications and a few case-working writes. Closing, rejecting or deferring a case, and every key or trust change, have no tool, by design.`, href: '/docs/capabilities' },
+      { title: 'One function behind every surface', body: 'The CLI, the HTTP API and MCP call the same domain function; 401 and 402 mean different things.', href: productHref('assurance-api-and-mcp') },
+      { title: 'File-based integration', body: 'Inventory import and public-source ingest are file based and evolving, not supported adapters.', href: productHref('enterprise-integration') },
     ],
     primaryCta: { label: 'See what is supported today', href: '/#platform' },
     secondaryCta: repoLink('#readme')
