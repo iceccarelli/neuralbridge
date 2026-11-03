@@ -24,7 +24,7 @@ from neuralbridge.security.audit import AuditLogger
 async def main() -> None:
     print("=" * 60)
     print("  NeuralBridge Quick Start")
-    print("  Universal Enterprise Middleware for Agentic AI")
+    print("  Experimental adapter platform behind Industrial Autonomous Assurance")
     print("=" * 60)
 
     # ── Step 1: Create the adapter registry ──────────────────

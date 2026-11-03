@@ -34,7 +34,7 @@ for (const [route, b] of Object.entries(BUDGETS)) {
   let jsRaw = 0, jsGz = 0, css = 0;
   for (const r of refs) {
     const p = join(dist, r.replace('/_next/', ''));
-    if (!existsSync(p)) continue;
+    if (!existsSync(p)) { rows.push({ route, error: `referenced file missing from the build: ${r}` }); failed = true; continue; }
     const buf = readFileSync(p);
     if (r.endsWith('.js')) { jsRaw += buf.length; jsGz += gzipSync(buf).length; } else css += buf.length;
   }

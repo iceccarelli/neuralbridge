@@ -61,17 +61,36 @@ def test_unhosted_variant_says_where_the_check_actually_runs():
     assert "hosted endpoint not live yet" in PAGE
 
 
-def test_promise_sits_in_the_hosted_arm_not_the_unhosted_one():
-    # `{HOSTED_API ? 'A' : 'B'}`: the online promise must be arm A. Swapping the arms would pass the
-    # window check above while showing the promise on the build that cannot keep it.
-    for promise in PROMISES:
-        for m in re.finditer(re.escape(promise), PAGE):
-            before = PAGE[: m.start()]
-            q = max(before.rfind("HOSTED_API ?"), before.rfind("{HOSTED_API\n"))
-            assert q >= 0, promise
-            between = before[q:]
-            # No ':' arm separator may sit between the condition and the promise at the same nesting.
-            assert "\n                : " not in between and "\n                  : " not in between, promise
+def _promise_arm_violations(text: str, phrases: tuple[str, ...]) -> list[str]:
+    """A promise must sit in the *hosted* arm of a `HOSTED_API ? A : B` expression: after the condition and
+    before the `:` that starts the unhosted arm. Indentation-independent; swapping the arms fails it."""
+    bad = []
+    for phrase in phrases:
+        for m in re.finditer(re.escape(phrase), text):
+            before = text[: m.start()]
+            cond = before.rfind("HOSTED_API")
+            if cond < 0 or not re.match(r"HOSTED_API\s*\?", before[cond:]):
+                bad.append(f"{phrase!r} @ {m.start()}: no `HOSTED_API ?` condition before it")
+                continue
+            between = before[cond:]
+            if re.search(r"\)\s*:\s*[(<'\"`]|['\"`]\s*:\s*['\"`]|\n\s+:\s", between):
+                bad.append(f"{phrase!r} @ {m.start()}: sits in the unhosted arm")
+    return bad
+
+
+def test_promises_sit_in_the_hosted_arm_in_page_and_layout():
+    layout = (ROOT / "app" / "layout.tsx").read_text(encoding="utf-8")
+    # `for free` / `Start free` only appear in layout.tsx inside the hosted arm; page.tsx's list is PROMISES.
+    assert not _promise_arm_violations(PAGE, PROMISES)
+    assert not _promise_arm_violations(layout, ("free, no account", "for free", "Start free"))
+    assert "HOSTED_API ?" in layout  # the guard exists at all
+
+
+def test_verify_page_does_not_claim_a_free_online_check_unconditionally():
+    verify = (ROOT / "app" / "verify" / "page.tsx").read_text(encoding="utf-8")
+    assert "HOSTED_API" in verify
+    assert "Free, no account" not in verify
+    assert not _promise_arm_violations(verify, ("FREE · NO ACCOUNT",))
 
 
 # Copy that was static, promised a free/no-account online tool, and so was false in an unhosted build.

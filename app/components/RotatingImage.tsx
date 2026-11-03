@@ -51,7 +51,11 @@ export default function RotatingImage({
   }, []);
 
   useEffect(() => {
-    if (!hasB || reducedMotion) return;
+    if (!hasB || reducedMotion) {
+      // B is unmounted under reduced motion; if it was showing, A must come back or the slot is empty.
+      setShowB(false);
+      return;
+    }
 
     // Only flip to B once it has loaded; flipping back to A is always allowed.
     const tick = () => {

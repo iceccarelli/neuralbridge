@@ -73,3 +73,30 @@ def test_contact_form_validates_on_submit_instead_of_disabling_the_button():
     assert "disabled={!canSend}" not in form and "noValidate" in form
     assert 'role="alert"' in form and "aria-invalid" in form and "aria-describedby" in form
     assert 'autoComplete="email"' in form and 'autoComplete="name"' in form
+
+
+def test_closed_mega_panels_leave_the_tab_order():
+    # opacity:0 alone left every link in the four megas focusable but invisible (29 of the first 40 Tab stops).
+    css = _t("app/globals.css")
+    closed = re.search(r"\.mega-panel-full \{([^}]*)\}", css).group(1)
+    opened = re.search(r"\.mega-panel-full\.is-open \{([^}]*)\}", css).group(1)
+    assert "visibility: hidden" in closed and "visibility: visible" in opened
+
+
+def test_search_overlay_does_not_make_the_page_inert_before_it_exists():
+    # Its code loads on first open; a slow or failed chunk must not leave the page inert with no overlay.
+    effect = re.search(r"The open drawer makes the page behind it inert.*?\}, \[([^\]]*)\]\);", HEADER, re.S)
+    assert effect and effect.group(1).strip() == "mobileOpen"
+
+
+def test_mega_close_button_returns_focus_to_its_trigger():
+    assert HEADER.count("onClick={closeAndRestoreFocus}") == 4
+
+
+def test_reduced_motion_switched_on_mid_session_restores_the_first_frame():
+    src = _t("app/components/RotatingImage.tsx")
+    assert re.search(r"if \(!hasB \|\| reducedMotion\) \{[^}]*setShowB\(false\);[^}]*return;", src)
+
+
+def test_perf_budget_fails_on_a_chunk_missing_from_the_build():
+    assert "referenced file missing from the build" in _t("scripts/perf_budget.mjs")

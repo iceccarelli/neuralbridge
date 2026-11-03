@@ -261,13 +261,19 @@ img {
   max-height: 0;
   overflow: hidden;
   opacity: 0;
-  transition: max-height 220ms ease, opacity 180ms ease;
+  /* Closed panels must leave the tab order and the accessibility tree, not just fade: opacity alone left
+     every link in all four megas focusable but invisible (about 29 of the first 40 Tab stops). Visibility
+     flips after the close animation, and immediately on open so focus can move in. */
+  visibility: hidden;
+  transition: max-height 220ms ease, opacity 180ms ease, visibility 0s linear 220ms;
 }
 
 .mega-panel-full.is-open {
   max-height: 640px;
   opacity: 1;
   overflow-y: auto;
+  visibility: visible;
+  transition-delay: 0s;
 }
 
 .mega-close {

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { HOSTED_API } from '../lib/hostedApi';
 import { buildMetadata } from '../lib/seo';
 import EvidenceVerifier from '../components/EvidenceVerifier';
 import { repoLink } from '../lib/links';
@@ -6,7 +7,7 @@ import { repoLink } from '../lib/links';
 export const metadata: Metadata = buildMetadata({
   title: 'Check an evidence file',
   description:
-    'Drop in a ledger export, machine verification bundle or signed head attestation log and see which facts a check established. Free, no account, nothing stored.',
+    'Drop in a ledger export, machine verification bundle or signed head attestation log and see which facts a check established. Nothing is stored.',
   path: '/verify',
 });
 
@@ -15,7 +16,7 @@ export default function VerifyPage() {
     <main id="top">
       <section className="hero" style={{ padding: '3rem 0 2.5rem' }}>
         <div className="shell">
-          <span className="kicker">FREE · NO ACCOUNT · NOTHING STORED</span>
+          <span className="kicker">{HOSTED_API ? 'FREE · NO ACCOUNT · NOTHING STORED' : 'NEEDS THE HOSTED API · NOT LIVE YET · NOTHING STORED'}</span>
           <h1 style={{ maxWidth: '26ch' }}>Check an evidence file you were handed</h1>
           <p className="hero-lead" style={{ maxWidth: '72ch' }}>
             An auditor, an insurer or a customer sends you a JSON export. This page tells you which facts can be

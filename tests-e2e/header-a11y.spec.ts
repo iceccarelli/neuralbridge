@@ -63,6 +63,16 @@ test.describe('desktop mega menu', () => {
     await expect(page.locator('#mega-products.is-open')).toHaveCount(0);
   });
 
+  test('closed mega panels contribute no Tab stops (no invisible focus)', async ({ page }) => {
+    await page.goto('/');
+    let inClosed = 0;
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press('Tab');
+      if (await page.evaluate(() => !!document.activeElement?.closest('.mega-panel:not(.is-open)'))) inClosed++;
+    }
+    expect(inClosed).toBe(0);
+  });
+
   test('search loads on first open and returns focus on Escape', async ({ page }) => {
     const scripts: string[] = [];
     page.on('response', (r) => r.request().resourceType() === 'script' && scripts.push(r.url()));

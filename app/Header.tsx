@@ -85,6 +85,11 @@ export default function Header({
   const closeAll = () => {
     setOpenMenu(null);
   };
+  // The panel's own close button: leave focus on the button that opened it, not on <body>.
+  const closeAndRestoreFocus = () => {
+    setOpenMenu(null);
+    triggerRef.current?.focus();
+  };
 
   const toggle = (name: MenuKey, trigger: HTMLElement) => {
     triggerRef.current = trigger;
@@ -121,13 +126,15 @@ export default function Header({
     };
   }, [mobileOpen, searchOpen]);
 
-  // A modal makes the page behind it inert: screen-reader virtual cursors and Tab cannot reach it.
+  // The open drawer makes the page behind it inert: screen-reader virtual cursors and Tab cannot reach it.
+  // (Search is aria-modal but not made inert here: its code loads on first open, and a slow or failed chunk
+  // must not leave the whole page inert behind an overlay that never appeared.)
   useEffect(() => {
-    if (!mobileOpen && !searchOpen) return;
+    if (!mobileOpen) return;
     const behind = document.querySelectorAll('main, .footer-cta, .site-footer, .sticky-chrome');
     behind.forEach((el) => el.setAttribute('inert', ''));
     return () => behind.forEach((el) => el.removeAttribute('inert'));
-  }, [mobileOpen, searchOpen]);
+  }, [mobileOpen]);
 
   // The closed drawer is not part of the page for keyboard or assistive technology.
   useEffect(() => {
@@ -260,7 +267,7 @@ export default function Header({
 
           {/* PRODUCTS mega: two-pane */}
           <div id="mega-products" className={`mega-panel mega-panel-full two-pane ${openMenu === 'products' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell two-pane-inner">
               <div className="pane-rail">
                 {(Object.keys(panes) as ProductsPane[]).map((key) => (
@@ -305,7 +312,7 @@ export default function Header({
 
           {/* SOLUTIONS mega: editorial */}
           <div id="mega-solutions" className={`mega-panel mega-panel-full editorial ${openMenu === 'solutions' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell editorial-inner">
               <div className="editorial-cards">
                 {solutionLinks.map((item) => (
@@ -331,7 +338,7 @@ export default function Header({
 
           {/* PRICING mega: finder-style */}
           <div id="mega-pricing" className={`mega-panel mega-panel-full finder ${openMenu === 'pricing' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell finder-inner">
               <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Free tier</strong>
@@ -350,7 +357,7 @@ export default function Header({
 
           {/* RESOURCES mega */}
           <div id="mega-resources" className={`mega-panel mega-panel-full finder ${openMenu === 'resources' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell finder-inner">
               <a className="finder-item" href={DOCS} onClick={closeAll}>
                 <strong>Documentation</strong>
