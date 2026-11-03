@@ -35,6 +35,8 @@ from assurance.core.identity import content_hash_of, format_utc, parse_utc
 from assurance.core.tiers import AssuranceTier
 
 __all__ = [
+    "INCOMPLETE_COLLECTION_MARK",
+    "SAFETY_DECLARATION_SCHEMA",
     "HashSource",
     "ItemKind",
     "MachineIdentity",
@@ -43,10 +45,25 @@ __all__ = [
     "SafetyFunction",
     "SafetyItem",
     "SafetyManifest",
+    "incomplete_collection_note",
+    "last_attribution",
+    "manifest_is_incomplete",
+    "not_a_look",
 ]
 
 
 _HEX64 = frozenset("0123456789abcdef")
+
+#: Written into a manifest's ``notes`` when a collection did not find or read every item its
+#: plan names. Such a manifest is a partial look, not a configuration the machine was in.
+#: The format is read back by the watch, the change workflow and the ledger reader, and it
+#: is already in stored ledgers: do not change it. (``change.service`` and
+#: ``machinery.record`` re-export it under their own names and a test pins them together.)
+INCOMPLETE_COLLECTION_MARK = "[collection incomplete"
+
+#: Version of the safety-function declaration hash. A declaration hash is only ever compared
+#: with one of the same version.
+SAFETY_DECLARATION_SCHEMA = "assurance.machinery.safety-declaration/1"
 
 
 def normalised_digest(text: str) -> str:
@@ -161,8 +178,56 @@ class MachineIdentity:
 
     @property
     def key(self) -> str:
-        """The ledger subject for everything about this machine."""
+        """The ledger subject for everything about this machine.
+
+        Plain concatenation, and it stays that: stored ledgers are filed under it. It is
+        therefore not injective over arbitrary strings (``A``/``B#1``/``2`` and
+        ``A``/``B``/``1#2`` give the same key), which is why new identities are checked
+        with :meth:`ambiguity_problems` where they are created, and why a ledger that
+        already holds an ambiguous one is still readable.
+        """
         return f"{self.manufacturer}/{self.model}#{self.serial}"
+
+    @property
+    def components(self) -> tuple[str, str, str]:
+        """The three strings the key is made of, for telling two identities apart."""
+        return (self.manufacturer, self.model, self.serial)
+
+    def ambiguity_problems(self) -> tuple[str, ...]:
+        """Why this identity cannot safely be the basis of a NEW record; empty if it can.
+
+        A component that contains a key separator (``/`` or ``#``), has leading or trailing
+        whitespace, is blank, or contains a control or other non-printing character can make
+        two different units share one key (so one would inherit the other's evidence), or
+        make a key that no reader can take apart again. This is checked where an identity is
+        created or enrolled and deliberately NOT where one is read back from a ledger: a
+        record already sealed with such an identity stays readable.
+        """
+        out: list[str] = []
+        for name, value in zip(("manufacturer", "model", "serial"), self.components,
+                               strict=True):
+            if not value.strip():
+                out.append(f"{name} is blank")
+                continue
+            bad_sep = sorted({c for c in value if c in "/#"})
+            if bad_sep:
+                out.append(f"{name} {value!r} contains {' and '.join(repr(c) for c in bad_sep)}"
+                           ", which separate the parts of the machine key")
+            if value != value.strip():
+                out.append(f"{name} {value!r} has leading or trailing whitespace")
+            if any(not c.isprintable() for c in value):
+                out.append(f"{name} {value!r} contains a control or non-printing character")
+        return tuple(out)
+
+    def require_unambiguous(self) -> MachineIdentity:
+        """Raise :class:`ManifestError` if :meth:`ambiguity_problems` finds anything."""
+        problems = self.ambiguity_problems()
+        if problems:
+            raise ManifestError(
+                f"machine identity {self.key!r} is ambiguous: " + "; ".join(problems)
+                + ". Two different units could share one key and so one record. Correct "
+                "the manufacturer, model or serial; nothing was recorded.")
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -375,6 +440,15 @@ class SafetyManifest:
                     f"manifest {self.manifest_id!r} lists item {item.item_id!r} twice."
                 )
             seen.add(item.item_id)
+        declared: set[str] = set()
+        for fn in self.functions:
+            if fn.function_id in declared:
+                raise ManifestError(
+                    f"manifest {self.manifest_id!r} declares safety function "
+                    f"{fn.function_id!r} twice. Two declarations of one function disagree "
+                    "about what verifies it, and a reader would take the first."
+                )
+            declared.add(fn.function_id)
         known = {f.function_id for f in self.functions}
         for item in self.items:
             for fid in item.implements:
@@ -493,6 +567,26 @@ class SafetyManifest:
             ],
         })
 
+    def safety_declaration_hash(self) -> str:
+        """Identity of what the manifest says its safety functions are and how they are shown.
+
+        Separate from :meth:`configuration_hash`, which is in stored ledgers and does not
+        change: that hash covers the items (and what each implements) but not the functions,
+        so emptying a function's ``verified_by`` or lowering its required performance level
+        left it equal. This one covers every declared function: id, description, required
+        performance, and the set of checks that verify it. Versioned
+        (:data:`SAFETY_DECLARATION_SCHEMA`); compare it only with one of the same version.
+        """
+        return content_hash_of({
+            "schema": SAFETY_DECLARATION_SCHEMA,
+            "functions": [
+                {"function_id": f.function_id, "description": f.description,
+                 "required_performance": f.required_performance,
+                 "verified_by": sorted(f.verified_by)}
+                for f in sorted(self.functions, key=lambda f: f.function_id)
+            ],
+        })
+
     def to_dict(self) -> dict[str, Any]:
         return self.hashable_payload()
 
@@ -514,6 +608,41 @@ class SafetyManifest:
     @classmethod
     def from_json(cls, path: str | Path) -> SafetyManifest:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def manifest_is_incomplete(manifest: SafetyManifest) -> bool:
+    """Is this manifest marked as a partial collection (see :data:`INCOMPLETE_COLLECTION_MARK`)?
+
+    An incomplete manifest lacks items its plan names. It is a record of what was read, not
+    a configuration the machine was in: it can be neither a baseline nor proof of a
+    machine's state after a change. The marker is the only thing that says so, which is why
+    every consumer that needs a complete look asks this one function.
+    """
+    return INCOMPLETE_COLLECTION_MARK in (manifest.notes or "")
+
+
+def incomplete_collection_note(missing_items: Iterable[str]) -> str:
+    """The note that marks a manifest as incomplete, naming what was not collected."""
+    return f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]"
+
+
+def last_attribution(manifests: Iterable[SafetyManifest]) -> dict[str, tuple[str, ...]]:
+    """For each item, the safety functions it was last credited with in a COMPLETE manifest.
+
+    Oldest first in; the latest non-empty ``implements`` per item wins. A plan
+    (``as_intended``) and a partial collection say nothing about the machine and are
+    skipped. An item whose attribution was later dropped keeps the one it had: dropping an
+    attribution is not evidence the item stopped mattering, so a change to that item still
+    disturbs those functions (see :func:`assurance.machinery.divergence.compare`).
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for m in manifests:
+        if m.source is ManifestSource.AS_INTENDED or manifest_is_incomplete(m):
+            continue
+        for i in m.items:
+            if i.implements:
+                out[i.item_id] = tuple(i.implements)
+    return out
 
 
 def not_a_look(manifest: SafetyManifest) -> str:

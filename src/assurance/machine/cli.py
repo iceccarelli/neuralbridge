@@ -120,6 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="file the bundle in the ledger under this subject. Give the "
                           "machine's key (manufacturer/model#serial) for it to count as "
                           "evidence for that unit; default is product@version")
+    ver.add_argument("--configuration-hash", default="",
+                     help="the configuration hash of the machine manifest this run was made "
+                          "against (`assurance machinery diff`/`collect run --json` print "
+                          "it). Optional; with it the verification reads stale once the "
+                          "machine's manifest has another configuration hash, without it "
+                          "its currency is by time alone")
     ver.add_argument("--out", type=Path, default=None, help="write the bundle here")
     ver.add_argument("--json", action="store_true")
 
@@ -288,6 +294,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         limits=limits, limits_reviews=reviews, review_trust=trust,
         recorder_attestations=attestations, recorder_trust=recorder_trust,
         machine_serial=args.machine_serial, ledger=ledger, subject=args.subject,
+        configuration_hash=args.configuration_hash,
     )
     if args.out:
         bundle.write(args.out)

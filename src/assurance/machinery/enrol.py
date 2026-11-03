@@ -48,9 +48,10 @@ from assurance.core.evidence import (
     ValidationState,
 )
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import ManifestError, SafetyManifest, manifest_is_incomplete
 from assurance.machinery.record import (
     MANIFEST_KIND,
+    check_identity_for_sealing,
     interventions_from_ledger,
     record_manifest,
 )
@@ -355,6 +356,26 @@ def _conflicts(enrolled: dict[str, Any], claimed: dict[str, str]) -> list[dict[s
     return out
 
 
+def _identity_conflicts(body: dict[str, Any], manifest: SafetyManifest) -> list[dict[str, str]]:
+    """The machine key is a plain concatenation, so two different (manufacturer, model,
+    serial) tuples can share one (``A``/``B#1``/``2`` and ``A``/``B``/``1#2``). The enrolment
+    records the identity it was made with; a claim of the same key by different parts is a
+    conflict, not "the same machine". An enrolment that records no identity cannot be
+    compared and is not accused."""
+    held = body.get("identity")
+    if not isinstance(held, dict):
+        return []
+    try:
+        enrolled = (str(held["manufacturer"]), str(held["model"]), str(held["serial"]))
+    except KeyError:
+        return []
+    if enrolled == manifest.machine.components:
+        return []
+    return [{"attribute": "identity",
+             "enrolled": " / ".join(repr(c) for c in enrolled),
+             "claimed": " / ".join(repr(c) for c in manifest.machine.components)}]
+
+
 def _coverage_after(ledger: EvidenceLedger, manifest: SafetyManifest) -> dict[str, str]:
     key = manifest.machine.key
     report = assess_coverage(
@@ -447,6 +468,14 @@ def enrol_machine(
     """
     who = require_person(actor)
     key = manifest.machine.key
+    if manifest_is_incomplete(manifest):
+        raise EnrolmentError(
+            f"manifest {manifest.manifest_id!r} for {key} is marked as an incomplete "
+            "collection (some item its plan names was not read). An enrolment takes its "
+            "manifest as the machine's baseline, and a partial look is not a "
+            "configuration the machine was in: everything later would be compared "
+            "against a baseline with items missing. Complete the collection and enrol "
+            "that. Nothing was recorded.")
     declared = _declared(manifest, site, owner)
     config = manifest.configuration_hash()
 
@@ -463,6 +492,10 @@ def enrol_machine(
         existing = enrolment_of(ledger, key)
         if existing is not None:
             return _against_existing(ledger, manifest, declared, config, *existing)
+        try:
+            check_identity_for_sealing(ledger, manifest.machine)
+        except ManifestError as exc:
+            raise EnrolmentError(f"{exc}") from exc
         try:
             return _first_enrolment(ledger, manifest, declared, config, who)
         except LedgerConflictError:
@@ -512,7 +545,7 @@ def _against_existing(
         "written": False,
         **_shape(manifest),
     }
-    conflicts = _conflicts({"declared": in_force}, declared)
+    conflicts = _identity_conflicts(body, manifest) + _conflicts({"declared": in_force}, declared)
     if conflicts:
         return EnrolmentReceipt(
             status=IDENTITY_CONFLICT, conflicts=tuple(conflicts),

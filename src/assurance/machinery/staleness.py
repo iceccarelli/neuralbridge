@@ -417,6 +417,13 @@ class VerificationRecord:
     #: dated when it was filed; ``unreadable_why`` says why.
     unreadable: bool = False
     unreadable_why: str = ""
+    #: The ``SafetyManifest.configuration_hash`` the filer states this verification was run
+    #: against, or ``""`` when the bundle carries no such binding (every bundle sealed before
+    #: it existed, and any sealed without one). With it, a pass is stale once the machine's
+    #: current manifest has a different configuration hash. Without it currency is by time
+    #: alone: later changes disturb it, but nothing ties it to the configuration it was
+    #: run on, and the coverage report says so.
+    configuration_hash: str = ""
 
     def __post_init__(self) -> None:
         if self.effective_at.tzinfo is None:
@@ -432,7 +439,7 @@ class VerificationRecord:
         return tuple(c for c in self.checks_not_verified if c not in n_a)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "content_hash": self.content_hash,
             "effective_at": format_utc(self.effective_at),
             "ledger_seq": self.ledger_seq,
@@ -449,6 +456,9 @@ class VerificationRecord:
             "filed_at": format_utc(self.filed_at) if self.filed_at else "",
             "unreadable": self.unreadable,
         }
+        if self.configuration_hash:
+            out["configuration_hash"] = self.configuration_hash
+        return out
 
     @classmethod
     def from_ledger(
@@ -535,6 +545,9 @@ class VerificationRecord:
                 checks_unchecked=unchecked,
                 date_suspect=suspect,
                 filed_at=filed,
+                configuration_hash=(str(body.get("configuration_hash"))
+                                    if isinstance(body.get("configuration_hash"), str)
+                                    else ""),
             ))
         out.sort(key=lambda v: v.ledger_seq)
         return _cap_to_the_holder(ledger, recorder_trust, out, where, claims)
@@ -690,6 +703,8 @@ class CoverageReport:
 
 #: ``invalidated_by`` of a function that rests on a pass nobody can date.
 UNDATABLE_PREFIX = "undatable:"
+#: ``invalidated_by`` of a function whose verification states it ran on another configuration.
+CONFIG_MISMATCH_PREFIX = "configuration:"
 
 
 def _fail_time(v: VerificationRecord) -> datetime:
@@ -766,6 +781,8 @@ def assess_coverage(
     verifs = sorted(verifications, key=lambda v: (v.effective_at, v.ledger_seq))
 
     caveats: list[str] = []
+    current_cfg = manifest.configuration_hash()
+    unbound: list[str] = []
     coverages: list[FunctionCoverage] = []
     weak_tiers: dict[str, list[str]] = {}
     current_tiers: list[str] = []
@@ -900,6 +917,30 @@ def assess_coverage(
         undatable = [v for v in used.values() if v.date_suspect]
         tiers = {v.tier for v in used.values()}
         weakest = min(tiers, key=lambda t: _TIER_RANK.get(t, 0))
+        # A verification bound to a configuration other than the manifest's is about a
+        # different machine state, whatever the clock says. (When something is `after`, the
+        # intervention is the better explanation and is reported below.)
+        other_config = [v for v in used.values()
+                        if v.configuration_hash and v.configuration_hash != current_cfg]
+        if other_config and not after:
+            coverages.append(FunctionCoverage(
+                function_id=fn.function_id, description=fn.description,
+                required_performance=fn.required_performance,
+                coverage=Coverage.STALE, checks=tuple(sorted(checks)),
+                last_verified_hash=last_good.content_hash,
+                last_verified_at=format_utc(last_good.effective_at),
+                invalidated_by=f"{CONFIG_MISMATCH_PREFIX}{other_config[0].configuration_hash[:12]}",
+                detail=(
+                    f"verified by {', '.join(v.content_hash[:12] for v in other_config)}, "
+                    "which states it was run against configuration "
+                    f"{other_config[0].configuration_hash[:12]}; this machine's manifest is "
+                    f"configuration {current_cfg[:12]}. A verification of another "
+                    "configuration does not show this one: run it again."),
+            ))
+            continue
+        for v in used.values():
+            if not v.configuration_hash and v.content_hash not in unbound:
+                unbound.append(v.content_hash)
         if undatable and not after:
             # Verified, but only by a pass nobody can date: it cannot be shown to describe
             # the machine as it is now, and no recorded change is needed to say so.
@@ -993,6 +1034,15 @@ def assess_coverage(
             "current here means the recorded evidence still stands, not that the "
             "behaviour was demonstrated on the machine."
         )
+    if unbound:
+        caveats.append(
+            "currency is judged by TIME ONLY for the verification(s) "
+            + ", ".join(h[:12] for h in unbound)
+            + ": none states which machine configuration it was run against, so nothing but "
+            "the dates ties it to the manifest's configuration "
+            f"({current_cfg[:12]}). A change nobody recorded and no manifest shows would not "
+            "make it stale. Seal verifications with their configuration hash "
+            "(`machine verify --configuration-hash`) to bind them.")
     for v in verifs:
         if v.tier_note:
             caveats.append(
