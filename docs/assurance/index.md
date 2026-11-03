@@ -14,7 +14,7 @@ a bare checkout and runs the offline kit end to end.
 | [Public-source intelligence](intel.md) | `assurance intel history` | A CVE no recorded source mentions is `unknown`, never clear; hosted routes read the operator's store and answer 503 until one is configured |
 | [Watch](watch.md) | `assurance watch run` | Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares a code with "nothing moved" |
 | [Attest](attest.md) | `assurance attest sign` | A hash chain catches editing; a counter-signature is what catches deletion |
-| [Key ceremony](key-ceremony.md) | `assurance attest keygen` | Prepared, not performed: the procedure for the two trust anchors, and the evidence to keep |
+| [Key ceremony](KEY-CEREMONY.md) | `assurance attest keygen` | Prepared, not performed: the procedure for the two trust anchors, and the evidence to keep |
 | [Offline kit](kit.md) | `assurance kit run` | One command inside the plant — their ledger, their disk, a socket guard that proves nothing left |
 | [Supplier feeds](supplier.md) | `assurance supplier publish` | A supplier cannot silently un-publish; a withdrawal is a publication, not a deletion |
 | [Bridge](bridge.md) | `assurance bridge` | Field 5 (Member States) assembled from serial numbers, never guessed |
