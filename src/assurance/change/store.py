@@ -21,10 +21,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from assurance.core.actor_names import actor_grammar_problem
-from assurance.core.errors import AssuranceError, LedgerConflictError, LedgerIntegrityError
+from assurance.core.errors import AssuranceError, LedgerConflictError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
-from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
+from assurance.evidence.ledger import ChainBrokenError, EvidenceLedger, LedgerEntry
 
 from .model import CaseStatus, ChangeAssuranceCase
 
@@ -54,10 +54,6 @@ REOPENED_KIND = "assurance.change.reopened"
 #: later chapters.
 CASE_KINDS = (OPENED_KIND, UPDATED_KIND, TRANSITION_KIND, REVERIFICATION_KIND,
               DECISION_KIND, REOPENED_KIND)
-
-
-class ChainBrokenError(LedgerIntegrityError):
-    """The ledger's hash chain does not verify; nothing in it is shown or extended."""
 
 
 class CaseStoreError(AssuranceError):
