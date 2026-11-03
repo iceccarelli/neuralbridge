@@ -532,6 +532,11 @@ def run_watch(
 
         status = "first_seen" if baseline is None else (
             "changed" if baseline.configuration_hash() != observed else "observed")
+        # The newest manifest this machine holds is a partial look and this look is whole
+        # and unchanged from the last complete one. The fleet view is showing the partial
+        # one's gap (and flagging the machine) until a complete manifest is sealed again.
+        recovering = (status == "observed" and result.complete and bool(history)
+                      and INCOMPLETE_COLLECTION_MARK in history[-1].notes)
 
         drift_severity = ""
         drift_items: tuple[str, ...] = ()
@@ -546,6 +551,10 @@ def run_watch(
         elif status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
                       f"{len(manifest.items)} item(s)")
+        elif recovering:
+            detail = (f"complete again at {observed[:12]}: the previous look was incomplete, "
+                      "so a complete manifest is sealed again and the fleet view regains "
+                      "the items the gap dropped")
         elif status == "observed" and why_not_a_look:
             detail = (f"same configuration hash {observed[:12]}; this is an export folder, "
                       "not a look at the machine, so it is not reported as unchanged "
@@ -586,7 +595,8 @@ def run_watch(
         # An incomplete first look is not sealed: with no complete configuration
         # before it there is nothing for it to differ from, and as the first
         # manifest held it would become the baseline every later look is judged by.
-        if seal and (status == "changed" or (status == "first_seen" and result.complete)):
+        if seal and (status == "changed" or recovering
+                     or (status == "first_seen" and result.complete)):
             record_manifest(ledger, manifest, actor=actor)
             sealed.append(f"manifest {manifest.manifest_id}")
 
