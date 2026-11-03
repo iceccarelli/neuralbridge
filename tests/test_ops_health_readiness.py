@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from assurance.api import deps
 from assurance.attest import SigningKey
 
-OPERATOR_KEY = "operator-key-ops-health"
+OPERATOR_KEY = "operator-key-ops-health-readiness-0123456789"  # >= 32 chars: startup validation
 _ENV_NAMES = (
     "ASSURANCE_ALLOW_UNAUTHENTICATED", "ASSURANCE_TENANT_LEDGERS", "ASSURANCE_ATTEST_KEY",
     "ASSURANCE_ATTEST_KEY_PEM", "ASSURANCE_ATTEST_PASSPHRASE", "ASSURANCE_ATTEST_LOGS",

@@ -530,6 +530,9 @@ def test_art14_breaches_mcp_and_api_agree_and_the_cli_exit_code_says_the_same(
     empty = World(tmp_path / "empty.db", client, live_api.url, key, tmp_path)
     assert client.get("/v1/register/breaches").json() == [] == mcp_body(
         mcp(monkeypatch, empty, "art14_breaches"))
+    from assurance.evidence.ledger import EvidenceLedger
+
+    EvidenceLedger(tmp_path / "empty.db")      # an existing, empty ledger (a missing one is an error now)
     assert cli(empty, "art14", "--ledger", tmp_path / "empty.db", "register").returncode == 0
 
 
