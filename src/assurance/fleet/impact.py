@@ -332,9 +332,14 @@ class ImpactReport:
             "needs_review": "NEEDS REVIEW — matches found, none with standing evidence",
         }[self.verdict]
         if self.verdict == "needs_review" and not self.exposures:
-            head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
-                    "verify, so the absence of a match is not evidence")
-            if self.incomplete:
+            # Evidence integrity outranks every other reason: if the chain does not verify, nothing
+            # below it can be relied on, and the headline must say so first.
+            head = ("NEEDS REVIEW — no match was found, but it cannot be established that "
+                    "nothing is affected, so nothing is cleared")
+            if not self.chain_verified:
+                head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
+                        "verify, so the absence of a match is not evidence")
+            elif self.incomplete:
                 head = ("NEEDS REVIEW — INCOMPLETE TRANSLATION: no machine matched what "
                         "was imported, but the advisory is partial, so a machine running "
                         "what was left out is not cleared")
