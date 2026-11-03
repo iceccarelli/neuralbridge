@@ -2664,7 +2664,7 @@
     },
     "/healthz": {
       "get": {
-        "description": "Reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count.",
+        "description": "Readiness: reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count. A store or data directory the service cannot use is a 503 with\nthe reason (never a path) in ``ledger_error`` / ``accounts_error`` /\n``storage_problems``, not an unhandled 500. ``attestation_key`` is\ninformational: ``not_configured`` is an honest, supported state and does not\nfail readiness (the attestation routes answer 503 and say so), but it is\nshown; ``unsafe`` / ``unusable`` additionally degrade the status.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -2680,7 +2680,31 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Liveness and configuration",
+        "summary": "Readiness and configuration",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/livez": {
+      "get": {
+        "description": "The process is up and the event loop answers. Depends on nothing.\n\nNot a statement that the service can do its job: that is ``/healthz``. A platform\nshould restart on this one and stop routing traffic on the other.",
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Livez Livez Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness: the process answers",
         "tags": [
           "service"
         ]
