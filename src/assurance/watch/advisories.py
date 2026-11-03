@@ -443,7 +443,10 @@ def check_feeds(
                                  and advisory.import_record is None else "unsigned_import"),
                     inspect_only=True))
                 continue
-            if report.verdict == "clear":
+            # An empty fleet is not "clear" (impact reads needs_review), but for the watch it is
+            # still the explicit not_assessed state, never a finding about a machine.
+            if report.verdict == "clear" or (
+                    report.machines_in_fleet == 0 and not report.exposures):
                 if report.machines_in_fleet == 0:
                     # Vacuous: nothing was assessed, so nothing was cleared.
                     # Surfaced explicitly (DEGRADED), never silently dropped.

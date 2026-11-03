@@ -321,9 +321,12 @@ def _cmd_advisory(args: argparse.Namespace) -> int:
     if all(r.verdict == "clear" and r.machines_in_fleet > 0 for r in reports):
         return 0
     # An advisory assessed against an EMPTY fleet is not "clear": nothing was assessed.
-    if all(r.verdict == "clear" or (r.incomplete and not r.exposures and r.chain_verified)
+    # Likewise a fleet whose machines were last looked at incompletely: the match was made on
+    # the last complete configuration, and the machine is not cleared by it.
+    if all(r.verdict == "clear" or (
+            (r.incomplete or r.not_clear_reasons) and not r.exposures and r.chain_verified)
            for r in reports):
-        return 3      # nothing matched, but the translation was partial: not clear
+        return 3      # nothing matched, but nothing was fully checked: not clear
     return 1
 
 

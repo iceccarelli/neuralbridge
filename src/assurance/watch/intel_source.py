@@ -346,7 +346,8 @@ def _assess_store(
             "functions_in_question": (), "trust_basis": INTEL_TRUST_BASIS,
             "trust_state": INTEL_TRUST_STATE, "inspect_only": True, "content_hash": ch,
             "inspect_machines": tuple(impact.machines_affected), "report": None}
-        if impact.verdict == "clear":
+        if impact.verdict == "clear" or (
+                impact.machines_in_fleet == 0 and not impact.exposures):
             if impact.machines_in_fleet == 0:
                 unassessed.append(adv.advisory_id)
                 findings.append(AdvisoryFinding(
