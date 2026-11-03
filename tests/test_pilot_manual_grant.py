@@ -32,7 +32,7 @@ from assurance.core.identity import utc_now
 from assurance.kit.airgap import no_network
 
 ROOT = Path(__file__).resolve().parent.parent
-OPERATOR_KEY = "operator-key-manual-grant"
+OPERATOR_KEY = "operator-key-manual-grant-0123456789abcdef"
 CELL_ROUTE = "/v1/change/cases"          # Machine gate: Cell and up
 REGISTER_ROUTE = "/v1/cases"             # Register gate: Register and up
 

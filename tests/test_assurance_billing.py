@@ -21,8 +21,10 @@ from fastapi.testclient import TestClient
 from assurance.billing.accounts import AccountStore
 from assurance.billing.plans import PLANS
 
+from .support_billing import claim
+
 WEBHOOK_SECRET = "whsec_test_do_not_ship"
-OPERATOR_KEY = "operator-key-test"
+OPERATOR_KEY = "operator-key-test-0123456789abcdef0123456789"
 
 
 @pytest.fixture()
@@ -243,9 +245,12 @@ class TestCheckout:
                 json={"tier": "register", "email": "m.braun@example.de"},
             )
         assert response.status_code == 200
-        assert captured["success_url"] == (
-            "https://neuralbridge.io/checkout/success?session_id={CHECKOUT_SESSION_ID}"
-        )
+        # The session id is in the query (Stripe fills it in); the claim token is in the
+        # fragment only: never in the part of the URL that reaches a server or a Referer.
+        base, _, fragment = captured["success_url"].partition("#")
+        assert base == "https://neuralbridge.io/checkout/success?session_id={CHECKOUT_SESSION_ID}"
+        assert fragment == f"claim={response.json()['claim_token']}"
+        assert len(response.json()["claim_token"]) >= 40
         assert captured["cancel_url"] == "https://neuralbridge.io/#pricing"
 
     def test_marketing_url_defaults_to_the_real_site(self, env, monkeypatch):
@@ -312,7 +317,7 @@ class TestWebhook:
         raw, headers = _signed(_checkout_event())
         client.post("/v1/billing/webhook", content=raw, headers=headers)
 
-        collected = client.get("/v1/checkout/complete", params={"session_id": "cs_test_1"})
+        collected = claim(client, "cs_test_1")
         assert collected.status_code == 200
         key = collected.json()["api_key"]
         assert key.startswith("asr_")
@@ -320,15 +325,12 @@ class TestWebhook:
         # It works.
         assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
 
-        # And it cannot be collected a second time.
-        assert (
-            client.get("/v1/checkout/complete", params={"session_id": "cs_test_1"}).status_code
-            == 202
-        )
+        # And it cannot be collected a second time: a definite "gone", not "pending".
+        assert claim(client, "cs_test_1").status_code == 410
 
     def test_collecting_before_the_webhook_lands_is_202_not_a_free_key(self, client):
         # Landing on a success URL proves only that a browser followed a redirect.
-        response = client.get("/v1/checkout/complete", params={"session_id": "cs_never"})
+        response = claim(client, "cs_never")
         assert response.status_code == 202
         assert response.json()["detail"]["status"] == "pending"
 
@@ -346,9 +348,7 @@ class TestWebhook:
     def test_cancellation_downgrades_to_free(self, client, store):
         raw, headers = _signed(_checkout_event())
         client.post("/v1/billing/webhook", content=raw, headers=headers)
-        key = client.get(
-            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
-        ).json()["api_key"]
+        key = claim(client, "cs_test_1").json()["api_key"]
         assert client.get("/v1/cases", headers={"X-API-Key": key}).status_code == 200
 
         cancel_raw, cancel_headers = _signed(
@@ -378,9 +378,7 @@ class TestWebhook:
         # dunning decides when the subscription ends; the account is flagged.
         raw, headers = _signed(_checkout_event())
         client.post("/v1/billing/webhook", content=raw, headers=headers)
-        key = client.get(
-            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
-        ).json()["api_key"]
+        key = claim(client, "cs_test_1").json()["api_key"]
         due_raw, due_headers = _signed(
             {
                 "type": "customer.subscription.updated",
@@ -405,9 +403,7 @@ class TestKeyStorage:
     def test_the_key_is_never_stored(self, client, store):
         raw, headers = _signed(_checkout_event())
         client.post("/v1/billing/webhook", content=raw, headers=headers)
-        key = client.get(
-            "/v1/checkout/complete", params={"session_id": "cs_test_1"}
-        ).json()["api_key"]
+        key = claim(client, "cs_test_1").json()["api_key"]
 
         db = sqlite3.connect(store.path)
         try:

@@ -26,6 +26,7 @@ import httpx
 __all__ = [
     "StripeError",
     "SignatureError",
+    "PayloadError",
     "stripe_configured",
     "METER_API_VERSION",
     "Transport",
@@ -37,6 +38,7 @@ __all__ = [
     "list_meter_event_summaries",
     "list_invoices",
     "list_subscriptions",
+    "retrieve_charge",
     "retrieve_subscription",
     "verify_webhook",
 ]
@@ -79,6 +81,10 @@ class StripeError(RuntimeError):
 
 class SignatureError(StripeError):
     """A webhook did not carry a signature this service can verify."""
+
+
+class PayloadError(StripeError):
+    """A webhook carried a valid signature but a body that is not a JSON object."""
 
 
 def _secret_key() -> str:
@@ -373,6 +379,13 @@ def retrieve_subscription(subscription_id: str) -> dict[str, Any]:
     return _get(f"/subscriptions/{subscription_id}")
 
 
+def retrieve_charge(charge_id: str) -> dict[str, Any]:
+    """One charge by id. Read-only. A dispute event names its charge, not its customer."""
+    if not _STRIPE_ID.fullmatch(charge_id or ""):
+        raise StripeError("not a Stripe charge id", status=400, code="invalid_id")
+    return _get(f"/charges/{charge_id}")
+
+
 @dataclass(frozen=True)
 class CheckoutSession:
     id: str
@@ -479,4 +492,12 @@ def verify_webhook(payload: bytes, signature_header: str, *, secret: str | None 
     if not any(hmac.compare_digest(expected.encode(), c.encode()) for c in candidates):
         raise SignatureError("signature does not match")
 
-    return json.loads(payload.decode("utf-8"))
+    try:
+        event = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # Signed by Stripe's secret (or by someone holding it) but not JSON: a clean refusal,
+        # not an unhandled 500 that Stripe would retry for days.
+        raise PayloadError("the signed webhook body is not valid JSON") from None
+    if not isinstance(event, dict):
+        raise PayloadError("the signed webhook body is not a JSON object")
+    return event

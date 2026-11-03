@@ -78,6 +78,17 @@ class Hosted:
         headers = {"X-API-Key": key} if key else {}
         return self.http.request(method, path, json=body, headers=headers, params=params)
 
+    def claim(self, session: str) -> httpx.Response:
+        """Collect the key the way the buyer's browser does: id and claim token in a POST body.
+
+        The token is what ``POST /v1/checkout`` would have returned; this plant skips Stripe, so
+        the same row is registered directly in the live store.
+        """
+        token = f"golden-claim-{session}"
+        self.live.accounts.register_checkout_claim(session, token)
+        return self.call("POST", "/v1/checkout/complete",
+                         body={"session_id": session, "claim_token": token})
+
     def ok(self, method: str, path: str, key: str | None = None, body: Any = None,
            **params: Any) -> dict[str, Any]:
         r = self.call(method, path, key, body, **params)
@@ -108,7 +119,7 @@ class Hosted:
         far side of the webhook, is handed over once, and is not minted by a redirect.
         """
         session, customer = f"cs_golden_{name}", f"cus_golden_{name}"
-        before = self.call("GET", "/v1/checkout/complete", session_id=session)
+        before = self.claim(session)
         assert before.status_code == 202 and before.json()["detail"]["status"] == "pending"
         event = {
             "id": f"evt_golden_{name}", "created": int(time.time()),
@@ -125,7 +136,7 @@ class Hosted:
                        self.webhook(event, age=3600)):
             assert forged.status_code == 400, forged.text
             assert forged.json()["detail"]["error"] == "signature_rejected"
-        assert self.call("GET", "/v1/checkout/complete", session_id=session).status_code == 202
+        assert self.claim(session).status_code == 202
         assert len(accounts.list_accounts()) == known
         granted = self.webhook(event)
         assert granted.status_code == 200 and granted.json()["tier"] == tier, granted.text
@@ -135,12 +146,12 @@ class Hosted:
         assert replay.status_code == 200 and replay.json()["duplicate"] is True, replay.text
         assert len(accounts.list_accounts()) == known + 1
         assert len(accounts.keys_for(granted.json()["account_id"])) == 1
-        handed = self.call("GET", "/v1/checkout/complete", session_id=session)
+        handed = self.claim(session)
         assert handed.status_code == 200, handed.text
         body = handed.json()
         assert body["tier"] == tier and body["account_id"] == granted.json()["account_id"]
-        again = self.call("GET", "/v1/checkout/complete", session_id=session)
-        assert again.status_code == 202, "the key must be handed over exactly once"
+        again = self.claim(session)
+        assert again.status_code == 410, "the key must be handed over exactly once"
         me = self.ok("GET", "/v1/me", body["api_key"])
         assert me["tier"] == tier
         return body["account_id"], body["api_key"], customer

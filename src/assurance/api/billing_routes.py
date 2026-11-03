@@ -9,9 +9,22 @@ Two decisions worth stating.
 
 **The key is minted by the webhook, not by the success page.** A browser that
 lands on a success URL proves nothing; a signed ``checkout.session.completed``
-event does. The success page looks the key up by session id, and says "not
-ready yet" if the webhook has not landed, rather than issuing one on the
-strength of a URL anyone could visit.
+event does. The success page asks ``POST /v1/checkout/complete`` for the key and
+is told "not ready yet" if the webhook has not landed, rather than being issued
+one on the strength of a URL anyone could visit.
+
+**The key never travels in a URL, and the session id alone collects nothing.**
+``POST /v1/checkout`` mints a claim token, stores its hash against the Stripe
+session and puts it in the *fragment* of the success URL (never sent to a server
+or in a Referer). The collection call is a POST whose body carries both the
+session id and the token; a wrong or missing token consumes nothing, so a
+stranger cannot lock the buyer out. The token is still a bearer secret: whoever
+holds both values first gets the key. Recovery for everyone else is an operator
+re-issue (``python -m assurance.billing.issue_key``).
+
+**Money coming back revokes, and never grants.** A full refund, an open or lost
+dispute: the account lapses (free plan, evidence still readable); a partial
+refund is recorded; a won dispute releases (see ``_handle_refund``).
 
 **The key is shown exactly once.** Permanently it is stored only as ``sha256``,
 so nobody, including the operator, can retrieve it later. The one exception is
@@ -30,6 +43,9 @@ account exists.
 
 from __future__ import annotations
 
+import secrets
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -47,13 +63,57 @@ from ..billing.accounts import (
 )
 from ..billing.metering import MAX_SPEND_LIMIT_UNITS, parse_period, usage_report
 from ..billing.plans import PLANS, payg_available, public_catalogue
+from ..billing.rate_limit import Limit, RateLimitedError, env_limit
 from ..billing.subscription_state import PURCHASABLE_TIERS, map_subscription
 from ..core.identity import utc_now
-from .deps import current_principal, get_accounts, marketing_url, public_url
+from .deps import (
+    current_principal,
+    get_accounts,
+    limiter_for,
+    marketing_url,
+    public_url,
+    rate_limited,
+    refuse_rate_limited,
+    validate_startup_config,
+)
 
 __all__ = ["billing_router"]
 
-billing_router = APIRouter(prefix="/v1", tags=["billing"])
+
+
+@asynccontextmanager
+async def _billing_lifespan(_app: Any) -> AsyncIterator[None]:
+    """Refuse to start on an unsafe configuration (see ``deps.validate_startup_config``).
+
+    Carried by this router so that ``uvicorn assurance.api.service:app`` -- the way the
+    container runs it, with no ``main()`` in the path -- fails at start-up rather than serving.
+    """
+    validate_startup_config()
+    yield
+
+
+billing_router = APIRouter(prefix="/v1", tags=["billing"], lifespan=_billing_lifespan)
+
+#: Per client address, per process (an edge limit is still the operator's job; see
+#: ``billing/rate_limit.py``). Overridable with the named environment variable, ``0`` = off.
+_CHECKOUT_LIMIT = Limit(5, 60.0)        # ASSURANCE_RATE_CHECKOUT, "<count>[/<seconds>]"
+_CLAIM_LIMIT = Limit(20, 60.0)          # ASSURANCE_RATE_CLAIM
+#: Calls to Stripe the whole process may start per hour, however many addresses ask.
+_STRIPE_BUDGET = Limit(120, 3600.0)     # ASSURANCE_STRIPE_CHECKOUT_BUDGET
+
+_checkout_throttle = rate_limited(
+    "checkout", _CHECKOUT_LIMIT, "ASSURANCE_RATE_CHECKOUT", what="checkout requests")
+_claim_throttle = rate_limited(
+    "claim", _CLAIM_LIMIT, "ASSURANCE_RATE_CLAIM", what="key-collection requests")
+
+
+def _spend_stripe_budget(request: Request) -> None:
+    """One unit of the process-wide Stripe-call budget, or a 429 before Stripe is called."""
+    limiter = limiter_for(request, "stripe_budget")
+    try:
+        limiter.check("all", env_limit("ASSURANCE_STRIPE_CHECKOUT_BUDGET", _STRIPE_BUDGET))
+    except RateLimitedError as exc:
+        raise refuse_rate_limited(exc.retry_after, what="checkouts across all callers") from None
 
 #: Tiers a Stripe checkout may grant (shared with the reconciler; the
 #: subscription-status mapping lives in ``billing/subscription_state.py``).
@@ -75,6 +135,21 @@ class CheckoutOut(BaseModel):
     checkout_url: str
     tier: str
     price: str
+    #: A secret for collecting the key after paying: the success URL carries it in its
+    #: fragment (never sent to a server or in a Referer), and a client that wants to keep it
+    #: across the redirect another way may. It is shown once, here; only its hash is stored.
+    claim_token: str = ""
+
+
+#: Every reply of the claim routes: nothing may cache a response that can carry a key.
+_NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+class ClaimIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(pattern=r"^[A-Za-z0-9_\-]{1,255}$")
+    claim_token: str = Field(default="", max_length=256)
 
 
 @billing_router.get("/plans", response_model=list, summary="What is on sale")
@@ -88,10 +163,14 @@ def get_plans() -> list[dict[str, Any]]:
 
 
 @billing_router.post(
-    "/checkout", response_model=CheckoutOut, summary="Start a subscription"
+    "/checkout", response_model=CheckoutOut, summary="Start a subscription",
+    dependencies=[Depends(_checkout_throttle)],
 )
 def post_checkout(
-    body: CheckoutIn, request: Request, principal: Principal = Depends(current_principal)
+    body: CheckoutIn,
+    request: Request,
+    principal: Principal = Depends(current_principal),
+    accounts: AccountStore = Depends(get_accounts),
 ) -> CheckoutOut:
     account = principal.account
     if account is not None and account.is_manual_grant:
@@ -147,12 +226,21 @@ def post_checkout(
             },
         )
     market = marketing_url()
+    # Everything above is refused without costing a Stripe call. From here each request does,
+    # so the process-wide budget is spent first: a flood from many addresses is stopped here.
+    _spend_stripe_budget(request)
+    claim_token = secrets.token_urlsafe(32)
     try:
         session = stripe.create_checkout_session(
             price_id=plan.price_id,
             email=body.email,
             company=body.company,
-            success_url=f"{market}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
+            # The claim token rides in the fragment: a browser keeps it across the redirect,
+            # but it is never sent to a server, never in a Referer, never in an access log.
+            # (The query string, with the session id, is all three.) Whether Stripe preserves a
+            # fragment on its redirect has not been exercised against Stripe.
+            success_url=(f"{market}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
+                         f"#claim={claim_token}"),
             cancel_url=f"{market}/#pricing",
             tier=plan.tier,
             metered=plan.metered_overage,
@@ -170,24 +258,70 @@ def post_checkout(
             detail={"error": "checkout_unavailable",
                     "detail": "The payment provider could not start checkout. Try again shortly."},
         ) from exc
-    return CheckoutOut(checkout_url=session.url, tier=plan.tier, price=plan.price_label)
+    accounts.register_checkout_claim(session.id, claim_token)
+    return CheckoutOut(checkout_url=session.url, tier=plan.tier, price=plan.price_label,
+                       claim_token=claim_token)
 
 
 @billing_router.get(
-    "/checkout/complete", response_model=dict, summary="Collect the key after paying"
+    "/checkout/complete", response_model=dict, summary="Moved: collect the key with POST",
+    deprecated=True, include_in_schema=False,
 )
-def get_checkout_complete(
-    session_id: str, response: Response, accounts: AccountStore = Depends(get_accounts)
-) -> dict[str, Any]:
-    """Hand over the key the webhook minted for this checkout session.
+def get_checkout_complete(response: Response) -> dict[str, Any]:
+    """Gone. The key used to be collected with a URL that carried the session id; it no longer is.
 
-    Returns 202 while the webhook is still in flight. It does not mint a key
-    here: landing on this URL proves only that a browser followed a redirect.
+    A session id in a query string is written to browser history, sent in ``Referer``, and
+    kept by analytics and proxies, and it used to be all a caller needed. This answers 410 and
+    hands over nothing, whatever it is sent.
+    """
+    response.headers.update(_NO_STORE)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "error": "moved",
+            "detail": "A key is no longer collected from a URL.",
+            "remedy": 'POST /v1/checkout/complete with JSON {"session_id": ..., '
+                      '"claim_token": ...}. The claim token is in the reply to POST '
+                      "/v1/checkout and in the fragment of the success URL.",
+        },
+        headers=_NO_STORE,
+    )
+
+
+@billing_router.post(
+    "/checkout/complete", response_model=dict, summary="Collect the key after paying",
+    dependencies=[Depends(_claim_throttle)],
+)
+def post_checkout_complete(
+    body: ClaimIn, response: Response, accounts: AccountStore = Depends(get_accounts)
+) -> dict[str, Any]:
+    """Hand over, once, the key the webhook minted for this checkout session.
+
+    The browser's redirect proves nothing about payment and this route mints nothing: the key
+    exists only after a signed ``checkout.session.completed``. What this adds is who may
+    collect it: the caller must present the session id **and** the claim token that ``POST
+    /v1/checkout`` returned, bound to that session and stored hashed. A leaked session id
+    alone (history, ``Referer``, an analytics beacon, a log) claims nothing.
+
+    The limit, stated plainly: the token is still a bearer secret. Whoever holds both values
+    (a leaked success URL with its fragment, a shared screen, an extension that reads the
+    page) can collect the key first.
+
+    * 200: the key, exactly once.
+    * 202 ``pending``: the webhook has not landed. Poll again.
+    * 403 ``claim_token_required`` / ``claim_token_invalid``: a key is staged and this caller
+      is not its holder. **Nothing is consumed**, so a stranger's guess does not lock the real
+      buyer out.
+    * 410 ``already_collected_or_expired``: the key was collected (by the buyer, or by whoever
+      held both values), expired after 24 hours, or was lost in a restore. The buyer does not
+      wait on this: an operator re-issues a key (``python -m assurance.billing.issue_key
+      --account acc_...``, with ``--discard-staged cs_...`` first if one is still staged), and
+      a key someone else collected is to be treated as exposed.
     """
     # The body of a successful reply is a secret: nothing may cache it.
-    response.headers["Cache-Control"] = "no-store"
-    pending = accounts.claim_pending_key(session_id)
-    if pending is None:
+    response.headers.update(_NO_STORE)
+    outcome, pending = accounts.claim_checkout(body.session_id, body.claim_token)
+    if outcome == "pending":
         raise HTTPException(
             status_code=status.HTTP_202_ACCEPTED,
             detail={
@@ -198,6 +332,36 @@ def get_checkout_complete(
                     "reachable or STRIPE_WEBHOOK_SECRET is wrong."
                 ),
             },
+            headers=_NO_STORE,
+        )
+    if outcome == "forbidden":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "claim_token_required" if not body.claim_token
+                else "claim_token_invalid",
+                "detail": "A key is waiting for this checkout, but the claim token is missing "
+                          "or does not match. Nothing was collected and the key is still "
+                          "held for the buyer.",
+                "remedy": "Use the browser that started the checkout. If the token is lost, "
+                          "contact the operator with your session id: they can discard the "
+                          "staged key and issue a new one.",
+            },
+            headers=_NO_STORE,
+        )
+    if outcome != "claimed" or pending is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={
+                "error": "already_collected_or_expired",
+                "detail": "This checkout completed, but no key is waiting for it: it was "
+                          "already collected, it expired (24 hours), or it was lost in a "
+                          "restore. It cannot be shown again.",
+                "remedy": "If you did not collect it, treat it as exposed and contact the "
+                          "operator with your session id: they issue a new key and revoke "
+                          "the old. If you did, issue another with POST /v1/keys.",
+            },
+            headers=_NO_STORE,
         )
     return {
         "api_key": pending["api_key"],
@@ -229,6 +393,12 @@ async def post_webhook(
     signature = request.headers.get("stripe-signature", "")
     try:
         event = stripe.verify_webhook(payload, signature)
+    except stripe.PayloadError as exc:
+        # Correctly signed, but not an event: nothing a retry could turn into success.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_payload", "detail": str(exc)},
+        ) from exc
     except stripe.SignatureError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -251,6 +421,12 @@ async def post_webhook(
 
     if kind in {"customer.subscription.updated", "customer.subscription.deleted"}:
         return _handle_subscription(accounts, kind, obj, event_id, created)
+
+    if kind == "charge.refunded":
+        return _handle_refund(accounts, kind, obj, event_id, created)
+
+    if kind in _DISPUTE_EVENTS:
+        return _handle_dispute(accounts, kind, obj, event_id, created)
 
     # Everything else is acknowledged and ignored, so Stripe stops retrying.
     return {"handled": None, "ignored": kind}
@@ -370,6 +546,118 @@ def _handle_subscription(
         ours=state.ours,
     )
     return _subscription_response(kind, outcome, state.label)
+
+
+#: Dispute lifecycle events that carry the dispute object. The state is read from the
+#: dispute's own ``status``, never from which event brought it, so their order cannot matter.
+_DISPUTE_EVENTS = frozenset({
+    "charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed",
+    "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated",
+})
+
+#: Stripe dispute status -> the hold state it implies (``billing/accounts.py:_HOLD_RANK``).
+#: An open chargeback holds; a lost one revokes for good; a won one, or an inquiry that closed
+#: without becoming a chargeback, releases; a warning-stage inquiry is only noted.
+_DISPUTE_STATE = {
+    "needs_response": "held",
+    "under_review": "held",
+    "lost": "lost",
+    "won": "released",
+    "warning_closed": "released",
+    "warning_needs_response": "noted",
+    "warning_under_review": "noted",
+    "charge_refunded": "noted",
+}
+
+
+def _stripe_id(value: Any) -> str:
+    """A Stripe id from a field that is a string or an expanded object."""
+    if isinstance(value, dict):
+        value = value.get("id")
+    return value if isinstance(value, str) else ""
+
+
+def _handle_refund(
+    accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
+) -> dict[str, Any]:
+    """A full refund revokes; a partial refund is recorded and revokes nothing.
+
+    The account is moved to the same ``suspended`` phase a paused subscription has (free plan,
+    tier remembered, read/verify/export of its own evidence kept), through
+    ``AccountStore.apply_entitlement_hold``: idempotent per event id, a monotone join per
+    charge so reordering cannot lose or invent it, and it never creates an account or a key.
+    Only a charge that belongs to a subscription invoice counts: this Stripe account may sell
+    other things, and refunding one of those is not about our plans.
+    """
+    customer = _stripe_id(obj.get("customer"))
+    charge = obj.get("id", "") or ""
+    if not customer or not charge:
+        return {"handled": kind, "ignored": "no_customer_or_charge"}
+    if not _stripe_id(obj.get("invoice")):
+        return {"handled": kind, "ignored": "not_a_subscription_charge"}
+    try:
+        amount = int(obj.get("amount") or 0)
+        refunded = int(obj.get("amount_refunded") or 0)
+    except (TypeError, ValueError):
+        return {"handled": kind, "ignored": "unreadable_amounts"}
+    if obj.get("refunded") is True or (amount > 0 and refunded >= amount):
+        state = "full"
+    elif refunded > 0:
+        state = "partial"
+    else:
+        return {"handled": kind, "ignored": "nothing_refunded"}
+    outcome = accounts.apply_entitlement_hold(
+        event_id=event_id, event_kind=kind, stripe_customer_id=customer,
+        hold_id=f"refund:{charge}", kind="refund", state=state, event_created=created)
+    return _hold_response(kind, outcome, state, "revoked" if state == "full" else "recorded")
+
+
+def _handle_dispute(
+    accounts: AccountStore, kind: str, obj: dict[str, Any], event_id: str, created: int
+) -> dict[str, Any]:
+    """An open dispute suspends, a lost one revokes, a won one releases. Never grants.
+
+    The dispute names its charge, not its customer, so the charge is read from Stripe; if that
+    fails the answer is 503 and Stripe redelivers (nothing was recorded, the event is not
+    marked processed). Whether the event is the first or the fifth, its effect is the state
+    in the dispute's ``status``, joined into the record so that a ``closed`` that arrives before
+    its ``created`` leaves the dispute closed.
+    """
+    state = _DISPUTE_STATE.get(str(obj.get("status", "")))
+    dispute = obj.get("id", "") or ""
+    charge_id = _stripe_id(obj.get("charge"))
+    if state is None or not dispute or not charge_id:
+        return {"handled": kind, "ignored": "unreadable_dispute"}
+    customer = _stripe_id(obj.get("customer"))
+    invoice = _stripe_id(obj.get("invoice"))
+    if not customer:
+        try:
+            charge = stripe.retrieve_charge(charge_id)
+        except stripe.StripeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "charge_lookup_failed",
+                        "detail": "The dispute's charge could not be read from Stripe. "
+                                  "Stripe will redeliver this event."},
+            ) from exc
+        customer = _stripe_id(charge.get("customer"))
+        invoice = _stripe_id(charge.get("invoice"))
+    if not customer:
+        return {"handled": kind, "ignored": "no_customer_or_charge"}
+    if not invoice:
+        return {"handled": kind, "ignored": "not_a_subscription_charge"}
+    outcome = accounts.apply_entitlement_hold(
+        event_id=event_id, event_kind=kind, stripe_customer_id=customer,
+        hold_id=f"dispute:{dispute}", kind="dispute", state=state, event_created=created)
+    label = {"held": "suspended", "lost": "revoked", "released": "released"}.get(state, "recorded")
+    return _hold_response(kind, outcome, state, label)
+
+
+def _hold_response(kind: str, outcome: str, state: str, label: str) -> dict[str, Any]:
+    if outcome == "duplicate":
+        return {"handled": kind, "duplicate": True, "result": "duplicate"}
+    return {"handled": kind, "result": label, "hold": state,
+            "account_changed": outcome == "applied"}
 
 
 def _subscription_response(kind: str, outcome: str, label: str) -> dict[str, Any]:

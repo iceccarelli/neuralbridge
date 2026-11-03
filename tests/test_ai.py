@@ -90,7 +90,7 @@ def seeded_table():
 #: through is `assurance.api.deps`'s own `ASSURANCE_API_KEYS` — the same
 #: entitlement engine `/ai` reuses (see `neuralbridge.ai.entitlements`).
 #: An operator key resolves to a Cell-tier principal, i.e. paid.
-OPERATOR_KEY = "test-golden-task-operator-key"
+OPERATOR_KEY = "test-golden-task-operator-key-0123456789abcdef0123456789"
 
 
 @pytest.fixture

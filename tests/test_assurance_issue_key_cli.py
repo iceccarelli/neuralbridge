@@ -24,6 +24,7 @@ from .support_billing import (  # noqa: F401
     _billing_client_fixture,
     _billing_env_fixture,
     checkout_event,
+    claim,
     send,
 )
 
@@ -140,8 +141,9 @@ def test_a_customer_with_an_unclaimed_key_at_backup_time_can_be_let_back_in(
     deps._tenant_register_for.cache_clear()
     with TestClient(service.create_app()) as client:
         # the stuck state the runbook describes
-        assert client.get("/v1/checkout/complete", params={"session_id": "cs_lost"}
-                          ).status_code == 202
+        # the marker survives the restore, the staged key does not: a definite 410 (not an
+        # endless "pending"), which is what sends the buyer to the operator
+        assert claim(client, "cs_lost").status_code == 410
         assert send(client, checkout_event("cs_lost", "cus_1", "sub_1", "cell", T)
                     ).json()["result"] == "duplicate"
         assert issue.main(["--customer", "cus_1"]) == 0

@@ -33,6 +33,7 @@ from .support_billing import (  # noqa: F401
     _billing_client_fixture,
     _billing_env_fixture,
     checkout_event,
+    claim,
     collect_key,
     send,
     subscription_event,
@@ -329,9 +330,9 @@ def _no_store(r):
 def test_l6_every_response_that_carries_a_plaintext_key_is_no_store(billing_client):
     c = billing_client
     assert send(c, checkout_event("cs_h", "cus_h", "sub_h", "cell", T)).status_code == 200
-    pending = c.get("/v1/checkout/complete", params={"session_id": "nope"})
+    pending = claim(c, "nope")
     assert pending.status_code == 202 and _no_store(pending)
-    claimed = c.get("/v1/checkout/complete", params={"session_id": "cs_h"})
+    claimed = claim(c, "cs_h")
     assert claimed.status_code == 200 and _no_store(claimed)
     key = claimed.json()["api_key"]
     issued = c.post("/v1/keys", headers={"X-API-Key": key}, json={})
@@ -471,7 +472,8 @@ def test_l7_an_encoded_name_that_the_app_accepts_is_not_in_a_real_access_log(
     finally:
         server.should_exit = True
         thread.join(timeout=10)
-    assert r.status_code == r2.status_code == 202          # the app does read the encoded name
+    # the app does read the encoded name (and, GET being retired, answers 410 to it)
+    assert r.status_code == r2.status_code == 410
     out = capfd.readouterr()
     joined = out.out + out.err
     assert "/v1/checkout/complete" in joined

@@ -20,7 +20,7 @@ from assurance.api import deps
 from assurance.billing.accounts import AccountStore, IdempotencyConflictError
 from assurance.billing.plans import PLANS
 
-OPERATOR_KEY = "operator-key-idem"
+OPERATOR_KEY = "operator-key-idem-0123456789abcdef0123456789"
 VALIDATE = {"track": "actively_exploited_vulnerability", "stage": "early_warning",
             "payload": {}}
 ALLOWANCE = PLANS["free"].validations_per_day
