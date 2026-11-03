@@ -149,3 +149,30 @@ class TestKeyManagementAndOperators:
         r = client.post("/v1/operators", headers=h, json={"name": "Mallory", "role": "decider"})
         assert r.status_code == 403
         assert client.get("/v1/operators", headers=boss).status_code == 200
+
+
+class TestBillingIsNotForContributors:
+    """Found by a static security review: ``POST /v1/billing/portal`` (cancel or change the subscription) and
+    ``POST /v1/usage/limits`` (set the spend limit to 0 or very high) accepted any key bound to a person, while
+    ``/v1/keys`` already refused a contributor's. Same rule now: a key bound to a person needs the 'decider' role;
+    the plain account key and a decider pass."""
+
+    def test_a_contributor_key_cannot_open_the_portal_or_set_the_limit(self, client, cell):
+        _, h = cell
+        boss, _ = _op(client, h, "Boss")
+        lena, _ = _op(client, boss, "Lena", "contributor")
+        for call in (
+            lambda hd: client.post("/v1/billing/portal", headers=hd),
+            lambda hd: client.post("/v1/usage/limits", headers=hd, json={"spend_limit_units": 0}),
+        ):
+            r = call(lena)
+            assert r.status_code == 403, r.text
+            assert r.json()["detail"]["error"] == "decider_role_required"
+
+    def test_a_decider_and_the_account_key_are_not_refused(self, client, cell):
+        _, h = cell
+        boss, _ = _op(client, h, "Boss")
+        for who in (boss, h):
+            # the portal answers 404 (no Stripe customer in this fixture), never 403
+            assert client.post("/v1/billing/portal", headers=who).status_code != 403
+            assert client.post("/v1/usage/limits", headers=who, json={"spend_limit_units": 100}).status_code != 403

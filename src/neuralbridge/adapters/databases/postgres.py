@@ -49,6 +49,7 @@ class PostgresAdapter(BaseAdapter):
 
     # Override class attributes
     adapter_type: str = "postgres"
+    backend: str = "real"
     category: str = "databases"
     description: str = "Connects to and interacts with PostgreSQL databases."
     version: str = "0.2.0"
@@ -135,8 +136,9 @@ class PostgresAdapter(BaseAdapter):
         Executes a given operation on the PostgreSQL database.
         """
         if not self._pool:
-            # MOCK: Fallback to a mock response if not connected.
-            logger.warning("Not connected to PostgreSQL, using mock data.")
+            if not self._mock_allowed():
+                raise self._refuse_mock("it is not connected to PostgreSQL")
+            logger.warning("Not connected to PostgreSQL, using mock data (allow_mock).")
             return self._get_mock_response(operation, params)
 
         async with self._pool.acquire() as connection:

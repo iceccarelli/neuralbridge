@@ -23,12 +23,14 @@ below needs its own extra, `.[assurance-api]`, and that one is a real install.
 ## The free path: the offline enrolment kit
 
 ```bash
-python -m assurance kit init plant/
-python -m assurance kit check plant/kit.json   # reads only — the report your IT department signs off on
+python -m assurance report demo --out demo/    # see a worked report first: nothing to edit (synthetic machines)
+python -m assurance kit init plant/            # a skeleton: edit kit.json and plans/cell.json
+python -m assurance kit check plant/kit.json   # names the placeholders left; reads only — what your IT department signs off on
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
-You get `plant/out/report.html`, `plant/out/evidence.db`, and
+`kit check` and `kit run` exit 2 while template values remain (`kit run` refuses to produce evidence with them). Once
+they are replaced and your exports are in place, you get `plant/out/report.html`, `plant/out/evidence.db`, and
 `plant/out/attestation-request.json`. The run arms a guard over the
 process's own socket layer, refuses every outbound connection — including
 name resolution — and seals a record of any attempt into your own ledger.

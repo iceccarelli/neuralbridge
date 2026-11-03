@@ -10,6 +10,13 @@ from __future__ import annotations
 import pytest
 
 
+def _flagged_canned(result) -> bool:
+    """A canned result must say so (AdapterResponse.metadata["mock"]), wherever the adapter put it."""
+    if isinstance(result, dict):
+        return result.get("mock") is True or (result.get("metadata") or {}).get("mock") is True
+    return (getattr(result, "metadata", None) or {}).get("mock") is True
+
+
 class TestBaseAdapter:
     """Tests for the abstract BaseAdapter contract."""
 
@@ -62,10 +69,11 @@ class TestSalesforceAdapter:
     @pytest.mark.asyncio
     async def test_soql_query(self):
         from neuralbridge.adapters.erp_crm.salesforce import SalesforceAdapter
-        adapter = SalesforceAdapter(config={})
+        adapter = SalesforceAdapter(config={"allow_mock": True})  # canned: no Salesforce call is made
         await adapter.connect()
         result = await adapter.execute("query", {"soql": "SELECT Id FROM Account"})
         assert result is not None
+        assert _flagged_canned(result)
         await adapter.disconnect()
 
 
@@ -79,13 +87,14 @@ class TestSlackAdapter:
     @pytest.mark.asyncio
     async def test_send_message(self):
         from neuralbridge.adapters.messaging.slack import SlackAdapter
-        adapter = SlackAdapter(config={"bot_token": "xoxb-test"})
+        adapter = SlackAdapter(config={"bot_token": "xoxb-test", "allow_mock": True})  # canned: nothing is sent
         await adapter.connect()
         result = await adapter.execute("send_message", {
             "channel": "#general",
             "text": "Hello from NeuralBridge!"
         })
         assert result is not None
+        assert _flagged_canned(result)
         await adapter.disconnect()
 
 
@@ -99,10 +108,11 @@ class TestRESTAdapter:
     @pytest.mark.asyncio
     async def test_get_request(self):
         from neuralbridge.adapters.apis.rest import RestApiAdapter
-        adapter = RestApiAdapter(config={"base_url": "https://api.example.com"})
+        adapter = RestApiAdapter(config={"base_url": "https://api.example.com", "allow_mock": True})  # canned: no request
         await adapter.connect()
         result = await adapter.execute("get", {"endpoint": "/users"})
         assert result is not None
+        assert _flagged_canned(result)
         await adapter.disconnect()
 
 

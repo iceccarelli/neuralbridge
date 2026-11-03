@@ -48,7 +48,7 @@ export default function CliPage() {
           <p className="code-panel-label">Install and check</p>
           <pre className="code-panel" tabIndex={0}>{`pip install cryptography && export PYTHONPATH=src   # from a checkout; nothing else to install
 python -m assurance                     # lists every domain
-python -m assurance kit init plant/     # a runnable kit
+python -m assurance kit init plant/     # a kit skeleton to fill in
 python -m assurance kit check plant/kit.json`}</pre>
         </div>
       </section>

@@ -19,7 +19,7 @@ Two regulations turned that from a quality problem into a legal one:
 
 | | |
 |---|---|
-| **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning naming the Member States where the product is available. Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
+| **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning that indicates, where applicable, the Member States where you know the product has been made available (Art. 14(2)(a)). Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
 | **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
 
 Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
@@ -32,18 +32,28 @@ That record is what this builds.
 
 ---
 
-## Start here: one command, inside your plant, nothing uploaded
+## Start here: see a real report in a second, then run it on your own plant
 
 ```bash
 pip install cryptography                       # the one third-party package the offline kit imports
 export PYTHONPATH=src                          # run from this checkout; nothing else is installed
-python -m assurance kit init plant/            # a runnable kit
-python -m assurance kit check plant/kit.json   # what it would open. Reads only
+python -m assurance report demo --out demo/    # a worked fleet; nothing to edit; open demo/report.html
+```
+
+That runs the real collection, normalisation and engines on synthetic exports and writes a self-contained
+`demo/report.html` (no scripts, no network). It is a demonstration on made-up machines, not evidence about yours.
+
+For your own plant, the kit is a skeleton you fill in. `kit run` refuses to produce evidence while template values
+remain, because that report goes to an auditor, an insurer or a customer:
+
+```bash
+python -m assurance kit init plant/            # a kit skeleton: edit kit.json and plans/cell.json (placeholders)
+python -m assurance kit check plant/kit.json   # names every placeholder still there, and what it would open. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
-You get `plant/out/report.html`, `plant/out/evidence.db` and
-`plant/out/attestation-request.json`. **Your ledger, your disk.** For the kit:
+Once the placeholders are replaced and your vendor exports are in place, you get `plant/out/report.html`,
+`plant/out/evidence.db` and `plant/out/attestation-request.json`. **Your ledger, your disk.** For the kit:
 no account, no API key, no upload, nothing to procure. (That is true of the kit
 and of the other offline commands. It is not true of the hosted service below,
 which needs an account and a key.)

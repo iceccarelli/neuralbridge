@@ -22,6 +22,7 @@ purely on integration logic.
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -33,6 +34,23 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+#: How far an adapter talks to a real service. Fail-closed: BaseAdapter defaults to "mock".
+#:
+#: * ``real``    - calls the real service and is exercised against it by a test (PostgreSQL only; that test
+#:                 needs a server and fails, not skips, under NEURALBRIDGE_REQUIRE_POSTGRES=1).
+#: * ``partial`` - has a real client path that no test has run against a live service. It may serve data from the
+#:                 live service, but must never answer from canned data unless mock is opted in.
+#: * ``mock``    - no real call is made; results are canned. ``execute`` refuses unless mock is opted in.
+BACKENDS = ("real", "partial", "mock")
+
+#: Environment switch for demos and tests of canned adapters. Never set it where results are relied on.
+ALLOW_MOCK_ENV = "NEURALBRIDGE_ALLOW_MOCK_ADAPTERS"
+
+
+class MockBackendRefusedError(ConnectionError):
+    """An operation would have answered with canned data that looks like a real result."""
 
 
 class AdapterStatus(StrEnum):
@@ -53,6 +71,7 @@ class AdapterMetadata:
     category: str = "general"
     supported_operations: list[str] = field(default_factory=list)
     config_schema: dict[str, Any] = field(default_factory=dict)
+    backend: str = "mock"
 
 
 @dataclass
@@ -97,6 +116,8 @@ class BaseAdapter(ABC):
     description: str = "Base adapter"
     version: str = "0.1.0"
     supported_operations: list[str] = []
+    #: One of BACKENDS. Unclassified adapters are treated as canned (``mock``) and refused by default.
+    backend: str = "mock"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
@@ -104,6 +125,20 @@ class BaseAdapter(ABC):
         self._operation_count = 0
         self._error_count = 0
         self._total_duration_ms = 0.0
+
+    # ── Mock policy ──────────────────────────────────────────
+
+    def _mock_allowed(self) -> bool:
+        """True only when the caller opted in: ``config["allow_mock"] is True`` or the env switch is "1"."""
+        return self.config.get("allow_mock") is True or os.environ.get(ALLOW_MOCK_ENV) == "1"
+
+    def _refuse_mock(self, why: str) -> MockBackendRefusedError:
+        """The error to raise instead of answering from canned data (``raise self._refuse_mock(...)``)."""
+        return MockBackendRefusedError(
+            f"Adapter '{self.adapter_type}' ({self.backend}) would answer from canned data: {why}. "
+            f"Fix the connection, or opt in to canned data for a demo or test with config allow_mock=true "
+            f"or {ALLOW_MOCK_ENV}=1."
+        )
 
     # ── Public API (with automatic logging & error handling) ─
 
@@ -178,11 +213,22 @@ class BaseAdapter(ABC):
                 f"Supported: {self.supported_operations}"
             )
 
+        if self.backend == "mock":
+            if not self._mock_allowed():
+                raise self._refuse_mock("it makes no real call to the service")
+            logger.warning("adapter_mock_backend_active", adapter=self.adapter_type, operation=operation)
+
         start = time.monotonic()
         self._operation_count += 1
 
         try:
             result = await self._do_execute(operation, params or {})
+            if self.backend == "mock":
+                # Canned data must say so, whatever shape the adapter returns it in.
+                if isinstance(result, AdapterResponse):
+                    result.metadata.setdefault("mock", True)
+                elif isinstance(result, dict):
+                    result.setdefault("mock", True)
             elapsed = (time.monotonic() - start) * 1000
             self._total_duration_ms += elapsed
             logger.info(
@@ -221,6 +267,7 @@ class BaseAdapter(ABC):
             category=self.category,
             supported_operations=self.supported_operations,
             config_schema=self._get_config_schema(),
+            backend=self.backend,
         )
 
     def get_stats(self) -> dict[str, Any]:

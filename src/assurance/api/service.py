@@ -72,7 +72,7 @@ triage returns *undetermined* until a human answers.
 
 def create_app(**kwargs: Any) -> FastAPI:
     application = FastAPI(
-        title="Industrial Assurance — CRA Article 14 register",
+        title="Industrial Autonomous Assurance API",
         version=__version__,
         description=_DESCRIPTION,
         openapi_tags=[

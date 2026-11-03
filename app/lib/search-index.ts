@@ -48,6 +48,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Key ceremony', group: 'Docs', href: '/docs/assurance/key-ceremony', blurb: 'Prepared, not performed: the procedure for the two trust anchors.' },
   { title: 'Operator pipeline', group: 'Docs', href: '/docs/assurance/pipeline', blurb: 'A public vulnerability record to a machine passport, in the order an operator runs it.' },
   { title: 'Platform status', group: 'Docs', href: '/docs/platform', blurb: 'What is Supported vs. Evolving today.' },
+  { title: 'Integrations', group: 'Docs', href: '/docs/integrations', blurb: 'Every adapter, and how far it goes: one supported with limits, the rest not run against a live service.' },
   { title: 'Check an evidence file', group: 'Docs', href: '/verify', blurb: 'Nothing stored: what can and cannot be established from an export, bundle or attestation log.' },
   { title: 'Developers — API reference', group: 'Docs', href: '/developers', blurb: 'Auth, the real free-vs-paid route table, curl and Python examples.' },
   { title: 'Applications', group: 'Docs', href: '/applications', blurb: 'Cobots, packaging, fleet, OEM register, insurer evidence — mapped to real routes.' },
