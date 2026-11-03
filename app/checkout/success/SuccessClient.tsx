@@ -24,15 +24,32 @@ type KeyResponse = {
 // page proves only that a browser followed a Stripe redirect — it never mints anything itself,
 // and entitlement comes only from the signed webhook.
 //
-// The Stripe redirect puts the session id in the query string and the claim token in the
-// fragment. Neither may stay in the address bar: both are removed with history.replaceState as
-// the very first thing the page does, before any network call, and are then held in memory only.
-// The page is served with Referrer-Policy: no-referrer and Cache-Control: no-store
-// (next.config.js), so nothing sent while the URL still held them carries it onward.
+// The Stripe redirect puts only the session id in the query string. The claim token is NOT in the
+// URL (Stripe stores the success URL, so a token in it would be readable by anyone with Stripe
+// access): POST /v1/checkout returned it to the browser that started checkout, and
+// app/components/PricingPlans.tsx stored it in THAT TAB's sessionStorage under
+// `nb-checkout-claim:<session_id>`. sessionStorage is per tab, so a different tab, browser or device
+// has no token: it gets the 'claim' state below (the key is held; an operator discards it and
+// re-issues). Whoever can read this tab's sessionStorage, or saw the reply to POST /v1/checkout,
+// holds the token.
+// The session id is removed from the address bar with history.replaceState as the very first thing
+// the page does, before any network call, and is then held in memory only. The page is served with
+// Referrer-Policy: no-referrer and Cache-Control: no-store (next.config.js).
 const MAX_ATTEMPTS = 10;
 const POLL_MS = 2000;
 
 type Captured = { sessionId: string; claim: string };
+
+// Keep in step with app/components/PricingPlans.tsx.
+const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
+
+function storedClaim(sessionId: string): string {
+  try {
+    return window.sessionStorage.getItem(`${CLAIM_STORAGE_PREFIX}${sessionId}`) || '';
+  } catch {
+    return '';
+  }
+}
 
 // Module scope, not component state: React strict mode (development) runs the effect twice, and
 // the second run would otherwise find the URL already stripped.
@@ -42,12 +59,11 @@ function captureAndStripUrl(): Captured | null {
   try {
     const url = new URL(window.location.href);
     const sessionId = url.searchParams.get('session_id') || '';
-    const claim = new URLSearchParams(url.hash.replace(/^#/, '')).get('claim') || '';
     if (url.search || url.hash) {
       // Keep the entry's state: Next's router keeps its own bookkeeping in it.
       window.history.replaceState(window.history.state, '', url.pathname);
     }
-    if (sessionId) captured = { sessionId, claim };
+    if (sessionId) captured = { sessionId, claim: storedClaim(sessionId) };
   } catch {
     /* an unparsable URL has nothing to capture */
   }
@@ -166,7 +182,9 @@ export default function CheckoutSuccessClient() {
         }
         if (res.status === 202) {
           if (n >= MAX_ATTEMPTS) {
-            setState('nokey');
+            // Without a token in this tab the buyer cannot be told "collected already": the key
+            // may well be held for the tab that started checkout. Say that instead.
+            setState(claim ? 'nokey' : 'claim');
             return;
           }
           setAttempt(n + 1);
@@ -264,12 +282,12 @@ export default function CheckoutSuccessClient() {
             <span className="eyebrow">Checkout</span>
             <h2>A key is waiting, but this browser can&apos;t collect it</h2>
             <p>
-              Your payment went through and a key is held for you, but this page did not receive the claim
-              token that proves it is the browser that started the checkout (it travels after the{' '}
-              <code>#</code> in the address and is removed from the address bar the moment this page opens).
-              Nothing was collected, so the key is still held. <a href={SALES}>Contact sales</a> with your
-              session ID <code>{sessionId}</code> and an operator will discard the held key and issue you a
-              new one.
+              Your payment went through and a key is held for you, but this tab does not hold the claim
+              token that proves it started the checkout. The token is kept only in the tab that
+              started checkout (session storage is per tab), never in the address, and never by Stripe, so a
+              different tab, browser or device cannot collect the key. Nothing was collected: the key is still
+              held (for up to 24 hours). <a href={SALES}>Contact sales</a> with your session ID{' '}
+              <code>{sessionId}</code> and an operator will discard the held key and issue you a new one.
             </p>
           </div>
         )}

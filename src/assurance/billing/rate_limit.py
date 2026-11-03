@@ -14,6 +14,13 @@ Memory is bounded two ways: a client's record is dropped once its window has emp
 table never holds more than ``max_clients`` records (the least recently seen is evicted, so an
 attacker with a great many addresses can make the limiter forget a quiet client, but cannot
 make the process grow).
+
+Residual, stated plainly: that same eviction is a way to reset a victim. An attacker who sends
+from more than ``max_clients`` (10,000) distinct addresses inside one window pushes a quiet
+client's record out, and that client's counter starts again from zero. The counters are also
+per process and forgotten on restart. None of this is a defence against a distributed flood;
+that belongs at the edge. Keep any single process-wide counter (the Stripe-call budget) in a
+limiter of its own so that address churn cannot evict it.
 """
 
 from __future__ import annotations

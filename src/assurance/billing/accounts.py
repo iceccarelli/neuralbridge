@@ -1264,10 +1264,19 @@ class AccountStore:
             "NOT IN (SELECT stripe_customer_id FROM accounts WHERE stripe_customer_id <> '')",
             (format_utc(now - _ORPHAN_RETENTION),),
         )
-        db.execute(
-            "DELETE FROM pending_keys WHERE created_at < ?",
-            (format_utc(now - PENDING_KEY_TTL),),
-        )
+        # An expired, uncollected key is no longer claimable, so it must not stay usable: its
+        # api_keys row is revoked in this same transaction (matched by the hash of the staged
+        # plaintext) before the plaintext is deleted. Otherwise the key would stay active (and
+        # count against the account's key cap) with nobody able to receive it.
+        expired_before = format_utc(now - PENDING_KEY_TTL)
+        for stale in db.execute(
+            "SELECT api_key FROM pending_keys WHERE created_at < ?", (expired_before,)
+        ).fetchall():
+            db.execute(
+                "UPDATE api_keys SET revoked_at = ? WHERE key_hash = ? AND revoked_at IS NULL",
+                (format_utc(now), hash_key(stale["api_key"])),
+            )
+        db.execute("DELETE FROM pending_keys WHERE created_at < ?", (expired_before,))
 
     @staticmethod
     def _held_at(db: sqlite3.Connection, customer: str) -> int | None:
@@ -1943,8 +1952,8 @@ class AccountStore:
         This is the one place a key exists in plaintext at rest. It stays there
         until :meth:`claim_pending_key` collects it, which deletes the row, or
         until :data:`PENDING_KEY_TTL` (24 hours) passes, after which it is
-        purged and the key can no longer be handed over — only its SHA-256
-        remains. The checkout webhook stages through :meth:`apply_checkout`
+        purged, its ``api_keys`` row is revoked and the key can no longer be handed over —
+        only its SHA-256 remains. The checkout webhook stages through :meth:`apply_checkout`
         instead, in the same transaction as the account and the key.
         """
         if not session_id:
@@ -1993,7 +2002,7 @@ class AccountStore:
 
         Only the SHA-256 of ``claim_token`` is stored. The token is a bearer secret: it
         narrows who can collect the key to someone who saw the response to ``POST
-        /v1/checkout`` (or the success URL's fragment) as well as the session id; it does not
+        /v1/checkout`` (the success URL carries only the session id) as well as the session id; it does not
         authenticate a person.
         """
         if not session_id or not claim_token:

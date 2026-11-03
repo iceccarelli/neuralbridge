@@ -56,10 +56,11 @@ def test_checkout_issues_a_claim_token_and_keeps_it_out_of_the_query_string(star
     token = body["claim_token"]
     assert len(token) >= 40
     url = sent["success_url"]
-    # the session id may be in the query (Stripe fills it in); the claim token never is
-    assert "session_id={CHECKOUT_SESSION_ID}" in url.split("#")[0]
-    assert token not in url.split("#")[0]
-    assert url.split("#")[1] == f"claim={token}"
+    # the session id is in the query (Stripe fills it in); the claim token is nowhere in the URL
+    # Stripe stores and echoes: not the query, not a fragment (see test_billing_redteam_money.py)
+    assert url.endswith("/checkout/success?session_id={CHECKOUT_SESSION_ID}")
+    assert token not in url and "#" not in url
+    assert body["session_id"] == "cs_test_1"
     # only a hash is stored
     rows = sqlite3.connect(billing_env / "accounts.db").execute(
         "SELECT session_id, token_hash FROM checkout_claims").fetchall()

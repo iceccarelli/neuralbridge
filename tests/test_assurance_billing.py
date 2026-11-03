@@ -245,11 +245,11 @@ class TestCheckout:
                 json={"tier": "register", "email": "m.braun@example.de"},
             )
         assert response.status_code == 200
-        # The session id is in the query (Stripe fills it in); the claim token is in the
-        # fragment only: never in the part of the URL that reaches a server or a Referer.
-        base, _, fragment = captured["success_url"].partition("#")
-        assert base == "https://neuralbridge.io/checkout/success?session_id={CHECKOUT_SESSION_ID}"
-        assert fragment == f"claim={response.json()['claim_token']}"
+        # The session id is in the query (Stripe fills it in); the claim token is not in the URL
+        # at all (Stripe stores the success URL): it is only in this reply.
+        assert captured["success_url"] == (
+            "https://neuralbridge.io/checkout/success?session_id={CHECKOUT_SESSION_ID}")
+        assert response.json()["claim_token"] not in captured["success_url"]
         assert len(response.json()["claim_token"]) >= 40
         assert captured["cancel_url"] == "https://neuralbridge.io/#pricing"
 
