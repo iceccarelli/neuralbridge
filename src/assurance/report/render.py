@@ -340,10 +340,18 @@ def _impact_block(impact: ImpactReport) -> str:
         "needs_review": ("warn", "Matches found; none had standing evidence."),
     }[impact.verdict]
     if impact.verdict == "needs_review" and not impact.exposures:
-        head = ("warn", "No match was found, but the advisory is an incomplete translation "
-                        "of its source. That is not a statement that nothing is affected."
-                if impact.incomplete else
-                "No match was found, but the ledger chain does not verify.")
+        if impact.incomplete:
+            head = ("warn", "No match was found, but the advisory is an incomplete translation "
+                            "of its source. That is not a statement that nothing is affected.")
+        elif impact.machines_in_fleet == 0:
+            head = ("warn", "NOT ASSESSED: no machine is enrolled, so nothing was assessed. "
+                            "This is not a clear.")
+        elif getattr(impact, "look_incomplete_machines", None):
+            head = ("warn", "No match was found, but the latest look at one or more machines was incomplete, "
+                            "so what was seen covers less than the plan. That is not a statement that "
+                            "nothing is affected.")
+        else:
+            head = ("warn", "No match was found, but the ledger chain does not verify.")
     out = [
         _import_banner(impact),
         f"<div class='banner {head[0]}'><b>{e(impact.advisory_id)}</b> "

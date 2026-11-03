@@ -772,9 +772,10 @@ def assess_advisory(
     machine, and forty copies of it would not be forty findings.
 
     Opens a case only when the report is not ``clear``: an advisory that
-    matches nothing in the fleet is not a change to anyone's evidence.
+    matches nothing in the fleet is not a change to anyone's evidence. An EMPTY fleet is not ``clear`` (nothing
+    was assessed) but has no machine to open a case about either, so it opens none; the report still says so.
     """
-    if impact.verdict == "clear":
+    if impact.verdict == "clear" or (impact.machines_in_fleet == 0 and not impact.exposures):
         return None
     marker = _untrusted_marker(impact, actor, accept_unsigned, reason)
     imported = impact.advisory_import is not None
