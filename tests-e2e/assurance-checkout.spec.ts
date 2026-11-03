@@ -31,10 +31,18 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     expect(res.status, res.stderr.toString()).toBe(0);
   }
 
-  // The buyer's browser holds the claim token that POST /v1/checkout returned; Stripe's success URL carries it in
-  // the FRAGMENT (never sent to a server). The seed registers `claim-<session>` the way /v1/checkout does.
+  // The claim token is NOT in the success URL (Stripe stores that URL). The tab that started checkout holds the
+  // token POST /v1/checkout returned in its sessionStorage under `nb-checkout-claim:<session_id>` (written by
+  // PricingPlans before it redirects). The seed registers `claim-<session>` the way /v1/checkout does.
+  const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
   const claimToken = (sid: string) => `claim-${sid}`;
-  const successUrl = (sid: string) => `/checkout/success?session_id=${sid}#claim=${claimToken(sid)}`;
+  const successUrl = (sid: string) => `/checkout/success?session_id=${sid}`;
+  // The tab that started the checkout: its sessionStorage entry exists before the success page loads.
+  const arriveAsBuyer = async (page: Page, sid: string) => {
+    await page.goto('/');
+    await page.evaluate(([k, v]) => window.sessionStorage.setItem(k, v), [`${CLAIM_STORAGE_PREFIX}${sid}`, claimToken(sid)]);
+    await page.goto(successUrl(sid));
+  };
   const claim = (request: import('@playwright/test').APIRequestContext, sid: string, token = claimToken(sid)) =>
     request.post(`${apiBase}/v1/checkout/complete`, { data: { session_id: sid, claim_token: token } });
 
@@ -46,7 +54,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   }) => {
     const sid = `cs_e2e_cell_${Date.now()}`;
     stage(sid, 'cell');
-    await page.goto(successUrl(sid));
+    await arriveAsBuyer(page, sid);
 
     const keyBox = page.getByTestId('issued-key');
     await expect(keyBox).toBeVisible({ timeout: 20_000 });
@@ -83,7 +91,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
 
   test('the page waits for the webhook, and picks the key up when it arrives', async ({ page }) => {
     const sid = `cs_e2e_late_${Date.now()}`;
-    await page.goto(successUrl(sid));
+    await arriveAsBuyer(page, sid);
     await expect(page.getByText(/Confirming your payment/)).toBeVisible();
     await expect(page.getByTestId('issued-key')).toHaveCount(0);
     // Not collecting anything is not a failure yet, and no workspace link is offered before a key exists.
@@ -99,7 +107,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   }) => {
     const sid = `cs_e2e_register_${Date.now()}`;
     stage(sid, 'register');
-    await page.goto(successUrl(sid));
+    await arriveAsBuyer(page, sid);
     const key = (await page.getByTestId('issued-key').textContent({ timeout: 20_000 }))!.trim();
     const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': key } })).json();
     await expect(page.getByTestId('checkout-plan')).toContainText(me.plan.name, { timeout: 10_000 });
@@ -118,7 +126,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     const sid = `cs_e2e_gone_${Date.now()}`;
     stage(sid, 'cell');
     expect((await claim(request, sid)).status()).toBe(200);
-    await page.goto(successUrl(sid));
+    await arriveAsBuyer(page, sid);
     const msg = page.getByTestId('checkout-gone');
     await expect(msg).toBeVisible({ timeout: 60_000 });
     await expect(msg).toContainText(/already been collected/i);
@@ -134,12 +142,30 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     await page.goto('/assurance');
     await page.evaluate(([k, v]) => window.sessionStorage.setItem(k, v), [KEY_STORAGE, seed.key_g]);
     const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': seed.key_g } })).json();
-    await page.goto(`/checkout/success?session_id=cs_e2e_never_staged_${Date.now()}`);
+    await arriveAsBuyer(page, `cs_e2e_never_staged_${Date.now()}`);
     const saved = page.getByTestId('checkout-saved-key');
     await expect(saved).toBeVisible({ timeout: 60_000 });
     await expect(saved).toContainText(me.plan.name);
     await expect(saved.getByRole('link', { name: 'Open your workspace' })).toBeVisible();
     await expect(page.locator('body')).not.toContainText(seed.key_g);
+  });
+
+  test('another tab or device has no claim token: it is told the key is held, and nothing is collected', async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const sid = `cs_e2e_othertab_${Date.now()}`;
+    stage(sid, 'cell');
+    await page.goto(successUrl(sid));      // no sessionStorage entry: not the tab that started the checkout
+    const msg = page.getByTestId('checkout-claim');
+    await expect(msg).toBeVisible({ timeout: 60_000 });
+    await expect(msg).toContainText(/this tab does not hold the claim token/i);
+    await expect(msg).toContainText(sid);
+    await expect(page.getByTestId('issued-key')).toHaveCount(0);
+    expect(page.url()).not.toContain(sid);   // the session id is stripped from the address bar
+    // Nothing was consumed: the buyer's own tab (the token holder) can still collect it.
+    expect((await claim(request, sid)).status()).toBe(200);
   });
 
   test('no session id and no API are said plainly', async ({ page }) => {

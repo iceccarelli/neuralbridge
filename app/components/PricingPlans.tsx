@@ -22,6 +22,9 @@ function Price({ price }: { price: string }) {
   );
 }
 
+// Keep in step with app/checkout/success/SuccessClient.tsx.
+const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
+
 function CheckoutForm({
   tier,
   label,
@@ -55,6 +58,17 @@ function CheckoutForm({
         setError(data?.detail?.detail || data?.detail || `Checkout is unavailable (${res.status}).`);
         setBusy(false);
         return;
+      }
+      // The claim token is returned only in this reply: it is NOT in the success URL (Stripe
+      // stores that). Keep it in THIS tab's sessionStorage, keyed by the Stripe session id the
+      // success page gets back in its query. sessionStorage is per tab: a different tab, browser
+      // or device has no token and is told the key is held (see checkout/success/SuccessClient).
+      if (data.session_id && data.claim_token) {
+        try {
+          window.sessionStorage.setItem(`${CLAIM_STORAGE_PREFIX}${data.session_id}`, data.claim_token);
+        } catch {
+          /* sessionStorage blocked: the key can still be recovered through the operator */
+        }
       }
       window.location.href = data.checkout_url;
     } catch {

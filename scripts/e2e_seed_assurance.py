@@ -103,7 +103,7 @@ def stage_checkout(session_id: str, tier: str) -> int:
     """What Stripe's webhook does after a payment, through the real store."""
     store = AccountStore(accounts_path())
     # POST /v1/checkout stores the hash of the claim token it returns; the test browser holds `claim-<session>`
-    # (the specs put it in the success URL's fragment), so the claim route is exercised through its real check.
+    # (the specs put it in the buyer tab's sessionStorage under `nb-checkout-claim:<session>`), so the claim route is exercised through its real check.
     store.register_checkout_claim(session_id, f"claim-{session_id}")
     result = store.apply_checkout(
         event_id=f"evt_e2e_{session_id}", session_id=session_id,

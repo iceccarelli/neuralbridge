@@ -226,6 +226,12 @@ def validate_startup_config() -> None:
       refused.
     * Every ``ASSURANCE_API_KEYS`` entry at least :data:`MIN_OPERATOR_KEY_LENGTH` characters.
       The message names the position of the short key, never its value.
+
+    Two limits, stated exactly. The key check is a length in *characters*, not entropy: a long
+    repetitive or guessable key passes. ``ASSURANCE_HOST`` is a *declared* value, not the real
+    bind: the service cannot see ``uvicorn --host``, and e.g. the repository ``Dockerfile`` binds
+    ``0.0.0.0`` whatever this variable says, so the open-mode check is only as honest as the
+    operator's declaration.
     """
     problems: list[str] = []
     keys = _operator_keys()
