@@ -41,6 +41,7 @@ from assurance.machinery.manifest import (
     SafetyManifest,
     manifest_is_incomplete,
     not_a_look,
+    notes_mark_incomplete,
 )
 from assurance.machinery.record import (
     MANIFEST_KIND,
@@ -420,8 +421,7 @@ def _recurrence(
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
-            if INCOMPLETE_COLLECTION_MARK in str(
-                    evidence.body.get("manifest", {}).get("notes", "")):
+            if notes_mark_incomplete(evidence.body.get("manifest", {}).get("notes", "")):
                 continue
             other = str(evidence.body.get("configuration_hash", ""))
             if other and other != settled.trigger_id:

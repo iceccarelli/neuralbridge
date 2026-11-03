@@ -182,3 +182,13 @@ def test_n5_the_bound_is_accepted_and_status_exits_2_on_a_bad_config(tmp_path, c
                        str(tmp_path / "r.db"), "--json"])
     assert code == 2
     assert "max_age_hours" in capsys.readouterr().err
+
+
+def test_every_consumer_reads_a_case_variant_marker_as_incomplete():
+    """A re-typed marker ('[Collection  Incomplete') must read as incomplete everywhere, never as a whole look."""
+    from assurance.machinery.manifest import notes_mark_incomplete
+
+    assert notes_mark_incomplete("x [collection incomplete: ITM-FW not collected]")
+    assert notes_mark_incomplete("x [Collection   INCOMPLETE: ITM-FW not collected]")
+    assert not notes_mark_incomplete("a normal operator note")
+    assert not notes_mark_incomplete(None)

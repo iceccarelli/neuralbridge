@@ -615,6 +615,12 @@ class SafetyManifest:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def notes_mark_incomplete(notes: object) -> bool:
+    """Do these manifest notes carry the incomplete-collection marker? Case- and whitespace-insensitive (fail-safe)."""
+    text = " ".join(str(notes or "").split()).lower()
+    return " ".join(INCOMPLETE_COLLECTION_MARK.split()).lower() in text
+
+
 def manifest_is_incomplete(manifest: SafetyManifest) -> bool:
     """Is this manifest marked as a partial collection (see :data:`INCOMPLETE_COLLECTION_MARK`)?
 
@@ -626,8 +632,7 @@ def manifest_is_incomplete(manifest: SafetyManifest) -> bool:
     # Case-insensitive and whitespace-normalised: a note edited or re-typed by hand must read
     # as incomplete rather than slip through as a whole look (fail-safe). The marker FORMAT
     # that is written is unchanged.
-    notes = " ".join((manifest.notes or "").split()).lower()
-    return " ".join(INCOMPLETE_COLLECTION_MARK.split()).lower() in notes
+    return notes_mark_incomplete(manifest.notes)
 
 
 def incomplete_collection_note(missing_items: Iterable[str]) -> str:
