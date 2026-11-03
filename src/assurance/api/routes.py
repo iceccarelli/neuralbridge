@@ -17,7 +17,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import field_validator
 
-from ..billing.accounts import AccountStore, Principal
+from ..billing.accounts import Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
 from ..core.evidence import Actor
 from ..evidence.ledger import AnchorContradictsLedgerError
@@ -40,7 +40,6 @@ from .deps import (
     MeterTicket,
     auth_mode,
     current_principal,
-    get_accounts,
     get_register,
     require_evidence_readout,
     require_register,
@@ -683,34 +682,46 @@ def root() -> dict[str, Any]:
     }
 
 
-@public_router.get("/healthz", response_model=dict, summary="Liveness and configuration")
-def healthz(
-    response: Response, accounts: AccountStore = Depends(get_accounts)
-) -> dict[str, Any]:
-    """Reports what is actually true, including an unauthenticated deployment.
+@public_router.get("/livez", response_model=dict, summary="Liveness: the process answers")
+def livez() -> dict[str, str]:
+    """The process is up and the event loop answers. Depends on nothing.
+
+    Not a statement that the service can do its job: that is ``/healthz``. A platform
+    should restart on this one and stop routing traffic on the other.
+    """
+    return {"status": "alive"}
+
+
+@public_router.get("/healthz", response_model=dict, summary="Readiness and configuration")
+def healthz(response: Response) -> dict[str, Any]:
+    """Readiness: reports what is actually true, including an unauthenticated deployment.
 
     Unauthenticated and polled every few seconds, so it is cheap and says
     nothing about the host: no filesystem path, and no chain verification
     (that is O(n) in the ledger and lives at the authenticated
     ``GET /v1/ledger/verify``). It does confirm that both stores open, which
     exercises their schema-version checks, and reports the operator ledger's
-    entry count.
+    entry count. A store or data directory the service cannot use is a 503 with
+    the reason (never a path) in ``ledger_error`` / ``accounts_error`` /
+    ``storage_problems``, not an unhandled 500. ``attestation_key`` is
+    informational: ``not_configured`` is an honest, supported state and does not
+    fail readiness (the attestation routes answer 503 and say so), but it is
+    shown; ``unsafe`` / ``unusable`` additionally degrade the status.
     """
+    from .service import readiness
+
     mode = auth_mode()
-    payload: dict[str, Any] = {"status": "ok", "auth_mode": mode}
-    try:
-        payload["ledger_records"] = len(shared_register().ledger)
-        payload["ledger_ok"] = True
-    except Exception:  # noqa: BLE001 - reported as a state, never echoed
-        payload["ledger_ok"] = False
-    try:
-        accounts.usage_today("healthz")
-        payload["accounts_ok"] = True
-    except Exception:  # noqa: BLE001
-        payload["accounts_ok"] = False
-    if not (payload["ledger_ok"] and payload["accounts_ok"]):
+    state = readiness(lambda: len(shared_register().ledger))
+    payload: dict[str, Any] = {"status": "ok"}
+    payload |= {k: v for k, v in state.items() if k not in ("ready", "problems", "warnings")}
+    if not state["ready"]:
         payload["status"] = "unavailable"
+        payload["problems"] = state["problems"]
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif state["warnings"]:
+        payload["status"] = "degraded"
+    if state["warnings"]:
+        payload["warnings"] = state["warnings"]
     payload |= {
         "field_spec": {"source": "ENISA CRA SRP Glossary", "version": GLOSSARY_VERSION,
                        "dated": GLOSSARY_DATE},

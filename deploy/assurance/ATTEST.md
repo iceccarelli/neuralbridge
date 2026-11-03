@@ -30,6 +30,51 @@ signed by a key the holder of the database does not have. Then a rewind is no
 longer a matter of anybody's word: here is a signature, made at a stated time,
 over a head this ledger can no longer produce.
 
+## What `verify` establishes, and what it cannot
+
+`assurance attest verify --log L --public-key K [--ledger DB]` establishes that the
+attestations in `L` are genuine (signatures, unbroken sequence, each naming its
+predecessor, lengths never decreasing, one key) and, with `--ledger`, that the ledger
+still contains every head `L` attests.
+
+It does **not** establish that `L` is the newest log. Whoever can write both the ledger
+and the log can truncate the ledger to an older signed head, cut the log back to the
+attestation that signed it, and leave a pair that verifies: every remaining signature is
+genuine and every remaining head is present. (Reproduced: sign at length 10, append to 20,
+sign again, `DELETE FROM chain WHERE seq > 10`, keep only the first log line: `ok`.) Nothing
+inside the pair can show it. Only the verifier's own memory can:
+
+```bash
+# first check: note the two values printed under "keep for your next check"
+assurance attest verify --log L --public-key K --ledger DB
+#   --min-sequence 2 --expect-head 3f9c...   (the newest attestation seen)
+
+# every later check
+assurance attest verify --log L --public-key K --ledger DB \
+    --min-sequence 2 --expect-head 3f9c... --max-age 26
+```
+
+* `--min-sequence N` fails the check ("rollback or withheld newer attestation") when the
+  log's newest attestation is older than N.
+* `--expect-head HASH` (12+ hex characters of the head link hash) fails it when no
+  attestation in the log has that head.
+* `--max-age HOURS` fails it when the newest attestation is older than that: signing has
+  stopped, or newer attestations are being withheld.
+* With neither expectation, a passing check says so: *cannot detect a withheld newer
+  attestation or a rollback; keep and pass the newest head from your last check*. The
+  same note appears in `checks_skipped` of the JSON output, and `remember_for_next_check`
+  holds the values to keep. Keep them somewhere the ledger's operator cannot write.
+
+**A signed head names no tenant and no ledger.** The attested value is the sequence, length
+and head hash (plus basis, time and key), not an account or a ledger id, and the format is
+unchanged so that existing attestations keep verifying. A log from one account verifies
+against any ledger that contains those heads; keep one log per ledger and check them
+together. Records written after the newest signature are covered by no signature.
+
+Reading is read-only: `verify`, `sign` and the other read verbs open the ledger without
+writing to it (no journal-mode change, no schema script, no ledger id minted, no `-wal` or
+`-shm` created), so the bytes you verified are the bytes that were there.
+
 Two deployments do this, and they are for different buyers.
 
 ---

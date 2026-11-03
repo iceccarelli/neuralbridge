@@ -40,19 +40,20 @@ import time
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from ..core.errors import AssuranceError
-from ..core.identity import content_hash_of, format_utc, utc_now
+from ..core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from ..evidence.ledger import GENESIS, EvidenceLedger
 from .keys import SigningKey, VerifyingKey
 
 __all__ = [
     "ATTESTATION_FORMAT",
     "LOCK_TIMEOUT_SECONDS",
+    "NO_EXPECTATION_NOTE",
     "AttestationBasis",
     "AttestationBusyError",
     "AttestationError",
@@ -782,12 +783,73 @@ class LogVerdict:
         return f"{len(self.problems)} problem(s) across {self.checked} attestation(s)"
 
 
+#: Said on every verification that was given no expectation about the newest attestation.
+NO_EXPECTATION_NOTE = (
+    "Cannot detect a withheld newer attestation or a rollback: a ledger truncated to an "
+    "older signed head, with the attestation log cut back to match, verifies. Keep the "
+    "newest attestation's sequence and head from your last check and pass them next time "
+    "(--min-sequence N --expect-head HASH); a log whose newest head is older than that "
+    "then fails as a rollback or a withheld newer attestation.")
+
+
+def _expectation_problems(
+    records: Sequence[HeadAttestation], *, min_sequence: int | None = None,
+    expect_head: str | None = None, max_age: timedelta | None = None,
+    now: datetime | None = None,
+) -> list[str]:
+    """Problems with the log's NEWEST attestation measured against what the caller expects.
+
+    ``min_sequence`` is the newest attestation sequence the caller remembers from an earlier
+    check; ``expect_head`` is that attestation's ``head_link_hash`` (full, or a prefix of at
+    least 12 hex characters). The log must be at least that new and must still contain
+    that head. A log that is shorter or older than this is a rollback or a withheld newer
+    attestation: the signatures on what remains are all genuine, which is why nothing but
+    the caller's own memory can catch it. ``max_age`` bounds the age of the newest one.
+    """
+    problems: list[str] = []
+    newest = records[-1] if records else None
+    if min_sequence is not None:
+        if isinstance(min_sequence, bool) or not isinstance(min_sequence, int) or min_sequence < 1:
+            raise ValueError("min_sequence must be a whole number of at least 1.")
+        if newest is None or newest.sequence < min_sequence:
+            have = f"attestation {newest.sequence}" if newest else "no attestation"
+            problems.append(
+                f"rollback or withheld newer attestation: the log's newest is {have}, but "
+                f"attestation {min_sequence} was seen before. A newer attestation was "
+                "removed from this log, or this is an older copy of it.")
+    if expect_head is not None:
+        want = str(expect_head).strip().lower()
+        if len(want) < 12 or any(c not in "0123456789abcdef" for c in want):
+            raise ValueError("expect_head must be a hex head link hash (12 or more characters).")
+        found = [r for r in records if r.head_link_hash.startswith(want)]
+        if not found:
+            problems.append(
+                f"rollback or withheld newer attestation: no attestation in the log has head "
+                f"{want[:12]}, the newest head you remembered. The log is older than your "
+                "last check, was rewritten, or belongs to a different ledger.")
+    if max_age is not None:
+        if newest is None:
+            problems.append("no attestation, so its age cannot be within the limit")
+        else:
+            moment = now if now is not None else utc_now()
+            age = moment - parse_utc(newest.attested_at)
+            if age > max_age:
+                problems.append(
+                    f"the newest attestation ({newest.sequence}, {newest.attested_at}) is "
+                    f"{age.total_seconds() / 3600:.1f} h old, over the allowed "
+                    f"{max_age.total_seconds() / 3600:g} h: signing has stopped, or a newer "
+                    "attestation is being withheld")
+    return problems
+
+
 def check_log_against_ledger(
     records: Sequence[HeadAttestation],
     ledger: EvidenceLedger,
     *,
     basis: AttestationBasis | None = None,
     chain: bool = True,
+    min_sequence: int | None = None,
+    expect_head: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Whether *ledger* still holds every head the log attests. ``(problems, skipped)``.
 
@@ -796,10 +858,17 @@ def check_log_against_ledger(
     record states (length, head sequence, head link hash), so on its own it finds a
     rewind or a loss but does not authenticate the log: that is ``verify_log``'s
     signature check. ``chain=False`` skips re-verifying the ledger's own hash chain
-    for a caller that has just done it.
+    for a caller that has just done it. ``min_sequence`` / ``expect_head`` are the newest
+    attestation sequence / head link hash the caller remembers (see
+    :func:`_expectation_problems`): without one, a ledger rolled back to an older signed
+    head with the log cut to match passes, and the result says so in ``skipped``.
     """
     problems: list[str] = []
     skipped: list[str] = []
+    problems.extend(_expectation_problems(
+        records, min_sequence=min_sequence, expect_head=expect_head))
+    if min_sequence is None and expect_head is None:
+        skipped.append(NO_EXPECTATION_NOTE)
     if chain:
         chain_ok, chain_problems = ledger.verify_chain()
         if not chain_ok:
@@ -857,6 +926,10 @@ def verify_log(
     *,
     ledger: EvidenceLedger | None = None,
     basis: AttestationBasis | None = None,
+    min_sequence: int | None = None,
+    expect_head: str | None = None,
+    max_age: timedelta | None = None,
+    now: datetime | None = None,
 ) -> LogVerdict:
     """Check an attestation log, and optionally check a ledger against it.
 
@@ -877,6 +950,15 @@ def verify_log(
 
     Length and head are compared only between records of the same basis, for the
     same reason.
+
+    **Rollback.** Everything above is relative to the log in hand. An operator with write
+    access to the ledger who truncates it to an older signed head and cuts the log to
+    match leaves a pair that verifies. Only the verifier's memory closes that:
+    ``min_sequence`` (the newest attestation sequence seen at the last check) and
+    ``expect_head`` (its head link hash) fail the verdict with a "rollback or withheld newer
+    attestation" problem when the log's newest head is older; ``max_age`` fails a log whose
+    newest attestation is too old. With neither expectation the limitation is listed in
+    ``checks_skipped``.
     """
     records = list(attestations)
     problems: list[str] = []
@@ -969,6 +1051,11 @@ def verify_log(
             "over its own span; this check used one."
         )
 
+    problems.extend(_expectation_problems(
+        records, min_sequence=min_sequence, expect_head=expect_head, max_age=max_age, now=now))
+    if min_sequence is None and expect_head is None:
+        skipped.append(NO_EXPECTATION_NOTE)
+
     if ledger is None:
         skipped.append(
             "The ledger itself was not examined. This says the attestations are "
@@ -979,7 +1066,7 @@ def verify_log(
         ledger_problems, ledger_skipped = check_log_against_ledger(
             records, ledger, basis=basis)
         problems.extend(ledger_problems)
-        skipped.extend(ledger_skipped)
+        skipped.extend(x for x in ledger_skipped if x != NO_EXPECTATION_NOTE)
 
     skipped.append(
         "Whether this public key belongs to whom you think it does was not "
