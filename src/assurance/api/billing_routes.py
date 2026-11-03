@@ -507,6 +507,8 @@ def post_usage_limits(
     pay-as-you-go plan (a free or lapsed account stays at its daily cap).
     """
     account_id = _own_account(principal)
+    if principal.operator_id:
+        _require_decider_for_keys(principal, "setting the account's spend limit")
     account = accounts.set_spend_limit(
         account_id, units=body.spend_limit_units, budget_alert_pct=body.budget_alert_pct)
     now: datetime = utc_now()
@@ -554,19 +556,22 @@ def _own_account(principal: Principal) -> str:
     return principal.account.id
 
 
-def _require_decider_for_keys(principal: Principal) -> None:
-    """Issuing or revoking account-level keys is for account keys and deciders.
+def _require_decider_for_keys(
+    principal: Principal, action: str = "issuing or revoking account-level API keys"
+) -> None:
+    """Account-level credentials and billing are for account keys and deciders.
 
     A contributor operator's key is attributed to a person with no authority over
-    the account's credentials.
+    the account's credentials, its subscription or its spend. Call this only for a
+    key bound to a person (``principal.operator_id``); a plain account key passes.
     """
     if principal.operator_role != "decider":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": "decider_role_required",
                     "detail": f"operator {principal.operator_name!r} has role "
-                              f"{principal.operator_role!r}; issuing or revoking "
-                              "account-level API keys needs an account key or a 'decider'."},
+                              f"{principal.operator_role!r}; {action} "
+                              "needs an account key or a 'decider'."},
         )
 
 
@@ -687,6 +692,9 @@ def post_key_revoke(
 @billing_router.post("/billing/portal", response_model=dict, summary="Manage your subscription")
 def post_portal(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """A self-service portal, so cancelling never requires emailing a human."""
+    if principal.operator_id:
+        # The portal can cancel or change the subscription: not for a contributor's key.
+        _require_decider_for_keys(principal, "managing the subscription")
     if principal.account is None or not principal.account.stripe_customer_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -19,7 +19,7 @@ let through. It runs on the inside and proves it stayed there.
 ## The three commands
 
 ```bash
-python -m assurance kit init plant/            # write a runnable kit
+python -m assurance kit init plant/            # write a kit skeleton; edit its placeholders before check/run
 python -m assurance kit check plant/kit.json   # what it would touch. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```

@@ -238,11 +238,13 @@ export default function IndustrialAutonomousAssuranceSite() {
             <div className="hero-panel">
               <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
               <div className="hero-code" tabIndex={0} role="region" aria-label="Command example">{`pip install cryptography && export PYTHONPATH=src
-python -m assurance kit init plant/
-python -m assurance kit check plant/kit.json
+python -m assurance report demo --out demo/   # a worked report in a second; nothing to edit
+python -m assurance kit init plant/           # then your own: fill in kit.json and plans/cell.json
+python -m assurance kit check plant/kit.json  # lists any placeholder still in place
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               <p className="hero-panel-note">
-                Your ledger, your disk. No account, no API key, no upload. The run arms a guard over the process's
+                Your ledger, your disk. No account, no API key, no upload. The demo uses synthetic machines; a kit run refuses
+                to produce evidence until the template values are replaced. The run arms a guard over the process's
                 socket layer and refuses every outbound connection, including name resolution.
               </p>
             </div>
