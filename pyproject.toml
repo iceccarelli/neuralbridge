@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "neuralbridge-middleware"
 version = "0.1.1"
-description = "Universal Enterprise Middleware for Agentic AI Integration — securely connect ANY AI agent to ANY system with YAML configuration, CRA compliance, and zero-trust security."
+description = "Industrial Autonomous Assurance: hash-chained evidence and change-assurance for machines whose software can affect safety, with an offline kit, API and MCP server. Includes the experimental NeuralBridge adapter platform it grew out of. Supports your own CRA Art. 14 and Machinery Regulation evidence process; it is not a certification."
 readme = "README.md"
 license = {text = "Proprietary - All rights reserved. See LICENSE."}
 requires-python = ">=3.11"
@@ -13,9 +13,9 @@ authors = [
     {name = "NeuralBridge Contributors"}
 ]
 keywords = [
-    "agentic-ai", "ai-agent", "middleware", "enterprise",
-    "openclaw", "mcp-gateway", "cra-compliance",
-    "zero-trust", "adapters", "langchain", "autogpt"
+    "industrial-assurance", "machine-safety", "cyber-resilience-act",
+    "machinery-regulation", "evidence", "hash-chain", "attestation",
+    "offline", "mcp", "adapters"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -84,7 +84,7 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'A hash-chained register, not a folder of PDFs', body: 'Every case, every clock, every piece of triage reasoning, in one append-only ledger that refuses to export if it does not verify.' },
     ],
     proof: [
-      { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — free, no account.', href: '/#products' },
+      { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — in the offline kit or the Assurance API.', href: '/#products' },
       { title: 'Both deadline clocks, computed correctly', href: '/docs/capabilities#service-art14', body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
       { title: 'Article 14 clocks, step by step', body: 'Awareness, triage reasoning and the deadline clocks, with the filing left to the manufacturer.', href: productHref('cra-article-14') },
     ],
@@ -113,7 +113,7 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'What a signature proves and does not', body: 'Counter-signed heads, anchors and the key ceremony, which is prepared and not performed.', href: productHref('evidence-attestation') },
       { title: 'The evidence ledger', body: 'What a hash chain detects, what it cannot, and how anchors and completeness reporting address it.', href: productHref('machine-evidence-ledger') },
     ],
-    primaryCta: { label: 'Verify a bundle for free', href: '/#products' },
+    primaryCta: { label: 'Verify a bundle', href: '/#products' },
     secondaryCta: { label: 'Read how attestation works', href: `/docs/assurance/attest` },
     images: { hero: 'solution-auditor-hero', supporting: ['solution-auditor-mismatch'] },
   },

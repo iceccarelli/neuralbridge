@@ -6,7 +6,9 @@ import CookiePreferencesLink from './components/CookiePreferencesLink';
 import RepoLink from './components/RepoLink';
 import { DOCS, ownerLink, repoLink } from './lib/links';
 import { SOLUTIONS } from './lib/solutions';
-import { PRODUCT_PAGES, productHref } from './lib/productPages';
+import { CATEGORY_SLUG, PRODUCT_PAGES, productHref } from './lib/productPages';
+import { HOSTED_API } from './lib/hostedApi';
+import SkipLink from './components/SkipLink';
 import { BRAND, SITE_URL, jsonLdString, siteGraph } from './lib/seo';
 import './globals.css';
 
@@ -48,20 +50,36 @@ export const viewport: Viewport = {
   themeColor: '#0f1b2d',
 };
 
+// The client Header gets only what it renders (name, one-line intent, href), built here on the server from
+// the data modules, so those modules' full text is not shipped in every route's JavaScript.
+const productLinks = [...PRODUCT_PAGES]
+  .sort((a, b) => Number(b.slug === CATEGORY_SLUG) - Number(a.slug === CATEGORY_SLUG))
+  .map((p) => ({ name: p.name, blurb: p.intent, href: productHref(p.slug) }));
+const solutionLinks = SOLUTIONS.map((s) => ({ slug: s.slug, role: s.role, headline: s.headline }));
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <a className="skip-link" href="#top">Skip to main content</a>
+        <SkipLink />
         <div className="site-chrome">
-          <Header />
+          <Header productLinks={productLinks} solutionLinks={solutionLinks} />
 
           {children}
 
-          <section className="footer-cta" aria-label="Start free">
+          <section className="footer-cta" aria-label="Get started">
             <div className="shell footer-cta-inner">
-              <span>Re-check a Declaration, evidence bundle or passport for free — no account.</span>
-              <a className="btn btn-primary" href="/#pricing">Start free</a>
+              {HOSTED_API ? (
+                <>
+                  <span>Re-check a Declaration, evidence bundle or passport for free — no account.</span>
+                  <a className="btn btn-primary" href="/#pricing">Start free</a>
+                </>
+              ) : (
+                <>
+                  <span>Re-check a Declaration, evidence bundle or passport on your own machine — the offline kit needs no account or upload.</span>
+                  <a className="btn btn-primary" href="/docs/getting-started">Read the quickstart</a>
+                </>
+              )}
             </div>
           </section>
 
@@ -73,6 +91,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
                   else&apos;s evidence needs no account. The file verifier allows 20 a day per address and manifest
                   diff 10; declaration, bundle, passport and attestation checks are not metered.
+                  {!HOSTED_API && ' The hosted API is not deployed to a public endpoint yet; the offline kit runs these checks on your own machine.'}
                 </p>
               </div>
 

@@ -1,11 +1,25 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FocusEvent } from 'react';
 import RepoLink from './components/RepoLink';
 import { DOCS, repoLink, SALES, srcLink } from './lib/links';
-import { SOLUTIONS } from './lib/solutions';
-import { CATEGORY_SLUG, PRODUCT_PAGES, productHref } from './lib/productPages';
-import SearchOverlay from './components/SearchOverlay';
+import dynamic from 'next/dynamic';
+
+// Loaded on first open only: it pulls in the whole search index (every product page's text), which
+// would otherwise ride in the bundle of every route.
+const SearchOverlay = dynamic(() => import('./components/SearchOverlay'), { ssr: false });
+
+export interface NavLink {
+  name: string;
+  blurb: string;
+  href: string;
+  external?: boolean;
+}
+export interface SolutionNavLink {
+  slug: string;
+  role: string;
+  headline: string;
+}
 
 type MenuKey = 'products' | 'solutions' | 'pricing' | 'resources';
 type ProductsPane = 'plans' | 'engines' | 'platform' | 'product';
@@ -43,28 +57,42 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
       { name: 'AI (agent control plane)', blurb: 'Discover a connection, read it, plan a write, approve, get a receipt.', href: '/ai' },
     ],
   },
-  // The workflow pages (app/lib/productPages.ts): the category page first, then one page per question.
-  product: {
-    label: 'Product',
-    cards: [...PRODUCT_PAGES]
-      .sort((a, b) => Number(b.slug === CATEGORY_SLUG) - Number(a.slug === CATEGORY_SLUG))
-      .map((p) => ({ name: p.name, blurb: p.intent, href: productHref(p.slug) })),
-  },
+  // The workflow pages: filled in from the `productLinks` prop (built from app/lib/productPages.ts by the
+  // server layout, category page first) so this client bundle does not carry every page's text.
+  product: { label: 'Product', cards: [] },
 };
 
-export default function Header() {
+export default function Header({
+  productLinks,
+  solutionLinks,
+}: {
+  productLinks: NavLink[];
+  solutionLinks: SolutionNavLink[];
+}) {
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const [productsPane, setProductsPane] = useState<ProductsPane>('plans');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>('root');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoaded, setSearchLoaded] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
+  const drillRef = useRef<HTMLDivElement>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  const searchBtnRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const panes = { ...PRODUCTS_PANES, product: { ...PRODUCTS_PANES.product, cards: productLinks } };
 
   const closeAll = () => {
     setOpenMenu(null);
   };
+  // The panel's own close button: leave focus on the button that opened it, not on <body>.
+  const closeAndRestoreFocus = () => {
+    setOpenMenu(null);
+    triggerRef.current?.focus();
+  };
 
-  const toggle = (name: MenuKey) => {
+  const toggle = (name: MenuKey, trigger: HTMLElement) => {
+    triggerRef.current = trigger;
     setOpenMenu((current) => (current === name ? null : name));
   };
 
@@ -74,7 +102,10 @@ export default function Header() {
       if (e.key !== 'Escape') return;
       if (searchOpen) setSearchOpen(false);
       else if (mobileOpen) setMobileOpen(false);
-      else closeAll();
+      else if (openMenu) {
+        closeAll();
+        triggerRef.current?.focus();
+      }
     };
     const onClick = (e: MouseEvent) => {
       if (headerRef.current && !headerRef.current.contains(e.target as Node)) closeAll();
@@ -85,7 +116,7 @@ export default function Header() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousedown', onClick);
     };
-  }, [searchOpen, mobileOpen]);
+  }, [searchOpen, mobileOpen, openMenu]);
 
   // Lock body scroll while a full-screen overlay is open.
   useEffect(() => {
@@ -95,19 +126,40 @@ export default function Header() {
     };
   }, [mobileOpen, searchOpen]);
 
-  // Basic focus trap: while a mega panel or the mobile drill-in is open,
-  // move focus into it and keep Tab from escaping to the page behind it.
+  // The open drawer makes the page behind it inert: screen-reader virtual cursors and Tab cannot reach it.
+  // (Search is aria-modal but not made inert here: its code loads on first open, and a slow or failed chunk
+  // must not leave the whole page inert behind an overlay that never appeared.)
   useEffect(() => {
-    const container = mobileOpen
-      ? headerRef.current?.querySelector<HTMLElement>('.mobile-drill.open')
-      : headerRef.current?.querySelector<HTMLElement>('.mega-panel.is-open');
+    if (!mobileOpen) return;
+    const behind = document.querySelectorAll('main, .footer-cta, .site-footer, .sticky-chrome');
+    behind.forEach((el) => el.setAttribute('inert', ''));
+    return () => behind.forEach((el) => el.removeAttribute('inert'));
+  }, [mobileOpen]);
+
+  // The closed drawer is not part of the page for keyboard or assistive technology.
+  useEffect(() => {
+    drillRef.current?.toggleAttribute('inert', !mobileOpen);
+  }, [mobileOpen]);
+
+  // Return focus to whatever opened a modal once it closes.
+  const wasMobile = useRef(false);
+  const wasSearch = useRef(false);
+  useEffect(() => {
+    if (wasMobile.current && !mobileOpen) hamburgerRef.current?.focus();
+    wasMobile.current = mobileOpen;
+  }, [mobileOpen]);
+  useEffect(() => {
+    if (wasSearch.current && !searchOpen) searchBtnRef.current?.focus();
+    wasSearch.current = searchOpen;
+  }, [searchOpen]);
+
+  // Mobile drawer (a modal dialog): move focus in on open and on every drill-in/back, and keep Tab inside it.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const container = drillRef.current;
     if (!container) return;
-
-    const focusable = container.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
-    );
+    const focusable = container.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])');
     focusable[0]?.focus();
-
     const onTab = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || focusable.length === 0) return;
       const first = focusable[0];
@@ -122,12 +174,23 @@ export default function Header() {
     };
     container.addEventListener('keydown', onTab);
     return () => container.removeEventListener('keydown', onTab);
-  }, [openMenu, mobileOpen]);
+  }, [mobileOpen, mobileView]);
 
-  const pane = PRODUCTS_PANES[productsPane];
+  // A desktop mega panel is a disclosure, not a modal: focus moves into it on open, but it is not a trap.
+  // Tabbing out of the header closes it; Escape closes it and returns focus to its button.
+  useEffect(() => {
+    if (!openMenu) return;
+    headerRef.current?.querySelector<HTMLElement>('.mega-panel.is-open .mega-close')?.focus();
+  }, [openMenu]);
+  const onHeaderBlur = (e: FocusEvent<HTMLElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (openMenu && next && headerRef.current && !headerRef.current.contains(next)) closeAll();
+  };
+
+  const pane = panes[productsPane];
 
   return (
-    <header ref={headerRef}>
+    <header ref={headerRef} onBlur={onHeaderBlur}>
       <div className="sticky-chrome">
         <div className="utility-bar">
           <div className="shell utility-bar-inner">
@@ -149,35 +212,46 @@ export default function Header() {
 
             <nav className="topbar-nav" aria-label="Primary">
               <div className={`nav-item ${openMenu === 'products' ? 'open' : ''}`}>
-                <button onClick={() => toggle('products')} aria-expanded={openMenu === 'products'} aria-haspopup="true">
+                <button onClick={(e) => toggle('products', e.currentTarget)} aria-expanded={openMenu === 'products'} aria-controls="mega-products">
                   Products <span className="caret">▾</span>
                 </button>
               </div>
               <div className={`nav-item ${openMenu === 'solutions' ? 'open' : ''}`}>
-                <button onClick={() => toggle('solutions')} aria-expanded={openMenu === 'solutions'} aria-haspopup="true">
+                <button onClick={(e) => toggle('solutions', e.currentTarget)} aria-expanded={openMenu === 'solutions'} aria-controls="mega-solutions">
                   Solutions <span className="caret">▾</span>
                 </button>
               </div>
               <div className={`nav-item ${openMenu === 'pricing' ? 'open' : ''}`}>
-                <button onClick={() => toggle('pricing')} aria-expanded={openMenu === 'pricing'} aria-haspopup="true">
+                <button onClick={(e) => toggle('pricing', e.currentTarget)} aria-expanded={openMenu === 'pricing'} aria-controls="mega-pricing">
                   Pricing <span className="caret">▾</span>
                 </button>
               </div>
               <div className={`nav-item ${openMenu === 'resources' ? 'open' : ''}`}>
-                <button onClick={() => toggle('resources')} aria-expanded={openMenu === 'resources'} aria-haspopup="true">
+                <button onClick={(e) => toggle('resources', e.currentTarget)} aria-expanded={openMenu === 'resources'} aria-controls="mega-resources">
                   Resources <span className="caret">▾</span>
                 </button>
               </div>
             </nav>
 
             <div className="topbar-actions">
-              <button className="icon-button" aria-label="Search" onClick={() => setSearchOpen(true)}>⌕</button>
+              <button
+                className="icon-button"
+                aria-label="Search"
+                ref={searchBtnRef}
+                onClick={() => {
+                  setSearchLoaded(true);
+                  setSearchOpen(true);
+                }}
+              >⌕</button>
 
               <a className="nav-cta ghost" href={SALES}>Talk to sales</a>
               <a className="nav-cta primary" href="/#products">Get started</a>
 
               <button
                 className="hamburger"
+                ref={hamburgerRef}
+                aria-expanded={mobileOpen}
+                aria-controls="mobile-menu"
                 onClick={() => {
                   setMobileView('root');
                   setMobileOpen(true);
@@ -192,11 +266,11 @@ export default function Header() {
           </div>
 
           {/* PRODUCTS mega: two-pane */}
-          <div className={`mega-panel mega-panel-full two-pane ${openMenu === 'products' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+          <div id="mega-products" className={`mega-panel mega-panel-full two-pane ${openMenu === 'products' ? 'is-open' : ''}`}>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell two-pane-inner">
               <div className="pane-rail">
-                {(Object.keys(PRODUCTS_PANES) as ProductsPane[]).map((key) => (
+                {(Object.keys(panes) as ProductsPane[]).map((key) => (
                   <button
                     key={key}
                     className={`pane-rail-item ${productsPane === key ? 'active' : ''}`}
@@ -237,11 +311,11 @@ export default function Header() {
           </div>
 
           {/* SOLUTIONS mega: editorial */}
-          <div className={`mega-panel mega-panel-full editorial ${openMenu === 'solutions' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+          <div id="mega-solutions" className={`mega-panel mega-panel-full editorial ${openMenu === 'solutions' ? 'is-open' : ''}`}>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell editorial-inner">
               <div className="editorial-cards">
-                {SOLUTIONS.map((item) => (
+                {solutionLinks.map((item) => (
                   <a className="editorial-card" href={`/solutions/${item.slug}`} key={item.slug} onClick={closeAll}>
                     <strong>{item.role}</strong>
                     <span>{item.headline}</span>
@@ -263,8 +337,8 @@ export default function Header() {
           </div>
 
           {/* PRICING mega: finder-style */}
-          <div className={`mega-panel mega-panel-full finder ${openMenu === 'pricing' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+          <div id="mega-pricing" className={`mega-panel mega-panel-full finder ${openMenu === 'pricing' ? 'is-open' : ''}`}>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell finder-inner">
               <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Free tier</strong>
@@ -282,8 +356,8 @@ export default function Header() {
           </div>
 
           {/* RESOURCES mega */}
-          <div className={`mega-panel mega-panel-full finder ${openMenu === 'resources' ? 'is-open' : ''}`}>
-            <button className="mega-close" aria-label="Close menu" onClick={closeAll}>✕</button>
+          <div id="mega-resources" className={`mega-panel mega-panel-full finder ${openMenu === 'resources' ? 'is-open' : ''}`}>
+            <button className="mega-close" aria-label="Close menu" onClick={closeAndRestoreFocus}>✕</button>
             <div className="shell finder-inner">
               <a className="finder-item" href={DOCS} onClick={closeAll}>
                 <strong>Documentation</strong>
@@ -365,10 +439,17 @@ export default function Header() {
         onClick={closeAll}
       />
 
-      <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />
+      {searchLoaded && <SearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />}
 
       {/* MOBILE: full-screen drill-in */}
-      <div className={`mobile-drill ${mobileOpen ? 'open' : ''}`}>
+      <div
+        className={`mobile-drill ${mobileOpen ? 'open' : ''}`}
+        id="mobile-menu"
+        ref={drillRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Menu"
+      >
         <div className="mobile-drill-header">
           {mobileView !== 'root' ? (
             <button className="mobile-back" onClick={() => setMobileView('root')}>‹ Back</button>
@@ -395,8 +476,8 @@ export default function Header() {
               <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo</a>
               <a className="mobile-drill-item" href="/#products" onClick={() => setMobileOpen(false)}>All engines</a>
               <a className="mobile-drill-item" href="/#platform" onClick={() => setMobileOpen(false)}>Platform</a>
-              {PRODUCT_PAGES.map((p) => (
-                <a className="mobile-drill-item" href={productHref(p.slug)} key={p.slug} onClick={() => setMobileOpen(false)}>
+              {productLinks.map((p) => (
+                <a className="mobile-drill-item" href={p.href} key={p.href} onClick={() => setMobileOpen(false)}>
                   {p.name}
                 </a>
               ))}
@@ -404,7 +485,7 @@ export default function Header() {
           )}
           {mobileView === 'solutions' && (
             <>
-              {SOLUTIONS.map((item) => (
+              {solutionLinks.map((item) => (
                 <a
                   className="mobile-drill-item"
                   href={`/solutions/${item.slug}`}
