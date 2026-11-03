@@ -67,6 +67,7 @@ except ImportError:  # pragma: no cover - Windows
 __all__ = [
     "FEED_FORMAT",
     "AdvisoryFeed",
+    "FeedFetchError",
     "FeedVerdict",
     "PublishError",
     "SignedAdvisory",
@@ -86,6 +87,20 @@ FEED_FORMAT = "assurance.supplier-feed.v1"
 
 class PublishError(AssuranceError):
     """An advisory cannot be published, or a feed does not hold up."""
+
+
+class FeedFetchError(PublishError):
+    """A hosted feed could not be fetched: the outcome is *could not check*.
+
+    ``reason`` is a stable code (``plain_http``, ``blocked_address``, ``redirect_refused``,
+    ``too_large``, ``timeout``, ``http_status``, ...). Never evidence that the feed is empty.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(f"could not check the feed [{reason}]: {detail} Treat this as "
+                         "could-not-check, not as an empty feed.")
+        self.reason = reason
+        self.detail = detail
 
 
 @dataclass(frozen=True)
@@ -501,7 +516,14 @@ def _withdraw_locked(
     ))
 
 
-def fetch_feed(url: str, *, timeout: float = 10.0) -> str:
+def fetch_feed(
+    url: str,
+    *,
+    timeout: float = 10.0,
+    max_bytes: int | None = None,
+    _resolver: Any = None,
+    _transport: Any = None,
+) -> str:
     """Download a hosted feed's raw body. Writes nothing, trusts nothing.
 
     The feed watch (``assurance.watch``) reads a local file; this is the one
@@ -510,35 +532,35 @@ def fetch_feed(url: str, *, timeout: float = 10.0) -> str:
     failure must read as *could not check*, never as *the supplier published
     nothing* — those two are not the same fact, and collapsing them is exactly
     the failure mode ``verify_feed`` already refuses for an empty file. So this
-    raises loudly instead of returning an empty string, and the caller decides
-    whether to persist what came back — typically only once it also verifies.
+    raises loudly instead of returning an empty string (:class:`FeedFetchError`,
+    with a stable ``reason``), and the caller decides whether to persist what
+    came back — typically only once it also verifies.
+
+    The request runs under ``supplier/netpolicy.py``: https (plain http only to
+    loopback), no credentials, public destinations only, the validated address
+    pinned for the connection, no redirects, bounded time, size and
+    decompression. ``_resolver`` / ``_transport`` are test seams only; they do
+    not relax the policy.
     """
-    if not url.startswith(("http://", "https://")):
-        raise PublishError(
-            f"{url!r} is not an http(s) URL. `fetch` downloads a hosted feed; "
-            "a feed already on disk needs no downloading."
-        )
+    from .netpolicy import DEFAULT_MAX_BYTES, FetchRefusedError, safe_fetch
+
     try:
-        import httpx
+        import httpx  # noqa: F401
     except ImportError as exc:
         raise PublishError(
             "fetching a hosted feed needs httpx (`pip install httpx`). A feed "
             "copied by hand onto disk needs no dependency at all."
         ) from exc
     try:
-        response = httpx.get(url, timeout=timeout, follow_redirects=True)
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise PublishError(
-            f"{url} returned HTTP {exc.response.status_code}. Treat this as "
-            "could-not-check, not as an empty feed."
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise PublishError(
-            f"could not reach {url} ({exc}). Treat this as could-not-check, "
-            "not as an empty feed."
-        ) from exc
-    return response.text
+        body = safe_fetch(url, timeout=timeout, max_bytes=max_bytes or DEFAULT_MAX_BYTES,
+                          _resolver=_resolver, _transport=_transport)
+    except FetchRefusedError as exc:
+        raise FeedFetchError(exc.reason, exc.detail) from exc
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FeedFetchError("not_utf8", "the feed body is not UTF-8 text. Treat this "
+                                         "as could-not-check, not as an empty feed.") from exc
 
 
 @dataclass(frozen=True)

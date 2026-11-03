@@ -144,7 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the fingerprint you were given by another route; the "
                          "key must match it")
     tp.add_argument("--obtained-via", required=True,
-                    help="how you learned the fingerprint (not: from the feed)")
+                    help="how you learned the fingerprint (not: from the feed; a value naming the feed "
+                         "itself is refused, but this free text only guards the obvious mistake)")
     tp.add_argument("--actor", required=True)
     tp.add_argument("--reason", default="")
 
@@ -155,7 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
     tro.add_argument("--retire-fingerprint", required=True)
     tro.add_argument("--effective-at", required=True, help="ISO-8601 with timezone")
     tro.add_argument("--fingerprint", default="")
-    tro.add_argument("--obtained-via", required=True)
+    tro.add_argument("--obtained-via", required=True,
+                     help="how you learned the new fingerprint (not: from the feed)")
     tro.add_argument("--actor", required=True)
     tro.add_argument("--reason", default="")
 
