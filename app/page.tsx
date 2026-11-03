@@ -58,7 +58,7 @@ const products = [
     name: 'Validator',
     body: 'Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, and attestation verification.',
     href: QUICKSTART,
-    cta: 'Start free',
+    cta: 'Read the quickstart',
     imageKey: 'card-plan-validator',
   },
   {
@@ -406,7 +406,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             </div>
             <ValidatorPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/spec/validate</code> endpoint: it reports missing required fields and
+              This is the real <code>POST /v1/spec/validate</code> request: it reports missing required fields and
               listed territories that are not EU Member States (<strong>Switzerland is not an EU Member State</strong>)
               &mdash; a live regulatory check, not a mockup. See the pricing section for whether this route is hosted
               publicly right now.
@@ -678,10 +678,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       <section className="final-cta" id="connect">
         <div className="shell final-cta-inner">
           <div>
-            <h2>Re-check one Declaration for free. See what your paperwork stopped describing.</h2>
+            <h2>Re-check one Declaration on your own machine. See what your paperwork stopped describing.</h2>
             <p>
-              The free checks need no account. The offline kit needs no account, key or upload and opens no sockets.
-              The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.
+              The offline kit needs no account, key or upload and opens no sockets.{' '}
+              {HOSTED_API
+                ? 'The hosted API answers the same checks over HTTP; the quickstart runs them locally.'
+                : 'The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.'}
             </p>
           </div>
           <div className="hero-actions">
