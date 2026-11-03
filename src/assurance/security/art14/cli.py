@@ -25,18 +25,20 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ...core.actor_names import actor_grammar_problem, declared_role_problem
 from ...core.errors import AssuranceError
 from ...core.evidence import Actor
-from ...core.identity import format_utc, parse_utc, utc_now
+from ...core.identity import format_utc, utc_now
 from ...evidence.ledger import EvidenceLedger
 from .engine import Art14Register
 from .model import Awareness, ProductVersion, Signal, SignalChannel, Stage, Track
 from .report import case_report, readiness_json, register_report
 from .srp import fields_for, validate_payload
+from .timestamps import legal_timestamp
 from .triage import Answer, Question
 
 DEFAULT_LEDGER = "art14-register.db"
@@ -58,6 +60,11 @@ def _actor(args: argparse.Namespace) -> Actor:
     if problem:
         raise SystemExit(f"error: --by cannot be recorded: {problem}. Nothing was recorded.")
     return Actor(identifier=identifier.strip(), role=role.strip())
+
+
+def _when(value: str, flag: str) -> datetime:
+    """A legal timestamp from the command line: full ISO-8601 with an offset, or refused."""
+    return legal_timestamp(value, flag)
 
 
 def _load_json(path: str) -> dict[str, Any]:
@@ -85,7 +92,7 @@ def _show_outstanding(register: Art14Register, case_id: str) -> None:
 def cmd_signal(args: argparse.Namespace) -> int:
     register = _register(args)
     signal = Signal(
-        received_at=parse_utc(args.at) if args.at else utc_now(),
+        received_at=_when(args.at, "--at") if args.at else utc_now(),
         channel=SignalChannel(args.channel),
         received_by=args.received_by or _actor(args).identifier,
         description=args.description,
@@ -106,9 +113,9 @@ def cmd_signal(args: argparse.Namespace) -> int:
 def cmd_awareness(args: argparse.Namespace) -> int:
     register = _register(args)
     awareness = Awareness(
-        established_at=parse_utc(args.at),
-        assessment_started_at=parse_utc(args.started),
-        assessment_completed_at=parse_utc(args.completed),
+        established_at=_when(args.at, "--at"),
+        assessment_started_at=_when(args.started, "--started"),
+        assessment_completed_at=_when(args.completed, "--completed"),
         determined_by=args.determined_by or _actor(args).identifier,
         reasoning=args.because,
     )
@@ -158,7 +165,7 @@ def cmd_availability(args: argparse.Namespace) -> int:
 def cmd_measure(args: argparse.Namespace) -> int:
     register = _register(args)
     evidence = register.record_measure_available(
-        args.case_id, parse_utc(args.at), args.description, _actor(args)
+        args.case_id, _when(args.at, "--at"), args.description, _actor(args)
     )
     print(f"recorded measure  {evidence.content_hash[:16]}")
     case = register.case(args.case_id)
@@ -178,7 +185,7 @@ def cmd_file(args: argparse.Namespace) -> int:
     evidence, validation = register.record_filing(
         args.case_id,
         Stage(args.stage),
-        parse_utc(args.at) if args.at else utc_now(),
+        _when(args.at, "--at") if args.at else utc_now(),
         payload,
         _actor(args),
         args.reference or "",
@@ -193,7 +200,7 @@ def cmd_notify_users(args: argparse.Namespace) -> int:
     register = _register(args)
     evidence = register.record_user_notification(
         args.case_id,
-        parse_utc(args.at) if args.at else utc_now(),
+        _when(args.at, "--at") if args.at else utc_now(),
         args.scope,
         args.content,
         _actor(args),
