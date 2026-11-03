@@ -50,7 +50,8 @@ _FAILED_LOOK_STATUSES = frozenset({"uncollectable", "incomplete", "manifest_stal
 
 
 def _is_partial(manifest: SafetyManifest) -> bool:
-    return _PARTIAL_LOOK_MARK in manifest.notes
+    # Same rule as machinery.manifest.manifest_is_incomplete (case- and whitespace-insensitive).
+    return _PARTIAL_LOOK_MARK in " ".join((manifest.notes or "").split()).lower()
 
 
 def _missing_from_note(manifest: SafetyManifest) -> str:
