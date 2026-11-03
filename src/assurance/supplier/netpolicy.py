@@ -27,6 +27,7 @@ every check above.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 import threading
 import time
@@ -49,7 +50,6 @@ __all__ = [
 
 DEFAULT_MAX_BYTES = 16 * 1024 * 1024  # the hosted feed's own size bound (MAX_FEED_BYTES)
 DEFAULT_TOTAL_TIMEOUT = 30.0
-_CHUNK = 64 * 1024
 
 Resolver = Callable[[str, int], Sequence[str]]
 
@@ -110,6 +110,25 @@ def address_problem(address: str, *, allow_loopback: bool = False) -> str | None
     return None
 
 
+def _host_shape_problem(host: str) -> str | None:
+    """Why ``host`` cannot be a DNS name (pure). IP literals are judged elsewhere."""
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    if not host.isascii():
+        return ("the feed URL host contains non-ASCII characters; give the ASCII (punycode) "
+                "form of the name.")
+    name = host[:-1] if host.endswith(".") else host
+    if not name or len(name) > 253:
+        return "the feed URL host is empty or longer than 253 characters."
+    for label in name.split("."):
+        if not label or len(label) > 63:
+            return "the feed URL host has an empty label or a label longer than 63 characters."
+    return None
+
+
 def url_problem(url: str) -> tuple[str, str] | None:
     """(reason, detail) if ``url`` may not be fetched at all, judged on its text alone."""
     try:
@@ -127,6 +146,9 @@ def url_problem(url: str) -> tuple[str, str] | None:
         return "query_in_url", "the feed URL must not carry a query or fragment."
     if port == 0:
         return "bad_url", "the feed URL names port 0."
+    shape = _host_shape_problem(parts.hostname)
+    if shape:
+        return "bad_url", shape
     if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
         return ("plain_http", "plain http is accepted only for localhost, 127.0.0.1 and ::1; "
                               "use https.")
@@ -141,7 +163,7 @@ def _system_resolver(host: str, port: int, *, timeout: float) -> list[str]:
         try:
             box["ok"] = [ai[4][0] for ai in
                          socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
-        except OSError as exc:
+        except Exception as exc:  # OSError, but also idna UnicodeError for malformed names
             box["err"] = exc
 
     t = threading.Thread(target=work, daemon=True)
@@ -149,7 +171,7 @@ def _system_resolver(host: str, port: int, *, timeout: float) -> list[str]:
     t.join(timeout)
     if t.is_alive():
         raise FetchRefusedError("dns_timeout", f"resolving {host!r} took longer than {timeout:g}s.")
-    if "err" in box:
+    if "err" in box or "ok" not in box:
         raise FetchRefusedError("dns_failed", f"could not resolve {host!r}.")
     return list(box["ok"])  # type: ignore[arg-type]
 
@@ -179,11 +201,123 @@ class _BoundedDecoder:
         except zlib.error as exc:
             raise FetchRefusedError("bad_encoding", "the response body is not valid compressed "
                                                "data.") from exc
+        if self._d.eof and self._d.unused_data:
+            # A second gzip member (or junk) after the first stream ended: silently dropping it
+            # would let one body mean different things to different readers.
+            raise FetchRefusedError("bad_encoding", "the compressed response has data after the "
+                                               "end of its stream (a second member or trailing "
+                                               "bytes).")
         return bytes(out)
 
     def finish(self) -> None:
         if not self._d.eof:
             raise FetchRefusedError("truncated", "the compressed response ended early.")
+
+
+class _Deadline:
+    """One monotonic wall-clock deadline plus the live sockets the watchdog may cut."""
+
+    def __init__(self, total: float) -> None:
+        self.at = time.monotonic() + total
+        self._lock = threading.Lock()
+        self._fds: set[int] = set()
+
+    def remaining(self) -> float:
+        return self.at - time.monotonic()
+
+    def check(self) -> float:
+        left = self.remaining()
+        if left <= 0:
+            raise FetchRefusedError("timeout", "the feed download exceeded its total time limit.")
+        return left
+
+    def add(self, sock: socket.socket | None) -> int | None:
+        fd = sock.fileno() if sock is not None else -1
+        if fd < 0:
+            return None
+        with self._lock:
+            self._fds.add(fd)
+        return fd
+
+    def drop(self, fd: int | None) -> None:
+        if fd is not None:
+            with self._lock:
+                self._fds.discard(fd)
+
+    def kill(self) -> None:
+        """Shut down every live socket so a blocked recv/handshake in the worker returns."""
+        with self._lock:
+            for fd in list(self._fds):
+                try:
+                    s = socket.socket(fileno=os.dup(fd))
+                    try:
+                        s.shutdown(socket.SHUT_RDWR)
+                    finally:
+                        s.close()
+                except OSError:
+                    pass
+
+
+def _make_backend(httpcore, deadline: _Deadline, allowed: str):
+    """A network backend that dials only ``allowed`` and never outlives ``deadline``."""
+    base = httpcore.SyncBackend()
+    want = ipaddress.ip_address(allowed.split("%", 1)[0])
+
+    class Guarded(httpcore.NetworkStream):
+        def __init__(self, inner, fd) -> None:
+            self._inner = inner
+            self._fd = fd
+
+        def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+            left = deadline.check()
+            return self._inner.read(min(max_bytes, 16384),
+                                    left if timeout is None else min(timeout, left))
+
+        def write(self, buffer: bytes, timeout: float | None = None) -> None:
+            left = deadline.check()
+            self._inner.write(buffer, left if timeout is None else min(timeout, left))
+
+        def close(self) -> None:
+            deadline.drop(self._fd)
+            self._inner.close()
+
+        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            left = deadline.check()
+            tls = self._inner.start_tls(ssl_context, server_hostname,
+                                        left if timeout is None else min(timeout, left))
+            return Guarded(tls, self._fd)
+
+        def get_extra_info(self, info: str):
+            return self._inner.get_extra_info(info)
+
+    class Backend(httpcore.NetworkBackend):
+        def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+            try:
+                ok = ipaddress.ip_address(host.split("%", 1)[0]) == want
+            except ValueError:
+                ok = False
+            if not ok:  # defence in depth: only the address that passed validation is dialled
+                raise FetchRefusedError(
+                    "blocked_address", f"refusing to dial {host!r}: it is not the validated address.")
+            left = deadline.check()
+            inner = base.connect_tcp(host, port, left if timeout is None else min(timeout, left),
+                                     local_address, socket_options)
+            return Guarded(inner, deadline.add(inner.get_extra_info("socket")))
+
+        def connect_unix_socket(self, *a, **k):
+            raise FetchRefusedError("blocked_address", "unix sockets are never dialled.")
+
+        def sleep(self, seconds: float) -> None:
+            base.sleep(seconds)
+
+    return Backend()
+
+
+def _is_loopback(address: str) -> bool:
+    ip = ipaddress.ip_address(address.split("%", 1)[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
 
 
 def safe_fetch(
@@ -198,10 +332,13 @@ def safe_fetch(
     """GET ``url`` under the policy above and return the (decoded) body bytes.
 
     Raises :class:`FetchRefusedError` for every refusal or failure; nothing is written anywhere.
+    ``total_timeout`` is a hard wall-clock bound over DNS, connect, TLS, headers and body: the
+    request runs in a worker thread, every socket read is clamped to the time left, and when the
+    deadline passes the watchdog cuts the sockets and the call raises ``timeout``.
     """
     import httpx
 
-    started = time.monotonic()
+    deadline = _Deadline(total_timeout)
     problem = url_problem(url)
     if problem:
         raise FetchRefusedError(*problem)
@@ -218,25 +355,57 @@ def safe_fetch(
     if is_literal:
         addresses = [host]
     else:
-        resolve = _resolver or (lambda h, p: _system_resolver(h, p, timeout=min(timeout, 10.0)))
-        addresses = list(dict.fromkeys(resolve(host, port)))
+        try:
+            if _resolver is not None:
+                answers = _resolver(host, port)
+            else:
+                answers = _system_resolver(
+                    host, port, timeout=max(0.001, min(timeout, 10.0, deadline.remaining())))
+            addresses = list(dict.fromkeys(answers))
+        except FetchRefusedError:
+            raise
+        except Exception as exc:  # a resolver must fail closed, never escape as a traceback
+            raise FetchRefusedError(
+                "dns_failed", f"could not resolve {host!r} ({type(exc).__name__}).") from exc
     if not addresses:
         raise FetchRefusedError("dns_failed", f"{host!r} resolved to no address.")
+    deadline.check()
     for address in addresses:  # all of them: one bad answer among good ones is a refusal
         why = address_problem(address, allow_loopback=dev_loopback)
+        if not why and dev_loopback and not _is_loopback(address):
+            why = f"{address} is not a loopback address (dev http is loopback-only)"
         if why:
             raise FetchRefusedError("blocked_address", f"refusing to connect for {host!r}: {why}.")
 
-    deadline = started + total_timeout
-    last: FetchRefusedError | None = None
-    for address in addresses:
+    box: dict[str, object] = {}
+
+    def work() -> None:
+        last: FetchRefusedError | None = None
         try:
-            return _get_pinned(httpx, parts, host, port, address, is_literal, timeout,
-                               deadline, max_bytes, _transport)
-        except _ConnectFailedError as exc:
-            last = FetchRefusedError("connect_failed", str(exc))
-    assert last is not None
-    raise last
+            for address in addresses:
+                try:
+                    box["ok"] = _get_pinned(httpx, parts, host, port, address, is_literal, timeout,
+                                            deadline, max_bytes, _transport)
+                    return
+                except _ConnectFailedError as exc:
+                    last = FetchRefusedError("connect_failed", str(exc))
+            box["err"] = last
+        except BaseException as exc:  # noqa: BLE001 - carried to the caller's thread
+            box["err"] = exc
+
+    t = threading.Thread(target=work, name="supplier-fetch", daemon=True)
+    t.start()
+    t.join(max(0.0, deadline.remaining()))
+    if t.is_alive():
+        deadline.kill()
+        t.join(2.0)
+        raise FetchRefusedError("timeout", "the feed download exceeded its total time limit.")
+    err = box.get("err")
+    if err is not None:
+        raise err  # type: ignore[misc]
+    if "ok" not in box:
+        raise FetchRefusedError("network_error", f"could not read from {host}.")
+    return box["ok"]  # type: ignore[return-value]
 
 
 class _ConnectFailedError(Exception):
@@ -245,6 +414,8 @@ class _ConnectFailedError(Exception):
 
 def _get_pinned(httpx, parts, host, port, address, is_literal, timeout, deadline, max_bytes,
                 transport) -> bytes:
+    import httpcore
+
     ip = ipaddress.ip_address(address.split("%", 1)[0])
     shown = f"[{ip}]" if ip.version == 6 else str(ip)
     pinned = f"{parts.scheme}://{shown}:{port}{parts.path or '/'}"
@@ -252,6 +423,13 @@ def _get_pinned(httpx, parts, host, port, address, is_literal, timeout, deadline
                "Accept": "application/x-ndjson, application/json, text/plain"}
     extensions = {"sni_hostname": host} if (parts.scheme == "https" and not is_literal) else {}
     tmo = httpx.Timeout(timeout, connect=min(timeout, 10.0))
+    if transport is None:
+        transport = httpx.HTTPTransport(trust_env=False)
+        pool = getattr(transport, "_pool", None)
+        if pool is None or not hasattr(pool, "_network_backend"):
+            raise FetchRefusedError("network_error", "the HTTP client does not expose its network "
+                                    "backend; refusing to fetch without deadline enforcement.")
+        pool._network_backend = _make_backend(httpcore, deadline, str(ip))
     try:
         with httpx.Client(transport=transport, timeout=tmo, follow_redirects=False,
                           trust_env=False) as client, \
@@ -263,7 +441,7 @@ def _get_pinned(httpx, parts, host, port, address, is_literal, timeout, deadline
             if resp.status_code != 200:
                 raise FetchRefusedError("http_status", f"{host} answered HTTP {resp.status_code}.")
             declared = resp.headers.get("content-length", "")
-            if declared.isdigit() and int(declared) > max_bytes:
+            if declared.isascii() and declared.isdigit() and int(declared) > max_bytes:
                 raise FetchRefusedError("too_large", f"the response declares {declared} bytes; "
                                                 f"the limit is {max_bytes}.")
             encoding = resp.headers.get("content-encoding", "identity").strip().lower()
@@ -276,16 +454,15 @@ def _get_pinned(httpx, parts, host, port, address, is_literal, timeout, deadline
                                    f"unsupported Content-Encoding {encoding!r}.")
             raw_total = 0
             body = bytearray()
-            for chunk in resp.iter_raw(_CHUNK):
-                if time.monotonic() > deadline:
-                    raise FetchRefusedError("timeout", "the feed download exceeded its total "
-                                                  "time limit.")
+            for chunk in resp.iter_raw():  # no chunk size: yield what arrived, do not buffer
+                deadline.check()
                 raw_total += len(chunk)
                 if raw_total > max_bytes:
                     raise FetchRefusedError("too_large", f"the response exceeds {max_bytes} bytes.")
                 body += decoder.feed(chunk) if decoder else chunk
                 if len(body) > max_bytes:
                     raise FetchRefusedError("too_large", f"the response exceeds {max_bytes} bytes.")
+            deadline.check()
             if decoder:
                 decoder.finish()
             return bytes(body)
@@ -296,6 +473,6 @@ def _get_pinned(httpx, parts, host, port, address, is_literal, timeout, deadline
             from exc
     except httpx.TimeoutException as exc:
         raise FetchRefusedError("timeout", f"{host} timed out ({type(exc).__name__}).") from exc
-    except (httpx.HTTPError, OSError) as exc:
+    except (httpx.HTTPError, OSError, ValueError) as exc:
         raise FetchRefusedError("network_error",
                            f"could not read from {host} ({type(exc).__name__}).") from exc

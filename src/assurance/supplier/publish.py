@@ -521,6 +521,7 @@ def fetch_feed(
     *,
     timeout: float = 10.0,
     max_bytes: int | None = None,
+    total_timeout: float | None = None,
     _resolver: Any = None,
     _transport: Any = None,
 ) -> str:
@@ -542,7 +543,7 @@ def fetch_feed(
     decompression. ``_resolver`` / ``_transport`` are test seams only; they do
     not relax the policy.
     """
-    from .netpolicy import DEFAULT_MAX_BYTES, FetchRefusedError, safe_fetch
+    from .netpolicy import DEFAULT_MAX_BYTES, DEFAULT_TOTAL_TIMEOUT, FetchRefusedError, safe_fetch
 
     try:
         import httpx  # noqa: F401
@@ -553,6 +554,7 @@ def fetch_feed(
         ) from exc
     try:
         body = safe_fetch(url, timeout=timeout, max_bytes=max_bytes or DEFAULT_MAX_BYTES,
+                          total_timeout=total_timeout or DEFAULT_TOTAL_TIMEOUT,
                           _resolver=_resolver, _transport=_transport)
     except FetchRefusedError as exc:
         raise FeedFetchError(exc.reason, exc.detail) from exc
