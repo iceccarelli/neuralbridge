@@ -20,10 +20,16 @@ domain code and merely surfaced here:
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
 import json
 import os
 import re
+import stat
 import tempfile
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -101,6 +107,51 @@ def trust_file_problems(path: str | Path) -> list[str]:
     return []
 
 
+#: How long a writer waits for another writer of the same trust list before refusing.
+LOCK_TIMEOUT_SECONDS = 30.0
+
+
+@contextlib.contextmanager
+def _exclusive(path: Path, *, timeout: float | None = None) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``<trustfile>.lock`` around a whole read-modify-write.
+
+    Without it two writers read the same list and the later ``os.replace`` silently drops
+    the earlier one's change: a lost update, and when the lost change was a revocation the
+    server goes on trusting a key somebody revoked. The lock file is created 0600 and a
+    symlink in its place is refused (so the lock cannot be pointed at another file).
+    """
+    wait = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise RecorderAttestationError(
+                f"{lock.name} is a symbolic link; refusing to lock through it.") from exc
+        raise RecorderAttestationError(
+            f"{lock.name} could not be opened for locking ({type(exc).__name__}).") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RecorderAttestationError(f"{lock.name} is not a regular file.")
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise RecorderAttestationError(
+                        "another process is changing this trust list; nothing was changed. "
+                        "Retry.") from exc
+                time.sleep(0.01)
+        yield
+    finally:
+        os.close(fd)                       # closing releases the flock
+
+
 def _write(path: Path, trust: RecorderTrust, *, create: bool) -> None:
     """Write atomically, 0644, then prove the server's loader accepts the result."""
     text = json.dumps(trust.to_dict(), indent=2) + "\n"
@@ -131,10 +182,11 @@ def _write(path: Path, trust: RecorderTrust, *, create: bool) -> None:
 def create_trust_file(path: str | Path) -> Path:
     """Start an empty trust list. Refuses to replace one that exists."""
     p = Path(path)
-    if p.exists() or p.is_symlink():
-        raise RecorderAttestationError(
-            f"{p} already exists; refusing to replace a trust list. Use `add` / `revoke`.")
-    _write(p, RecorderTrust(), create=True)
+    with _exclusive(p):
+        if p.exists() or p.is_symlink():
+            raise RecorderAttestationError(
+                f"{p} already exists; refusing to replace a trust list. Use `add` / `revoke`.")
+        _write(p, RecorderTrust(), create=True)
     return p
 
 
@@ -177,9 +229,10 @@ def add_recorder(
             f"the key in {Path(public_key_file).name} has fingerprint {key.fingerprint}, not "
             f"the {wanted} you were given. Do not trust it until the difference is explained.")
     p = Path(trust_path)
-    existing = load_trust(p).recorders
     entry = TrustedRecorder(label=label.strip(), key=key, provenance=provenance)
-    _write(p, RecorderTrust([*existing, entry]), create=False)   # duplicate key: refused
+    with _exclusive(p):                   # read, modify, write as one step
+        existing = load_trust(p).recorders
+        _write(p, RecorderTrust([*existing, entry]), create=False)   # duplicate key: refused
     return TrustEntry(entry.label, entry.fingerprint, tuple(sorted(provenance)), False, "")
 
 
@@ -198,17 +251,18 @@ def revoke_recorder(trust_path: str | Path, fingerprint: str, *, effective: str)
         raise RecorderAttestationError("--effective must be an explicit date, YYYY-MM-DD.")
     fp = _fingerprint(fingerprint)
     p = Path(trust_path)
-    current = load_trust(p).recorders
-    target = next((r for r in current if r.fingerprint == fp), None)
-    if target is None:
-        raise RecorderAttestationError(f"no recorder with fingerprint {fp} is in this list.")
-    if target.revoked:
-        raise RecorderAttestationError(
-            f"{fp} is already revoked"
-            + (f" as of {target.revoked_on}" if target.revoked_on else "")
-            + "; the recorded date is not rewritten.")
-    changed = replace(target, revoked=True, revoked_on=effective)
-    _write(p, RecorderTrust([changed if r is target else r for r in current]), create=False)
+    with _exclusive(p):                   # read, modify, write as one step
+        current = load_trust(p).recorders
+        target = next((r for r in current if r.fingerprint == fp), None)
+        if target is None:
+            raise RecorderAttestationError(f"no recorder with fingerprint {fp} is in this list.")
+        if target.revoked:
+            raise RecorderAttestationError(
+                f"{fp} is already revoked"
+                + (f" as of {target.revoked_on}" if target.revoked_on else "")
+                + "; the recorded date is not rewritten.")
+        changed = replace(target, revoked=True, revoked_on=effective)
+        _write(p, RecorderTrust([changed if r is target else r for r in current]), create=False)
     return TrustEntry(changed.label, fp, tuple(sorted(changed.provenance)), True, effective)
 
 

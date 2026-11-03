@@ -176,7 +176,7 @@ class AuthHandler:
         else:
             expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         to_encode.update({"exp": expire})
-        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM)
+        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM, settings.env)
         encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
         return str(encoded_jwt)
 
@@ -191,7 +191,7 @@ class AuthHandler:
             The decoded token payload if validation is successful, otherwise None.
         """
         # A misconfigured secret/algorithm is an operator error, not a bad token: raise.
-        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM)
+        check_hmac_secret(JWT_SECRET_KEY, JWT_ALGORITHM, settings.env)
         try:
             # The algorithm comes from configuration, never from the token. Reject any
             # token whose header names a different one (this also rejects "none")

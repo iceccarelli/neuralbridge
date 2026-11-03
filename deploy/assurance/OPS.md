@@ -177,7 +177,8 @@ The offline kit never loads it and opens no socket; `ops cycle --dry-run` sends 
   The URL path of a chat webhook can itself be a bearer token: it is never printed or recorded,
   so keep `ops.json` mode 0600.
 * `on` defaults to both statuses. A quiet (`ok`) cycle sends nothing.
-* `format` is `"json"` only.
+* `format` is `"json"` (default), `"slack"`, `"teams"` or `"pagerduty"`; see **Formats** below.
+  `"servicenow_json"` is **not built** and is refused at config.
 
 **Payload** (an allow-list built from the record; step `detail`/`info`/`command`, key and backup
 paths, and ledger contents are never copied; finding text is neutralised, path-masked and
@@ -206,34 +207,54 @@ truncated):
 separators) **without** its `notifications` field, which cannot cover its own outcome. The body is
 sent as canonical JSON, so the bytes you verify are the bytes that were signed.
 
-**Headers**: `X-NeuralBridge-Signature: sha256=<hex>` (HMAC-SHA256 of the exact body bytes with
-the secret), `X-NeuralBridge-Delivery: <uuid>` (new per attempt), `Idempotency-Key:
-<cycle_id>:<target name>` (the same for every retry of that message), plus your `headers_env`
-lines.
+**Headers**: `X-NeuralBridge-Timestamp: <unix seconds at send>` and
+`X-NeuralBridge-Signature: sha256=<hex>`, where the signature is HMAC-SHA256, keyed with the
+secret, over the bytes `"<timestamp>." + <exact body bytes>`. `X-NeuralBridge-Delivery: <uuid>`
+(new per attempt), `Idempotency-Key: <cycle_id>:<target name>` (the same for every retry of that
+message), plus your `headers_env` lines. A retry has the same body and key but a **new timestamp
+and signature**. PagerDuty has neither header (it authenticates by routing key and de-duplicates
+on `dedup_key`).
 
-**Verify in a receiver** (compare in constant time; reject on mismatch; use the raw bytes, not
-re-serialised JSON):
+**Verify in a receiver** (use the raw bytes, not re-serialised JSON; compare in constant time;
+reject if the timestamp is not plain digits or `|now - timestamp| > 300` seconds, which stops a
+captured request being replayed later):
 
 ```python
-import hashlib, hmac
+import hashlib, hmac, time
 
-def valid(secret: bytes, raw_body: bytes, header: str) -> bool:
-    expected = "sha256=" + hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header)
+def valid(secret: bytes, raw_body: bytes, signature: str, timestamp: str,
+          now: float | None = None, window_s: int = 300) -> bool:
+    if not timestamp.isascii() or not timestamp.isdigit() or len(timestamp) > 12:
+        return False
+    if abs((time.time() if now is None else now) - int(timestamp)) > window_s:
+        return False
+    expected = "sha256=" + hmac.new(
+        secret, timestamp.encode() + b"." + raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 ```
 
 ```sh
-# body.json holds the raw request body; SIG is the X-NeuralBridge-Signature value
-expected="sha256=$(openssl dgst -sha256 -hmac "$SECRET" < body.json | sed 's/^.* //')"
-[ "$expected" = "$SIG" ] && echo valid || echo INVALID
+# body.json holds the raw request body; TS is X-NeuralBridge-Timestamp, SIG is
+# X-NeuralBridge-Signature. Also check by hand that |$(date +%s) - TS| <= 300.
+expected="sha256=$( (printf '%s.' "$TS"; cat body.json) | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')"
+[ "$expected" = "$SIG" ] && [ $(( $(date +%s) - TS )) -le 300 ] \
+  && [ $(( TS - $(date +%s) )) -le 300 ] && echo valid || echo INVALID
 ```
 
 (`-hmac "$SECRET"` puts the secret on a command line, visible to other local users; use it only
-for an ad-hoc check, not in a long-lived script.) Deduplicate on `Idempotency-Key`.
+for an ad-hoc check, not in a long-lived script.) Deduplicate on `Idempotency-Key`. The timestamp
+only limits replay to the window; it does not make a message exactly-once.
+
+**Path masking is a heuristic.** `human_actions` text comes from the operator's own findings. It is
+neutralised, truncated and path-masked, not redacted: anything path-like (absolute, `./`, `../`
+or `a/b` relative, `~/`, Windows drive and UNC paths, anything containing `tenants/acc_`, any token
+ending `.key .pem .db .jsonl .sqlite .p12 .pfx`) becomes `<path>`, a quoted path is masked whole,
+and an unquoted path containing a space is masked token by token. It over-masks on purpose and can
+still miss a secret written as ordinary words. Do not put secrets in finding text.
 
 **Delivery semantics.** A 2xx is `delivered`. 429 and 5xx are retried inside one attempt with
 backoff, honouring `Retry-After` up to 30 s (a longer wait is not waited out). A failure is
-appended to `<record>.outbox.jsonl` (append-only, mode 0600; it holds the message body, which is
+appended to `<record>.outbox.jsonl` (append-only inside its live window, mode 0600; at the start of each cycle items that were delivered or abandoned more than 30 days ago are dropped by an atomic rewrite, open items never are; it holds the message body, which is
 the minimal payload above) and **retried at the next cycle with the same body and the same
 `Idempotency-Key`**; after 5 attempts it is marked `abandoned` and shown by `ops status`. This is
 at-least-once: a receiver can see a message twice. A target whose `secret_env` (or `headers_env`)
@@ -247,18 +268,109 @@ sent whatever the current cycle's status.
 **Check and test.** `ops check` validates the `notify` block (https, host equality, whether each
 environment variable is set in *this* shell, a warning for a token-like URL) and lists what it does
 not check. `python -m assurance ops notify-test --config ops.json --target oncall` prints what a
-test would send (the signature masked as `<hmac of N bytes>`); only with `--live` does it POST a
+test would send (the signature masked as `<hmac of '<timestamp>.' + N body bytes>`); only with `--live` does it POST a
 clearly labelled `status: "test"` message that contains no record contents. Exit `0` delivered,
 `1` failed, `2` could not run.
 
-**Pointing a vendor at it.** Slack, Teams, PagerDuty, ServiceNow and Jira each offer an inbound
-webhook or an events API with its own JSON shape. **No vendor integration is built or claimed, and
-no format adaptation for any of them exists.** This sends the generic JSON above, so such a tool
-accepts it only if it takes arbitrary JSON (for example a ServiceNow scripted REST endpoint, a Jira
-automation "incoming webhook" rule, or a small relay you operate that checks the signature and
-re-posts in the vendor's shape). Put the endpoint's host in `allow_host`; if it wants a token, put
-`Authorization: ...` in the variable named by `headers_env`. Whether a given vendor endpoint accepts
-the body has not been tested.
+#### Formats
+
+`format` only changes the *shape* of the body. Every format is built from the same allow-listed
+message above, so no extra data enters any vendor body, and the same neutralisation, path masking
+and truncation already applied to finding text hold. **ServiceNow: `servicenow_json` is not built.**
+For ServiceNow or Jira use `json` against an endpoint that takes arbitrary JSON, or a relay you
+operate. The operator names the host in `allow_host`; no vendor host is trusted by name.
+
+| `format` | body | what `secret_env` is | signature header |
+|---|---|---|---|
+| `json` | the generic body above | HMAC key | `X-NeuralBridge-Signature` |
+| `slack` | `{"text": ...}` | HMAC key | sent, but Slack does not check it |
+| `teams` | `{"text": ...}` | HMAC key | sent, but Teams does not check it |
+| `pagerduty` | Events API v2 enqueue body | **the PagerDuty routing key** | **none** |
+
+> **Auth asymmetry, read this.** For `json`, `slack` and `teams`, `secret_env` is an HMAC key and the
+> request is signed. Slack and Teams do **not** verify that signature: for them the webhook URL
+> *is* the credential (keep `ops.json` mode 0600; the path is never printed or recorded). The
+> signature only helps if you put a relay of your own in front. For `pagerduty`, `secret_env` names
+> the variable holding the **routing key** (PagerDuty's integration key), the key is sent only
+> inside the body PagerDuty requires, and **no HMAC header is sent**. The routing key is read at
+> send time and is never written to the record, the outbox, `ops status` or any log: the outbox
+> stores the routing-key-free canonical message and the PagerDuty body is rebuilt on each retry.
+
+Slack, `{"text": ...}` (`•` bullets, one per human action, Slack's `&amp; &lt; &gt;` escaping):
+
+```json
+{"text": "NeuralBridge ops example-ops: cycle flagged\nSteps: 2 total; not ok: watch.run:watch.json=flagged\nHuman actions: 1\n• watch.run:watch.json / ADV-2026-001: read new finding ADV-2026-001 ... Nothing was opened\nDrafted by software from an unsigned operator log; it decides nothing."}
+```
+
+Teams, `{"text": ...}` (plain text with `-` bullets; markdown punctuation is backslash-escaped):
+
+```json
+{"text": "NeuralBridge ops example-ops: cycle flagged\nSteps: 2 total; not ok: watch.run:watch.json=flagged\nHuman actions: 1\n- watch.run:watch.json / ADV-2026-001: read new finding ADV-2026-001 ... Nothing was opened\nDrafted by software from an unsigned operator log; it decides nothing."}
+```
+
+PagerDuty Events API v2:
+
+```json
+{"routing_key": "<from $secret_env>", "event_action": "trigger",
+ "dedup_key": "example-ops-20261102T031500Z:oncall",
+ "payload": {"summary": "NeuralBridge ops example-ops: cycle flagged; 1 human action(s): ...",
+             "source": "example-ops", "severity": "warning",
+             "custom_details": {"kind": "cycle", "cycle_id": "...", "status": "flagged",
+                                "steps": [], "human_actions": [], "human_actions_omitted": 0,
+                                "record_sha256": "<64 hex>", "not_established": "..."}}}
+```
+
+`severity` is `warning` for a `flagged` cycle and `error` for `degraded` (`info` for the
+`notify-test` event). `dedup_key` equals the `Idempotency-Key` (`<cycle_id>:<target name>`), so a
+retry updates the same alert instead of opening a second one. A `notify-test --live` to PagerDuty
+**does trigger a real event** (`info`, summary "TEST message"); resolve it afterwards.
+
+**Making text inert.** In step names, refs and action text: `@` becomes `@ ` (so `@channel`,
+`@here` and `<@U123>` notify nobody); `://` becomes `:/ /` and `www.` becomes `www .` (no
+auto-link). Slack: `&`, `<`, `>` are entity-escaped (this also defuses `<!channel>` and
+`<url|text>`) and `*`, `_`, `~` and the backtick are replaced by look-alike characters, because
+mrkdwn has no escape for them. Teams: backslash, backtick, `* _ [ ] ( ) < > & | ~ #` are
+backslash-escaped. Newlines in finding text were already turned into visible `\n`, so a finding
+cannot add bullets.
+
+**Size caps.** Slack and Teams text: 3000 characters (our cap). PagerDuty `summary`: 1024
+(Events API v2 limit). Over the cap, whole trailing bullets are dropped and the text says
+`… (N more)` (N counts human actions not shown, including any the payload already omitted); an
+over-long PagerDuty summary is cut and ends `… (N more)` (N counts characters). Nothing is cut
+silently.
+
+**Pointing a vendor at it.**
+
+* *Slack:* create an Incoming Webhook in your workspace; `url` is the `https://hooks.slack.com/...`
+  URL, `allow_host` is `hooks.slack.com`, `format` is `slack`. `secret_env` still needs a value
+  (any HMAC key; Slack ignores the header).
+* *Teams:* create a webhook / Workflows "post to channel when a webhook request is received" URL;
+  `allow_host` is that URL's exact host, `format` is `teams`. A Workflows flow may need its trigger
+  schema set to accept `{"text": ...}`.
+* *PagerDuty:* add an *Events API v2* integration to a service, copy its integration (routing)
+  key into the environment variable named by `secret_env`; `url` is
+  `https://events.pagerduty.com/v2/enqueue`, `allow_host` is `events.pagerduty.com`, `format` is
+  `pagerduty`. Do not put the key in `ops.json`.
+
+```json
+"notify": [
+  {"name": "oncall", "url": "https://events.pagerduty.com/v2/enqueue",
+   "allow_host": "events.pagerduty.com", "format": "pagerduty",
+   "on": ["degraded"], "secret_env": "NB_PAGERDUTY_ROUTING_KEY"},
+  {"name": "team-chat", "url": "https://hooks.slack.com/services/T000/B000/XXXX",
+   "allow_host": "hooks.slack.com", "format": "slack", "secret_env": "NB_NOTIFY_HMAC_SECRET"}
+]
+```
+
+`ops check` and `ops notify-test` (dry run) print the format and the body shape; the dry run shows
+the body with the routing key masked.
+
+**Verified against vendor docs only, not against a live account.** The Slack, Teams and PagerDuty
+bodies are built from each vendor's published request schema and checked by golden contract
+fixtures in `tests/test_ops_notify_formats.py`. No Slack workspace, Teams tenant or PagerDuty
+account was contacted, so whether a given endpoint accepts a body (a Teams Workflows trigger schema,
+an org-specific Slack restriction, a PagerDuty rate limit) is unknown until you run
+`ops notify-test --live` against it.
 
 **Not established by this.** That the receiver exists, authenticates the signature, or keeps the
 idempotency key (`ops check` makes no request); that a delivered (2xx) webhook was read by anyone,
@@ -408,3 +520,99 @@ This tooling and this runbook do **not** establish:
 - Anything about legal or regulatory status. No step here says a machine, a filing or an organisation
   complies with anything.
 - Postgres, the `/ai` control plane and the website are outside this runbook.
+
+## 8. What we measured
+
+One run of `scripts/bench_scale.py` on one machine, before and after three fixes (below). These are
+measurements of this code on this host, not a capacity statement.
+
+**Machine.** 2026-11-02; 4 vCPU Intel Xeon @ 2.10 GHz, 16 GB RAM, Python 3.13.18, Linux 6.18 in a
+VM; disk type not probed. The host was shared with other jobs: the 1-minute load average was
+3 to 12 during the baseline and 5 to 9 during the "after" run, so absolute seconds are noisy (the
+same append loop ran at 3.5 and 6.3 ms per append in two runs of unchanged code). Read the shape
+(the exponent) before the seconds. Data is synthetic: each machine is one manifest plus one
+enrolment record (2 ledger entries, about 4.4 KB each on disk), two items, one declared safety
+function, no verifications and no open cases.
+
+**Fleet size N (machines), seconds, before -> after.** "Before" is commit `c505cc6` unmodified.
+
+| operation | N=100 | N=500 | N=2000 | slope before -> after |
+|---|---|---|---|---|
+| `machinery import-inventory` (CLI) | 3.3 -> 1.4 | 44.9 -> 9.1 | 577.7 -> 26.5 | 1.72 -> 0.98 |
+| `POST /v1/machinery/enrol/batch`, 200 rows per request | 2.6 -> 1.4 | 36.4 -> 8.0 | 493.5 -> 35.2 | 1.74 -> 1.08 |
+| `fleet list` (CLI) | 0.43 -> 0.28 | 4.0 -> 1.6 | 22.4 -> 5.3 | 1.32 -> 0.99 |
+| `GET /v1/fleet/machines` | 0.58 -> 0.39 | 3.2 -> 1.5 | 18.2 -> 5.2 | 1.15 -> 0.86 |
+| `report build` (CLI) | 0.49 -> 0.31 | 2.9 -> 1.6 | 18.4 -> 5.7 | 1.21 -> 0.98 |
+| `GET /v1/fleet/report` | 0.85 -> 0.32 | 3.7 -> 1.3 | 20.7 -> 5.1 | 1.06 -> 0.92 |
+| `machinery coverage` (one machine) | 0.02 | 0.12 | 0.43 | 1.01 -> 0.96 |
+| `change list` (CLI / API, no cases) | 0.04 / 0.01 | 0.06 / 0.08 | 0.19 / 0.27 | 0.6 / 0.4 -> 0.5 / 1.0 |
+| `watch run --dry-run`, N targets | 0.49 | 2.0 | 7.0 | 0.81 -> 0.89 |
+| `ops cycle` (backup, verify, anchor-all) | 0.27 | 0.81 | 2.98 | 0.73 -> 0.80 |
+
+The slope is the log-log fit of time against N over the three sizes (1.0 is linear, 2.0 is
+quadratic). It includes process start-up and per-call fixed cost, so it understates growth at
+small N. Peak resident memory of the largest read cases was 129 MB at N=2000 (17.5 MB database).
+
+**Ledger size (entries), seconds.** Linear in every case (slopes 0.9 to 1.05); unchanged by the fixes.
+
+| operation | 1,000 | 10,000 | 50,000 |
+|---|---|---|---|
+| append, one writer, whole loop | 3.5 to 6.3 | 50 to 80 | 184 to 231 |
+| `verify_chain` | 0.06 | 0.65 | 2.3 |
+| `export` | 0.08 | 0.78 | 3.2 |
+| `verify_report` | 0.08 | 0.65 | 2.5 |
+| enrol one machine (it verifies the chain first) | 0.06 | 0.54 | 2.4 |
+
+Tenant export of a 10,000-entry ledger: 2.2 s, 22 MB written, 117 MB peak. The whole
+50,000-entry case (build, verify, export, read everything) peaked at 408 MB; the export bundle is
+built in memory. Intel store with 3,000 observations
+(750 repeats of the four repo fixtures): ingest 21 s in total, `intel history` 0.28 s,
+`intel candidates` 0.01 s; the repeats are the same bodies, so the candidate set did not grow and
+that figure does not show how candidates scale with distinct advisories.
+
+**Write throughput is bounded by one SQLite file with one writer.** Every append is its own
+transaction with `synchronous=FULL` (an fsync), and a tenant ledger has exactly one writer. On
+this host that was **125 to 290 appends per second** (3.5 to 8 ms each; it varied with host load,
+not with ledger size). A machine enrolment is two appends, so one tenant's enrolment ceiling here
+is about 60 to 145 machines per second before any other work; the measured 2,000-machine import
+(4,001 entries) took 26.5 s, about 150 entries per second. Two tenants write to two files and do
+not share this bound; one tenant's concurrent writers queue on its file. Raising it would mean
+weakening the commit guarantee or batching commits, and neither was done.
+
+**What changed.** 1) The batch importer verified the whole chain before every row (O(rows x
+entries)); it now walks the chain in full once before the first row, checks the head it holds
+plus everything appended since before each row, and walks in full again after the batch record
+(`BatchChain` in `machinery/enrol.py`). A broken chain is still refused up front with nothing
+written; an old record edited mid-batch is found by the closing walk, not by each row, and the
+import then fails with `ledger_chain_unverified` (409 on the API) although earlier rows were
+written. `enrol_machine` without a `BatchChain`
+(`machinery enrol`, `POST /v1/machinery/enrol`) still walks the whole chain per call.
+2) `subject = ? AND kind = ?` queries were answered from the kind index and scanned every row of
+that kind (one scan per machine: fleet reads, enrolment, the compare-and-swap in `append`); they
+now use the subject index (`+kind`, no schema change, no migration, same rows in the same order).
+3) Nothing else was changed: the 60 s `ASSURANCE_CHAIN_RECHECK_SECONDS` window and the full
+verification before `READY_TO_CLOSE` are as before, and no hash or serialisation format moved.
+
+**Still linear by design.** Any read that must vouch for the chain walks it (about 55 microseconds
+per entry, so 0.2 s for a 2,000-machine fleet), and a fleet read costs about 2.5 ms per machine in
+separate ledger reads. These grow in proportion to the fleet, not faster.
+
+**What this does NOT establish.**
+
+- Not a capacity or latency guarantee, and not a statement about any other hardware, disk, Python
+  or load. One host, one run per size, a shared and noisy machine, disk type unknown.
+- Synthetic data only: machines with two items and no verifications, no open change cases, no
+  amendments, one site-per-20 pattern. A real fleet with many verifications per machine, large
+  manifests or many cases will cost more per machine; none was measured.
+- No concurrency test: one reader or writer at a time. Two writers on one ledger, many tenants at
+  once, lock contention and the hosted process model were not measured.
+- No network: the API cases use an in-process ASGI client. Latency over a network, TLS, a proxy or
+  the hosted volume was not measured.
+- Nothing about sizes above 2,000 machines or 50,000 entries, or about Postgres-backed parts.
+- The "before" figures come from two runs on a busier host; the speed-ups quoted are the order of
+  magnitude, not a precise ratio.
+
+To repeat: `PYTHONPATH=src python scripts/bench_scale.py --out result.json` (about 20 minutes;
+`--sizes`, `--ledger-sizes` and `--only` narrow it). `tests/test_scale_smoke.py` and
+`tests/test_assurance_batch_chain.py` guard against a return to quadratic behaviour; they are not
+performance claims.

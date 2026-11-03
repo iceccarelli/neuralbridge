@@ -37,7 +37,6 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -45,7 +44,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from assurance.api.deps import Machine
 from assurance.core.errors import AssuranceError
 from assurance.intel.sources import SOURCE_ALIASES, SOURCES, resolve_source
-from assurance.intel.store import _APP_ID, IntelStore, IntelStoreError, Observation
+from assurance.intel.store import IntelStore, IntelStoreError, Observation
 from assurance.intel.view import EPSS_UNAVAILABLE_NOTE, KEV_NOT_ESTABLISHED, build_report
 
 __all__ = ["INTEL_STORE_ENV", "intel_router", "intel_store_path"]
@@ -87,42 +86,6 @@ def intel_store_path() -> str:
     return os.environ.get(INTEL_STORE_ENV, "").strip()
 
 
-class _ReadOnlyIntelStore(IntelStore):
-    """An :class:`IntelStore` that cannot write and cannot create.
-
-    ``IntelStore.__init__`` creates the file and runs the schema in a write transaction, which a
-    read route must never do (and which would turn an unconfigured path into an empty store that
-    reads as "nothing known"). This subclass opens SQLite with ``mode=ro`` and ``query_only`` and
-    refuses ``append``, so the only operations the report builder can reach are reads.
-    """
-
-    def __init__(self, path: str | Path) -> None:       # noqa: D107 - deliberately not super()
-        import threading
-
-        self.path = Path(path)
-        self._lock = threading.Lock()
-        if not self.path.is_file():
-            raise IntelStoreError("the configured intel store file does not exist")
-        with self._read() as db:
-            app_id = db.execute("PRAGMA application_id").fetchone()[0]
-            if app_id != _APP_ID:
-                raise IntelStoreError("the configured file is not an intel observation store")
-            db.execute("SELECT seq FROM observations LIMIT 1").fetchall()
-            db.execute("SELECT sha256 FROM blobs LIMIT 1").fetchall()
-
-    def _connect(self, create: bool = False) -> sqlite3.Connection:
-        if create:
-            raise IntelStoreError("this store is read-only")
-        db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0,
-                             isolation_level=None)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA query_only=ON")
-        return db
-
-    def append(self, *args: Any, **kwargs: Any) -> Observation:
-        raise IntelStoreError("this store is read-only")
-
-
 def _unavailable(error: str, detail: str, remedy: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -140,7 +103,7 @@ def _open_store() -> IntelStore:
             "`assurance intel ingest` / `assurance intel refresh --live`. This service never "
             "fetches or records feeds over HTTP.")
     try:
-        return _ReadOnlyIntelStore(path)
+        return IntelStore.open_existing(path, label="the configured intel store file")
     except (IntelStoreError, sqlite3.Error, OSError) as exc:
         # The reason class only; the server's path is the operator's, not the caller's.
         reason = str(exc) if isinstance(exc, IntelStoreError) else \
@@ -236,7 +199,7 @@ def intel_history(
     store = _open_store()
     try:
         rows = store.observations(source=wanted, after_seq=after_seq, limit=limit + 1)
-    except (sqlite3.Error, AssuranceError) as exc:
+    except (sqlite3.Error, AssuranceError, TypeError, ValueError) as exc:
         raise _read_failed(exc) from exc
     page, more = rows[:limit], len(rows) > limit
     body: dict[str, Any] = {
@@ -269,7 +232,7 @@ def intel_observation(seq: str) -> dict[str, Any]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={
             "error": "observation_not_found",
             "detail": "no observation has this sequence in the store"}) from exc
-    except (sqlite3.Error, AssuranceError) as exc:
+    except (sqlite3.Error, AssuranceError, TypeError, ValueError) as exc:
         raise _read_failed(exc) from exc
     return {"status": "ok", "store": _scope(), "observation": _observation(obs, full=True),
             "not_established": _observation_notes(obs)}
@@ -292,7 +255,7 @@ def intel_cve(cve_id: str) -> dict[str, Any]:
     try:
         report = build_report(store, cve_ids=[cve_id])
         sources = _sources_consulted(store)
-    except (sqlite3.Error, AssuranceError) as exc:
+    except (sqlite3.Error, AssuranceError, TypeError, ValueError) as exc:
         raise _read_failed(exc) from exc
     e = report.enrichments[0].to_dict()
     mentioned = (e["kev"]["status"] == "listed" or e["epss"]["status"] == "available"
@@ -330,7 +293,7 @@ def intel_candidates() -> dict[str, Any]:
     try:
         report = build_report(store)
         sources = _sources_consulted(store)
-    except (sqlite3.Error, AssuranceError) as exc:
+    except (sqlite3.Error, AssuranceError, TypeError, ValueError) as exc:
         raise _read_failed(exc) from exc
     candidates = [c.to_dict() for c in report.candidates]
     not_rep: list[dict[str, Any]] = [

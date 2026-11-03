@@ -299,12 +299,17 @@ test.describe('Assurance workspace', () => {
 
   test('a loading panel is a skeleton, never an empty-state sentence', async ({ page }) => {
     // Real responses, held back for a moment: the empty fleet of account B must not flash
-    // "No machine is enrolled" while it is still being fetched.
+    // "No machine is enrolled" while it is still being fetched. The hold is 4s, and the key is
+    // typed without clicking Refresh: on the mobile project that click alone took ~1.8s to
+    // return, so a 1.5s hold had already expired (the skeleton is shown only while no earlier
+    // data exists, so the later Refresh reload correctly shows none). The debounced load that
+    // typing the key triggers is the first fetch under test.
     await page.route('**/v1/fleet/machines', async (route) => {
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 4000));
       await route.continue();
     });
-    await enter(page, seed.key_b);
+    await page.goto('/assurance');
+    await page.getByLabel('API key').fill(seed.key_b);
     const fleet = page.locator('section#aw-fleet');
     await expect(fleet.getByTestId('panel-skeleton')).toBeVisible();
     await expect(fleet.getByTestId('panel-skeleton')).toHaveAttribute('aria-busy', 'true');

@@ -16,6 +16,12 @@ const nextConfig = {
   allowedDevOrigins: ['127.0.0.1', 'localhost'],
   // Do not advertise the framework in a response header.
   poweredByHeader: false,
+  // /product has no page of its own (each page is /product/<slug>), but a reader who types or trims
+  // a link to it should land on the category page, not a 404. Permanent, and the target is the
+  // same URL the sitemap, the breadcrumbs and the navigation already use.
+  async redirects() {
+    return [{ source: '/product', destination: '/product/industrial-autonomous-assurance', permanent: true }];
+  },
   async headers() {
     return [
       {

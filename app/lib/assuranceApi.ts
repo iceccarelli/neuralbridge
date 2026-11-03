@@ -359,7 +359,16 @@ export type ApiOutcome<T> =
   // 409: the request is well-formed but the resource's state does not allow it. `code` is the
   // server's error code when it gave one (e.g. anchor_contradicts_ledger); `finding` is what it
   // found and `remedy` what to do about it, kept apart so a page can show both with the refusal.
-  | { kind: 'conflict'; status: 409; message: string; code?: string; finding?: string; remedy?: string }
+  | {
+      kind: 'conflict';
+      status: 409;
+      message: string;
+      code?: string;
+      finding?: string;
+      remedy?: string;
+      /** The body's `receipt`, when the refusal carries one (POST /v1/machinery/enrol). Unparsed. */
+      receipt?: unknown;
+    }
   // 413: the request body is over the server's limit.
   | { kind: 'toolarge'; status: 413; limitBytes: number | null; message: string }
   // 422: the server could not use the content of the request.
@@ -369,7 +378,16 @@ export type ApiOutcome<T> =
   // The request never produced an HTTP answer.
   | { kind: 'unreachable'; message: string }
   // Anything else, including 5xx.
-  | { kind: 'error'; status: number; code: string; message: string };
+  | {
+      kind: 'error';
+      status: number;
+      code: string;
+      message: string;
+      /** What the server says to do about it, when it says (the intel 503s do). */
+      remedy?: string;
+      /** The server's own statement of what its answer does not mean, when it sends one. */
+      notEstablished?: string;
+    };
 
 export type Detail = { code: string; message: string; finding: string; remedy: string; extra: Record<string, unknown> };
 
@@ -483,6 +501,7 @@ export function classify(status: number, body: unknown, retryAfter = ''): ApiOut
         code: d.code || undefined,
         finding: d.finding || undefined,
         remedy: d.remedy || undefined,
+        receipt: d.extra.receipt,
       };
     case 413: {
       const limit = (d.extra as { limit_bytes?: number }).limit_bytes;
@@ -493,7 +512,14 @@ export function classify(status: number, body: unknown, retryAfter = ''): ApiOut
     case 429:
       return { kind: 'ratelimited', status, message: d.message, remedy: d.remedy, retryAfter };
     default:
-      return { kind: 'error', status, code: d.code, message: d.message };
+      return {
+        kind: 'error',
+        status,
+        code: d.code,
+        message: d.message,
+        ...(d.remedy ? { remedy: d.remedy } : {}),
+        ...(typeof d.extra.not_established === 'string' ? { notEstablished: d.extra.not_established } : {}),
+      };
   }
 }
 
@@ -588,6 +614,19 @@ export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'o
         remedy: 'This is not an empty result: nothing was learned. Check your connection and try Reload.',
       };
     case 'error':
+      if (outcome.status === 503 && (outcome.code === 'no_intel_store_configured' || outcome.code === 'intel_store_unreadable')) {
+        // The operator's observation store is not available. This is the opposite of an empty
+        // answer: nothing is known from this service until the operator fixes it.
+        return {
+          kind: outcome.kind,
+          heading:
+            outcome.code === 'no_intel_store_configured'
+              ? 'Public intelligence store not configured (503)'
+              : 'Public intelligence store unreadable (503)',
+          text: `${outcome.message} ${outcome.notEstablished ?? 'Nothing is known from this service until the store is available.'}`.trim(),
+          remedy: `Operator action: ${outcome.remedy ?? 'configure and check the intel observation store.'}`,
+        };
+      }
       if (outcome.code === 'ledger_integrity') {
         return {
           kind: outcome.kind,
@@ -762,3 +801,142 @@ export type SignedImpactResult = {
   inspect_only: boolean;
   trust_statement: string;
 };
+
+// ---------------------------------------------------------------------------
+// Enrolment (POST /v1/machinery/enrol; src/assurance/machinery/enrol.py)
+// ---------------------------------------------------------------------------
+
+export type EnrolStatus = 'enrolled' | 'already_enrolled' | 'configuration_differs' | 'identity_conflict';
+
+export type EnrolReceipt = {
+  schema: string;
+  status: EnrolStatus | string;
+  written: boolean;
+  machine: string;
+  configuration_hash: string;
+  enrolled_configuration_hash: string;
+  declared: Record<string, string>;
+  identity_basis: string;
+  manifest_id: string;
+  manifest_content_hash: string;
+  manifest_entry: number;
+  enrolment_content_hash: string;
+  enrolment_entry: number;
+  enrolled_by: string;
+  items: number;
+  uncomparable_items: string[];
+  uncomparable_note: string;
+  tier_ceiling: string;
+  tier_ceiling_note: string;
+  undemonstrable_functions: string[];
+  /** function_id -> coverage, read back from the ledger (`never_verified` straight after enrolling). */
+  coverage: Record<string, string>;
+  conflicts: { attribute: string; enrolled: string; claimed: string }[];
+  notes: string[];
+  pointer: string;
+  does_not_establish: string[];
+  next_steps: string[];
+};
+
+/** The receipt a 409 refusal carries, if the body has one in the documented shape. */
+export function receiptOf(value: unknown): EnrolReceipt | null {
+  const r = value as Partial<EnrolReceipt> | null;
+  if (!r || typeof r !== 'object' || typeof r.status !== 'string' || typeof r.machine !== 'string') return null;
+  return {
+    ...(r as EnrolReceipt),
+    declared: r.declared ?? {},
+    uncomparable_items: r.uncomparable_items ?? [],
+    undemonstrable_functions: r.undemonstrable_functions ?? [],
+    coverage: r.coverage ?? {},
+    conflicts: r.conflicts ?? [],
+    notes: r.notes ?? [],
+    does_not_establish: r.does_not_establish ?? [],
+    next_steps: r.next_steps ?? [],
+  };
+}
+
+// What the server calls an automated actor (src/assurance/machinery/enrol.py _RESERVED_NAMES).
+// The server decides; this only saves a round trip for a name that cannot be accepted.
+const AUTOMATION_NAMES = new Set(['automation', 'watch', 'agent', 'service', 'system', 'bot', 'assistant', 'operator', 'ai']);
+
+/** Why this name cannot make an enrolment declaration, or '' when it looks like a person's name. */
+export function actorProblem(actor: string): string {
+  const name = actor.normalize('NFKC');
+  if (!name.trim()) return 'Enter your name: an enrolment is a declaration by a named person, and an unattributed one is not recorded.';
+  if (/[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]/u.test(name) || !/[\p{L}\p{N}]/u.test(name)) {
+    return 'That is not a name a person could have (invisible characters, or no letter or digit).';
+  }
+  const words = (name.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => !/^\p{N}+$/u.test(w));
+  if (words.length > 0 && words.every((w) => AUTOMATION_NAMES.has(w))) {
+    return 'That is what an automated actor is called, not who it is. Automation can collect a manifest; a named person declares the enrolment.';
+  }
+  return '';
+}
+
+// ---------------------------------------------------------------------------
+// Public intelligence (GET /v1/intel/cve/{cve_id}; src/assurance/api/intel_routes.py)
+// ---------------------------------------------------------------------------
+
+export type IntelCitation = {
+  observation_seq: number;
+  source: string;
+  url?: string;
+  retrieved_at: string;
+  sha256: string;
+  record_id?: string;
+  feed_stamp?: string;
+};
+
+export type IntelKev =
+  | { status: 'listed'; vendor_project?: string | null; product?: string | null; date_added?: string | null; due_date?: string | null; known_ransomware_campaign_use?: string | null; citation: IntelCitation }
+  | { status: 'not_listed_in_kev'; not_established: string; citation: IntelCitation }
+  | { status: 'unchecked'; note: string };
+
+export type IntelEpss =
+  | { status: 'available'; score: string | number; percentile: string | number; score_date: string; note: string; citation: IntelCitation }
+  | { status: 'unavailable'; score: null; note: string; reason: string };
+
+export type IntelNvd =
+  | { status: 'present' | 'rejected'; vuln_status?: string | null; last_modified?: string | null; citation: IntelCitation }
+  | { status: 'unknown'; note: string };
+
+export type IntelConflict = {
+  cve_id: string;
+  kind: string;
+  component_link: string;
+  nvd: { says: string; citation: IntelCitation };
+  csaf: { says: string; citation: IntelCitation };
+  resolution: string;
+};
+
+export type IntelCve = {
+  status: string;
+  cve_id: string;
+  kev: IntelKev;
+  epss: IntelEpss;
+  nvd: IntelNvd;
+  cvss: { family: string; version?: string | null; base_score?: number | null; base_severity?: string | null; vector?: string | null; metric_source?: string | null; type?: string | null; citation: IntelCitation }[];
+  conflicts: IntelConflict[];
+  not_representable: string[];
+  csaf_advisories: string[];
+  summary: { status: 'recorded' | 'unknown' | string; reason: string };
+  sources_consulted: {
+    observations: { seq: number; source: string; url: string; retrieved_at: string; sha256: string; parser_version?: string; feed_stamp?: string; disposition?: string }[];
+    sources_without_an_accepted_observation: string[];
+  };
+  unreadable_observations: number[];
+  not_established: string[];
+};
+
+/** The one spelling the server accepts. Same pattern as the route: upper case, ASCII digits. */
+export const CVE_ID_PATTERN = /^CVE-\d{4}-\d{4,19}$/;
+
+/** Upper-case and trim what was typed. Returns '' with a reason when it is not a CVE id. */
+export function parseCveId(input: string): { id: string; problem: string } {
+  const id = input.trim().toUpperCase();
+  if (!id) return { id: '', problem: 'Enter a CVE id, for example CVE-2021-44228.' };
+  if (!CVE_ID_PATTERN.test(id)) {
+    return { id: '', problem: `“${input.trim().slice(0, 40)}” is not a CVE id. It looks like CVE-2021-44228: CVE, a four-digit year, and four or more digits.` };
+  }
+  return { id, problem: '' };
+}

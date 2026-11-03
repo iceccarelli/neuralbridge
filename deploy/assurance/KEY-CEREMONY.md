@@ -8,7 +8,7 @@ procedure the founder approves; the actions are the founder's (`CLAUDE.md`, "Aut
 
 | capability on the Cell plan | needs | without it |
 |---|---|---|
-| counter-signed head attestation (`POST /v1/ledger/attest`) | `ASSURANCE_ATTEST_KEY_PEM` (or `ASSURANCE_ATTEST_KEY`, a path) | HTTP 503 `no_attestation_key_configured` |
+| counter-signed head attestation (`POST /v1/ledger/attest`) | `ASSURANCE_ATTEST_KEY_PEM` (or `ASSURANCE_ATTEST_KEY`, a path) | HTTP 503 `no_attestation_key_configured` (no key), `attestation_key_unsafe` (a key file is present but its custody is unsafe; see below) |
 | hosted `validated` verification | `ASSURANCE_RECORDER_TRUST` naming at least one recorder key, and a recorder who signs traces | every hosted trace is `community` |
 
 Everything below uses commands in this repository. `python -m assurance attest …`:
@@ -18,7 +18,7 @@ Everything below uses commands in this repository. `python -m assurance attest �
 | `keygen --out F [--public-out F.pub] [--json]` | Ed25519 pair; private file created `0600` exclusively; **refuses to overwrite** either file, or to sit beside the ledger; prints the public fingerprint, never the key | 0 / 2 |
 | `sign … --key F` | refuses a key file readable by group or other (or a symlink) | 0 / 1 finding / 2 |
 | `verify --log L --public-key P [--public-key P2 …]` | repeat `--public-key` to check a log that spans a rotation; every record must verify under the pinned key it names | 0 / 1 / 2 / 3 |
-| `trust-list create \| add \| revoke \| list \| verify-file` | the recorder trust file, in exactly the format the server loads | 0 / 1 / 2 |
+| `trust-list create \| add \| revoke \| list \| verify-file` | the recorder trust file, in exactly the format the server loads; writers take an exclusive lock on `<trustfile>.lock` (0600) so two operators cannot overwrite each other's revocation | 0 / 1 / 2 |
 | `preflight [--key F] [--trust F] [--expect-fingerprint FP] [--must-be-revoked FP] [--require both\|counter-signing\|validated\|none] [--json]` | would each capability work *here*; prints the public fingerprint and what it did **not** check | 0 / 1 |
 
 None of these is an HTTP route or an MCP tool, by design (`src/assurance/capabilities.py`:
@@ -89,7 +89,15 @@ python -m assurance attest keygen --out ./ceremony/attest-service.pem \
    `python -m assurance attest preflight --key <restored.pem> --expect-fingerprint <FP>`
    must exit 0 for counter-signing. Delete the restored file.
 4. Delete `./ceremony/attest-service.pem`. Keep `attest-service.pub`; it is public.
-5. Keep the key **off the data volume** (`preflight` fails a key file that sits under the
+5. **Custody rule, enforced by the loader.** `SigningKey.load` (used by the API, every CLI
+   and `preflight`: one implementation) opens the key `O_NOFOLLOW` and judges the open
+   descriptor: a regular file, owned by the service account (or root), mode with no group or
+   other bits (`chmod 600`), in a directory that group and other cannot write (`chmod 700`).
+   A symlink, a `/tmp`-style sticky shared directory, or another account's file is refused.
+   The API then answers 503 `attestation_key_unsafe` (the message names the problem, never a
+   path or key bytes); `preflight` reports the same verdict as `key.permissions` / `key.load`.
+   There is no environment switch to relax it.
+6. Keep the key **off the data volume** (`preflight` fails a key file that sits under the
    ledger or attestation-log directories).
 
 ## 4. Build the recorder trust list (only when a real recorder operator exists)

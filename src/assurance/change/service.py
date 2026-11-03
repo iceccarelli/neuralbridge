@@ -22,11 +22,11 @@ from __future__ import annotations
 import random
 import re
 import time
-import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TypeVar
 
+from assurance.core.actor_names import actor_name_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
@@ -146,54 +146,9 @@ def advisory_case_id(impact: ImpactReport) -> str:
     return _case_id(TriggerType.SUPPLIER_ADVISORY, _advisory_trigger(impact))
 
 
-#: Names no person is called. A caller that labels itself one of these is saying
-#: what it is, not who it is.
-_RESERVED_NAMES = frozenset({
-    "automation", "watch", "agent", "service", "system", "bot", "assistant",
-    "operator", "ai",
-})
-#: Code points that render as nothing (or as a blank) but are not control or
-#: format characters, so a category test alone lets them through.
-_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
-_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
-#: Letters from other scripts that read as Latin ones, mapped to the Latin
-#: letter. A short list of the common ones, not Unicode's full confusables
-#: table: it closes the obvious disguises of a reserved word, no more.
-_CONFUSABLES = str.maketrans({
-    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c",
-    "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0455": "s", "\u0458": "j",
-    "\u04bb": "h", "\u0501": "d", "\u0475": "v", "\u043a": "k", "\u043c": "m",
-    "\u0442": "t", "\u043d": "h",
-    "\u03b1": "a", "\u03bf": "o", "\u03c1": "p", "\u03bd": "v", "\u03b9": "i",
-    "\u03ba": "k", "\u03c4": "t", "\u03c5": "u", "\u03c7": "x", "\u03b5": "e",
-    "\u03b7": "n", "\u03c2": "s",
-    "\u0261": "g", "\u0131": "i", "\u0237": "j",
-})
-
-
-def _skeleton(name: str) -> str:
-    """The name as it would read in Latin letters: NFKC, accents dropped,
-    lookalike letters mapped, case folded."""
-    norm = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
-    stripped = "".join(c for c in norm if not unicodedata.combining(c))
-    return stripped.casefold().translate(_CONFUSABLES)
-
-
 def _name_problem(name: str) -> str:
-    """Why ``name`` cannot be the name of a person, or ``""`` if it can."""
-    norm = unicodedata.normalize("NFKC", name)
-    for ch in norm:
-        if ch in _FILLERS or unicodedata.category(ch) in _INVISIBLE_CATEGORIES:
-            return f"it contains an invisible or control character (U+{ord(ch):04X})"
-    if not any(ch.isalnum() for ch in norm):
-        return "it has no letter or digit in it"
-    # Reserved if every word in it that is not a number is a reserved word:
-    # "agent.", "system:", "bot-7", "automation bot", and the same in lookalike
-    # letters. "Agent Smith" and "Botticelli" are somebody's name and pass.
-    words = [w for w in re.findall(r"[^\W_]+", _skeleton(name)) if not w.isdigit()]
-    if words and all(w in _RESERVED_NAMES for w in words):
-        return f"{name.strip()!r} is what an automated actor is called, not who it is"
-    return ""
+    """Why ``name`` cannot be the name of a person, or ``""`` if it can (the shared rule)."""
+    return actor_name_problem(name)
 
 
 def _require_human(actor: Actor, what: str) -> None:

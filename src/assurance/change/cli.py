@@ -68,6 +68,7 @@ from assurance.change.service import (
     waive_reverification,
 )
 from assurance.change.store import CASE_KINDS, CaseConflictError, CaseStore, ChainBrokenError
+from assurance.core.actor_names import actor_grammar_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
@@ -87,6 +88,10 @@ EXIT_NOT_CLEARED = 3
 
 
 def _actor(name: str, role: str) -> Actor:
+    problem = actor_grammar_problem(name)
+    if problem:
+        raise CaseTransitionError(
+            f"--actor {name[:60]!r} cannot be recorded: {problem}. Nothing was recorded.")
     return Actor(identifier=name or "operator", role=role, kind="person" if name else "automation")
 
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from assurance.core.errors import AssuranceError
+from assurance.ops.formats import FORMATS
 
 __all__ = ["NotifyCfg", "OpsConfig", "OpsConfigError", "SCHEMA", "load_config"]
 
@@ -60,7 +61,11 @@ class AttestCfg:
 
 @dataclass(frozen=True)
 class NotifyCfg:
-    """One outbound webhook. ``secret_env`` / ``headers_env`` are NAMES; values are read at send."""
+    """One outbound webhook. ``secret_env`` / ``headers_env`` are NAMES; values are read at send.
+
+    For ``format == "pagerduty"`` ``secret_env`` names the variable holding the PagerDuty routing
+    key (its credential) and no HMAC signature is sent; for json/slack/teams it is the HMAC key.
+    """
 
     name: str
     url: str
@@ -68,7 +73,7 @@ class NotifyCfg:
     secret_env: str
     on: tuple[str, ...] = ("flagged", "degraded")
     headers_env: str | None = None
-    format: str = "json"
+    format: str = "json"      # json | slack | teams | pagerduty (see assurance.ops.formats)
 
     def __repr__(self) -> str:       # the URL path can itself be a bearer token (chat webhooks)
         return f"NotifyCfg(name={self.name!r}, host={self.allow_host!r})"
@@ -200,13 +205,16 @@ def _notify(raw: Any) -> tuple[NotifyCfg, ...]:
                 or not all(isinstance(o, str) and o in _NOTIFY_ON for o in on)):
             raise _fail(f"notify[{i}].on must be a non-empty list drawn from "
                         f"{', '.join(_NOTIFY_ON)}")
-        if n.get("format", "json") != "json":
-            raise _fail(f"notify[{i}].format must be 'json' (no vendor format is built)")
+        fmt = n.get("format", "json")
+        if not isinstance(fmt, str) or fmt not in FORMATS:
+            raise _fail(f"notify[{i}].format must be one of {', '.join(FORMATS)} "
+                        "(servicenow_json is not built); the value was not shown")
         out.append(NotifyCfg(
             name=name, url=url, allow_host=allow, on=tuple(o for o in _NOTIFY_ON if o in on),
             secret_env=_notify_env(n["secret_env"], f"notify[{i}].secret_env"),
             headers_env=_notify_env(n["headers_env"], f"notify[{i}].headers_env")
-            if n.get("headers_env") is not None else None))
+            if n.get("headers_env") is not None else None,
+            format=fmt))
     return tuple(out)
 
 

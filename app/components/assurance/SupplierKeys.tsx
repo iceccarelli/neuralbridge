@@ -237,7 +237,7 @@ export default function SupplierKeys({
               key): it can be inspected, and nothing automated may follow from it.
             </p>
           ) : (
-            <div className="aw-scroll">
+            <div className="aw-scroll" tabIndex={0} role="region" aria-label="Pinned supplier keys table, scrolls sideways">
               <table className="aw-table" data-testid="pins-table">
                 <thead>
                   <tr>

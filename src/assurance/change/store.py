@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from assurance.core.actor_names import actor_grammar_problem
 from assurance.core.errors import AssuranceError, LedgerConflictError, LedgerIntegrityError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from assurance.core.identity import format_utc, utc_now
@@ -209,6 +210,14 @@ class CaseStore:
         # ASSURANCE_CHAIN_RECHECK_SECONDS to a deleted or edited old record, and
         # that is not a window in which automation may clear a case. Writes that
         # cannot clear a case keep the cheap incremental check.
+        # Whatever the surface, a sealed actor identifier cannot carry the server's
+        # attribution grammar (`attribution=`, `operator=`, `;`, parentheses) or invisible
+        # characters: a reader must be able to believe those tokens came from the server.
+        problem = actor_grammar_problem(actor.identifier)
+        if problem:
+            raise CaseStoreError(
+                f"actor {actor.identifier[:60]!r} cannot be recorded: {problem}. "
+                "Nothing was written.")
         self.require_intact(full=kind == DECISION_KIND or case.status in (
             CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED))
         if case.status in (CaseStatus.READY_TO_CLOSE, CaseStatus.CLOSED):

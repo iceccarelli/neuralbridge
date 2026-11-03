@@ -187,6 +187,9 @@ def run_check(cfg: OpsConfig) -> dict[str, Any]:
             add(f"{label}.url_secret", "warn", "the URL path or query holds a long token-like "
                 "part: the URL itself may be a bearer secret. Keep the config file private "
                 "(mode 0600); it is never printed or recorded")
+        from assurance.ops import formats as _formats
+
+        add(f"{label}.format", "ok", f"format {t.format}: {_formats.body_shape(t.format)}")
         add(f"{label}.on", "ok", "tells a person when a cycle is " + " or ".join(t.on))
         env_names = [(t.secret_env, "secret_env")] + (
             [(t.headers_env, "headers_env")] if t.headers_env else [])
@@ -195,9 +198,13 @@ def run_check(cfg: OpsConfig) -> dict[str, Any]:
             if not value:
                 add(f"{label}.{what}", "warn", f"${env_name} is not set in this environment: "
                     "this target would be SKIPPED ('secret_env not set'), not sent")
-            elif what == "secret_env" and len(value.encode("utf-8")) < 16:
+            elif (what == "secret_env" and t.format != "pagerduty"
+                  and len(value.encode("utf-8")) < 16):
                 add(f"{label}.{what}", "warn", f"${env_name} is set but shorter than 16 bytes "
                     "(the value is not shown)")
+            elif what == "secret_env" and t.format == "pagerduty" and len(value) != 32:
+                add(f"{label}.{what}", "warn", f"${env_name} is set but is not 32 characters, "
+                    "the length of a PagerDuty Events v2 routing key (the value is not shown)")
             else:
                 add(f"{label}.{what}", "ok", f"${env_name} is set (value not shown)")
         if t.headers_env and os.environ.get(t.headers_env):

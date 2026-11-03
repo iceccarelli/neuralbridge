@@ -58,6 +58,7 @@ from assurance.machinery.enrol import (
     CONFIGURATION_DIFFERS,
     ENROLLED,
     IDENTITY_CONFLICT,
+    BatchChain,
     enrol_machine,
     require_person,
 )
@@ -649,7 +650,7 @@ def _short(text: str) -> str:
 def _enrol_all(
     ledger: EvidenceLedger, parsed: Iterable[tuple[int, InventoryRow | str]], *, actor: Actor,
     source_system: str, export_date: date | None, file_sha256: str,
-    functions: tuple[FunctionDecl, ...],
+    functions: tuple[FunctionDecl, ...], chain: BatchChain,
 ) -> list[RowOutcome]:
     outcomes: list[RowOutcome] = []
     seen: dict[str, int] = {}
@@ -668,7 +669,8 @@ def _enrol_all(
             manifest = _manifest_for(item, actor=actor, source_system=source_system,
                                      export_date=export_date, file_sha256=file_sha256,
                                      functions=functions)
-            receipt = enrol_machine(ledger, manifest, actor=actor, owner=item.owner or None)
+            receipt = enrol_machine(ledger, manifest, actor=actor, owner=item.owner or None,
+                                    batch_chain=chain)
         except (AssuranceError, ValueError, KeyError, TypeError) as exc:
             outcomes.append(RowOutcome(number, REJECTED, machine=key, reason=_short(exc),
                                        notes=item.notes))
@@ -708,11 +710,18 @@ def _seal_batch(ledger: EvidenceLedger, *, actor: Actor, source_system: str, exp
     return appended.seq, evidence.content_hash
 
 
-def _verified(ledger: EvidenceLedger) -> None:
-    ok, problems = ledger.verify_chain()
-    if not ok:
+def _begin(ledger: EvidenceLedger) -> BatchChain:
+    """The up-front FULL walk. Nothing is written when the chain does not verify."""
+    return BatchChain.begin(ledger, error=LedgerChainUnverifiedError, nothing="imported")
+
+
+def _end(chain: BatchChain) -> None:
+    """The closing FULL walk, after the last row and the batch record."""
+    problems = chain.finish()
+    if problems:
         raise LedgerChainUnverifiedError(
-            "the ledger chain does not verify, so nothing was imported: "
+            "the ledger chain does not verify after the import, so the import is not "
+            "relied on: rows written before the break may be in the ledger. "
             + "; ".join(problems[:3]))
 
 
@@ -723,9 +732,10 @@ def _run(
     rows_read: int, not_processed: int, dry_run: bool, channel: str,
 ) -> ImportReport:
     ledger = make_ledger()
-    _verified(ledger)
+    chain = _begin(ledger)
     outcomes = _enrol_all(ledger, parsed, actor=actor, source_system=source_system,
-                          export_date=export_date, file_sha256=file_sha256, functions=functions)
+                          export_date=export_date, file_sha256=file_sha256, functions=functions,
+                          chain=chain)
     entry, chash = 0, ""
     if not dry_run and any(o.status == ENROLLED for o in outcomes):
         entry, chash = _seal_batch(
@@ -733,6 +743,7 @@ def _run(
             export_date=export_date.isoformat() if export_date else "",
             file_sha256=file_sha256, mapping_sha256=mapping_sha256, channel=channel,
             rows_read=rows_read, not_processed=not_processed, outcomes=outcomes)
+    _end(chain)
     return ImportReport(
         dry_run=dry_run, source_system=source_system,
         export_date=export_date.isoformat() if export_date else "not declared",

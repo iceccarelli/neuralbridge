@@ -86,6 +86,14 @@ CREATE INDEX IF NOT EXISTS chain_by_kind    ON chain (kind, seq);
 CREATE INDEX IF NOT EXISTS chain_by_content ON chain (content_hash);
 """
 
+#: ``kind`` in a query that already pins ``subject``. SQLite (no statistics here) otherwise
+#: picks ``chain_by_kind`` for ``subject = ? AND kind = ?`` and scans every row of that kind in
+#: the ledger: one scan per machine, so a fleet read or an enrolment was O(machines) per call.
+#: The unary ``+`` stops the planner using an index on the column, so the existing
+#: ``chain_by_subject`` index answers it. Same rows, same order; no schema change, so older
+#: ledgers need no migration and are never written to by a read.
+_KIND_AFTER_SUBJECT = "+kind"
+
 
 class AnchorContradictsLedgerError(LedgerIntegrityError):
     """A signed anchor offered at export does not match this ledger.
@@ -300,7 +308,7 @@ class EvidenceLedger:
                 sql = "SELECT COALESCE(MAX(seq), 0) FROM chain WHERE subject = ?"
                 args: list[Any] = [subject]
                 if expect_kinds:
-                    sql += f" AND kind IN ({','.join('?' * len(expect_kinds))})"
+                    sql += f" AND {_KIND_AFTER_SUBJECT} IN ({','.join('?' * len(expect_kinds))})"
                     args.extend(expect_kinds)
                 current = int(db.execute(sql, args).fetchone()[0])
                 if current != expect_subject_head:
@@ -369,7 +377,7 @@ class EvidenceLedger:
             clauses.append("subject = ?")
             args.append(subject)
         if kind is not None:
-            clauses.append("kind = ?")
+            clauses.append(f"{_KIND_AFTER_SUBJECT} = ?" if subject is not None else "kind = ?")
             args.append(kind)
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -413,7 +421,7 @@ class EvidenceLedger:
         db = self._connect()
         try:
             where, args = (("kind = ?", [kind]) if subject is None
-                           else ("subject = ? AND kind = ?", [subject, kind]))
+                           else (f"subject = ? AND {_KIND_AFTER_SUBJECT} = ?", [subject, kind]))
             for row in db.execute(f"SELECT * FROM chain WHERE {where} ORDER BY seq", args):
                 try:
                     readable.append(self._row_to_entry(row))
@@ -555,13 +563,38 @@ class EvidenceLedger:
         a clean walk becomes the new verified head, a failing one forgets it, so a
         cache can never hold a pass that a full walk has since contradicted.
         """
+        problems, _, _ = self.verify_chain_head()
+        return (not problems, problems)
+
+    def verify_chain_head(self) -> tuple[list[str], int, str]:
+        """:meth:`verify_chain`, also returning the head the walk itself read.
+
+        ``(problems, head_seq, head_link_hash)``. The head is the last record this very
+        walk verified, so a caller that goes on to check only what is appended after it
+        (see :meth:`verify_since`) leaves no unverified gap. Same full walk, same effect
+        on what :meth:`verify_cached` believes, as :meth:`verify_chain`.
+        """
         problems, head_seq, head_link = self.verify_full()
         key = chain_cache.identity(self.path)
         if problems:
             chain_cache.drop(key)
         else:
             chain_cache.remember(key, head_seq, head_link, chain_cache.now())
-        return (not problems, problems)
+        return problems, head_seq, head_link
+
+    def verify_since(self, seq: int, link_hash: str) -> tuple[list[str], int, str]:
+        """Re-check the record at a verified head and verify everything appended after it.
+
+        ``(problems, head_seq, head_link_hash)``, O(records appended since). It does NOT
+        re-walk older records, so it is for a caller that has itself just done a full
+        walk (:meth:`verify_chain_head`) and will do another before it relies on the
+        result (a batch writer). It is not a substitute for :meth:`verify_chain`, and it
+        does not touch the verified-head cache.
+        """
+        try:
+            return self._verify_since(seq, link_hash)
+        except ValueError as exc:
+            return [_UNREADABLE_ROW.format(exc=exc)], 0, GENESIS
 
     def verify_report(
         self, *, anchor: Mapping[str, Any] | None = None,
