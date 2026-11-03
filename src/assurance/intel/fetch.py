@@ -4,6 +4,13 @@ Every path ends in :meth:`IntelStore.append`: a good feed, a malformed one, a no
 oversized body and a transport failure each leave one row with the sha256 of what was seen.
 A rejected observation changes nothing else (no blob, no baseline). No network client is
 imported here; the transport is injected.
+
+Conditional GET: when the transport offers ``get_conditional`` and the store holds validators
+(``ETag`` / ``Last-Modified``) for the series' newest accepted body, that body still re-hashes,
+the request carries ``If-None-Match`` / ``If-Modified-Since``. A ``304`` is then recorded as an
+``unchanged`` re-observation (time of the check, no download, no new blob). A ``304`` nobody
+asked for, or one the store cannot back with an intact body, is ``rejected``: unknown, never
+"unchanged". A server that ignores validators answers 200 and is handled as before.
 """
 
 from __future__ import annotations
@@ -20,7 +27,12 @@ from typing import Any
 from assurance.core.identity import utc_now
 from assurance.intel.parsers import INTERIM_REFUSAL, PARSER_VERSION, FeedRejected, parser_for
 from assurance.intel.sources import SOURCES, Source, resolve_source
-from assurance.intel.store import IntelStore, Observation
+from assurance.intel.store import (
+    IntelStore,
+    Observation,
+    Validators,
+    clean_validators,
+)
 from assurance.intel.transport import (
     HostNotAllowed,
     RedirectRefused,
@@ -70,7 +82,7 @@ def ingest_bytes(
     store: IntelStore, source_id: str, raw: bytes, *, url: str, locator: str, via: str,
     http_status: int | None, retrieved_at: datetime | None = None, max_bytes: int | None = None,
     reason_prefix: str = "", provenance: dict[str, Any] | None = None,
-    allow_interim: bool = False,
+    allow_interim: bool = False, validators: Validators | None = None,
 ) -> Observation:
     """Parse ``raw`` and record the outcome, accepted or rejected.
 
@@ -102,7 +114,7 @@ def ingest_bytes(
         source=source_id, url=url, locator=locator, via=via, retrieved_at=when,
         http_status=http_status, byte_length=len(raw), sha256=sha,
         parser_version=PARSER_VERSION, parse_result="ok", reason="", raw=raw, parsed=parsed,
-        provenance=provenance)
+        provenance=provenance, validators=validators)
     log.info("intel: %s %s seq=%d", source_id, obs.disposition, obs.seq)
     return obs
 
@@ -142,8 +154,17 @@ def fetch(
     if src.url and not url.startswith(src.url):
         raise ValueError(f"{url!r} is not a {src.id} URL")
     when = clock()
+    conditional = getattr(transport, "get_conditional", None)
+    sent = store.validators_for(src.id, url) if conditional is not None else None
+    sent_headers: Mapping[str, str] = headers or {}
+    if sent:
+        sent_headers = RequestHeaders({**(headers or {}), **sent.request_headers()})
+    received: Mapping[str, str] = {}
     try:
-        status, raw = transport.get(url, headers or {}, timeout)
+        if conditional is not None:
+            status, raw, received = conditional(url, sent_headers, timeout)
+        else:
+            status, raw = transport.get(url, sent_headers, timeout)
     except ResponseTooLarge as exc:
         return _rejected(store, src, url, when, exc.status, exc.partial,
                          f"oversized: the body exceeded the size cap ({exc}); the sha256 "
@@ -153,13 +174,23 @@ def fetch(
         return _rejected(store, src, url, when, 0, b"", f"transport_error: {exc}",
                          _settle(provenance, permanent=isinstance(
                              exc, (HostNotAllowed, RedirectRefused))))
+    if status == 304 and sent:
+        obs = store.append_not_modified(
+            source=src.id, url=url, locator=url, retrieved_at=when, sent=sent,
+            received=clean_validators(received) or None, provenance=provenance)
+        log.info("intel: %s %s seq=%d (304)", src.id, obs.disposition, obs.seq)
+        return obs
     if status != 200:
         permanent = 400 <= status < 500 and status != 429
-        return _rejected(store, src, url, when, status, raw, f"http_status: {status}",
+        reason = f"http_status: {status}"
+        if status == 304:
+            reason += " (not requested: no validator was sent, so nothing is confirmed)"
+        return _rejected(store, src, url, when, status, raw, reason,
                          _settle(provenance, permanent=permanent))
     return ingest_bytes(store, src.id, raw, url=url, locator=url, via="network",
                         http_status=status, retrieved_at=when, max_bytes=max_bytes,
-                        provenance=provenance, allow_interim=allow_interim)
+                        provenance=provenance, allow_interim=allow_interim,
+                        validators=clean_validators(received))
 
 
 def _settle(provenance: dict[str, Any] | None, *, permanent: bool) -> dict[str, Any] | None:

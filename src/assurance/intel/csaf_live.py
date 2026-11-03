@@ -28,6 +28,16 @@ run, newest first, and says how many ("N more not fetched"); it never silently t
 transient failure (transport error, 429, 5xx) is not settled and is retried next run; a
 malformed or oversized document is settled until the provider lists it again as changed.
 
+Conditional GET
+---------------
+When the transport offers ``get_conditional``, each document request carries the validators
+(``ETag`` / ``Last-Modified``) stored with that document's newest accepted body, and each
+listing resource (provider-metadata.json, changes.csv, index.txt, a ROLIE feed) carries those
+of its last stored copy. A ``304`` for a document is an ``unchanged`` observation dated now; a
+``304`` for a listing reuses the stored copy after re-hashing it. A ``304`` with no intact
+stored body is a refusal / ``rejected`` row (unknown), never "unchanged". A server that
+ignores validators simply answers 200.
+
 Bounds: ``max_documents`` fetches, ``max_total_bytes`` across everything fetched (checked
 before each request, so the overshoot is at most one document), a per-document byte cap, and
 a stop on 429/503 (the provider asked us to slow down; the rest is reported as not fetched).
@@ -39,7 +49,7 @@ import csv
 import io
 import json
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -48,7 +58,7 @@ from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.intel.fetch import RequestHeaders, build_headers, fetch
 from assurance.intel.parsers import INTERIM_REFUSAL
 from assurance.intel.sources import SOURCES
-from assurance.intel.store import IntelStore, Observation
+from assurance.intel.store import IntelStore, IntelStoreError, Observation, clean_validators
 from assurance.intel.transport import Transport, TransportError
 
 __all__ = ["CsafRefusal", "CsafRunReport", "DEFAULT_MAX_DOCUMENTS", "DEFAULT_MAX_TOTAL_BYTES",
@@ -172,7 +182,7 @@ def refresh_documents(
                     provenance={"provider": f"direct:{hosts[i]}", "listed_at": "",
                                 "mode": "direct-url"}, allow_interim=allow_interim)
         report.observations.append(obs)
-        report.bytes_fetched += obs.byte_length
+        report.bytes_fetched += 0 if obs.http_status == 304 else obs.byte_length  # 304: none
         if obs.http_status in _STOP_STATUSES:
             report.not_fetched = len(urls) - i - 1
             report.stopped = f"provider answered {obs.http_status}"
@@ -188,12 +198,33 @@ class _Entry:
     listed_at: str      # normalised UTC, or "" when the provider lists no time
 
 
-def _get(transport: Transport, url: str, headers: RequestHeaders, timeout: float,
-         cap: int, what: str, report: CsafRunReport) -> bytes:
+def _get(store: IntelStore, transport: Transport, url: str, headers: RequestHeaders,
+         timeout: float, cap: int, what: str, report: CsafRunReport,
+         clock: Callable[[], datetime]) -> bytes:
+    conditional = getattr(transport, "get_conditional", None)
+    state = store.listing_state(url) if conditional is not None else None
+    sent = state.validators if state is not None and state.validators else None
+    sent_headers = RequestHeaders({**headers, **sent.request_headers()}) if sent else headers
+    received: Mapping[str, str] = {}
     try:
-        status, body = transport.get(url, headers, timeout)
+        if conditional is not None:
+            status, body, received = conditional(url, sent_headers, timeout)
+        else:
+            status, body = transport.get(url, sent_headers, timeout)
     except TransportError as exc:
         raise CsafRefusal(f"{what} ({_safe_label(url)}) could not be fetched: {exc}") from exc
+    if status == 304 and sent is not None:
+        try:
+            body = store.record_listing_not_modified(
+                url, retrieved_at=clock(), sent=sent,
+                received=clean_validators(received) or None)
+        except IntelStoreError as exc:
+            raise CsafRefusal(f"{what} ({_safe_label(url)}) answered 304 but the stored copy "
+                              f"cannot back it ({exc}); the state is unknown, not unchanged"
+                              ) from exc
+        report.index_status[what] = {"url": _safe_label(url), "http_status": 304, "bytes": 0,
+                                     "not_modified": True}
+        return body
     report.bytes_fetched += len(body)
     report.index_status[what] = {"url": _safe_label(url), "http_status": status,
                                  "bytes": len(body)}
@@ -202,6 +233,9 @@ def _get(transport: Transport, url: str, headers: RequestHeaders, timeout: float
     if len(body) > cap:
         raise CsafRefusal(f"{what} ({_safe_label(url)}) is {len(body)} bytes, over the "
                           f"{cap}-byte cap")
+    if conditional is not None:
+        store.record_listing(url, retrieved_at=clock(), raw=body,
+                             validators=clean_validators(received))
     return body
 
 
@@ -348,8 +382,8 @@ def refresh_provider(
     report = CsafRunReport(provider=_safe_label(provider))
     headers = build_headers(SOURCES["csaf"])
 
-    meta_raw = _get(transport, metadata_url, headers, timeout, MAX_METADATA_BYTES,
-                    "provider-metadata.json", report)
+    meta_raw = _get(store, transport, metadata_url, headers, timeout, MAX_METADATA_BYTES,
+                    "provider-metadata.json", report, clock)
     directories, feeds, publisher = _directory_urls(meta_raw, allowed)
 
     entries: list[_Entry] = []
@@ -358,8 +392,8 @@ def refresh_provider(
     for directory in directories:
         for kind in ("changes.csv", "index.txt"):
             try:
-                body = _get(transport, f"{directory}/{kind}", headers, timeout,
-                            MAX_INDEX_BYTES, kind, report)
+                body = _get(store, transport, f"{directory}/{kind}", headers, timeout,
+                            MAX_INDEX_BYTES, kind, report, clock)
             except CsafRefusal as exc:
                 last_error = str(exc)
                 continue
@@ -371,8 +405,8 @@ def refresh_provider(
     if not report.index_kind:
         for directory in feeds:
             try:
-                body = _get(transport, directory, headers, timeout, MAX_ROLIE_BYTES,
-                            "rolie-feed", report)
+                body = _get(store, transport, directory, headers, timeout, MAX_ROLIE_BYTES,
+                            "rolie-feed", report, clock)
                 entries = _rolie_entries(body, report, allowed)
             except CsafRefusal as exc:
                 last_error = str(exc)
@@ -409,7 +443,7 @@ def refresh_provider(
                                 "mode": "provider-metadata", "directory": _safe_label(directory),
                                 "publisher": publisher}, allow_interim=allow_interim)
         report.observations.append(obs)
-        report.bytes_fetched += obs.byte_length
+        report.bytes_fetched += 0 if obs.http_status == 304 else obs.byte_length  # 304: none
         if obs.http_status in _STOP_STATUSES:
             report.not_fetched = len(pending) - i - 1
             report.stopped = f"provider answered {obs.http_status}; stopped"

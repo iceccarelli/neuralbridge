@@ -18,6 +18,10 @@ What it enforces, at the network boundary, before and during every request:
   waited out: the last response is returned so the caller records it;
 * ``post`` (the operator's outbound notifications) obeys every rule above and, in addition,
   follows NO redirect at all (a POST body is never replayed elsewhere);
+* ``get_conditional`` is ``get`` that also returns the response's ``ETag`` / ``Last-Modified``
+  (and nothing else from the headers). A ``304`` is a normal answer there, not a redirect. A
+  validator sent with the request travels only where the request goes: a redirect to another
+  host is refused before it is followed, so no validator is ever replayed cross-origin;
 * headers are never logged or put in an exception message.
 """
 
@@ -84,6 +88,18 @@ def parse_retry_after(value: str | None, *, now: Callable[[], float] = time.time
     return max(0.0, when.timestamp() - now())
 
 
+def _validator_headers(headers: Any) -> dict[str, str]:
+    """Only ``etag`` and ``last-modified`` of a response, lower-case keys, if present."""
+    out: dict[str, str] = {}
+    if headers is None:
+        return out
+    for name in ("ETag", "Last-Modified"):
+        value = headers.get(name)
+        if isinstance(value, str) and value:
+            out[name.lower()] = value
+    return out
+
+
 class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
     max_redirections = MAX_REDIRECTS
 
@@ -135,31 +151,39 @@ class UrllibTransport:
         return f"UrllibTransport(hosts={sorted(self.allowed_hosts)!r})"
 
     def get(self, url: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
+        status, body, _ = self._request("GET", url, headers, None, timeout)
+        return status, body
+
+    def get_conditional(self, url: str, headers: Mapping[str, str], timeout: float
+                        ) -> tuple[int, bytes, Mapping[str, str]]:
+        """``get`` plus the response's ``etag`` / ``last-modified`` (only those)."""
         return self._request("GET", url, headers, None, timeout)
 
     def post(self, url: str, headers: Mapping[str, str], body: bytes, timeout: float
              ) -> tuple[int, bytes]:
         """POST ``body`` as-is. Same host rules, retries and size cap; never follows a redirect."""
-        return self._request("POST", url, headers, body, timeout)
+        status, resp, _ = self._request("POST", url, headers, body, timeout)
+        return status, resp
 
     def _request(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
-                 timeout: float) -> tuple[int, bytes]:
+                 timeout: float) -> tuple[int, bytes, Mapping[str, str]]:
         check_url(url, self.allowed_hosts)
         wire = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity", **dict(headers)}
         attempt = 0
         while True:
-            status, resp, retry_after, failure = self._once(url, wire, timeout, method, body)
+            status, resp, retry_after, failure, seen = self._once(
+                url, wire, timeout, method, body)
             if failure is None and status not in RETRY_STATUSES:
-                return status, resp
+                return status, resp, seen
             if attempt >= self.retries:
                 if failure is not None:
                     raise TransportError(f"request failed after {attempt + 1} attempts: "
                                          f"{failure}")
-                return status, resp
+                return status, resp, seen
             delay = self.backoff * (2 ** attempt)
             if retry_after is not None:
                 if retry_after > self.max_wait:
-                    return status, resp           # told to wait longer than we will
+                    return status, resp, seen     # told to wait longer than we will
                 delay = retry_after
             log.info("intel: retry %d for status %s in %.1fs", attempt + 1,
                      status if failure is None else "error", delay)
@@ -167,7 +191,8 @@ class UrllibTransport:
             attempt += 1
 
     def _once(self, url: str, headers: dict[str, str], timeout: float, method: str = "GET",
-              body: bytes | None = None) -> tuple[int, bytes, float | None, str | None]:
+              body: bytes | None = None
+              ) -> tuple[int, bytes, float | None, str | None, dict[str, str]]:
         request = urllib.request.Request(  # noqa: S310
             url, data=body, headers=headers, method=method)
         opener = self._opener if method == "GET" else self._post_opener
@@ -177,21 +202,23 @@ class UrllibTransport:
             raise
         except urllib.error.HTTPError as exc:
             try:
-                if 300 <= exc.code < 400:
+                if 300 <= exc.code < 400 and exc.code != 304:
                     raise RedirectRefused(f"redirect (status {exc.code}) was not followed")
                 return (exc.code, self._read(exc, exc.code),
-                        parse_retry_after(exc.headers.get("Retry-After")), None)
+                        parse_retry_after(exc.headers.get("Retry-After")), None,
+                        _validator_headers(exc.headers))
             finally:
                 exc.close()
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, RedirectRefused):
                 raise exc.reason from None
-            return 0, b"", None, f"{type(exc.reason).__name__}"
+            return 0, b"", None, f"{type(exc.reason).__name__}", {}
         except (TimeoutError, OSError) as exc:
-            return 0, b"", None, type(exc).__name__
+            return 0, b"", None, type(exc).__name__, {}
         with response:
             status = int(getattr(response, "status", 200))
-            return status, self._read(response, status), None, None
+            return (status, self._read(response, status), None, None,
+                    _validator_headers(response.headers))
 
     def _read(self, response: Any, status: int) -> bytes:
         declared = response.headers.get("Content-Length") if response.headers else None

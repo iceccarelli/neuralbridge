@@ -143,6 +143,47 @@ By default these are refused and recorded `rejected` with the exact reason
   named person and the unsigned-import override. The watch has no such option: it only reads
   the store.
 
-The tests use a contract fixture (an in-memory provider on `csaf.example.invalid`); they are not
-live integration. Each fetch of a ROLIE provider re-downloads its whole feed (no conditional
-GET yet).
+### Conditional GET (`ETag` / `Last-Modified`, `304`)
+
+Every live fetch (KEV, NVD, EPSS, CSAF documents, and the CSAF provider-metadata /
+`changes.csv` / `index.txt` / ROLIE listings) is a conditional request when the store holds
+validators for it:
+
+* **What is stored.** The `ETag` and `Last-Modified` a `200` carried are kept in an append-only
+  `validators` table, keyed to that observation (CSAF listings, whose bodies are not
+  observations, get their own append-only `listings` table). Existing stores gain the tables
+  the next time a writer opens them; nothing is rewritten. A value with control or non-ASCII
+  characters, over 512 characters, or a `Last-Modified` that is not an HTTP date is not stored.
+* **What is sent.** `If-None-Match` / `If-Modified-Since` from the newest *accepted* observation
+  of that exact (source, URL), and only while its stored blob still re-hashes to the recorded
+  sha256. A damaged or edited blob drops its validators: the next request is unconditional.
+  A failed or rejected fetch in between does not discard them. A `200` that carries no
+  validators clears them for the next request (they described older bytes).
+* **A `304`** is recorded as one `unchanged` observation with `http_status` 304, the stored
+  sha256, byte length and counts, the time of the check and a reason beginning `not_modified`.
+  So `retrieved_at` is honest ("checked and confirmed current at T"), no body is downloaded, no
+  blob is written or re-hashed as new, and it is not a downstream event. The write transaction
+  re-hashes the stored blob and requires the validators sent to be the recorded ones.
+* **Unknown is not unchanged.** A `304` with no stored accepted body, a blob that no longer
+  hashes, or validators that are not the recorded ones is recorded `rejected` (`http_status`
+  304, reason `not_modified_unusable: ...; the answer is unknown`) and the baseline is
+  untouched. A `304` that was never asked for (no validator was sent) is `rejected` too. For a
+  CSAF listing the same cases stop the run with a refusal.
+* **Servers that ignore validators** answer `200` and behave exactly as before (identical bytes
+  are `unchanged`, `http_status` 200).
+* **Transport.** `get_conditional` is an optional second method on the transport; `get` alone
+  stays valid and then no validator is ever sent. The urllib transport returns only `ETag` and
+  `Last-Modified` from the response and treats `304` as an answer, not a redirect; every other
+  3xx is still refused. Redirects are unchanged: same host over https only, so a validator is
+  never replayed to another host. The offline kit is unchanged: no socket, and `ingest`/`history`
+  never touch this path.
+* **Provider runs.** `bytes` in the run summary counts only bytes actually downloaded; a `304`
+  listing prints `(not modified; stored copy reused)`. A provider that lists no times
+  (`index.txt`) is still re-checked per document, but a `304` costs no download.
+* **Limits.** A blob that fails its re-hash is not repaired (blobs are append-only): that
+  series is fetched in full each time until its bytes change. This is a bandwidth saving and a
+  freshness record. It does not make a feed signed or the observation attested.
+
+The tests use a contract fixture (an in-memory provider on `csaf.example.invalid`) and a
+scripted opener for the urllib transport; they are not live integration, and no real server's
+handling of validators has been observed by them.

@@ -121,3 +121,48 @@ def csaf_doc_with_status(tracking_id: str, status: str, **kw: str) -> dict:
     doc = csaf_doc(tracking_id, **kw)
     doc["document"]["tracking"]["status"] = status
     return doc
+
+
+class ConditionalFixtureTransport:
+    """CONTRACT FIXTURE transport that honours (or ignores) HTTP validators. No socket.
+
+    ``resources`` maps url -> (body, etag, last_modified). With ``honour=True`` it answers 304
+    when the request's ``If-None-Match`` / ``If-Modified-Since`` matches, as a compliant server
+    would; with ``honour=False`` it always answers 200 (a server that ignores validators).
+    ``force_304`` answers 304 to everything (a misbehaving server). Every request's headers
+    are recorded in ``calls``.
+    """
+
+    label = "contract-fixture (not live integration)"
+
+    def __init__(self, resources: Mapping[str, tuple[bytes, str, str]], *, honour: bool = True,
+                 force_304: bool = False) -> None:
+        self.resources = dict(resources)
+        self.honour = honour
+        self.force_304 = force_304
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def get_conditional(self, url: str, headers: Mapping[str, str], timeout: float
+                        ) -> tuple[int, bytes, Mapping[str, str]]:
+        self.calls.append((url, dict(headers)))
+        if url not in self.resources:
+            raise TransportError("no recorded response for this URL")
+        body, etag, last_modified = self.resources[url]
+        sent = dict(headers)
+        out = {k: v for k, v in (("etag", etag), ("last-modified", last_modified)) if v}
+        match = (etag and sent.get("If-None-Match") == etag) or (
+            not etag and last_modified and sent.get("If-Modified-Since") == last_modified)
+        if self.force_304 or (self.honour and match):
+            return 304, b"", out
+        return 200, body, out
+
+
+class PlainFixtureTransport:
+    """A transport with ``get`` only (no ``get_conditional``): never sent a validator."""
+
+    def __init__(self, inner: ConditionalFixtureTransport) -> None:
+        self.inner = inner
+
+    def get(self, url: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
+        status, body, _ = self.inner.get_conditional(url, headers, timeout)
+        return status, body

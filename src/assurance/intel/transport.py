@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
-__all__ = ["HostNotAllowed", "PostTransport", "RedirectRefused", "ResponseTooLarge",
+__all__ = ["ConditionalTransport", "HostNotAllowed", "PostTransport", "RedirectRefused", "ResponseTooLarge",
            "Transport", "TransportError"]
 
 
@@ -44,6 +44,21 @@ class Transport(Protocol):
     """
 
     def get(self, url: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
+        ...
+
+
+class ConditionalTransport(Protocol):
+    """Optional second method for conditional GET: ``get_conditional(url, headers, timeout)``.
+
+    Returns ``(http status, raw body bytes, validators)`` where ``validators`` holds only the
+    response's ``etag`` and ``last-modified`` values (lower-case keys, when present), never
+    any other header. A transport without it is still a valid :class:`Transport`: the caller
+    then sends no ``If-None-Match`` / ``If-Modified-Since`` and downloads in full. Everything
+    else (status returned not raised, no cross-origin redirect) is as for ``get``.
+    """
+
+    def get_conditional(self, url: str, headers: Mapping[str, str], timeout: float
+                        ) -> tuple[int, bytes, Mapping[str, str]]:
         ...
 
 

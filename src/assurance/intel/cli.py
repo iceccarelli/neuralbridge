@@ -206,7 +206,9 @@ def _refresh_csaf(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_COULD_NOT_RUN
     for what, info in report.index_status.items():
-        print(f"index {what}: http={info['http_status']} bytes={info['bytes']} {info['url']}")
+        note = " (not modified; stored copy reused)" if info.get("not_modified") else ""
+        print(f"index {what}: http={info['http_status']} bytes={info['bytes']} "
+              f"{info['url']}{note}")
     for o in report.observations:
         print(_line(o))
     c = report.counts()
