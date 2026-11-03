@@ -285,6 +285,25 @@ class PayloadValidation:
         return "\n".join(lines)
 
 
+def _has_content(value: Any) -> bool:
+    """Whether a payload value says anything.
+
+    A string is content only if it has a non-whitespace character; a list, tuple, set or dict
+    only if at least one element (dict: one value) is itself content, so ``[" "]`` and
+    ``{"a": ""}`` are empty. ``0`` and ``False`` are content: no field in the specification
+    is numeric or boolean, but a value that was deliberately supplied is not "absent".
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_content(v) for v in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_has_content(v) for v in value)
+    return True
+
+
 def validate_payload(
     payload: dict[str, Any], track: Track, stage: Stage
 ) -> PayloadValidation:
@@ -303,7 +322,7 @@ def validate_payload(
     for spec in applicable:
         requirement = spec.requirement_at(stage)
         value = payload.get(spec.name)
-        present = value not in (None, "", [], ())
+        present = _has_content(value)
 
         if requirement.must_be_present and not present:
             issues.append(

@@ -20,7 +20,7 @@ from assurance.security.art14 import Art14Register
 from assurance.security.art14.model import CASE_KIND
 
 ACTOR = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
-KEY = "test-key-do-not-ship"
+KEY = "test-key-do-not-ship-0123456789abcdef0123456789"
 AWARE = "2026-09-19T06:30:00Z"
 
 
@@ -174,16 +174,38 @@ def test_a_complete_filing_is_201_and_an_empty_one_is_recorded_but_not_on_time(e
 
 
 # -- a record whose deadlines cannot be computed ----------------------------------------
-def test_the_last_computable_century_is_still_accepted(env):
+def test_the_last_computable_century_is_refused_over_the_api_as_future_dated(env):
+    # Was "still accepted" before workstream L: awareness in 2099 is in the future, and a
+    # fact that has not happened cannot start a legal clock (409, nothing written). The
+    # arithmetic limit itself is exercised at the domain, with an injected clock, below.
     client, _ = env
     assert client.post("/v1/cases/H1/signal", json=BODIES["signal"]).status_code == 201
     before = length(client)
     body = {**BODIES["awareness"], "established_at": "2099-12-31T23:59:59Z",
             "assessment_completed_at": "2099-12-31T23:59:59Z",
             "assessment_started_at": "2099-12-31T23:00:00Z"}
-    # 2099 is in range and its deadlines are computable; year 9999 is refused (see BAD above).
-    assert client.post("/v1/cases/H1/awareness", json=body).status_code == 201
-    assert length(client) == before + 1
+    response = client.post("/v1/cases/H1/awareness", json=body)
+    assert response.status_code == 409, response.text
+    assert "future" in response.text
+    assert length(client) == before
+
+
+def test_the_last_computable_century_is_still_accepted_by_the_domain(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from assurance.security.art14 import Awareness, Signal, SignalChannel, Track
+
+    reg = Art14Register(EvidenceLedger(tmp_path / "x.db"))
+    last = datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC)
+    reg.record_signal("c", Signal(received_at=last - timedelta(hours=2),
+                                  channel=SignalChannel.OTHER, received_by="a", description="d"),
+                      Actor("a", "r"))
+    reg.record_awareness(
+        "c",
+        Awareness(established_at=last, assessment_started_at=last - timedelta(hours=1),
+                  assessment_completed_at=last, determined_by="a", reasoning="r"),
+        Track.VULNERABILITY, Actor("a", "r"), now=last)
+    assert reg.case("c").awareness is not None
 
 
 def test_the_domain_itself_refuses_uncomputable_deadlines_before_the_append(tmp_path):
@@ -202,7 +224,7 @@ def test_the_domain_itself_refuses_uncomputable_deadlines_before_the_append(tmp_
             "c",
             Awareness(established_at=far, assessment_started_at=far - timedelta(hours=1),
                       assessment_completed_at=far, determined_by="a", reasoning="r"),
-            Track.VULNERABILITY, Actor("a", "r"))
+            Track.VULNERABILITY, Actor("a", "r"), now=far)
     assert len(reg.ledger) == before
 
 

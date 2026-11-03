@@ -29,7 +29,7 @@ from assurance.security.art14.report import readiness_report
 
 ACTOR_JSON = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
 ACTOR = Actor("m.braun", "Entwicklungsleitung")
-KEY = "test-key-do-not-ship"
+KEY = "test-key-do-not-ship-0123456789abcdef0123456789"
 ORIGINAL = "2026-10-01T09:00:00Z"
 SHIFTED = "2026-10-11T09:00:00Z"
 

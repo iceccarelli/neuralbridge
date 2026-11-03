@@ -411,6 +411,11 @@ def _already_assessed(ledger: EvidenceLedger) -> frozenset[str]:
     a decision that has been taken.
     """
     out: set[str] = set()
+    ok, _problems = ledger.verify_chain()  # a full walk: the cached head misses an edit below it
+    if not ok:
+        # A row in a chain that does not verify is not a determination anyone can rely on;
+        # skipping it errs towards prompting again, never towards silence.
+        return frozenset()
     for entry in ledger.entries(kind="art14.awareness"):
         evidence = entry.evidence()
         if not evidence.verify():

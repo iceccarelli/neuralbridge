@@ -46,6 +46,31 @@ class CaseError(AssuranceError):
     """A step was attempted out of order, or without the fact it depends on."""
 
 
+def _require_person(actor: Actor, what: str) -> None:
+    """Awareness, triage, filing and closure are human decisions; software drafts.
+
+    A signal may be raised by monitoring (the bridge opens cases from advisories), but the
+    legal moment of awareness, the reportability call, a submission and the closing of a case
+    each need a person who can be asked about it. An ``automation`` or ``service`` actor is
+    refused; nothing is recorded.
+    """
+    if actor.kind != "person":
+        raise CaseError(
+            f"{what} is a human decision and cannot be recorded by an actor of kind "
+            f"'{actor.kind}' ({actor.identifier}). Software may draft it; a named person "
+            "records it. Nothing was recorded."
+        )
+
+
+def _not_in_future(at: datetime, field: str, reference: datetime) -> None:
+    if at - reference > timedelta(seconds=CLOCK_SKEW_SECONDS):
+        raise CaseError(
+            f"{field} {format_utc(at)} is in the future (after {format_utc(reference)} plus "
+            f"the {CLOCK_SKEW_SECONDS} s clock-skew allowance). A fact that has not happened "
+            "cannot start or satisfy a legal clock; record it when it has. Nothing was recorded."
+        )
+
+
 @dataclass
 class Case:
     """The live view of one Article 14 case, rebuilt from the ledger.
@@ -72,10 +97,18 @@ class Case:
     #: Filings kept in the ledger but NOT counted: their submission time is later than
     #: the ledger's own time of recording them (plus the skew allowance).
     uncounted_filings: list[dict[str, str]] = None  # type: ignore[assignment]
+    #: Every counted filing time per stage, ascending (complete and incomplete alike).
+    filing_times: dict[str, list[datetime]] = None  # type: ignore[assignment]
+    #: Decisions recorded (in a ledger written before this was enforced) by a non-person actor.
+    non_person_records: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.filings is None:
             self.filings = {}
+        if self.filing_times is None:
+            self.filing_times = {}
+        if self.non_person_records is None:
+            self.non_person_records = []
         if self.uncounted_filings is None:
             self.uncounted_filings = []
 
@@ -93,6 +126,16 @@ class Case:
             final_submitted_at=self.filings.get(Stage.FINAL.value),
             incomplete_stages=self.incomplete_stages,
             referenced_stages=self.referenced_stages,
+            notification_first_recorded_at=(
+                self.filing_times[Stage.NOTIFICATION.value][0]
+                if self.filing_times.get(Stage.NOTIFICATION.value)
+                else None
+            ),
+            conflicting_filing_times={
+                stage: tuple(times)
+                for stage, times in self.filing_times.items()
+                if len(set(times)) > 1
+            },
         )
 
     @property
@@ -103,11 +146,21 @@ class Case:
             return "signal_received"
         if self.triage_result is None or self.triage_result.reportable is None:
             return "awaiting_triage"
-        if Stage.FINAL.value in self.filings and Stage.FINAL.value not in self.incomplete_stages:
-            # An incomplete final filing is evidence that something was submitted, not that the
-            # case is finished: it stays open until a complete one is recorded.
+        if self._closable():
             return "closed_filed"
         return "reportable_open"
+
+    def _closable(self) -> bool:
+        """All three stages filed and complete. There is no waiver record in this version.
+
+        An incomplete filing is evidence that something was submitted, not that the case is
+        finished. A final report alone does not finish a case whose early warning and
+        notification were never recorded: those stay outstanding, and the case stays open.
+        """
+        return all(
+            stage.value in self.filings and stage.value not in self.incomplete_stages
+            for stage in (Stage.EARLY_WARNING, Stage.NOTIFICATION, Stage.FINAL)
+        )
 
     def outstanding(self, now: datetime | None = None) -> list[str]:
         """What still has to happen, worst first.
@@ -160,6 +213,36 @@ class Case:
                     gap = "; its content is also incomplete" if not d.content_complete else ""
                     out.append(f"FILED LATE: {d.stage.label} ({d.provision}){gap}")
             out.extend(deadlines.pending_facts())
+            for stage, times in sorted(deadlines.conflicting_filing_times.items()):
+                shown = ", ".join(format_utc(t) for t in times)
+                out.append(
+                    f"CONFLICTING FILING TIMES for {stage}: {shown}. The deadline view uses the "
+                    "earliest of the complete filings (earliest of any, if none is complete); "
+                    "these are declarations nothing here can check against the platform. A "
+                    "person must confirm which is right."
+                )
+        if (
+            Stage.FINAL.value in self.filings
+            and self.triage_result is not None
+            and not self._closable()
+        ):
+            missing = [
+                s.label
+                for s in (Stage.EARLY_WARNING, Stage.NOTIFICATION, Stage.FINAL)
+                if s.value not in self.filings or s.value in self.incomplete_stages
+            ]
+            out.append(
+                "NOT CLOSED: a final filing is recorded, but "
+                + ", ".join(missing)
+                + " is not filed with complete content. A case closes only when the early "
+                "warning, the notification and the final report are each filed; there is no "
+                "waiver record."
+            )
+        for note in self.non_person_records:
+            out.append(
+                f"{note} Awareness, triage, filing and closure are human decisions; a person "
+                "must confirm this record."
+            )
         for f in self.uncounted_filings:
             out.append(
                 f"NOT COUNTED AS FILED: a {f['stage']} filing is recorded with submission time "
@@ -271,9 +354,19 @@ class Art14Register:
         )
 
     def record_awareness(
-        self, case_id: str, awareness: Awareness, track: Track, actor: Actor
+        self,
+        case_id: str,
+        awareness: Awareness,
+        track: Track,
+        actor: Actor,
+        *,
+        now: datetime | None = None,
     ) -> Evidence:
-        """Fix the moment every deadline runs from."""
+        """Fix the moment every deadline runs from. A person records it; software drafts.
+
+        None of the assessment times may be later than ``now`` plus :data:`CLOCK_SKEW_SECONDS`.
+        """
+        _require_person(actor, "recording awareness (the legal moment every deadline runs from)")
         case, head = self._load_for_write(case_id)
         if case.signal is None:
             raise CaseError(
@@ -284,7 +377,10 @@ class Art14Register:
             raise CaseError(
                 f"case {case_id} already has an awareness record at "
                 f"{format_utc(case.awareness.established_at)}. Moving it would move a legal "
-                "deadline; supersede it explicitly if it was wrong."
+                "deadline. This version has no supersede record for a wrong awareness: the "
+                "original stays in the ledger, and a correction has to be made outside the "
+                "register by the operator (for example by opening a new case that cites this "
+                "one). Nothing was recorded."
             )
         if case.users_informed_at is not None and case.users_informed_at < awareness.established_at:
             raise CaseError(
@@ -304,6 +400,10 @@ class Art14Register:
                 "an awareness record without reasoning is not evidence. Guidance §213 "
                 "makes this a judgement about reasonable certainty; record the judgement."
             )
+        reference = now or utc_now()
+        _not_in_future(awareness.established_at, "awareness established_at", reference)
+        _not_in_future(awareness.assessment_started_at, "assessment_started_at", reference)
+        _not_in_future(awareness.assessment_completed_at, "assessment_completed_at", reference)
         # Before the append: a record whose deadlines cannot be computed must not be written,
         # because the case would then fail on every later read and could not be corrected.
         require_deadline_arithmetic(
@@ -335,7 +435,12 @@ class Art14Register:
         *,
         reopen_trigger: str = "",
     ) -> tuple[Evidence, TriageResult]:
-        """Work the decision path and record the outcome, whichever way it goes."""
+        """Work the decision path and record the outcome, whichever way it goes.
+
+        Reportability (and so closing a case as not reportable) is a human decision: only a
+        ``person`` actor may record it.
+        """
+        _require_person(actor, "the reportability decision (triage)")
         case, head = self._load_for_write(case_id)
         if case.track is None:
             raise CaseError(
@@ -394,7 +499,13 @@ class Art14Register:
         )
 
     def record_measure_available(
-        self, case_id: str, at: datetime, description: str, actor: Actor
+        self,
+        case_id: str,
+        at: datetime,
+        description: str,
+        actor: Actor,
+        *,
+        now: datetime | None = None,
     ) -> Evidence:
         """Record the moment a corrective OR mitigating measure became available.
 
@@ -405,6 +516,13 @@ class Art14Register:
         case, head = self._load_for_write(case_id)
         if case.awareness is None:
             raise CaseError(f"case {case_id} has no awareness record")
+        _not_in_future(at, "measure available_at", now or utc_now())
+        if at < case.awareness.established_at:
+            raise CaseError(
+                f"a measure cannot have become available before awareness ({format_utc(at)} < "
+                f"{format_utc(case.awareness.established_at)}); a measure dated before awareness "
+                "would start the final-report clock before the case existed. Nothing was recorded."
+            )
         require_deadline_arithmetic(at, field="available_at")
         return self._append(
             case_id,
@@ -443,6 +561,7 @@ class Art14Register:
         something was submitted, but it is never counted as a met deadline (status
         ``recorded_incomplete``).
         """
+        _require_person(actor, "a filing (the submission to the reporting platform)")
         case, head = self._load_for_write(case_id)
         if case.awareness is None or case.track is None:
             raise CaseError(
@@ -475,6 +594,17 @@ class Art14Register:
                 f"({format_utc(submitted_at)} < {format_utc(case.awareness.established_at)}); "
                 "a submission time before awareness would make a late filing read as on time"
             )
+        earlier = min(case.filing_times.get(stage.value, ()), default=None)
+        if earlier is not None and submitted_at < earlier:
+            raise CaseError(
+                f"a {stage.value} filing is already recorded for case {case_id} with submission "
+                f"time {format_utc(earlier)}; a later record cannot declare an EARLIER time "
+                f"({format_utc(submitted_at)}) for the same stage, because that would move the "
+                "stage's lateness after the fact. The original stays. This version has no "
+                "supersede record: a genuine correction is an operator action outside the "
+                "register. Recording the same time again, or a later one, is accepted. "
+                "Nothing was recorded."
+            )
         validation = validate_payload(payload, case.track, stage)
         evidence = self._append(
             case_id,
@@ -502,6 +632,7 @@ class Art14Register:
         actor: Actor,
         *,
         public: bool = False,
+        now: datetime | None = None,
     ) -> Evidence:
         """Record the Article 14(8) notification to users.
 
@@ -511,6 +642,7 @@ class Art14Register:
         technical detail would itself increase risk.
         """
         case, head = self._load_for_write(case_id)
+        _not_in_future(at, "user notification time", now or utc_now())
         if case.awareness is not None and at < case.awareness.established_at:
             raise CaseError(
                 "users cannot be informed before the manufacturer became aware "
@@ -565,6 +697,17 @@ class Art14Register:
             head = entry.seq
             body = entry.payload.get("body", {})
             kind = entry.kind
+            actor_kind = str((entry.payload.get("actor") or {}).get("kind", "person"))
+            if actor_kind != "person" and kind in (
+                CASE_KIND["awareness"],
+                CASE_KIND["triage"],
+                CASE_KIND["non_report"],
+                CASE_KIND["filing"],
+            ):
+                case.non_person_records.append(
+                    f"ledger seq {entry.seq} ({kind}) was recorded by an actor of kind "
+                    f"'{actor_kind}'."
+                )
             if kind == CASE_KIND["signal"]:
                 case.signal = Signal.from_dict(body["signal"])
             elif kind == CASE_KIND["awareness"]:
@@ -621,6 +764,7 @@ class Art14Register:
                     continue
                 valid = (body.get("validation") or {}).get("submittable", True)
                 has_ref = bool(str(body.get("platform_reference") or "").strip())
+                case.filing_times.setdefault(stage, []).append(at)
                 bucket = filings_valid if valid else filings_any
                 if stage not in bucket or at < bucket[stage][0]:
                     bucket[stage] = (at, has_ref)
@@ -628,6 +772,8 @@ class Art14Register:
                 at = parse_utc(body["at"])
                 if case.users_informed_at is None or at < case.users_informed_at:
                     case.users_informed_at = at
+        for times in case.filing_times.values():
+            times.sort()
         counted = {**filings_any, **filings_valid}
         case.filings = {stage: at for stage, (at, _) in counted.items()}
         case.referenced_stages = frozenset(stage for stage, (_, ref) in counted.items() if ref)
