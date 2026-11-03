@@ -16,7 +16,9 @@ export function generateStaticParams() {
   return Object.keys(ICONS).map((file) => ({ file }));
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ file: string }> }) {
+type IconParams = Promise<{ file: string }>;
+
+export async function GET(_req: Request, { params }: { params: IconParams }) {
   const { file } = await params;
   const icon = ICONS[file];
   if (!icon) return new Response('Not found', { status: 404 });
