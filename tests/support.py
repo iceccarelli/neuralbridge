@@ -10,6 +10,7 @@ happened before this module existed.
 
 from __future__ import annotations
 
+import copy
 import json
 import zipfile
 from pathlib import Path
@@ -86,7 +87,9 @@ def plan_dict(*, tuned: bool = True) -> dict:
     return {
         "plan_id": "PLAN-AR7", "manufacturer": "Grimaldi", "model": "AR-7",
         "procedure": "Export from the three vendor tools into one folder.",
-        "functions": FUNCS, "items": items,
+        # A copy: FUNCS is shared module state, and a test that edits the plan it was handed (the N1 red-team test
+        # weakens `verified_by` and the required performance level) must not weaken every later test's plan.
+        "functions": copy.deepcopy(FUNCS), "items": items,
     }
 
 
