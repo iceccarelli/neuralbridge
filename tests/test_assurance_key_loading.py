@@ -31,7 +31,6 @@ from assurance.attest.preflight import run_preflight
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX")
 
 OPERATOR_KEY = "operator-key-test"
-IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 def make_key(tmp_path: Path, *, file_mode=0o600, dir_mode=0o700, name="service.pem") -> Path:
@@ -131,18 +130,39 @@ class TestLoaderRule:
         monkeypatch.setattr(keys_module.os, "fstat", swap_then_fstat)
         assert SigningKey.load(path).fingerprint == wanted
 
-    @pytest.mark.skipif(not IS_ROOT, reason="os.chown to another uid needs root")
-    def test_a_key_owned_by_another_account_is_refused(self, tmp_path):
+    def test_a_key_owned_by_another_account_is_refused(self, tmp_path, monkeypatch):
+        # No chown (needs root): run as euid 1000 and report the key file as owned by 4242.
         path = make_key(tmp_path)
-        os.chown(path, 4242, 4242)
+        real = os.fstat
+
+        def stranger(fd):
+            r = real(fd)
+            if stat.S_ISREG(r.st_mode):
+                fields = {n: getattr(r, n) for n in dir(r) if n.startswith("st_")}
+                fields["st_uid"] = 4242
+                return SimpleNamespace(**fields)
+            return r
+
+        monkeypatch.setattr(keys_module.os, "fstat", stranger)
+        monkeypatch.setattr(keys_module.os, "geteuid", lambda: 1000)
         with pytest.raises(UnsafeSigningKeyError, match="owned by another account"):
             SigningKey.load(path)
         assert any("owned by another" in p for p in key_file_problems(path))
 
-    @pytest.mark.skipif(not IS_ROOT, reason="os.chown to another uid needs root")
-    def test_a_directory_owned_by_another_account_is_refused(self, tmp_path):
+    def test_a_directory_owned_by_another_account_is_refused(self, tmp_path, monkeypatch):
         path = make_key(tmp_path)
-        os.chown(path.parent, 4242, 4242)
+        real = os.fstat
+
+        def stranger_dir(fd):
+            r = real(fd)
+            if stat.S_ISDIR(r.st_mode):
+                fields = {n: getattr(r, n) for n in dir(r) if n.startswith("st_")}
+                fields["st_uid"] = 4242
+                return SimpleNamespace(**fields)
+            return r
+
+        monkeypatch.setattr(keys_module.os, "fstat", stranger_dir)
+        monkeypatch.setattr(keys_module.os, "geteuid", lambda: 1000)
         with pytest.raises(UnsafeSigningKeyError, match="directory"):
             SigningKey.load(path)
 

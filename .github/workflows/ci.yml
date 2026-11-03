@@ -53,8 +53,9 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install pytest
       # --noconftest: tests/conftest.py imports FastAPI, which this job does not install; this test
-      # needs only pytest, node and the repo (checked in a clean environment: 16 passed, 0 skipped).
-      - run: python -m pytest tests/test_site_repo_links.py -q -o addopts="" -p no:cacheprovider -rs --noconftest
+      # needs only pytest, node and the repo (checked in a clean environment: 159 passed, 0 skipped; the Python Tests job has no
+      # node_modules, so these built-page tests skip there and run here).
+      - run: python -m pytest tests/test_site_repo_links.py tests/test_site_product_pages.py tests/test_site_seo.py -q -o addopts="" -p no:cacheprovider -rs --noconftest
 
   # ── Unit Tests ─────────────────────────────────────────────
   test:
