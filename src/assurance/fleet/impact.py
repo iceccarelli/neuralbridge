@@ -286,8 +286,12 @@ class ImpactReport:
         a machine.
         """
         if not self.exposures:
+            # Unknown machines/functions are machines the assessment could neither include
+            # nor exclude: a failure to check must never read as a successful check.
             return ("clear" if self.chain_verified and not self.incomplete
-                    and not self.not_clear_reasons else "needs_review")
+                    and not self.not_clear_reasons
+                    and not self.unknown_machines
+                    and not self.unknown_functions else "needs_review")
         if any(e.newly_in_question for e in self.exposures):
             return "exposed"
         return "needs_review"
@@ -337,6 +341,11 @@ class ImpactReport:
             elif self.machines_in_fleet == 0:
                 head = ("NOT ASSESSED — no machine is enrolled, so nothing was checked "
                         "and nothing is cleared")
+            elif self.unknown_machines or self.unknown_functions:
+                head = ("NEEDS REVIEW — no match was found among the machines that could "
+                        f"be assessed, but {len(self.unknown_machines)} machine(s) and "
+                        f"{len(self.unknown_functions)} safety function(s) are UNKNOWN "
+                        "and are not cleared")
             elif self.look_incomplete_machines:
                 head = ("NEEDS REVIEW — no match on the last complete configuration, but "
                         f"{len(self.look_incomplete_machines)} machine(s) were last looked "

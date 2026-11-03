@@ -623,7 +623,11 @@ def manifest_is_incomplete(manifest: SafetyManifest) -> bool:
     machine's state after a change. The marker is the only thing that says so, which is why
     every consumer that needs a complete look asks this one function.
     """
-    return INCOMPLETE_COLLECTION_MARK in (manifest.notes or "")
+    # Case-insensitive and whitespace-normalised: a note edited or re-typed by hand must read
+    # as incomplete rather than slip through as a whole look (fail-safe). The marker FORMAT
+    # that is written is unchanged.
+    notes = " ".join((manifest.notes or "").split()).lower()
+    return " ".join(INCOMPLETE_COLLECTION_MARK.split()).lower() in notes
 
 
 def incomplete_collection_note(missing_items: Iterable[str]) -> str:

@@ -21,11 +21,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from assurance.change.service import INCOMPLETE_COLLECTION_MARK
 from assurance.change.store import CaseStore
 from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import SafetyManifest, manifest_is_incomplete
 from assurance.machinery.record import MANIFEST_KIND
 
 __all__ = [
@@ -98,7 +97,7 @@ def last_complete_manifest(history: Sequence[SafetyManifest]) -> SafetyManifest 
     machine that merely came back whole reads as ``ITM-... added``.
     """
     for manifest in reversed(history):
-        if INCOMPLETE_COLLECTION_MARK not in manifest.notes:
+        if not manifest_is_incomplete(manifest):
             return manifest
     return None
 

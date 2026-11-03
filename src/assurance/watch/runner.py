@@ -60,7 +60,13 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
 from assurance.machinery.intervention import ImpliedIntervention
-from assurance.machinery.manifest import HashSource, ManifestSource, last_attribution, not_a_look
+from assurance.machinery.manifest import (
+    HashSource,
+    ManifestSource,
+    last_attribution,
+    manifest_is_incomplete,
+    not_a_look,
+)
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -517,7 +523,7 @@ def run_watch(
 
         manifest = result.manifest
         missing_items = tuple(o.item_id for o in (*result.missing, *result.unreadable))
-        if not result.complete and INCOMPLETE_COLLECTION_MARK not in manifest.notes:
+        if not result.complete and not manifest_is_incomplete(manifest):
             # (collect() now marks an incomplete manifest itself; do not mark it twice.)
             # Persisted on the manifest record itself, because a case judging
             # "did this machine leave that configuration" reads manifests and
@@ -531,13 +537,18 @@ def run_watch(
         history = manifests_from_ledger(ledger, machine_key)
         baseline = last_complete_manifest(history)
 
+        # The configuration hash covers the items only. What the manifest DECLARES about the
+        # safety functions (performance level, verified_by, ...) can be weakened with every
+        # item untouched, so a moved declaration is a change too (never "unchanged").
         status = "first_seen" if baseline is None else (
-            "changed" if baseline.configuration_hash() != observed else "observed")
+            "changed" if (baseline.configuration_hash() != observed
+                          or baseline.safety_declaration_hash()
+                          != manifest.safety_declaration_hash()) else "observed")
         # The newest manifest this machine holds is a partial look and this look is whole
         # and unchanged from the last complete one. The fleet view is showing the partial
         # one's gap (and flagging the machine) until a complete manifest is sealed again.
         recovering = (status == "observed" and result.complete and bool(history)
-                      and INCOMPLETE_COLLECTION_MARK in history[-1].notes)
+                      and manifest_is_incomplete(history[-1]))
 
         drift_severity = ""
         drift_items: tuple[str, ...] = ()
@@ -571,8 +582,11 @@ def run_watch(
             drift_severity = worst.value if worst else ""
             drift_items = tuple(c.item_id for c in divergence.changes)
             affected = divergence.affected_functions
-            detail = (f"configuration moved {baseline.configuration_hash()[:12]} → "
-                      f"{observed[:12]}: " + ", ".join(
+            moved = (f"configuration moved {baseline.configuration_hash()[:12]} → "
+                     f"{observed[:12]}" if baseline.configuration_hash() != observed
+                     else f"configuration unchanged at {observed[:12]} but the safety-function "
+                          "declaration changed")
+            detail = (moved + ": " + ", ".join(
                           f"{c.item_id} {c.kind.value}" for c in divergence.changes))
             if seal:
                 # The case comes first, before the new manifest becomes the

@@ -40,7 +40,6 @@ from typing import Any
 
 from assurance.change.model import TriggerType
 from assurance.change.service import (
-    INCOMPLETE_COLLECTION_MARK,
     assess_drift,
     case_id_for,
 )
@@ -58,7 +57,7 @@ from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import Divergence, compare
-from assurance.machinery.manifest import SafetyManifest, not_a_look
+from assurance.machinery.manifest import SafetyManifest, manifest_is_incomplete, not_a_look
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -579,7 +578,7 @@ def _ingest_entry(
             return _refuse(entry, key, "serial_mismatch",
                            f"the entry names serial {serial!r} but its manifest "
                            f"describes {manifest.machine.serial!r}.", stamp)
-        if INCOMPLETE_COLLECTION_MARK in manifest.notes:
+        if manifest_is_incomplete(manifest):
             return _refuse(entry, key, "manifest_marked_incomplete",
                            "the manifest says its collection was incomplete, so it "
                            "cannot be a positive observation.", stamp)
