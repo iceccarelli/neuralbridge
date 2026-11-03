@@ -46,6 +46,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      # Initial JS/CSS per route against scripts/perf_budget.json (transfer size only; not Core Web Vitals).
+      - run: node scripts/perf_budget.mjs
       # The repo-link gate builds the site twice (flag off, flag on); the Python test job has no
       # node_modules, so it skips there and this step is where it runs.
       - uses: actions/setup-python@v5
