@@ -334,11 +334,8 @@ class TestFile:
 
 
 class TestHostileCells:
-    # No "/" or "#" in a serial: those are the machine key's separators, and a new enrolment
-    # with one is refused as ambiguous (tests/test_machine_identity_key.py). The payloads are
-    # still the formula shapes; the hostile slash payload is pinned as a refusal below.
-    @pytest.mark.parametrize("cell", ["=cmd|' C calc'!A0", "+1+1", "-2+3", "@SUM(A1)",
-                                      '=HYPERLINK("http:x","y")'])
+    @pytest.mark.parametrize("cell", ["=cmd|' /C calc'!A0", "+1+1", "-2+3", "@SUM(A1)",
+                                      '=HYPERLINK("http://x","y")'])
     def test_formula_cells_are_kept_as_inert_text(self, env, cell):
         env.write([_row(cell, owner=cell)])
         report = env.run()
@@ -347,15 +344,6 @@ class TestHostileCells:
         assert any("never evaluated" in n for n in report.outcomes[0].notes)
         enrolment = next(e for e in env.entries() if e.kind == ENROLMENT_KIND)
         assert enrolment.evidence().body["identity"]["serial"] == cell
-
-    @pytest.mark.parametrize("cell", ["=cmd|' /C calc'!A0", '=HYPERLINK("http://x","y")',
-                                      "0412#2"])
-    def test_a_serial_that_contains_a_key_separator_is_refused_not_enrolled(self, env, cell):
-        env.write([_row(cell, owner="o")])
-        report = env.run()
-        assert report.outcomes[0].status == "rejected"
-        assert "ambiguous" in report.outcomes[0].reason
-        assert not [e for e in env.entries() if e.kind == ENROLMENT_KIND]
 
     def test_control_and_invisible_characters_are_refused(self, env):
         for bad in ("a\x00b", "a\x1bb", "a\x07b", "a‮b", "a​b", "a b"):

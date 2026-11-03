@@ -40,7 +40,7 @@ PERSON = Actor("Anna Keller", "safety engineer", kind="person")
 
 AMBIGUOUS = [
     ("A", "B#1", "2"), ("A", "B", "1#2"), ("A/B", "C", "1"), ("A", "B/C", "1"),
-    ("A", "B", "1/2"), (" ", "m", "s"), ("a", "m", " "), ("a", "m", "s "),
+    (" ", "m", "s"), ("a", "m", " "), ("a", "m", "s "),
     (" a", "m", "s"), ("a", "m\n", "s"), ("a", "m", "s\x00"), ("a", "m", "s​"),
 ]
 
@@ -176,3 +176,25 @@ class TestAnExistingLedgerStaysReadable:
         record_manifest(ledger, replace(manifest(manifest_id="X3", machine=ident),
                                         notes="a later look"))
         assert len(manifests_from_ledger(ledger, ident.key)) == 2
+
+
+class TestAcceptedIdentitiesNeverCollide:
+    """The rule must be exactly as strict as the collision surface, no stricter: a serial such as 2023/00123 is real."""
+
+    def test_a_slash_in_the_serial_is_accepted(self):
+        assert MachineIdentity("A", "B", "2023/00123").ambiguity_problems() == ()
+
+    def test_no_two_different_accepted_identities_share_a_key(self):
+        import itertools
+
+        alphabet = ["a", "b", "/", "#", "a/", "#b"]
+        parts = [p for r in (1, 2) for p in map("".join, itertools.product(alphabet, repeat=r))]
+        seen: dict[str, tuple[str, str, str]] = {}
+        accepted = 0
+        for maker, model, serial in itertools.product(parts, repeat=3):
+            ident = MachineIdentity(maker, model, serial)
+            if ident.ambiguity_problems():
+                continue
+            accepted += 1
+            assert seen.setdefault(ident.key, (maker, model, serial)) == (maker, model, serial), ident.key
+        assert accepted >= 700  # the property was exercised, not vacuous (720 of 74,088 tuples are accepted)

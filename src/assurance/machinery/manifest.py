@@ -196,7 +196,11 @@ class MachineIdentity:
     def ambiguity_problems(self) -> tuple[str, ...]:
         """Why this identity cannot safely be the basis of a NEW record; empty if it can.
 
-        A component that contains a key separator (``/`` or ``#``), has leading or trailing
+        The key is ``manufacturer/model#serial``. It parses back into exactly one tuple only if
+        ``#`` appears in no part (the bundle reader splits at the first ``#`` and the watch
+        ingester at the last) and ``/`` appears in neither the manufacturer nor the model. A ``/``
+        in the SERIAL is allowed (real serials such as ``2023/00123`` contain one, and nothing
+        parses the key at a serial ``/``). A component that breaks this, has leading or trailing
         whitespace, is blank, or contains a control or other non-printing character can make
         two different units share one key (so one would inherit the other's evidence), or
         make a key that no reader can take apart again. This is checked where an identity is
@@ -209,7 +213,8 @@ class MachineIdentity:
             if not value.strip():
                 out.append(f"{name} is blank")
                 continue
-            bad_sep = sorted({c for c in value if c in "/#"})
+            forbidden = "#" if name == "serial" else "/#"
+            bad_sep = sorted({c for c in value if c in forbidden})
             if bad_sep:
                 out.append(f"{name} {value!r} contains {' and '.join(repr(c) for c in bad_sep)}"
                            ", which separate the parts of the machine key")
