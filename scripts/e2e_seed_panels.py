@@ -47,6 +47,8 @@ def main(out: str, workdir: str) -> int:
     Path(out).write_text(json.dumps({
         "key_cell": account("panels-cell", "cell"),
         "key_free": account("panels-free", "free"),
+        "key_coverage": account("panels-coverage", "cell"),
+        "key_coverage_empty": account("panels-coverage-empty", "cell"),
         "manifest": base.to_dict(),
         "manifest_changed": changed.to_dict(),
         "manifest_uncomparable": no_hash.to_dict(),

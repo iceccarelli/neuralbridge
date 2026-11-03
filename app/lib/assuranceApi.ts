@@ -940,3 +940,52 @@ export function parseCveId(input: string): { id: string; problem: string } {
   }
   return { id, problem: '' };
 }
+
+// ---------------------------------------------------------------------------
+// Coverage inputs (GET /v1/value; GET /v1/ledger/attest/log). The Coverage panel reads these
+// next to /v1/fleet/machines and /v1/change/cases; src/assurance/value/position.py and
+// src/assurance/attest/attestation.py are the producers.
+// ---------------------------------------------------------------------------
+
+export type ValueMachine = {
+  machine: string;
+  // null: no manifest is sealed for this machine.
+  manifest: {
+    manifest_id: string;
+    taken_at: string;
+    collection_incomplete: boolean;
+    configuration_hash: string;
+  } | null;
+  inventory: { items: number; read_from_machine: number; supplied_by_vendor: number; declared_only: number } | null;
+  // null when there is no manifest. Counts per state; the states are the server's Coverage values.
+  coverage: ({ functions: number } & Partial<Record<string, number>>) | null;
+};
+
+export type ValueFinding = {
+  kind: string;
+  machine: string;
+  statement: string;
+  refs: { seq?: number; content_hash?: string; case_id?: string }[];
+};
+
+export type Value = {
+  as_of: string;
+  ledger: { entries: number; chain_verified: boolean; chain_problems: string[] };
+  machines: ValueMachine[];
+  findings?: ValueFinding[];
+  // Present (and machines empty) when the chain does not verify: nothing is derived from it.
+  withheld?: string;
+};
+
+export type AttestationRecord = {
+  sequence: number;
+  ledger_length: number;
+  head_seq: number;
+  // 'read_from_ledger': the operator's signer read this ledger. 'declared_by_holder': the account
+  // holder told the service the head; that is never an anchor of the hosted ledger.
+  basis: 'read_from_ledger' | 'declared_by_holder' | string;
+  attested_at: string;
+  key_fingerprint: string;
+};
+
+export type AttestLog = { count: number; attestations: AttestationRecord[]; warnings: string[] };
