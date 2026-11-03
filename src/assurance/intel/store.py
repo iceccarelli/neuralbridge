@@ -29,7 +29,6 @@ Dispositions
 
 from __future__ import annotations
 
-import email.utils
 import hashlib
 import json
 import sqlite3
@@ -37,7 +36,7 @@ import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -164,9 +163,12 @@ def _clean_value(value: object, *, http_date: bool) -> str:
     if not value or len(value) > _MAX_VALIDATOR or any(not 0x20 <= ord(c) < 0x7F for c in value):
         return ""        # empty, oversized, or carrying a control / non-ASCII character
     if http_date:
+        # IMF-fixdate only (RFC 9110). Not email.utils: on Python 3.11 it imports ``socket``, and
+        # this module is on the offline path, which must import no network client. An obsolete
+        # date form is dropped, so that series is simply fetched in full.
         try:
-            email.utils.parsedate_to_datetime(value)
-        except (TypeError, ValueError, IndexError):
+            datetime.strptime(value, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=UTC)
+        except ValueError:
             return ""
     return value
 
