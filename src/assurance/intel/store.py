@@ -295,6 +295,7 @@ class IntelStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._lock = threading.Lock()
+        self._refuse_if_foreign_before_writing()
         with self._write_txn(create=True) as db:
             current = db.execute("PRAGMA application_id").fetchone()[0]
             has_tables = db.execute(
@@ -304,6 +305,43 @@ class IntelStore:
             for statement in _split(_SCHEMA):
                 db.execute(statement)
             db.execute(f"PRAGMA application_id={_APP_ID}")
+
+    def _refuse_if_foreign_before_writing(self) -> None:
+        """Decide "this is somebody else's database" WITHOUT writing to the file.
+
+        ``_connect`` switches the journal mode to WAL (header bytes 18-19, a ``-wal``/``-shm``
+        pair), which is a write. A file this code then refuses must be byte-for-byte what it
+        was, so the check that can refuse runs first, on the raw header and, for an unset
+        application id, a table count over an ``immutable`` read-only handle (no lock file, no
+        ``-shm``, nothing created). A missing or empty file is new and proceeds. The same checks
+        run again inside the write transaction (a race, or an uncheckpointed WAL).
+        """
+        try:
+            if not self.path.is_file() or self.path.stat().st_size == 0:
+                return
+            with self.path.open("rb") as handle:
+                header = handle.read(100)
+        except OSError:
+            return          # let the normal open report it
+        what = str(self.path)
+        if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+            raise IntelStoreError(f"{what} is not an intel observation store.")
+        app_id = int.from_bytes(header[68:72], "big")
+        if app_id not in (0, _APP_ID):
+            raise IntelStoreError(f"{what} is not an intel observation store.")
+        if app_id == 0:
+            try:
+                db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro&immutable=1",
+                                     uri=True, timeout=5.0)
+                try:
+                    tables = db.execute(
+                        "SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+                finally:
+                    db.close()
+            except sqlite3.Error:
+                raise IntelStoreError(f"{what} is not an intel observation store.") from None
+            if tables:
+                raise IntelStoreError(f"{what} is not an intel observation store.")
 
     @classmethod
     def open_existing(cls, path: str | Path, *, label: str | None = None) -> IntelStore:
@@ -672,7 +710,18 @@ class ReadOnlyIntelStore(IntelStore):
     def _connect(self, create: bool = False) -> sqlite3.Connection:
         if create:
             raise IntelStoreError("this store is read-only")
-        db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=5.0,
+        # A WAL-mode file opened ``mode=ro`` still gets a ``-shm`` / ``-wal`` pair created beside
+        # it: a read verb writing into the store's directory. With neither sidecar there is no
+        # open writer (a writer holds both until the last connection closes), so the file is
+        # quiescent and ``immutable=1`` reads it with no locking and creates nothing. With a
+        # sidecar present a writer may be live: ``mode=ro`` then uses the existing files and
+        # creates none. (A writer that opens in the instant between the check and the read is
+        # the one case ``immutable`` could misread; the next read sees it.)
+        resolved = self.path.resolve()
+        quiescent = not any(resolved.with_name(resolved.name + sfx).exists()
+                            for sfx in ("-wal", "-shm", "-journal"))
+        mode = "mode=ro&immutable=1" if quiescent else "mode=ro"
+        db = sqlite3.connect(f"{resolved.as_uri()}?{mode}", uri=True, timeout=5.0,
                              isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA query_only=ON")
