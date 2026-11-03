@@ -48,6 +48,7 @@ class MongodbAdapter(BaseAdapter):
     """
 
     adapter_type = "mongodb"
+    backend = "partial"
     category = "databases"
     description = "Connects to MongoDB for document-based data operations."
     version = "0.2.0"
@@ -73,7 +74,7 @@ class MongodbAdapter(BaseAdapter):
         Establishes a connection to the MongoDB server.
 
         Uses the connection string and database name from the config.
-        If the connection fails, it will fall back to a mock implementation.
+        If the connection fails it raises ConnectionError; canned data only when mock is opted in (allow_mock).
         """
         connection_string = self.config.get("connection_string")
         if not connection_string:
@@ -81,8 +82,8 @@ class MongodbAdapter(BaseAdapter):
                 "mongodb_adapter_missing_connection_string",
                 adapter=self.adapter_type,
             )
-            # MOCK: In production, this would raise an error.
-            # For this exercise, we will proceed with a mock client.
+            if not self._mock_allowed():
+                raise ConnectionError("MongoDB adapter requires 'connection_string' in config.")
             self.client = None
             self.db = None
             return
@@ -108,9 +109,10 @@ class MongodbAdapter(BaseAdapter):
                 error=str(exc),
                 exc_info=True,
             )
-            # MOCK: Fallback to mock implementation on connection error
             self.client = None
             self.db = None
+            if not self._mock_allowed():
+                raise ConnectionError(f"MongoDB connection failed: {exc}") from exc
 
     async def _do_disconnect(self) -> None:
         """

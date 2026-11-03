@@ -24,6 +24,6 @@ way when it runs at all, so the assurance layer can be packaged, sold and
 audited without dragging a palletising engine behind it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["__version__"]

@@ -41,3 +41,18 @@ def test_runtime_version_matches_the_distribution_version():
 
     init = (ROOT / "src/neuralbridge/__init__.py").read_text(encoding="utf-8")
     assert re.search(rf'__version__ = "{re.escape(PYPROJECT["version"])}"', init)
+
+
+def test_assurance_api_mcp_and_exported_contract_share_the_distribution_version():
+    import json
+
+    import assurance
+    from assurance.api.service import create_app
+    from assurance.mcp.server import mcp
+
+    assert assurance.__version__ == PYPROJECT["version"]
+    app = create_app()
+    assert app.version == PYPROJECT["version"] and app.title == "Industrial Autonomous Assurance API"
+    assert mcp.version == PYPROJECT["version"]
+    info = json.loads((ROOT / "public" / "openapi.json").read_text(encoding="utf-8"))["info"]
+    assert info["version"] == PYPROJECT["version"] and info["title"] == app.title

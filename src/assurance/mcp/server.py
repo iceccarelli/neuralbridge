@@ -48,11 +48,12 @@ from typing import Any
 import httpx
 from mcp.server.mcpserver import MCPServer
 
+from assurance import __version__
 from assurance.core.api_url import api_url_problem
 
 mcp: MCPServer = MCPServer(
     name="assurance",
-    version="0.1.0",
+    version=__version__,
     instructions=(
         "Tools for the Industrial Autonomous Assurance API "
         "(CRA Article 14 / Machinery Regulation Annex III evidence). "

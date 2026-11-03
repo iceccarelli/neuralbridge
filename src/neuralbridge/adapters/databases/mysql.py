@@ -48,6 +48,7 @@ class MySQLAdapter(BaseAdapter):
 
     # --- Adapter Metadata ---
     adapter_type: str = "mysql"
+    backend: str = "partial"
     category: str = "databases"
     description: str = "Adapter for MySQL-compatible databases."
     version: str = "0.1.0"
@@ -77,7 +78,7 @@ class MySQLAdapter(BaseAdapter):
         Establish a connection pool to the MySQL database.
 
         Uses the configuration provided during initialisation. If the connection
-        fails, it falls back to a mock implementation for resilient operation.
+        fails it raises ConnectionError; canned data is served only when mock is opted in (allow_mock).
         """
         try:
             self._connection_pool = await aiomysql.create_pool(
@@ -90,9 +91,10 @@ class MySQLAdapter(BaseAdapter):
                 autocommit=True,
             )
             self._mock_mode = False
-        except (pymysql.err.OperationalError, ConnectionRefusedError):
-            # MOCK: In production, this would be a critical failure.
-            # For demonstration, we fall back to a mock implementation.
+        except (pymysql.err.OperationalError, ConnectionRefusedError) as exc:
+            # A failed connection is a failure. Canned data only on explicit opt-in (allow_mock / env).
+            if not self._mock_allowed():
+                raise ConnectionError(f"MySQL connection failed: {exc}") from exc
             self._mock_mode = True
 
     async def _do_disconnect(self) -> None:

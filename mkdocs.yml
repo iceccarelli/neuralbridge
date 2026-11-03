@@ -50,6 +50,7 @@ nav:
   - Pricing: pricing.md
   - Claims registry: claims-registry.md
   - Platform status: platform.md
+  - Integrations: integrations.md
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true

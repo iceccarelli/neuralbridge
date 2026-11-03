@@ -569,7 +569,7 @@ def root() -> dict[str, Any]:
     can try without an account, in one response.
     """
     return {
-        "service": "Industrial Assurance — CRA Article 14 register",
+        "service": "Industrial Autonomous Assurance API",
         "regulation": "Regulation (EU) 2024/2847, Article 14",
         "applicable_since": "2026-09-11",
         "scope_note": (

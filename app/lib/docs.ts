@@ -55,6 +55,7 @@ export const DOCS_NAV: { label: string; href: string; children?: { label: string
   { label: 'Capabilities', href: '/docs/capabilities' },
   { label: 'Pricing', href: '/docs/pricing' },
   { label: 'Platform status', href: '/docs/platform' },
+  { label: 'Integrations', href: '/docs/integrations' },
 ];
 
 // Rewrite the mkdocs-relative .md links (and root-doc-relative ones, for
@@ -65,6 +66,8 @@ const LINK_MAP: Record<string, string> = {
   'pricing.md': '/docs/pricing',
   'platform.md': '/docs/platform',
   'docs/platform.md': '/docs/platform',
+  'integrations.md': '/docs/integrations',
+  'docs/integrations.md': '/docs/integrations',
   'docs/index.md': '/docs',
   'assurance/index.md': '/docs/assurance',
   'ROADMAP.md': '/roadmap',
@@ -110,6 +113,7 @@ export function resolveDocSource(slug: string[] | undefined): { file: string; ti
   }
   if (parts.length === 1 && parts[0] === 'pricing') return { file: 'docs/pricing.md', title: 'Pricing' };
   if (parts.length === 1 && parts[0] === 'platform') return { file: 'docs/platform.md', title: 'Platform status' };
+  if (parts.length === 1 && parts[0] === 'integrations') return { file: 'docs/integrations.md', title: 'Integrations' };
   if (parts.length === 1 && parts[0] === 'assurance') {
     return { file: 'docs/assurance/index.md', title: 'Assurance engines' };
   }
@@ -171,6 +175,7 @@ export function listDocSlugs(): { slug: string[] }[] {
     { slug: ['getting-started'] },
     { slug: ['pricing'] },
     { slug: ['platform'] },
+    { slug: ['integrations'] },
     { slug: ['assurance'] },
     ...ENGINE_PAGES.map((p) => ({ slug: ['assurance', p.slug] })),
   ];

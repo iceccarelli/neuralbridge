@@ -47,6 +47,7 @@ class BigQueryAdapter(BaseAdapter):
     """
 
     adapter_type = "bigquery"
+    backend = "partial"
     category = "databases"
     description = "Adapter for Google BigQuery for large-scale data analytics."
     version = "0.2.0"
@@ -126,7 +127,8 @@ class BigQueryAdapter(BaseAdapter):
             An AdapterResponse containing the result of the operation.
         """
         if not self.client:
-            # MOCK: Simulating behavior without a real client
+            if not self._mock_allowed():
+                raise self._refuse_mock("it has no BigQuery client")
             logger.warning("bigquery_mock_mode_active")
             return await self._mock_execute(operation, params)
 
