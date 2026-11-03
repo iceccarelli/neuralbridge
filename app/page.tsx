@@ -7,6 +7,7 @@ import { SOLUTIONS } from './lib/solutions';
 import { PRODUCT_PAGES, productHref } from './lib/productPages';
 import { buildMetadata } from './lib/seo';
 import { IMAGES } from './lib/images';
+import { HOSTED_API } from './lib/hostedApi';
 import AdvisoryCheckPlayground from './components/AdvisoryCheckPlayground';
 import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
@@ -57,7 +58,7 @@ const products = [
     name: 'Validator',
     body: 'Article 14 draft validation, the ISO/TS 15066 separation calculator, manifest diff, advisory check, Declaration check, bundle re-verification, and attestation verification.',
     href: QUICKSTART,
-    cta: 'Start free',
+    cta: 'Read the quickstart',
     imageKey: 'card-plan-validator',
   },
   {
@@ -203,7 +204,11 @@ export default function IndustrialAutonomousAssuranceSite() {
               is let you evidence your own process, and show a reviewer which records stopped describing the machine.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-primary" href="#advisory-check">A change or advisory just landed — check it free</a>
+              <a className="btn btn-primary" href="#advisory-check">
+                {HOSTED_API
+                  ? 'A change or advisory just landed — check it free'
+                  : 'A change or advisory just landed — see the check, run it offline'}
+              </a>
               <a className="btn btn-outline" href={SALES}>Talk to sales</a>
               <a className="btn btn-outline" href="#pricing">See pricing</a>
             </div>
@@ -338,11 +343,13 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       <section className="section" id="products">
         <div className="shell">
           <div className="section-head" id="advisory-check">
-            <span className="eyebrow">Start here — free, no account</span>
+            <span className="eyebrow">
+              {HOSTED_API ? 'Start here — free, no account' : 'Start here — runs on your own machine today'}
+            </span>
             <h2>Machine Assurance Check: a change landed. What does it mean for this machine?</h2>
             <p>
               This is the question the whole system exists to answer. Paste a supplier advisory and one machine&apos;s
-              manifest below and run the real check &mdash; the same match logic that decides whether a hash is
+              manifest below. {HOSTED_API ? 'Run the real check' : 'The request is shown as the API takes it'} &mdash; the same match logic that decides whether a hash is
               byte-identical, a version label is only a label, or the two disagree and neither column gets to claim
               this machine. An explicit verdict, never collapsed to safe-or-not: no impact found, potentially
               affected, or needs a human to look.
@@ -350,18 +357,35 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
 
           <div className="hero-panel" style={{ marginBottom: '2rem' }}>
-            <div className="hero-panel-title">Machine Assurance Check &mdash; try it right here</div>
+            <div className="hero-panel-title">
+              {HOSTED_API
+                ? 'Machine Assurance Check \u2014 try it right here'
+                : 'Machine Assurance Check \u2014 the request it takes (hosted endpoint not live yet)'}
+            </div>
             <AdvisoryCheckPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/check/machine</code> endpoint on one machine, free, no account.
+              {HOSTED_API ? (
+                <>
+                  This calls the real <code>POST /v1/check/machine</code> endpoint on one machine, free, no account.
+                </>
+              ) : (
+                <>
+                  This site has no hosted API behind it yet, so the button below cannot run the check online. The same
+                  check is <code>POST /v1/check/machine</code> in the Assurance API you run yourself (
+                  <a href={QUICKSTART}>quickstart</a>), and the offline kit runs it with no server, no account and no
+                  upload.
+                </>
+              )}{' '}
               Enrolling the machine unlocks <code>POST /v1/check/fleet-machine</code>: the same check joined to its
               intervention history, its evidence staleness, and the fleet-wide fan-out across every other enrolled
               machine &mdash; the Cell plan.
             </p>
             <p className="hero-panel-note">
               Handed an evidence export, a machine verification bundle or a signed attestation log?{' '}
-              <a href="/verify">Check what can and cannot be established from the file</a> &mdash; free, no account,
-              nothing stored.
+              <a href="/verify">Check what can and cannot be established from the file</a> &mdash;{' '}
+              {HOSTED_API
+                ? 'free, no account, nothing stored.'
+                : 'this page needs the hosted API, which is not live yet; the offline kit does the same check on your own machine.'}
             </p>
           </div>
 
@@ -375,10 +399,14 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           </div>
 
           <div className="hero-panel" style={{ marginBottom: '2rem' }}>
-            <div className="hero-panel-title">The free CRA Article 14 validator &mdash; try it right here</div>
+            <div className="hero-panel-title">
+              {HOSTED_API
+                ? 'The free CRA Article 14 validator \u2014 try it right here'
+                : 'The CRA Article 14 validator \u2014 the request it takes (hosted endpoint not live yet)'}
+            </div>
             <ValidatorPlayground />
             <p className="hero-panel-note">
-              This calls the real <code>POST /v1/spec/validate</code> endpoint: it reports missing required fields and
+              This is the real <code>POST /v1/spec/validate</code> request: it reports missing required fields and
               listed territories that are not EU Member States (<strong>Switzerland is not an EU Member State</strong>)
               &mdash; a live regulatory check, not a mockup. See the pricing section for whether this route is hosted
               publicly right now.
@@ -650,10 +678,12 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
       <section className="final-cta" id="connect">
         <div className="shell final-cta-inner">
           <div>
-            <h2>Re-check one Declaration for free. See what your paperwork stopped describing.</h2>
+            <h2>Re-check one Declaration on your own machine. See what your paperwork stopped describing.</h2>
             <p>
-              The free checks need no account. The offline kit needs no account, key or upload and opens no sockets.
-              The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.
+              The offline kit needs no account, key or upload and opens no sockets.{' '}
+              {HOSTED_API
+                ? 'The hosted API answers the same checks over HTTP; the quickstart runs them locally.'
+                : 'The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.'}
             </p>
           </div>
           <div className="hero-actions">

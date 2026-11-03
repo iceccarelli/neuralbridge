@@ -15,7 +15,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
   plans: {
     label: 'Plans',
     cards: [
-      { name: 'Validator — free', blurb: 'Article 14 draft validation, calculators, offline kit. No account.', href: '/#pricing' },
+      { name: 'Validator — free', blurb: 'Article 14 draft validation, calculators, offline kit.', href: '/#pricing' },
       { name: 'Register — €390/mo', blurb: 'The Article 14 register for one manufacturer.', href: '/#pricing' },
       { name: 'Cell — €1,290/mo', blurb: 'Register, plus machine and fleet-level assurance.', href: '/#pricing' },
     ],
@@ -174,7 +174,7 @@ export default function Header() {
               <button className="icon-button" aria-label="Search" onClick={() => setSearchOpen(true)}>⌕</button>
 
               <a className="nav-cta ghost" href={SALES}>Talk to sales</a>
-              <a className="nav-cta primary" href="/#products">Start free</a>
+              <a className="nav-cta primary" href="/#products">Get started</a>
 
               <button
                 className="hamburger"
@@ -268,7 +268,7 @@ export default function Header() {
             <div className="shell finder-inner">
               <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Free tier</strong>
-                <span>Validator — Article 14 validation and calculators, no account.</span>
+                <span>Validator — Article 14 validation and calculators.</span>
               </a>
               <a className="finder-item" href="/#pricing" onClick={closeAll}>
                 <strong>Compare plans</strong>
@@ -441,7 +441,7 @@ export default function Header() {
 
         <div className="mobile-drill-sticky">
           <a className="btn btn-outline" href={SALES} onClick={() => setMobileOpen(false)}>Talk to sales</a>
-          <a className="btn btn-primary" href="/#pricing" onClick={() => setMobileOpen(false)}>Start free</a>
+          <a className="btn btn-primary" href="/#pricing" onClick={() => setMobileOpen(false)}>Get started</a>
         </div>
       </div>
     </header>

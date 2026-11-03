@@ -17,7 +17,7 @@ export interface SearchEntry {
 // pages that matter most for wayfinding; the full docs tree is browsable
 // from the /docs sidebar itself.
 export const SEARCH_INDEX: SearchEntry[] = [
-  { title: 'Validator — free', group: 'Products', href: '/#pricing', blurb: 'Article 14 draft validation, calculators, offline kit. No account.' },
+  { title: 'Validator — free', group: 'Products', href: '/#pricing', blurb: 'Article 14 draft validation, calculators, offline kit.' },
   { title: 'Article 14 Register — €390/mo', group: 'Products', href: '/#pricing', blurb: 'The CRA register for one manufacturer.' },
   { title: 'Cell — €1,290/mo', group: 'Products', href: '/#pricing', blurb: 'Register, plus machine and fleet-level assurance.' },
   { title: 'Machine safety verification', group: 'Products', href: `/docs/assurance/machine`, blurb: 'ISO/TS 15066 checks against a declared safety envelope.' },
@@ -48,7 +48,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Key ceremony', group: 'Docs', href: '/docs/assurance/key-ceremony', blurb: 'Prepared, not performed: the procedure for the two trust anchors.' },
   { title: 'Operator pipeline', group: 'Docs', href: '/docs/assurance/pipeline', blurb: 'A public vulnerability record to a machine passport, in the order an operator runs it.' },
   { title: 'Platform status', group: 'Docs', href: '/docs/platform', blurb: 'What is Supported vs. Evolving today.' },
-  { title: 'Check an evidence file', group: 'Docs', href: '/verify', blurb: 'Free, no account, nothing stored: what can and cannot be established from an export, bundle or attestation log.' },
+  { title: 'Check an evidence file', group: 'Docs', href: '/verify', blurb: 'Nothing stored: what can and cannot be established from an export, bundle or attestation log.' },
   { title: 'Developers — API reference', group: 'Docs', href: '/developers', blurb: 'Auth, the real free-vs-paid route table, curl and Python examples.' },
   { title: 'Applications', group: 'Docs', href: '/applications', blurb: 'Cobots, packaging, fleet, OEM register, insurer evidence — mapped to real routes.' },
   { title: 'CLI', group: 'Docs', href: '/cli', blurb: 'python -m assurance — the real command tree.' },

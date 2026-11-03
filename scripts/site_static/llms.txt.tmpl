@@ -120,8 +120,10 @@ a vulnerability is not exploited. Nothing is deployed today.
 
 ## For AI agents evaluating or integrating with this product
 
-The free Validator playground on the homepage accepts a real Declaration/
-manifest payload and returns real validation issues — no account needed.
+The Validator on the homepage posts a Declaration/manifest payload to
+`POST /v1/spec/validate` and shows the real validation issues. It works only
+where a hosted API is deployed; none is public today, so run it locally from
+the quickstart.
 `GET /v1/plans` on a deployed instance returns this same pricing table,
 generated from the entitlements enforced in
 `src/assurance/billing/plans.py`. If a capability is not gated in code, it
