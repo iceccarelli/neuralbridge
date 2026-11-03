@@ -444,8 +444,11 @@ class TestWiring:
     def test_sitemap_search_header_and_home_are_driven_by_the_data_module(self):
         assert "PRODUCT_PAGES.map" in _text("app/sitemap.ts") and "productHref(p.slug)" in _text("app/sitemap.ts")
         assert "PRODUCT_PAGES" in _text("app/lib/search-index.ts")
-        header = _text("app/Header.tsx")
-        assert "PRODUCT_PAGES" in header and "label: 'Product'" in header
+        # The client Header is fed from the server layout (so the full product text is not in every route's
+        # JavaScript): the layout builds the links from PRODUCT_PAGES and the Header renders them.
+        header, layout = _text("app/Header.tsx"), _text("app/layout.tsx")
+        assert "label: 'Product'" in header and "productLinks" in header
+        assert "PRODUCT_PAGES" in layout and "productHref(p.slug)" in layout and "productLinks={productLinks}" in layout
         assert "PRODUCT_PAGES" in _text("app/page.tsx")
 
     def test_each_solution_links_to_product_pages(self, pages):

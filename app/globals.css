@@ -3228,3 +3228,59 @@ table.status-table tbody tr:last-child td {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
+
+/* WCAG 2.2 AA (2.5.8 target size, 1.4.10 reflow, 2.3.3 motion) — found by the browser accessibility audit.
+   Primary mobile controls reach 44x44; long inline code (an env var) wraps instead of forcing a sideways scroll
+   at 320px; smooth scrolling is a motion effect and honours the reduced-motion preference. */
+.hamburger,
+.icon-button,
+.mobile-drill-close,
+.mobile-back {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.tile-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+:not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+.contact-form-errors {
+  border-left: 4px solid #b3261e;
+  background: #fdf0ef;
+  color: #5c1511;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--radius-sm);
+}
+
+.contact-form-errors[hidden] {
+  display: none;
+}
+
+.contact-form-errors ul {
+  margin: 0.35rem 0 0 1.1rem;
+  padding: 0;
+}
+
+.contact-field-error {
+  color: #8c1d18;
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0;
+}
+
+.contact-field input[aria-invalid='true'],
+.contact-field textarea[aria-invalid='true'] {
+  border-color: #b3261e;
+}

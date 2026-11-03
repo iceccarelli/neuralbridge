@@ -43,6 +43,18 @@ def test_every_online_promise_on_the_home_page_is_inside_a_hosted_api_branch():
     assert not unguarded, f"online-tool promise outside a HOSTED_API branch: {unguarded}"
 
 
+def test_every_online_promise_in_the_layout_is_inside_a_hosted_api_branch():
+    # The footer banner renders on every page; it promised "for free - no account" with a "Start free" button.
+    layout = (ROOT / "app" / "layout.tsx").read_text(encoding="utf-8").splitlines()
+    unguarded = [
+        (i + 1, line.strip())
+        for i, line in enumerate(layout)
+        if any(p in line for p in (*PROMISES, "for free", "Start free"))
+        and "HOSTED_API" not in "\n".join(layout[max(0, i - 6) : i + 1])
+    ]
+    assert not unguarded, unguarded
+
+
 def test_unhosted_variant_says_where_the_check_actually_runs():
     # The fallback branch must tell the visitor what they can do today, not just retract the promise.
     assert "runs on your own machine today" in PAGE

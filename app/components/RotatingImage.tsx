@@ -35,6 +35,11 @@ export default function RotatingImage({
   const hasB = Boolean(slot.b);
   const [showB, setShowB] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  // The alternate frame is not in the page until just before its first use, so a visitor who leaves, or who
+  // prefers reduced motion (and so never sees it), never downloads it. Rendering it from the start made
+  // roughly 40% of the home page's image bytes frames that sit at opacity 0.
+  const [armed, setArmed] = useState(false);
+  const bLoaded = useRef(false);
   const timeoutRef = useRef<number>();
 
   useEffect(() => {
@@ -48,13 +53,18 @@ export default function RotatingImage({
   useEffect(() => {
     if (!hasB || reducedMotion) return;
 
+    // Only flip to B once it has loaded; flipping back to A is always allowed.
     const tick = () => {
-      if (document.visibilityState === 'visible') setShowB((v) => !v);
+      if (document.visibilityState === 'visible') setShowB((v) => (v ? false : bLoaded.current));
       timeoutRef.current = window.setTimeout(tick, intervalMs);
     };
+    const armTimer = window.setTimeout(() => setArmed(true), Math.max(0, intervalMs + offsetMs - 2000));
     timeoutRef.current = window.setTimeout(tick, intervalMs + offsetMs);
 
-    return () => window.clearTimeout(timeoutRef.current);
+    return () => {
+      window.clearTimeout(armTimer);
+      window.clearTimeout(timeoutRef.current);
+    };
   }, [hasB, reducedMotion, intervalMs, offsetMs]);
 
   if (!hasB) {
@@ -77,14 +87,19 @@ export default function RotatingImage({
         fetchPriority={priority ? 'high' : undefined}
         style={{ objectFit: 'cover', opacity: showB ? 0 : 1, transition: 'opacity var(--duration-panel) var(--ease)' }}
       />
-      <Image
-        src={slot.b!.src}
-        alt={showB ? slot.b!.alt : ''}
-        aria-hidden={!showB}
-        fill
-        sizes={sizes}
-        style={{ objectFit: 'cover', opacity: showB ? 1 : 0, transition: 'opacity var(--duration-panel) var(--ease)' }}
-      />
+      {armed && !reducedMotion && (
+        <Image
+          src={slot.b!.src}
+          alt={showB ? slot.b!.alt : ''}
+          aria-hidden={!showB}
+          fill
+          sizes={sizes}
+          onLoad={() => {
+            bLoaded.current = true;
+          }}
+          style={{ objectFit: 'cover', opacity: showB ? 1 : 0, transition: 'opacity var(--duration-panel) var(--ease)' }}
+        />
+      )}
       {dots && (
         <div className="media-dots" aria-hidden="true">
           <span className={`media-dot ${!showB ? 'is-active' : ''}`} />
