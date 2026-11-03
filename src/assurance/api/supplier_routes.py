@@ -509,14 +509,24 @@ def post_self_pin(
     summary="Read a hosted supplier feed (no account needed)",
 )
 def get_feed(supplier_account_id: str) -> Response:
+    # Validate before the id is ever turned into a filename: an overlong or odd id must be
+    # a 4xx, not an OSError from the filesystem (and never a path component).
+    if not _ID.match(supplier_account_id) or supplier_account_id in (".", ".."):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "invalid_feed_id",
+                    "detail": "No feed can exist under this id."},
+        )
     feed_path = supplier_feeds_dir() / f"{supplier_account_id}.jsonl"
-    if not feed_path.exists():
+    try:
+        text = feed_path.read_text("utf-8")
+    except FileNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No feed has been published under this id.",
-        )
+        ) from None
     return Response(
-        content=feed_path.read_text("utf-8"),
+        content=text,
         media_type="application/x-ndjson",
         headers={"X-Content-Type-Options": "nosniff"},
     )

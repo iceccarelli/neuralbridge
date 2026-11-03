@@ -38,6 +38,7 @@ trail. The shared operator ledger must never be passed in.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -74,6 +75,32 @@ TRUST_STATEMENT = (
     "show that its newest records are present unless the reader supplies the highest "
     "sequence it has already seen."
 )
+
+
+_PROVENANCE_FILLER = frozenset({
+    "from", "via", "the", "this", "that", "same", "its", "own", "s", "itself", "a", "an", "in",
+    "on", "by", "of", "supplier", "suppliers", "hosted", "published", "signed", "key", "keys",
+    "fingerprint", "printed", "inside", "within", "advisory", "pin", "it", "was", "is", "i",
+    "got", "took", "copied", "read", "learned", "taken", "copy"})
+
+
+def _check_provenance(obtained_via: str, what: str = "fingerprint") -> None:
+    """Refuse an ``obtained_via`` that names the feed itself as the source.
+
+    A fingerprint printed inside a feed proves nothing (point 3 above): the feed is
+    signed by the very key it would vouch for. This is free text, so the check only
+    guards the obvious mistake ("from the feed", "the feed's own key", "same feed");
+    it cannot know where a person really got the value.
+    """
+    words = re.sub(r"[^a-z0-9]+", " ", obtained_via.lower().replace("'", "")).split()
+    words = ["feed" if w == "feeds" else w for w in words]
+    if "feed" in words and not [w for w in words if w != "feed" and w not in _PROVENANCE_FILLER]:
+        raise SupplierTrustError(
+            f"obtained_via {obtained_via.strip()!r} names the feed itself as the source of the "
+            f"{what}. A pin must come from an independent channel: the supplier contract, a "
+            "signed email whose fingerprint you verified by phone, or the vendor portal over a "
+            "separate channel. A fingerprint that came from the feed it signs is not a pin.")
+
 
 
 class SupplierTrustError(AssuranceError):
@@ -331,6 +358,7 @@ class SupplierTrustStore:
                 "obtained_via is empty. Say how you learned this fingerprint (the "
                 "contract, a phone call, the documentation folder). A fingerprint "
                 "that came from the feed it signs is not a pin.")
+        _check_provenance(obtained_via)
         fp = _fp_of(public_key_pem)
         if expected_fingerprint and expected_fingerprint.strip().lower() != fp:
             raise SupplierTrustError(
@@ -363,6 +391,7 @@ class SupplierTrustStore:
             raise SupplierTrustError(
                 "obtained_via is empty: how did you learn the new fingerprint? Not "
                 "from the feed that announces the rotation.")
+        _check_provenance(obtained_via, "new fingerprint")
         fp = _fp_of(new_public_key_pem)
         if expected_fingerprint and expected_fingerprint.strip().lower() != fp:
             raise SupplierTrustError(
