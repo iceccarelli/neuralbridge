@@ -1044,7 +1044,7 @@ def hook_client(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
     monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "hook-accounts.db"))
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
-    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-reconcile")
+    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-reconcile-0123456789abcdef0123456789")
     for name in ("ASSURANCE_ALLOW_UNAUTHENTICATED", "ASSURANCE_TENANT_LEDGERS"):
         monkeypatch.delenv(name, raising=False)
     deps._register_for.cache_clear()

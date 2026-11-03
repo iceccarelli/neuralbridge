@@ -32,7 +32,7 @@ from assurance.attest import (
 from assurance.core.evidence import Actor, Evidence, Origin
 from assurance.evidence.ledger import GENESIS, EvidenceLedger
 
-OPERATOR_KEY = "operator-key-test"
+OPERATOR_KEY = "operator-key-test-0123456789abcdef0123456789"
 PASSPHRASE = "correct horse battery staple"  # noqa: S105
 
 

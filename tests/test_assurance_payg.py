@@ -124,7 +124,7 @@ def meters():
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
     monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
-    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-payg")
+    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-payg-0123456789abcdef0123456789")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     for name in ("ASSURANCE_ALLOW_UNAUTHENTICATED", "STRIPE_SECRET_KEY", "ASSURANCE_PAYG_ALLOW_LIVE",
                  "ASSURANCE_PRICE_REGISTER", "ASSURANCE_PRICE_CELL", "ASSURANCE_PRICE_PAYG",

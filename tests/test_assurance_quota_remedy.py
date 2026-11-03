@@ -26,7 +26,7 @@ PAYG_PHRASE = "bills operations beyond the allowance"
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
     monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
-    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-remedy")
+    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-remedy-0123456789abcdef0123456789")
     for name in ("ASSURANCE_ALLOW_UNAUTHENTICATED", "STRIPE_SECRET_KEY",
                  "ASSURANCE_PRICE_REGISTER", "ASSURANCE_PRICE_CELL",
                  "ASSURANCE_TENANT_LEDGERS", "ASSURANCE_TRUST_FLY_PROXY"):

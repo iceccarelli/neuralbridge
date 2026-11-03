@@ -36,9 +36,10 @@ from assurance.billing.accounts import (
 from assurance.billing.plans import PLANS
 from assurance.core.identity import format_utc, utc_now
 
+from .support_billing import claim
 from .test_assurance_billing import WEBHOOK_SECRET, _signed
 
-OPERATOR_KEY = "operator-key-hardening"
+OPERATOR_KEY = "operator-key-hardening-0123456789abcdef"
 
 
 @pytest.fixture()
@@ -108,7 +109,7 @@ def hook(client, event):
 
 
 def collect(client, session="cs_1"):
-    return client.get("/v1/checkout/complete", params={"session_id": session})
+    return claim(client, session)
 
 
 def can_use_register(client, key):
@@ -185,14 +186,14 @@ class TestWebhookReplay:
         got = collect(client)
         assert got.status_code == 200
         assert can_use_register(client, got.json()["api_key"]) == 200
-        assert collect(client).status_code == 202   # exactly once
+        assert collect(client).status_code == 410   # exactly once
 
     def test_a_replay_after_collection_does_not_re_arm_the_handover(self, client, store):
         hook(client, checkout())
         collect(client)
         again = hook(client, checkout())
         assert again.json()["duplicate"] is True
-        assert collect(client).status_code == 202
+        assert collect(client).status_code == 410
         assert rows(store, "SELECT COUNT(*) FROM pending_keys")[0][0] == 0
         assert rows(store, "SELECT COUNT(*) FROM api_keys")[0][0] == 1
 
@@ -201,7 +202,7 @@ class TestWebhookReplay:
         collect(client)
         hook(client, checkout(event_id="evt_two"))
         assert rows(store, "SELECT COUNT(*) FROM api_keys")[0][0] == 1
-        assert collect(client).status_code == 202
+        assert collect(client).status_code == 410
 
     def test_a_replayed_cancellation_cannot_undo_a_later_resubscription(self, client):
         hook(client, checkout())
@@ -421,7 +422,8 @@ class TestPendingKeys:
         db.execute("UPDATE pending_keys SET created_at=?", (old,))
         db.commit()
         db.close()
-        assert collect(client).status_code == 202
+        # expired: a definite answer, not "pending" for ever
+        assert collect(client).status_code == 410
         assert rows(store, "SELECT COUNT(*) FROM pending_keys")[0][0] == 0
         # The key itself still works: only the plaintext handover lapsed.
         assert rows(store, "SELECT COUNT(*) FROM api_keys")[0][0] == 1
@@ -845,7 +847,7 @@ class TestBodyCap:
 class TestNonAsciiHeaders:
     @pytest.mark.parametrize("value", ["é", "ключ", "kéy-中"])
     def test_a_non_ascii_api_key_is_a_401_not_a_500(self, client, monkeypatch, value):
-        monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-1")
+        monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-1-0123456789abcdef0123456789")
         resp = client.get("/v1/me", headers={"X-API-Key": value.encode("utf-8")})
         assert resp.status_code == 401
 

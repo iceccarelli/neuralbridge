@@ -42,7 +42,7 @@ from assurance.watch.runner import _last_observation_at
 
 from .support import plan_dict, write_export
 
-OPERATOR_KEY = "operator-key-test-watch-report"
+OPERATOR_KEY = "operator-key-test-watch-report-0123456789abcdef0123456789"
 KEY_0412 = "Grimaldi/AR-7#0412"
 KEY_0501 = "Grimaldi/AR-7#0501"
 SCANNER = Actor("assurance-watch", "scheduled watch", "automation")

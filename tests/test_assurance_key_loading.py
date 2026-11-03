@@ -30,7 +30,7 @@ from assurance.attest.preflight import run_preflight
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX")
 
-OPERATOR_KEY = "operator-key-test"
+OPERATOR_KEY = "operator-key-test-0123456789abcdef0123456789"
 
 
 def make_key(tmp_path: Path, *, file_mode=0o600, dir_mode=0o700, name="service.pem") -> Path:

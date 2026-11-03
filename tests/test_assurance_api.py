@@ -18,7 +18,7 @@ from assurance.api.routes import GLOSSARY_VERSION
 
 ACTOR = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
 AWARE = "2026-09-19T06:30:00Z"
-KEY = "test-key-do-not-ship"
+KEY = "test-key-do-not-ship-0123456789abcdef0123456789"
 
 
 @pytest.fixture()

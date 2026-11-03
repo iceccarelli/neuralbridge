@@ -1,13 +1,19 @@
 """Operator command: issue a new API key to a paying Stripe account.
 
-``python -m assurance.billing.issue_key (--customer cus_... | --account acc_...) [--json]``
+``python -m assurance.billing.issue_key (--customer cus_... | --account acc_...)
+[--discard-staged cs_...] [--json]``
 
 For the one case the product has no other answer to: a checkout key that was never collected
 when a backup was taken. ``pending_keys`` is deliberately not in a backup (it holds a working
 credential in plaintext), and the checkout's session marker is, so after a restore the
-customer's ``/v1/checkout/complete`` answers 202 for ever and Stripe's redelivery is a
-duplicate. This mints a fresh key for that account through the same ``AccountStore.issue_key``
-the API uses (same active-key limit), once, to stdout.
+customer's ``/v1/checkout/complete`` answers 410 (``already_collected_or_expired``) and
+Stripe's redelivery is a duplicate. This mints a fresh key for that account through the same
+``AccountStore.issue_key`` the API uses (same active-key limit), once, to stdout.
+
+It is also the recovery when someone other than the buyer collected the key (they held the
+session id and the claim token), or the buyer lost the claim token while the key is still
+staged (``/v1/checkout/complete`` answers 403): ``--discard-staged cs_...`` first deletes
+the staged key and revokes it, so the staged copy can never be used.
 
 It issues only to an account that is paying now (``active`` or ``past_due`` on a paid tier)
 and has a Stripe customer; it never touches the operator account, status, tier or any
@@ -45,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
     who = parser.add_mutually_exclusive_group(required=True)
     who.add_argument("--customer", metavar="cus_...", help="the account's Stripe customer id")
     who.add_argument("--account", metavar="acc_...", help="the account id")
+    parser.add_argument("--discard-staged", metavar="cs_...", default="",
+                        help="first delete the key staged for this checkout session and revoke "
+                             "it: for a buyer who lost the claim token, or a key that may have "
+                             "been collected by someone else. It must belong to the same account")
     parser.add_argument("--json", action="store_true",
                         help='print {"account_id", "prefix", "api_key"} instead of the bare key')
     args = parser.parse_args(argv)
@@ -69,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         if acct.status not in ENTITLED_STATUSES or acct.tier == "free":
             return _refuse(f"the account is not entitled (status {acct.status!r}, tier "
                            f"{acct.tier!r}); a key would open nothing.")
+        if args.discard_staged:
+            staged_for = store.discard_pending_key(args.discard_staged)
+            if staged_for is None:
+                sys.stderr.write("issue_key: no key was staged for that session; continuing.\n")
+            elif staged_for != acct.id:
+                return _refuse("the staged key for that session belongs to a different "
+                               "account; it was discarded and revoked, nothing was issued.")
+            else:
+                sys.stderr.write("issue_key: discarded and revoked the staged key.\n")
         try:
             key = store.issue_key(acct.id, label=LABEL, max_active=MAX_ACTIVE_KEYS)
         except KeyLimitError:

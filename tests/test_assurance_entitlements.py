@@ -28,7 +28,7 @@ from assurance.billing import plans as plans_module
 from assurance.billing.plans import PLANS
 from assurance.core.identity import utc_now
 
-OPERATOR_KEY = "operator-key-entitlements"
+OPERATOR_KEY = "operator-key-entitlements-0123456789abcdef"
 ACTOR = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
 
 
@@ -154,6 +154,7 @@ FREE_ROUTES = {
 #: reach the billing portal.
 ACCOUNT_ROUTES = {
     ("POST", "/v1/checkout"), ("GET", "/v1/checkout/complete"),
+    ("POST", "/v1/checkout/complete"),
     ("POST", "/v1/billing/webhook"), ("GET", "/v1/me"),
     ("GET", "/v1/keys"), ("POST", "/v1/keys"), ("POST", "/v1/keys/revoke"),
     ("POST", "/v1/billing/portal"),

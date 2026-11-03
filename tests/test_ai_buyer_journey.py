@@ -58,7 +58,7 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
-OPERATOR_KEY = "test-buyer-journey-operator-key"
+OPERATOR_KEY = "test-buyer-journey-operator-key-0123456789abcdef0123456789"
 
 
 @pytest.fixture
