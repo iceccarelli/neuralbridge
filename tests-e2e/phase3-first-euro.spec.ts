@@ -38,7 +38,7 @@ test.describe('checkout-success next-step panel', () => {
       })
     );
 
-    await page.goto('/checkout/success?session_id=cs_test_123#claim=claim-test');
+    await page.goto('/checkout/success?session_id=cs_test_123');
 
     await expect(page.getByRole('heading', { name: /your cell key/i })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('nb-test-key-do-not-ship')).toBeVisible();
@@ -51,7 +51,7 @@ test.describe('checkout-success next-step panel', () => {
 
   test('an incomplete session polls, never fakes a key', async ({ page }) => {
     await page.route('**/v1/checkout/complete*', (route) => route.fulfill({ status: 202, body: '{}' }));
-    await page.goto('/checkout/success?session_id=cs_test_pending#claim=claim-test');
+    await page.goto('/checkout/success?session_id=cs_test_pending');
     await expect(page.getByText(/confirming your payment/i)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('nb-test-key-do-not-ship')).not.toBeVisible();
   });
