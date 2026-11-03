@@ -97,6 +97,11 @@ have independently confirmed the live API responds.
   https://neuralbridge.io/.well-known/agent.json
 - Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
 - Security policy (how to report a vulnerability): https://neuralbridge.io/security
+- security.txt (RFC 9116): https://neuralbridge.io/.well-known/security.txt
+- Organisation contact card (vCard, name, site and the published contact address only):
+  https://neuralbridge.io/neuralbridge.vcf
+- Web app manifest: https://neuralbridge.io/manifest.webmanifest; sitemap:
+  https://neuralbridge.io/sitemap.xml
 - Deploy checklist (a static founder checklist of what is left before this
   takes real money; it does not probe a live service):
   https://neuralbridge.io/status

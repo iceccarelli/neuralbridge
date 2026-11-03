@@ -1,0 +1,7 @@
+# How to report a vulnerability in Industrial Autonomous Assurance (RFC 9116).
+# The address is the one SECURITY.md already publishes. No response time is promised there or here.
+Contact: mailto:security@neuralbridge.ai
+Expires: 2027-10-31T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://neuralbridge.io/.well-known/security.txt
+Policy: https://neuralbridge.io/security

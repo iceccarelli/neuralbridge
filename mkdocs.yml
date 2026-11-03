@@ -29,10 +29,9 @@ theme:
 plugins:
   - search
 nav:
-  - Home: index.md
+  - Home: assurance/index.md
   - Getting started: getting-started.md
   - Assurance engines:
-    - Overview: assurance/index.md
     - Collect: assurance/collect.md
     - Machine safety: assurance/machine.md
     - Machinery Annex III: assurance/machinery.md
@@ -41,7 +40,7 @@ nav:
     - Public-source intelligence: assurance/intel.md
     - Watch: assurance/watch.md
     - Attest: assurance/attest.md
-    - Key ceremony: assurance/key-ceremony.md
+    - Key ceremony: assurance/KEY-CEREMONY.md
     - Trust runbook: assurance/trust-runbook.md
     - Offline kit: assurance/kit.md
     - Supplier feeds: assurance/supplier.md

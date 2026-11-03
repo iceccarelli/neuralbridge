@@ -22,6 +22,7 @@ export async function generateMetadata({ params }: { params: SolutionParams }): 
     title: solution.role,
     description: fitDescription(`${solution.headline} ${solution.lead}`),
     path: `/solutions/${solution.slug}`,
+    ownImage: true,
   });
 }
 

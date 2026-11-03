@@ -18,6 +18,10 @@ Dispositions
                the added / removed / modified record ids.
 ``unchanged``  byte-identical (same sha256) to the latest accepted observation; recorded as a
                re-observation, and never a downstream event.
+``unchanged`` is also how a conditional GET answered ``304 Not Modified`` is recorded: the
+               row carries ``http_status`` 304, the stored sha256 and a reason beginning
+               ``not_modified``, so the time of the check is on file (honest freshness) without
+               a second copy of the bytes. A 304 with no usable stored body is ``rejected``.
 ``rejected``   the response could not be accepted (transport failure, non-200, oversized,
                malformed). Recorded with its sha256 and reason; no payload is stored and the
                series baseline is untouched.
@@ -25,13 +29,14 @@ Dispositions
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +45,18 @@ from assurance.core.identity import format_utc
 from assurance.core.sqlite import enable_wal
 from assurance.intel.parsers import ParsedFeed
 
-__all__ = ["DISPOSITIONS", "SCHEMA_VERSION", "IntelStore", "IntelStoreError", "Observation",
-           "ReadOnlyIntelStore"]
+__all__ = ["DISPOSITIONS", "SCHEMA_VERSION", "IntelStore", "IntelStoreError", "ListingState",
+           "NOT_MODIFIED", "Observation", "ReadOnlyIntelStore", "Validators", "clean_validators"]
 
 SCHEMA_VERSION = 1
 DISPOSITIONS = ("first", "changed", "unchanged", "rejected")
 #: Longest id list kept per side of a diff; the totals are always exact.
 MAX_DIFF_IDS = 5_000
+
+#: Reason prefixes of a conditional-GET 304 (accepted / not usable).
+NOT_MODIFIED = "not_modified"
+_NOT_MODIFIED_UNUSABLE = "not_modified_unusable"
+_MAX_VALIDATOR = 512
 
 _APP_ID = 0x494E544C     # "INTL": refuse to treat some other SQLite file as this store
 
@@ -83,6 +93,31 @@ CREATE TABLE IF NOT EXISTS provenance (
     meta_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS provenance_provider ON provenance (provider, seq);
+CREATE TABLE IF NOT EXISTS validators (
+    seq           INTEGER PRIMARY KEY REFERENCES observations(seq),
+    etag          TEXT NOT NULL,
+    last_modified TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS listings (
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    url           TEXT NOT NULL,
+    retrieved_at  TEXT NOT NULL,
+    http_status   INTEGER NOT NULL,
+    outcome       TEXT NOT NULL CHECK (outcome IN ('fetched','not_modified')),
+    sha256        TEXT NOT NULL,
+    byte_length   INTEGER NOT NULL,
+    etag          TEXT NOT NULL,
+    last_modified TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS listings_url ON listings (url, seq);
+CREATE TRIGGER IF NOT EXISTS validators_no_update BEFORE UPDATE ON validators
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS validators_no_delete BEFORE DELETE ON validators
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS listings_no_update BEFORE UPDATE ON listings
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS listings_no_delete BEFORE DELETE ON listings
+  BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS provenance_no_update BEFORE UPDATE ON provenance
   BEGIN SELECT RAISE(ABORT, 'intel observations are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS provenance_no_delete BEFORE DELETE ON provenance
@@ -100,6 +135,58 @@ CREATE TRIGGER IF NOT EXISTS blobs_no_delete BEFORE DELETE ON blobs
 
 class IntelStoreError(AssuranceError):
     """The file is not an intel store, or a row cannot be found."""
+
+
+@dataclass(frozen=True)
+class Validators:
+    """HTTP cache validators the server gave for one body. Either part may be empty."""
+
+    etag: str = ""
+    last_modified: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.etag or self.last_modified)
+
+    def request_headers(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if self.etag:
+            out["If-None-Match"] = self.etag
+        if self.last_modified:
+            out["If-Modified-Since"] = self.last_modified
+        return out
+
+
+def _clean_value(value: object, *, http_date: bool) -> str:
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value or len(value) > _MAX_VALIDATOR or any(not 0x20 <= ord(c) < 0x7F for c in value):
+        return ""        # empty, oversized, or carrying a control / non-ASCII character
+    if http_date:
+        # IMF-fixdate only (RFC 9110). Not email.utils: on Python 3.11 it imports ``socket``, and
+        # this module is on the offline path, which must import no network client. An obsolete
+        # date form is dropped, so that series is simply fetched in full.
+        try:
+            datetime.strptime(value, "%a, %d %b %Y %H:%M:%S GMT").replace(tzinfo=UTC)
+        except ValueError:
+            return ""
+    return value
+
+
+def clean_validators(headers: Mapping[str, str] | None) -> Validators:
+    """Validators from response headers (any case). Anything unsafe to echo back is dropped."""
+    lowered = {str(k).lower(): v for k, v in (headers or {}).items()}
+    return Validators(_clean_value(lowered.get("etag"), http_date=False),
+                      _clean_value(lowered.get("last-modified"), http_date=True))
+
+
+@dataclass(frozen=True)
+class ListingState:
+    """The last stored copy of a listing resource (provider metadata, index, ROLIE feed)."""
+
+    sha256: str
+    body: bytes
+    validators: Validators
 
 
 @dataclass(frozen=True)
@@ -139,6 +226,44 @@ class Observation:
         return {"observation_seq": self.seq, "source": self.source, "url": self.url,
                 "retrieved_at": self.retrieved_at, "sha256": self.sha256,
                 "record_id": record_id, "feed_stamp": self.feed_stamp}
+
+
+def _insert_provenance(db: sqlite3.Connection, seq: int | None, provenance: dict[str, Any],
+                       meta: dict[str, Any]) -> None:
+    db.execute(
+        "INSERT INTO provenance (seq,provider,listed_at,settled,meta_json) VALUES (?,?,?,?,?)",
+        (seq, provenance["provider"], provenance.get("listed_at", ""),
+         1 if provenance.get("settled", True) else 0, json.dumps(meta, sort_keys=True)))
+
+
+def _rehashed(raw: object, sha256: str) -> bytes | None:
+    """``raw`` as bytes if it is a blob that hashes to ``sha256``, else None."""
+    if not isinstance(raw, (bytes, memoryview)):
+        return None
+    body = bytes(raw)
+    return body if hashlib.sha256(body).hexdigest() == sha256 else None
+
+
+def _blob_ok(db: sqlite3.Connection, sha256: str) -> bool:
+    row = db.execute("SELECT body FROM blobs WHERE sha256=?", (sha256,)).fetchone()
+    return row is not None and _rehashed(row["body"], sha256) is not None
+
+
+def _validators_of(db: sqlite3.Connection, seq: int) -> Validators | None:
+    row = db.execute("SELECT etag, last_modified FROM validators WHERE seq=?", (seq,)).fetchone()
+    return Validators(row["etag"], row["last_modified"]) if row else None
+
+
+def _not_modified_problem(db: sqlite3.Connection, prev: sqlite3.Row | None,
+                          sent: Validators) -> str:
+    """Why a 304 cannot be taken as "unchanged", or "" when it can."""
+    if prev is None:
+        return "no accepted observation of this series is stored"
+    if not _blob_ok(db, prev["sha256"]):
+        return "the stored body is missing or no longer matches its sha256"
+    if _validators_of(db, prev["seq"]) != sent:
+        return "the validators sent are not those recorded for the stored body"
+    return ""
 
 
 def _row_to_observation(row: sqlite3.Row) -> Observation:
@@ -231,6 +356,7 @@ class IntelStore:
         http_status: int | None, byte_length: int, sha256: str, parser_version: str,
         parse_result: str, reason: str, raw: bytes | None = None,
         parsed: ParsedFeed | None = None, provenance: dict[str, Any] | None = None,
+        validators: Validators | None = None,
     ) -> Observation:
         """Record one observation. Decides the disposition inside the write transaction.
 
@@ -270,20 +396,155 @@ class IntelStore:
                 (source, url, locator, via, format_utc(retrieved_at), http_status, byte_length,
                  sha256, parser_version, parse_result, reason, disposition, count, stamp,
                  json.dumps(diff, sort_keys=True) if diff is not None else None))
+            if accepted and validators:
+                db.execute("INSERT INTO validators (seq,etag,last_modified) VALUES (?,?,?)",
+                           (cur.lastrowid, validators.etag, validators.last_modified))
             if provenance is not None:
                 meta = {k: v for k, v in provenance.items()
                         if k not in ("provider", "listed_at", "settled")}
                 if parsed is not None and accepted and parsed.meta.get("tracking"):
                     meta["tracking"] = parsed.meta["tracking"]
-                db.execute(
-                    "INSERT INTO provenance (seq,provider,listed_at,settled,meta_json) "
-                    "VALUES (?,?,?,?,?)",
-                    (cur.lastrowid, provenance["provider"], provenance.get("listed_at", ""),
-                     1 if provenance.get("settled", True) else 0,
-                     json.dumps(meta, sort_keys=True)))
+                _insert_provenance(db, cur.lastrowid, provenance, meta)
             row = db.execute("SELECT * FROM observations WHERE seq=?",
                              (cur.lastrowid,)).fetchone()
             return _row_to_observation(row)
+
+    def append_not_modified(
+        self, *, source: str, url: str, locator: str, retrieved_at: datetime,
+        sent: Validators, received: Validators | None = None,
+        provenance: dict[str, Any] | None = None,
+    ) -> Observation:
+        """Record a conditional GET answered ``304 Not Modified``. Nothing is re-downloaded.
+
+        Inside one write transaction: take the newest accepted observation of the series,
+        re-hash its stored blob, and require that the validators we sent are the ones recorded
+        for it. Then, and only then, append an ``unchanged`` row (``http_status`` 304, the stored
+        sha256 and counts) so the time of the check is on file. If there is no accepted
+        observation, no blob, a blob that no longer hashes to its recorded sha256, or the sent
+        validators are not the recorded ones, the answer is UNKNOWN, not "unchanged": a
+        ``rejected`` row (``http_status`` 304, empty body) is appended and the baseline is
+        untouched. ``received`` are validators the 304 itself carried; otherwise ``sent`` carry
+        forward.
+        """
+        insert = (
+            "INSERT INTO observations (source,url,locator,via,retrieved_at,http_status,"
+            "byte_length,sha256,parser_version,parse_result,reason,disposition,"
+            "record_count,feed_stamp,diff_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        with self._write_txn() as db:
+            prev = db.execute(
+                "SELECT * FROM observations WHERE source=? AND url=? AND parse_result='ok' "
+                "AND disposition != 'rejected' ORDER BY seq DESC LIMIT 1",
+                (source, url)).fetchone()
+            problem = _not_modified_problem(db, prev, sent)
+            meta = {k: v for k, v in (provenance or {}).items()
+                    if k not in ("provider", "listed_at", "settled")}
+            if problem or prev is None:
+                reason = f"{_NOT_MODIFIED_UNUSABLE}: {problem}; the answer is unknown"
+                cur = db.execute(insert, (
+                    source, url, locator, "network", format_utc(retrieved_at), 304, 0,
+                    hashlib.sha256(b"").hexdigest(), prev["parser_version"] if prev else "",
+                    "malformed", reason, "rejected", 0, "", None))
+                if provenance is not None:
+                    _insert_provenance(db, cur.lastrowid, {**provenance, "settled": False}, meta)
+            else:
+                cur = db.execute(insert, (
+                    source, url, locator, "network", format_utc(retrieved_at), 304,
+                    prev["byte_length"], prev["sha256"], prev["parser_version"], "ok",
+                    f"{NOT_MODIFIED}: the server confirmed the stored copy "
+                    f"(observation {prev['seq']}) is current; nothing was downloaded",
+                    "unchanged", prev["record_count"], prev["feed_stamp"], None))
+                keep = received if received else sent
+                if keep:
+                    db.execute("INSERT INTO validators (seq,etag,last_modified) VALUES (?,?,?)",
+                               (cur.lastrowid, keep.etag, keep.last_modified))
+                if provenance is not None:
+                    old = db.execute("SELECT meta_json FROM provenance WHERE seq=?",
+                                     (prev["seq"],)).fetchone()
+                    tracking = json.loads(old["meta_json"]).get("tracking") if old else None
+                    if tracking:
+                        meta["tracking"] = tracking
+                    _insert_provenance(db, cur.lastrowid, provenance, meta)
+            row = db.execute("SELECT * FROM observations WHERE seq=?",
+                             (cur.lastrowid,)).fetchone()
+            return _row_to_observation(row)
+
+    def validators_for(self, source: str, url: str) -> Validators | None:
+        """Validators to send for the series, or None (send nothing, download in full).
+
+        They are those recorded with the newest accepted observation, and only while that
+        observation's stored blob still re-hashes to its recorded sha256: a damaged or edited
+        blob makes its validators worthless, so they are dropped, never trusted.
+        """
+        with self._read() as db:
+            try:
+                prev = db.execute(
+                    "SELECT * FROM observations WHERE source=? AND url=? AND "
+                    "parse_result='ok' AND disposition != 'rejected' "
+                    "ORDER BY seq DESC LIMIT 1", (source, url)).fetchone()
+                if prev is None:
+                    return None
+                got = _validators_of(db, prev["seq"])
+                return got if got and _blob_ok(db, prev["sha256"]) else None
+            except sqlite3.OperationalError:
+                return None     # a store from before validators existed
+
+    # -- listing resources (provider metadata, changes.csv, index.txt, ROLIE feed) ---------
+    def listing_state(self, url: str) -> ListingState | None:
+        """The newest stored copy of a listing resource, if its blob still re-hashes."""
+        with self._read() as db:
+            try:
+                row = db.execute("SELECT * FROM listings WHERE url=? ORDER BY seq DESC LIMIT 1",
+                                 (url,)).fetchone()
+            except sqlite3.OperationalError:
+                return None
+            if row is None:
+                return None
+            blob = db.execute("SELECT body FROM blobs WHERE sha256=?",
+                              (row["sha256"],)).fetchone()
+        body = _rehashed(blob["body"] if blob else None, row["sha256"])
+        if body is None:
+            return None
+        return ListingState(row["sha256"], body, Validators(row["etag"], row["last_modified"]))
+
+    def record_listing(self, url: str, *, retrieved_at: datetime, raw: bytes,
+                       validators: Validators) -> None:
+        """Keep a listing resource fetched in full (HTTP 200) so a later 304 can be honoured."""
+        sha = hashlib.sha256(raw).hexdigest()
+        with self._write_txn() as db:
+            db.execute("INSERT OR IGNORE INTO blobs (sha256, body, digests_json) "
+                       "VALUES (?,?,?)", (sha, raw, "{}"))
+            db.execute(
+                "INSERT INTO listings (url,retrieved_at,http_status,outcome,sha256,byte_length,"
+                "etag,last_modified) VALUES (?,?,?,?,?,?,?,?)",
+                (url, format_utc(retrieved_at), 200, "fetched", sha, len(raw),
+                 validators.etag, validators.last_modified))
+
+    def record_listing_not_modified(self, url: str, *, retrieved_at: datetime, sent: Validators,
+                                    received: Validators | None = None) -> bytes:
+        """Honour a 304 for a listing: return the stored body, after re-hashing it.
+
+        Raises :class:`IntelStoreError` (the answer is unknown) when there is no stored copy,
+        it no longer hashes to its sha256, or ``sent`` are not the validators recorded with it.
+        """
+        with self._write_txn() as db:
+            row = db.execute("SELECT * FROM listings WHERE url=? ORDER BY seq DESC LIMIT 1",
+                             (url,)).fetchone()
+            if row is None:
+                raise IntelStoreError("304 for a resource with no stored copy")
+            blob = db.execute("SELECT body FROM blobs WHERE sha256=?",
+                              (row["sha256"],)).fetchone()
+            body = _rehashed(blob["body"] if blob else None, row["sha256"])
+            if body is None:
+                raise IntelStoreError("304, but the stored copy no longer matches its sha256")
+            if Validators(row["etag"], row["last_modified"]) != sent:
+                raise IntelStoreError("304, but the validators sent are not the recorded ones")
+            keep = received if received else sent
+            db.execute(
+                "INSERT INTO listings (url,retrieved_at,http_status,outcome,sha256,byte_length,"
+                "etag,last_modified) VALUES (?,?,?,?,?,?,?,?)",
+                (url, format_utc(retrieved_at), 304, "not_modified", row["sha256"],
+                 row["byte_length"], keep.etag, keep.last_modified))
+            return body
 
     # -- reading ----------------------------------------------------------
     def observations(self, *, source: str | None = None, after_seq: int = 0,
@@ -358,17 +619,10 @@ class IntelStore:
         means bit-rot or an edit that still parses (a changed digit inside valid JSON) is
         treated as an unreadable payload, never as the observation that was recorded.
         """
-        import hashlib
-
         with self._read() as db:
             row = db.execute("SELECT body FROM blobs WHERE sha256=?", (sha256,)).fetchone()
-        if not row:
-            return None
-        raw = row["body"]
-        if not isinstance(raw, (bytes, memoryview)):
-            return None     # a payload rewritten as TEXT/INTEGER/NULL is unreadable, not a crash
-        body = bytes(raw)
-        return body if hashlib.sha256(body).hexdigest() == sha256 else None
+        # A payload rewritten as TEXT/INTEGER/NULL is unreadable, not a crash.
+        return _rehashed(row["body"], sha256) if row else None
 
     def latest_accepted(self, source: str | None = None) -> list[Observation]:
         """The newest accepted observation of each (source, url) series, oldest first."""
