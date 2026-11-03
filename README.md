@@ -19,7 +19,7 @@ Two regulations turned that from a quality problem into a legal one:
 
 | | |
 |---|---|
-| **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning naming the Member States where the product is available. Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
+| **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning that indicates, where applicable, the Member States where you know the product has been made available (Art. 14(2)(a)). Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
 | **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
 
 Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
