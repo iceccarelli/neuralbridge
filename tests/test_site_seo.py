@@ -16,11 +16,13 @@ pages carry a robots noindex tag. The four known ones are asserted by name so a 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -37,7 +39,7 @@ DESC_MIN, DESC_MAX = 120, 160
 KNOWN_NOINDEX = {"/assurance", "/status", "/checkout/success", "/investigate"}
 
 #: JSON-LD @type values any page may carry (top-level or nested): the layout graph and the docs breadcrumbs.
-SITE_TYPES = {"Organization", "WebSite", "BreadcrumbList", "Person", "ContactPoint", "ListItem"}
+SITE_TYPES = {"Organization", "WebSite", "BreadcrumbList", "Person", "ContactPoint", "ListItem", "ImageObject"}
 #: Carried by the home page only, from app/lib/structured-offers.json, which tests/test_site_honesty.py pins to
 #: billing/plans.py (price, currency and period). Nothing else may add to this set.
 HOME_ONLY_TYPES = {"SoftwareApplication", "Product", "Brand", "Offer", "UnitPriceSpecification"}
@@ -275,6 +277,196 @@ def check_robots_and_sitemap(pages: dict[str, Page], sitemap_paths: set[str], ro
 
 
 # ---------------------------------------------------------------------------
+# the "business card": what a crawler or a chat app shows when the link is shared or searched
+# ---------------------------------------------------------------------------
+BRAND = "Industrial Autonomous Assurance"
+THEME = "#0f1b2d"
+OG_MAX_BYTES = 300_000  # WhatsApp drops previews whose image is much larger than this
+PUBLIC = ROOT / "public"
+#: Every address the repository already publishes; nothing else may appear in structured data, security.txt or the vCard.
+PUBLISHED_EMAIL_SOURCES = ("app/components/ContactForm.tsx", "SECURITY.md")
+
+
+def published_emails() -> set[str]:
+    found: set[str] = set()
+    for rel in PUBLISHED_EMAIL_SOURCES:
+        found |= set(re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", (ROOT / rel).read_text(encoding="utf-8")))
+    return found
+
+
+def built_file(url: str, base: Path) -> Path | None:
+    """The build output behind a same-site URL (a dynamic image or icon route is written as ``<path>.body``)."""
+    if not url.startswith(f"{SITE}/"):
+        return None
+    rel = urlparse(url).path.lstrip("/")
+    candidate = base / f"{rel}.body"
+    return candidate if candidate.is_file() else None
+
+
+def png_size(data: bytes) -> tuple[int, int] | None:
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def check_image(url: str, base: Path, want: tuple[int, int], label: str, max_bytes: int | None = None) -> list[str]:
+    file = built_file(url, base)
+    if file is None:
+        return [f"{label}: {url} does not resolve to anything in the build"]
+    data = file.read_bytes()
+    problems = []
+    if png_size(data) != want:
+        problems.append(f"{label}: {url} is {png_size(data)}, want a PNG of {want[0]}x{want[1]}")
+    if max_bytes is not None and len(data) > max_bytes:
+        problems.append(f"{label}: {url} is {len(data)} bytes (max {max_bytes})")
+    return problems
+
+
+def check_business_card(pages: dict[str, Page], base: Path) -> list[str]:
+    """Open Graph, Twitter, icon, manifest and theme tags on every page, and every image they name resolves."""
+    problems = []
+    for route, page in sorted(pages.items()):
+        for key, want in (("og:type", "website"), ("og:site_name", BRAND), ("og:locale", "en_GB"),
+                          ("og:image:type", "image/png"), ("og:image:width", "1200"), ("og:image:height", "630"),
+                          ("theme-color", THEME)):
+            if page.one(key) != want:
+                problems.append(f"{route}: {key} is {page.one(key)!r}, want {want!r}")
+        if not (page.one("og:image:alt") or "").strip():
+            problems.append(f"{route}: og:image:alt is empty")
+        if page.one("twitter:image") != page.one("og:image"):
+            problems.append(f"{route}: twitter:image differs from og:image")
+        if page.one("twitter:image:alt") != page.one("og:image:alt"):
+            problems.append(f"{route}: twitter:image:alt differs from og:image:alt")
+        if page.links.get("manifest") != ["/manifest.webmanifest"]:
+            problems.append(f"{route}: manifest link is {page.links.get('manifest')}")
+        if page.links.get("apple-touch-icon") != ["/apple-icon"]:
+            problems.append(f"{route}: apple-touch-icon is {page.links.get('apple-touch-icon')}")
+        icons = page.links.get("icon", [])
+        if "/icon.svg" not in icons or "/icons/icon-48.png" not in icons:
+            problems.append(f"{route}: icon links are {icons}")
+        problems += check_image(page.one("og:image") or "", base, (1200, 630), f"{route} og:image", OG_MAX_BYTES)
+        try:
+            jsonld_nodes(page)
+        except (json.JSONDecodeError, KeyError) as exc:
+            problems.append(f"{route}: JSON-LD does not parse: {exc}")
+    return problems
+
+
+def check_own_images(pages: dict[str, Page], base: Path) -> list[str]:
+    """Product and solution pages carry their own card (a different image per page); the rest share the site card."""
+    problems, digests = [], {}
+    for route, page in sorted(pages.items()):
+        url = page.one("og:image") or ""
+        own = route.startswith(("/product/", "/solutions/"))
+        want = f"{SITE}{route}/opengraph-image" if own else f"{SITE}/opengraph-image"
+        if url != want:
+            problems.append(f"{route}: og:image is {url!r}, want {want!r}")
+        file = built_file(url, base)
+        if own and file:
+            digest = hashlib.sha256(file.read_bytes()).hexdigest()
+            if digest in digests:
+                problems.append(f"{route}: og:image is byte-identical to {digests[digest]}'s")
+            digests.setdefault(digest, route)
+    return problems
+
+
+def check_organization(pages: dict[str, Page], base: Path, emails: set[str]) -> list[str]:
+    problems = []
+    for route, page in sorted(pages.items()):
+        orgs = [n for n in jsonld_nodes(page) if n.get("@type") == "Organization"]
+        if len(orgs) != 1:
+            continue  # check_structured_data owns the count
+        org = orgs[0]
+        logo = (org.get("logo") or {}).get("url", "")
+        problems += check_image(logo, base, (512, 512), f"{route} Organization logo")
+        for address in {org.get("email"), (org.get("contactPoint") or {}).get("email")}:
+            if address not in emails:
+                problems.append(f"{route}: Organization email {address!r} is not an address the repository publishes")
+        for url in org.get("sameAs", []):
+            if not url.startswith("https://github.com/iceccarelli"):
+                problems.append(f"{route}: sameAs {url!r} is not a profile the repository proves exists")
+    return problems
+
+
+def check_manifest(text: str, base: Path) -> list[str]:
+    try:
+        manifest = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return [f"manifest does not parse: {exc}"]
+    problems = []
+    for key, want in (("name", BRAND), ("start_url", "/"), ("theme_color", THEME), ("background_color", THEME)):
+        if manifest.get(key) != want:
+            problems.append(f"manifest {key} is {manifest.get(key)!r}, want {want!r}")
+    if manifest.get("display") != "browser":
+        problems.append("manifest display must stay 'browser': the site has no service worker or offline mode")
+    icons = manifest.get("icons", [])
+    if not {(i["sizes"], i["purpose"]) for i in icons} >= {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")}:
+        problems.append(f"manifest icons lack a 192, a 512 and a maskable 512: {icons}")
+    for icon in icons:
+        w, h = (int(n) for n in icon["sizes"].split("x"))
+        problems += check_image(f"{SITE}{icon['src']}", base, (w, h), f"manifest icon {icon['src']}")
+    return problems
+
+
+def check_security_txt(text: str, emails: set[str], now: datetime) -> list[str]:
+    fields: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if line and not line.startswith("#"):
+            key, _, value = line.partition(":")
+            fields.setdefault(key.strip(), []).append(value.strip())
+    problems = []
+    contacts = fields.get("Contact", [])
+    if not contacts or any(c.removeprefix("mailto:") not in emails for c in contacts):
+        problems.append(f"security.txt Contact {contacts} is not an address SECURITY.md publishes")
+    expires = fields.get("Expires", [])
+    if len(expires) != 1:
+        problems.append("security.txt needs exactly one Expires")
+    elif datetime.fromisoformat(expires[0].replace("Z", "+00:00")) <= now:
+        problems.append(f"security.txt expired on {expires[0]}")
+    if fields.get("Canonical") != [f"{SITE}/.well-known/security.txt"]:
+        problems.append(f"security.txt Canonical is {fields.get('Canonical')}")
+    if fields.get("Policy") != [f"{SITE}/security"]:
+        problems.append(f"security.txt Policy is {fields.get('Policy')}")
+    if "Encryption" in fields:
+        problems.append("security.txt names an Encryption key; the repository publishes none")
+    return problems
+
+
+def check_vcard(text: str, emails: set[str]) -> list[str]:
+    problems = []
+    if "\r\n" not in text or text.replace("\r\n", "").count("\n"):
+        problems.append("vCard lines must end CRLF")
+    lines = text.split("\r\n")
+    if lines[0] != "BEGIN:VCARD" or "END:VCARD" not in lines:
+        problems.append("vCard is not wrapped in BEGIN/END:VCARD")
+    props = {line.split(":", 1)[0].split(";")[0] for line in lines if ":" in line}
+    if not props <= {"BEGIN", "VERSION", "KIND", "FN", "ORG", "URL", "EMAIL", "END"}:
+        problems.append(f"vCard carries properties the repository has no data for: {sorted(props)}")
+    for address in re.findall(r"EMAIL[^:]*:(\S+)", text):
+        if address not in emails:
+            problems.append(f"vCard email {address!r} is not published by the repository")
+    if f"FN:{BRAND}" not in lines or f"URL:{SITE}/" not in lines:
+        problems.append("vCard lacks the organisation name or URL")
+    return problems
+
+
+def check_llms_urls(text: str, pages: dict[str, Page], sitemap: set[str]) -> list[str]:
+    """Every same-site URL llms.txt names exists: a built page, or a file in public/ or a generated route."""
+    problems = []
+    generated = {"/manifest.webmanifest", "/sitemap.xml", "/robots.txt"}
+    for raw in sorted(set(re.findall(r"https://neuralbridge\.io(/[^\s)>\"]*)", text))):
+        path = raw.rstrip(".,;:").split("#")[0].split("?")[0]
+        path = path if path == "/" else path.rstrip("/")
+        if path in pages or path in generated or (PUBLIC / path.lstrip("/")).is_file():
+            continue
+        problems.append(f"llms.txt names {raw}, which is neither a built page nor a file in public/")
+    for route in sorted(sitemap):
+        if route.startswith(("/product/", "/solutions/")) and f"{SITE}{route}" not in text:
+            problems.append(f"llms.txt does not list {route}")
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # the build
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
@@ -372,7 +564,8 @@ class TestStructuredData:
         assert org["contactPoint"]["url"] == f"{SITE}/contact"
         assert web["publisher"] == {"@id": org["@id"]}
         assert "potentialAction" not in web  # no search results page exists to point one at
-        assert "logo" not in org  # no logo asset exists; the favicon is not a logo
+        # the logo is the generated 512px app icon; TestBusinessCard checks that it resolves and is 512x512
+        assert org["logo"] == {"@type": "ImageObject", "url": f"{SITE}/icons/icon-512.png", "width": 512, "height": 512}
 
     def test_only_the_home_page_carries_offer_types(self, site):
         for route, page in site["pages"].items():
@@ -525,3 +718,170 @@ class TestMutations:
         no_map = "\n".join(line for line in robots.splitlines() if not line.lower().startswith("sitemap"))
         assert any("does not declare" in p for p in check_robots_and_sitemap(pages, sitemap, no_map))
         assert any("missing from the sitemap" in p for p in check_robots_and_sitemap(pages, sitemap - {"/cli"}, robots))
+
+
+# ---------------------------------------------------------------------------
+# 5. the business card on the built site
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def emails():
+    return published_emails()
+
+
+class TestBusinessCard:
+    def test_the_published_addresses_are_the_two_the_repository_has(self, emails):
+        assert {"hello@neuralbridge.io", "security@neuralbridge.ai"} <= emails
+
+    def test_every_page_carries_the_full_card_and_every_image_resolves(self, site):
+        assert check_business_card(site["pages"], site["base"]) == []
+
+    def test_the_404_page_still_has_social_tags_but_no_address(self, site):
+        page = site["not_found"]
+        assert page.one("twitter:card") == "summary_large_image" and page.one("og:image")
+        assert not page.one("og:url")
+
+    def test_product_and_solution_pages_have_their_own_distinct_card(self, site):
+        pages = site["pages"]
+        assert any(r.startswith("/product/") for r in pages) and any(r.startswith("/solutions/") for r in pages)
+        assert check_own_images(pages, site["base"]) == []
+
+    def test_organization_logo_resolves_and_only_published_contacts_are_used(self, site, emails):
+        assert check_organization(site["pages"], site["base"], emails) == []
+
+    def test_app_icons_have_the_sizes_the_tags_promise(self, site):
+        base = site["base"]
+        assert check_image(f"{SITE}/apple-icon", base, (180, 180), "apple-icon") == []
+        assert check_image(f"{SITE}/icons/icon-48.png", base, (48, 48), "icon-48") == []
+        assert check_image(f"{SITE}/icons/icon-maskable-512.png", base, (512, 512), "maskable") == []
+        assert (ROOT / "app" / "icon.svg").is_file()
+
+    def test_manifest_is_valid_and_its_icons_resolve(self, site):
+        text = (site["base"] / "manifest.webmanifest.body").read_text(encoding="utf-8")
+        assert check_manifest(text, site["base"]) == []
+
+    def test_security_txt_follows_rfc_9116_with_the_published_contact(self, emails):
+        text = (PUBLIC / ".well-known" / "security.txt").read_text(encoding="utf-8")
+        assert check_security_txt(text, emails, datetime.now(UTC)) == []
+
+    def test_vcard_holds_only_data_the_repository_has(self, emails):
+        text = (PUBLIC / "neuralbridge.vcf").read_bytes().decode("utf-8")
+        assert check_vcard(text, emails) == []
+
+    def test_llms_txt_names_only_urls_that_exist_and_lists_every_product_and_solution_page(self, site):
+        text = (PUBLIC / "llms.txt").read_text(encoding="utf-8")
+        assert check_llms_urls(text, site["pages"], site["sitemap"]) == []
+
+    def test_robots_does_not_block_the_card_assets(self, site):
+        robots = parse_robots(site["robots"])
+        for path in ("/opengraph-image", "/icons/icon-512.png", "/apple-icon", "/manifest.webmanifest", "/.well-known/security.txt"):
+            assert not any(rule and path.startswith(rule) for rule in robots["disallow"]), path
+
+
+class TestBusinessCardMutations:
+    """Each new rule is broken on a copy of the real site and must be reported."""
+
+    @staticmethod
+    def _meta(page: Page, **changes) -> Page:
+        clone = _copy(page)
+        clone.meta = {**clone.meta, **{k: [v] for k, v in changes.items()}}
+        return clone
+
+    @pytest.mark.parametrize("key,bad", [
+        ("og:type", "article"), ("og:site_name", "x"), ("og:locale", "en_US"), ("og:image:type", "image/jpeg"),
+        ("og:image:width", "600"), ("og:image:height", "315"), ("theme-color", "#fff"), ("og:image:alt", " "),
+        ("twitter:image", "https://neuralbridge.io/other"), ("twitter:image:alt", "different"),
+    ])
+    def test_a_wrong_tag_is_caught(self, site, key, bad):
+        pages = dict(site["pages"])
+        pages["/cli"] = self._meta(pages["/cli"], **{key: bad})
+        assert any(p.startswith("/cli") and key in p for p in check_business_card(pages, site["base"]))
+
+    def test_missing_manifest_icon_and_apple_links_are_caught(self, site):
+        pages = dict(site["pages"])
+        pages["/cli"] = _copy(pages["/cli"], links={k: v for k, v in pages["/cli"].links.items() if k not in ("manifest", "icon")})
+        pages["/privacy"] = _copy(pages["/privacy"], links={**pages["/privacy"].links, "apple-touch-icon": ["/x.png"]})
+        problems = check_business_card(pages, site["base"])
+        assert any(p.startswith("/cli") and "manifest" in p for p in problems)
+        assert any(p.startswith("/cli") and "icon links" in p for p in problems)
+        assert any(p.startswith("/privacy") and "apple-touch-icon" in p for p in problems)
+
+    def test_an_og_image_that_does_not_resolve_or_has_the_wrong_size_or_is_too_big_is_caught(self, site, tmp_path):
+        pages = dict(site["pages"])
+        pages["/cli"] = self._meta(pages["/cli"], **{"og:image": f"{SITE}/missing-image", "twitter:image": f"{SITE}/missing-image"})
+        assert any(p.startswith("/cli") and "does not resolve" in p for p in check_business_card(pages, site["base"]))
+        real = (site["base"] / "opengraph-image.body").read_bytes()
+        small = bytearray(real)
+        small[16:24] = (600).to_bytes(4, "big") + (315).to_bytes(4, "big")
+        (tmp_path / "opengraph-image.body").write_bytes(bytes(small))
+        assert any("want a PNG of 1200x630" in p for p in check_image(f"{SITE}/opengraph-image", tmp_path, (1200, 630), "x"))
+        (tmp_path / "opengraph-image.body").write_bytes(real + b"\0" * OG_MAX_BYTES)
+        assert any("bytes (max" in p for p in check_image(f"{SITE}/opengraph-image", tmp_path, (1200, 630), "x", OG_MAX_BYTES))
+        (tmp_path / "opengraph-image.body").write_bytes(b"GIF89a" + real[6:])
+        assert any("want a PNG" in p for p in check_image(f"{SITE}/opengraph-image", tmp_path, (1200, 630), "x"))
+
+    def test_unparseable_json_ld_is_caught_by_the_card_check_too(self, site):
+        pages = dict(site["pages"])
+        pages["/cli"] = _copy(pages["/cli"], jsonld=["{nope"])
+        assert any(p.startswith("/cli") and "JSON-LD" in p for p in check_business_card(pages, site["base"]))
+
+    def test_a_product_page_sharing_the_site_card_or_a_twin_card_is_caught(self, site):
+        pages = dict(site["pages"])
+        product = next(r for r in pages if r.startswith("/product/"))
+        pages[product] = self._meta(pages[product], **{"og:image": f"{SITE}/opengraph-image"})
+        assert any(p.startswith(product) and "want" in p for p in check_own_images(pages, site["base"]))
+        pages = dict(site["pages"])
+        solution = next(r for r in pages if r.startswith("/solutions/"))
+        pages["/cli"] = self._meta(pages["/cli"], **{"og:image": f"{SITE}{solution}/opengraph-image"})
+        assert any(p.startswith("/cli") and "want" in p for p in check_own_images(pages, site["base"]))
+
+    def test_identical_per_page_cards_are_caught(self, tmp_path):
+        for name in ("a", "b"):
+            (tmp_path / "product" / name).mkdir(parents=True)
+            (tmp_path / "product" / name / "opengraph-image.body").write_bytes(b"same")
+        pages = {f"/product/{n}": self._meta(Page(""), **{"og:image": f"{SITE}/product/{n}/opengraph-image"}) for n in "ab"}
+        assert any("byte-identical" in p for p in check_own_images(pages, tmp_path))
+
+    def test_organization_logo_email_and_profile_rules_are_caught(self, site, emails):
+        pages = dict(site["pages"])
+        graph = json.loads(pages["/privacy"].jsonld[0])
+        org = next(n for n in graph["@graph"] if n["@type"] == "Organization")
+        org["logo"]["url"] = f"{SITE}/icons/missing.png"
+        org["email"] = "sales@example.com"
+        org["sameAs"] = ["https://www.linkedin.com/company/made-up"]
+        pages["/privacy"] = _copy(pages["/privacy"], jsonld=[json.dumps(graph)])
+        problems = check_organization(pages, site["base"], emails)
+        assert any("logo" in p and "does not resolve" in p for p in problems)
+        assert any("email" in p for p in problems)
+        assert any("sameAs" in p for p in problems)
+
+    def test_manifest_defects_are_caught(self, site):
+        text = (site["base"] / "manifest.webmanifest.body").read_text(encoding="utf-8")
+        good = json.loads(text)
+        assert check_manifest("{oops", site["base"])
+        for change in ({"theme_color": "#000"}, {"display": "standalone"}, {"name": "x"}, {"icons": good["icons"][:2]},
+                       {"icons": [{**good["icons"][0], "sizes": "256x256"}, *good["icons"][1:]]},
+                       {"icons": [{**good["icons"][0], "src": "/icons/none.png"}, *good["icons"][1:]]}):
+            assert check_manifest(json.dumps({**good, **change}), site["base"]), change
+
+    def test_security_txt_defects_are_caught(self, emails):
+        text = (PUBLIC / ".well-known" / "security.txt").read_text(encoding="utf-8")
+        now = datetime.now(UTC)
+        assert check_security_txt(text, emails, datetime(2099, 1, 1, tzinfo=UTC))  # expired
+        assert check_security_txt(text.replace("security@neuralbridge.ai", "x@example.com"), emails, now)
+        assert check_security_txt(text.replace("Canonical: ", "Canonical: x"), emails, now)
+        assert check_security_txt(text.replace("Policy: ", "Policy: x"), emails, now)
+        assert check_security_txt(text + "Encryption: https://example.com/key.asc\n", emails, now)
+        assert check_security_txt("\n".join(line for line in text.splitlines() if not line.startswith("Expires")), emails, now)
+
+    def test_vcard_defects_are_caught(self, emails):
+        text = (PUBLIC / "neuralbridge.vcf").read_bytes().decode("utf-8")
+        assert check_vcard(text.replace("\r\n", "\n"), emails)
+        assert check_vcard(text.replace("hello@neuralbridge.io", "ceo@example.com"), emails)
+        assert check_vcard(text.replace("END:VCARD", "TEL:+1555\r\nEND:VCARD"), emails)
+        assert check_vcard(text.replace("URL:", "X-URL:"), emails)
+
+    def test_llms_txt_defects_are_caught(self, site):
+        text = (PUBLIC / "llms.txt").read_text(encoding="utf-8")
+        assert check_llms_urls(text + "\n- https://neuralbridge.io/nowhere\n", site["pages"], site["sitemap"])
+        product = next(r for r in sorted(site["sitemap"]) if r.startswith("/product/"))
+        assert check_llms_urls(text.replace(f"{SITE}{product}", f"{SITE}/docs"), site["pages"], site["sitemap"])

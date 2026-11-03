@@ -33,6 +33,7 @@ export async function generateMetadata({ params }: { params: ProductParams }): P
     absoluteTitle: true,
     description: page.description,
     path: productHref(page.slug),
+    ownImage: true,
   });
 }
 

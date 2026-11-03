@@ -32,6 +32,14 @@ export const metadata: Metadata = {
   authors: [{ name: 'Vincenzo Grimaldi', ...(ownerLink() ? { url: ownerLink() as string } : {}) }],
   creator: 'Vincenzo Grimaldi',
   publisher: BRAND,
+  formatDetection: { telephone: false, email: false, address: false },
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/icons/icon-48.png', sizes: '48x48', type: 'image/png' },
+    ],
+    apple: [{ url: '/apple-icon', sizes: '180x180', type: 'image/png' }],
+  },
 };
 
 export const viewport: Viewport = {
