@@ -818,16 +818,19 @@ def test_webhook_test_hands_the_key_over_exactly_once_against_the_real_service(
     found = statuses(tmp_path, "webhook-test")
     assert found == {**dict.fromkeys((
         "webhook.preconditions", "webhook.forged_rejected", "webhook.pending_before",
-        "webhook.delivered", "webhook.replay_duplicate", "webhook.key_handover_once",
-        "webhook.key_works", "webhook.cleanup"), "PASS"),
+        "webhook.delivered", "webhook.replay_duplicate"), "PASS"),
+        # The handover needs a claim token that only POST /v1/checkout (a real Stripe session) mints; a
+        # synthetic session has none, so these are honestly NOT established, never passed.
+        **dict.fromkeys(("webhook.key_handover_once", "webhook.key_works", "webhook.cleanup"), "UNCHECKED"),
         "webhook.secret_is_test": "ATTESTED"}, (found, ran.text)
-    assert ran.code == 3            # the secret's mode is the founder's statement, not measured
+    assert ran.code == 3            # UNCHECKED/ATTESTED steps block a clean exit
     accounts = staging_like.accounts.list_accounts()
     assert len(accounts) == before + 1
     created = accounts[-1] if accounts[-1].email.startswith("rehearsal-") else next(
         a for a in accounts if a.email.startswith("rehearsal-"))
     assert created.tier == "register" and created.email.endswith("@example.invalid")
-    assert staging_like.accounts.active_key_count(created.id) == 0      # cleaned up
+    # The webhook staged a key the rehearsal cannot claim; the report must say how the operator removes it.
+    assert "--discard-staged" in ran.text and created.email in ran.text
     assert_no_secrets(ran.text, (tmp_path / "webhook-test.json").read_text())
     assert "asr_" not in ran.text                                         # no key, even masked
 
@@ -873,16 +876,27 @@ def fake_checkout(**d: Any) -> FastAPI:
                              "tier": d.get("tier", "register"),
                              "account_id": "acc_0123456789abcdef"}, 200)
 
+    def handed_key() -> JSONResponse:
+        return JSONResponse({"api_key": key, "tier": "register", "account_id": "acc_0123456789abcdef"},
+                            200, headers={"Cache-Control": "no-store"})
+
     @app.get("/v1/checkout/complete")
-    async def complete(session_id: str) -> JSONResponse:
-        if not state["delivered"] and not d.get("early_key"):
-            return JSONResponse({"detail": {"status": "pending"}}, 202)
+    async def complete_retired(session_id: str) -> JSONResponse:
+        """The retired GET: a session id alone must claim nothing (410), whatever else is true."""
         state["claims"] += 1
-        if state["claims"] > 1 and not d.get("hand_over_twice"):
-            return JSONResponse({"detail": {"status": "pending"}}, 202)
-        return JSONResponse({"api_key": key, "tier": "register",
-                             "account_id": "acc_0123456789abcdef"}, 200,
-                            headers={} if d.get("cacheable") else {"Cache-Control": "no-store"})
+        if d.get("get_hands_key"):
+            return handed_key()
+        return JSONResponse({"detail": {"error": "moved"}}, 410)
+
+    @app.post("/v1/checkout/complete")
+    async def complete(request: Request) -> JSONResponse:
+        """A synthetic session has no stored claim token: pending before delivery, 403 after, never a key."""
+        state["claims"] += 1
+        if not state["delivered"]:
+            return handed_key() if d.get("early_key") else JSONResponse({"detail": {"status": "pending"}}, 202)
+        if d.get("hand_over_without_token"):
+            return handed_key()
+        return JSONResponse({"detail": {"error": "claim_token_invalid"}}, 403)
 
     @app.get("/v1/me")
     async def me(request: Request) -> Any:
@@ -928,15 +942,20 @@ def test_the_stand_in_checkout_service_passes_so_its_defects_mean_something(
         sr, capsys, tmp_path):
     ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout())
     assert found.pop("webhook.secret_is_test") == "ATTESTED"
-    assert set(found.values()) == {"PASS"}, (found, ran.text)
+    # the handover, the key and the cleanup cannot be exercised without a real claim token: UNCHECKED, never PASS
+    unchecked = {"webhook.key_handover_once", "webhook.key_works", "webhook.cleanup"}
+    assert {k for k, v in found.items() if v == "UNCHECKED"} == unchecked, (found, ran.text)
+    assert {v for k, v in found.items() if k not in unchecked} == {"PASS"}, (found, ran.text)
+    assert ran.code == 3
 
 
 @pytest.mark.parametrize("defect,step", [
     ({"accept_forged": True}, "webhook.forged_rejected"),
-    ({"hand_over_twice": True}, "webhook.key_handover_once"),
+    ({"hand_over_without_token": True}, "webhook.key_handover_once"),
+    ({"get_hands_key": True}, "webhook.key_handover_once"),
     ({"never_ready": True}, "webhook.key_handover_once"),
-    ({"cacheable": True}, "webhook.key_handover_once"),
-    ({"no_revoke": True}, "webhook.cleanup"),
+    ({"early_key": True}, "webhook.pending_before"),
+    ({"no_revoke": True, "hand_over_without_token": True}, "webhook.cleanup"),
     ({"tier": "cell"}, "webhook.delivered"),
 ])
 def test_webhook_test_fails_on_each_handover_defect(sr, capsys, tmp_path, defect, step):
