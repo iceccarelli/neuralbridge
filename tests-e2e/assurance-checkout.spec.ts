@@ -70,7 +70,8 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     await expect(page).toHaveURL(/\/assurance$/);
     await expect(page.getByLabel('API key')).toHaveValue(key);
     // A brand-new account: the workspace loads with its key and says honestly that nothing is enrolled.
-    await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 20_000 });
+    // (scoped to the fleet section: the coverage view repeats the sentence, which made an unscoped locator ambiguous)
+    await expect(page.locator('section#aw-fleet').getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('.aw-alert')).toHaveCount(0);
     await expect(page.locator('section#aw-plan').getByTestId('plan-name')).toContainText(me.plan.name);
 
