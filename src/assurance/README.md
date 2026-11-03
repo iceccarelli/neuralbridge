@@ -99,7 +99,7 @@ Interactive documentation at `/docs`, schema at `/openapi.json`.
 | `GET /v1/register` · `GET /v1/register/breaches` | readiness across every case |
 | `GET /v1/spec/fields` · `POST /v1/spec/validate` | the field spec, and a dry-run validator |
 | `GET /v1/ledger/verify` | chain verification and the head attestation |
-| `GET /healthz` | liveness, and an honest statement of the auth mode |
+| `GET /livez` · `GET /healthz` | liveness (process up) and readiness (databases and storage usable; the attestation key's state; the auth mode), stated honestly |
 
 Every write returns what is now outstanding, because the next question after
 recording anything is always "and now what is due".
