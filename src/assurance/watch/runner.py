@@ -60,7 +60,7 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
 from assurance.machinery.intervention import ImpliedIntervention
-from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
+from assurance.machinery.manifest import HashSource, ManifestSource, last_attribution, not_a_look
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -517,7 +517,8 @@ def run_watch(
 
         manifest = result.manifest
         missing_items = tuple(o.item_id for o in (*result.missing, *result.unreadable))
-        if not result.complete:
+        if not result.complete and INCOMPLETE_COLLECTION_MARK not in manifest.notes:
+            # (collect() now marks an incomplete manifest itself; do not mark it twice.)
             # Persisted on the manifest record itself, because a case judging
             # "did this machine leave that configuration" reads manifests and
             # must be able to tell a partial look from a configuration.
@@ -562,7 +563,10 @@ def run_watch(
         elif status == "observed":
             detail = f"unchanged at {observed[:12]}"
         else:
-            divergence = compare(baseline, manifest)
+            # carried_attribution: an item that was credited with safety functions in an earlier complete look
+            # keeps them when a later look drops the attribution, so the two-step drop (drop `implements`, then
+            # change the hash) is caught here as it is on the record path (machinery/record.py).
+            divergence = compare(baseline, manifest, carried_attribution=last_attribution(history))
             worst = divergence.worst
             drift_severity = worst.value if worst else ""
             drift_items = tuple(c.item_id for c in divergence.changes)
