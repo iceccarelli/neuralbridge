@@ -580,14 +580,17 @@ class TestGolden010NonPostgresAdapterGate:
         )
         assert r.status_code == 402
 
-    def _build_gateway_with_slack(self):
+    def _build_gateway_with_slack(self, allow_mock: bool = True):
+        # These tests are about the ENTITLEMENT gate, not about Slack: Slack is a canned adapter (no call is
+        # made), so a call that clears the gate is refused by the adapter unless canned data is opted in.
+        # test_entitled_call_to_a_canned_adapter_is_refused_after_the_gate pins that, with allow_mock=False.
         from neuralbridge.adapters.messaging.slack import SlackAdapter
         from neuralbridge.core.gateway import MCPGateway, MCPToolDefinition
         from neuralbridge.core.router import AdapterRegistry, RequestRouter
         from neuralbridge.security.audit import AuditLogger, InMemoryAuditStorage
 
         registry = AdapterRegistry()
-        registry.register(SlackAdapter(config={"bot_token": "xoxb-test"}))
+        registry.register(SlackAdapter(config={"bot_token": "xoxb-test", **({"allow_mock": True} if allow_mock else {})}))
         audit = AuditLogger(storage=InMemoryAuditStorage())
         router = RequestRouter(registry=registry, audit_logger=audit)
         gateway = MCPGateway(router, audit)
@@ -595,6 +598,21 @@ class TestGolden010NonPostgresAdapterGate:
             name="slack_send", description="", input_schema={}, adapter_type="slack",
         ))
         return gateway, audit
+
+    def test_entitled_call_to_a_canned_adapter_is_refused_after_the_gate(self, entitlement_env) -> None:
+        # The gate proves the caller is paid; it says nothing about a backend. Slack makes no call, so a paid,
+        # gate-clearing send_message used to return a fabricated {"ok": true, "ts": ...}. It is now refused.
+        os.environ.pop("NEURALBRIDGE_ALLOW_MOCK_ADAPTERS", None)
+        gateway, _audit = self._build_gateway_with_slack(allow_mock=False)
+        body = asyncio.run(gateway.handle_request({
+            "id": "6", "method": "tools/call",
+            "params": {"name": "slack_send", "arguments": {
+                "operation": "send_message", "channel": "#general", "text": "hi",
+                "api_key": OPERATOR_KEY, "actor": "agent-dana",
+            }},
+        })).to_dict()
+        assert "result" not in body, body
+        assert "canned data" in body["error"]["message"]
 
     def test_free_tool_call_cannot_write_non_postgres_adapter_via_gateway(self, entitlement_env) -> None:
         os.environ.pop("NEURALBRIDGE_MCP_API_KEY", None)

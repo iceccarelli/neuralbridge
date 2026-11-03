@@ -1,89 +1,66 @@
 #!/usr/bin/env python3
 """
-NeuralBridge Quick Start Example.
+NeuralBridge adapter platform: a quick tour of the router, the audit log and the fail-closed policy.
 
-Demonstrates how to:
-1. Create an adapter registry
-2. Register adapters
-3. Execute operations through the router
-4. View audit logs
+This is the experimental adapter platform behind Industrial Autonomous Assurance, not the assurance product
+(for that: ``python -m assurance report demo --out demo/``).
 
-Run:
-    python examples/quickstart.py
+Slack and Salesforce here are CANNED adapters: they make no call to Slack or Salesforce and return invented
+results. They refuse to run unless you opt in with ``allow_mock`` (as below) or ``NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1``,
+and every canned result is flagged ``mock``. See docs/integrations.md for what each adapter really does.
+
+Run (from the repository root):
+    PYTHONPATH=src python examples/quickstart.py
 """
 
 import asyncio
 
-from neuralbridge.adapters.databases.postgres import PostgresAdapter
-from neuralbridge.adapters.messaging.slack import SlackAdapter
+from neuralbridge.adapters.base import MockBackendRefusedError
 from neuralbridge.adapters.erp_crm.salesforce import SalesforceAdapter
+from neuralbridge.adapters.messaging.slack import SlackAdapter
 from neuralbridge.core.router import AdapterRegistry, RequestRouter
-from neuralbridge.security.audit import AuditLogger
+from neuralbridge.security.audit import AuditLogger, InMemoryAuditStorage
 
 
 async def main() -> None:
-    print("=" * 60)
-    print("  NeuralBridge Quick Start")
-    print("  Experimental adapter platform behind Industrial Autonomous Assurance")
-    print("=" * 60)
+    print("=" * 64)
+    print("  NeuralBridge adapter platform: quick tour")
+    print("  Experimental. The adapters below return CANNED data.")
+    print("=" * 64)
 
-    # ── Step 1: Create the adapter registry ──────────────────
-    print("\n[1/5] Creating adapter registry...")
+    # 1-2. Registry and adapters. allow_mock is the explicit, per-adapter opt-in to canned data.
     registry = AdapterRegistry()
+    registry.register(SlackAdapter(config={"bot_token": "xoxb-demo", "allow_mock": True}))
+    registry.register(SalesforceAdapter(config={"allow_mock": True}))
+    print(f"\n[1/4] Registered: {', '.join(registry.list_all())}")
 
-    # ── Step 2: Register adapters ────────────────────────────
-    print("[2/5] Registering adapters...")
-    registry.register("postgres", PostgresAdapter(config={"host": "localhost"}))
-    registry.register("slack", SlackAdapter(config={"bot_token": "xoxb-demo"}))
-    registry.register("salesforce", SalesforceAdapter(config={}))
-    print(f"       Registered: {', '.join(registry.list_all())}")
-
-    # ── Step 3: Create the request router ────────────────────
-    print("[3/5] Initializing request router with audit logging...")
-    audit = AuditLogger()
+    # 3. Router with an audit log.
+    audit = AuditLogger(storage=InMemoryAuditStorage())
     router = RequestRouter(registry=registry, audit_logger=audit)
 
-    # ── Step 4: Execute operations ───────────────────────────
-    print("[4/5] Executing operations...\n")
-
-    # Query PostgreSQL
-    print("  → PostgreSQL: Running query...")
-    pg_result = await router.route(
-        adapter_type="postgres",
-        operation="query",
-        params={"sql": "SELECT id, name, email FROM users LIMIT 5"},
+    print("[2/4] Running operations (canned: nothing is sent to Slack or Salesforce)...\n")
+    sf = await router.route(
+        adapter_type="salesforce", operation="query", params={"soql": "SELECT Id, Name FROM Account LIMIT 3"}
     )
-    print(f"    Result: {pg_result}\n")
-
-    # Query Salesforce
-    print("  → Salesforce: Running SOQL query...")
-    sf_result = await router.route(
-        adapter_type="salesforce",
-        operation="query",
-        params={"soql": "SELECT Id, Name FROM Account LIMIT 3"},
+    print(f"  Salesforce query -> {sf}\n")
+    slack = await router.route(
+        adapter_type="slack", operation="send_message", params={"channel": "#ai-alerts", "text": "hello"}
     )
-    print(f"    Result: {sf_result}\n")
+    print(f"  Slack send_message -> {slack}\n")
 
-    # Send Slack message
-    print("  → Slack: Sending notification...")
-    slack_result = await router.route(
-        adapter_type="slack",
-        operation="send_message",
-        params={"channel": "#ai-alerts", "text": "NeuralBridge is running!"},
-    )
-    print(f"    Result: {slack_result}\n")
+    # 4. The default: no opt-in, no canned data.
+    print("[3/4] The same adapter without the opt-in:")
+    strict = SlackAdapter(config={"bot_token": "xoxb-demo"})
+    try:
+        await strict.execute("send_message", {"channel": "#ai-alerts", "text": "hello"})
+    except MockBackendRefusedError as exc:
+        print(f"  refused: {exc}\n")
 
-    # ── Step 5: Review audit trail ───────────────────────────
-    print("[5/5] Reviewing audit trail...")
-    events = await audit.query_events(filters={})
-    print(f"       Total audit events: {len(events)}")
+    print("[4/4] Audit trail:")
+    events = [event async for event in audit.query_events()]
+    print(f"  {len(events)} audit events recorded")
     for event in events[-3:]:
-        print(f"       - {event}")
-
-    print("\n" + "=" * 60)
-    print("  Quick start complete! NeuralBridge is ready.")
-    print("  Visit http://localhost:8000/docs for the API.")
-    print("=" * 60)
+        print(f"  - {event}")
 
 
 if __name__ == "__main__":
