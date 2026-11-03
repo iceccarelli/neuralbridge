@@ -47,7 +47,12 @@ from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
-           "AnchorContradictsLedgerError", "DamagedRow", "EvidenceLedger", "LedgerEntry"]
+           "AnchorContradictsLedgerError", "ChainBrokenError", "DamagedRow", "EvidenceLedger",
+           "LedgerEntry"]
+
+
+class ChainBrokenError(LedgerIntegrityError):
+    """The ledger's hash chain does not verify; nothing in it is shown or extended."""
 
 LEDGER_SCHEMA_VERSION = 1
 
@@ -685,6 +690,25 @@ class EvidenceLedger:
             return problems, head_seq, head_link
         finally:
             db.close()
+
+    def require_intact(self, *, full: bool = False) -> None:
+        """Raise :class:`ChainBrokenError` unless the chain verifies; return None if it does.
+
+        ``full=True`` is a complete walk (:meth:`verify_chain`) and is what a write
+        that settles or extends a legal record pays for. The default is the
+        incremental :meth:`verify_cached`: the last verified head and everything
+        appended since are checked on every call (O(new records)); an in-place edit
+        of an *old* record is seen at the next full pass (within
+        ``ASSURANCE_CHAIN_RECHECK_SECONDS``, default 60 s) or on any full walk. A
+        rebuilt, self-consistent chain is caught by neither; that is what a signed
+        head attestation is for.
+        """
+        ok, problems = self.verify_chain() if full else self.verify_cached()
+        if not ok:
+            raise ChainBrokenError(
+                "the ledger's chain does not verify, so no case in it can be shown or "
+                "extended as fact:\n  " + "\n  ".join(problems[:5])
+                + (f"\n  ... and {len(problems) - 5} more" if len(problems) > 5 else ""))
 
     def verify_cached(self) -> tuple[bool, list[str]]:
         """Does the chain still verify, at O(new records) cost? ``(ok, problems)``.

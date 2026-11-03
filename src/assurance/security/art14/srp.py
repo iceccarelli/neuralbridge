@@ -386,7 +386,20 @@ def validate_payload(
                     "assuming; they belong in the Art. 14(8) user-notification scope either way.",
                 )
             )
-        unknown = sorted(codes - EU_MEMBER_STATES - EEA_NON_EU)
+        # "EL" is the EU institutions' own code for Greece; ISO 3166-1 alpha-2 (which this field
+        # is checked against) uses "GR". Say that. Nothing here claims what the platform expects.
+        if "EL" in codes:
+            issues.append(
+                PayloadIssue(
+                    "5",
+                    "member_states_available",
+                    "blocking",
+                    "'EL' is the EU institutions' own code for Greece; this check uses ISO 3166-1 "
+                    "alpha-2, where Greece is 'GR'. Use 'GR'. Which code the reporting platform "
+                    "itself expects has not been checked.",
+                )
+            )
+        unknown = sorted(codes - EU_MEMBER_STATES - EEA_NON_EU - {"EL"})
         if unknown:
             issues.append(
                 PayloadIssue(

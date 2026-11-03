@@ -87,8 +87,9 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
         out += ["", "DEADLINES"]
         for d in deadlines.all():
             mark = {
-                "filed_on_time": "filed, on time",
-                "filed_late": "FILED LATE",
+                "filed_on_time": "recorded as filed, on time",
+                "filed_late": "RECORDED AS FILED LATE",
+                "recorded_incomplete": "RECORDED, CONTENT INCOMPLETE (not counted as met)",
                 "open": "open",
             }[d.status]
             detail = ""
@@ -96,6 +97,13 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
                 hours = d.hours_remaining(reference)
                 detail = (
                     f"  ({abs(hours):.1f} h overdue)" if hours < 0 else f"  ({hours:.1f} h left)"
+                )
+            else:
+                detail = (
+                    f"  (declared {format_utc(d.submitted_at)}, {d.submission_evidence}; "
+                    "not verified by the platform"
+                    + ("" if d.content_complete else "; content incomplete")
+                    + ")"
                 )
             out.append(
                 f"  {d.stage.label:26s} due {format_utc(d.due_at)}  {mark}{detail}"
@@ -126,7 +134,7 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
 def register_report(register: Art14Register, *, now: datetime | None = None) -> str:
     """Every case, worst first."""
     reference = now or utc_now()
-    cases = register.cases()
+    cases, unreadable = register.survey(reference)
     breaches = register.breaches(reference)
     ok, problems = register.ledger.verify_chain()
 
@@ -140,6 +148,7 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
         f"  ledger records       {len(register.ledger)}",
         f"  chain verified       {'yes' if ok else 'NO — SEE BELOW'}",
         f"  deadline breaches    {len(breaches)}",
+        f"  unreadable cases     {len(unreadable)}",
         f"  field spec           ENISA CRA SRP Glossary v{GLOSSARY_VERSION} ({GLOSSARY_DATE})",
     ]
 
@@ -151,9 +160,13 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
         out += ["", "BREACHES"]
         for b in breaches:
             out.append(
-                f"  {b['case_id']:14s} {b['stage']:16s} {b['status']:18s} "
-                f"due {b['due_at']}  {b['provision']}"
+                f"  {b['case_id']:14s} {b['stage'] or '-':16s} {b['status']:28s} "
+                f"due {b['due_at'] or '-'}  {b['provision'] or ''}"
             )
+
+    if unreadable:
+        out += ["", "CASES THAT COULD NOT BE READ (not part of the totals below)"]
+        out.extend(f"  {u['case_id']:14s} {u['error']}" for u in unreadable)
 
     out += ["", "CASES"]
     for case in cases:
@@ -172,7 +185,7 @@ def readiness_report(register: Art14Register, *, now: datetime | None = None) ->
     """The machine-readable version, for a dashboard or a customer hand-back."""
     reference = now or utc_now()
     ok, problems = register.ledger.verify_chain()
-    cases = register.cases()
+    cases, unreadable = register.survey(reference)
     return {
         "generated_at": format_utc(reference),
         "regulation": "Regulation (EU) 2024/2847, Article 14",
@@ -188,6 +201,7 @@ def readiness_report(register: Art14Register, *, now: datetime | None = None) ->
             "attestation": register.ledger.head_attestation(),
         },
         "cases": [c.to_dict(reference) for c in cases],
+        "unreadable_cases": unreadable,
         "breaches": register.breaches(reference),
         "checks_skipped": [
             (
