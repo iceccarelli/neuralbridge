@@ -6,6 +6,7 @@ import type { CaseQueue, Fleet, Me, Observations } from '../lib/assuranceApi';
 import AdvisoriesPanel from './assurance/AdvisoriesPanel';
 import CaseDetailPanel from './assurance/CaseDetailPanel';
 import CasesPanel from './assurance/CasesPanel';
+import CoveragePanel from './assurance/CoveragePanel';
 import EnrolPanel from './assurance/EnrolPanel';
 import FleetPanel from './assurance/FleetPanel';
 import IntelPanel from './assurance/IntelPanel';
@@ -75,6 +76,7 @@ export default function AssuranceWorkspace() {
       {API_BASE && !key && <p className="console-empty-note">Paste a key to load your fleet and cases.</p>}
 
       <FleetPanel apiKey={key} fleet={fleet} obs={obs} />
+      <CoveragePanel apiKey={key} fleet={fleet} queue={queue} />
       <CasesPanel apiKey={key} queue={queue} selected={selected} onOpen={setSelected} />
       {selected && (
         <CaseDetailPanel

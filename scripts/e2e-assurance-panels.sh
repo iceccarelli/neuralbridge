@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run tests-e2e/assurance-panels.spec.ts (Enrol a machine; Public intelligence lookup) against a
+# Run tests-e2e/assurance-panels.spec.ts and assurance-coverage.spec.ts (Enrol; Public intelligence; Coverage) against a
 # real local API and a production Next build. Throwaway databases under $WORK; never touches a
 # deployed service. Three API phases on one data dir: intel store set; store env unset; store
 # file unreadable. Extra arguments go to `playwright test`.
@@ -33,7 +33,7 @@ start_api() {
 npx next build >"$WORK/build.log" 2>&1 || { tail -30 "$WORK/build.log" >&2; exit 3; }
 setsid npx next start -p "$WEB_PORT" >"$WORK/web.log" 2>&1 & WEB=$!
 for i in $(seq 1 30); do curl -fs "http://127.0.0.1:$WEB_PORT/assurance" >/dev/null && break; sleep 1; done
-run() { PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test --workers=1 tests-e2e/assurance-panels.spec.ts "$@"; }
+run() { PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test --workers=1 tests-e2e/assurance-panels.spec.ts tests-e2e/assurance-coverage.spec.ts "$@"; }
 STORE="$($PY -c 'import json,os;print(json.load(open(os.environ["PANELS_SEED"]))["intel_store"])')"
 BAD="$($PY -c 'import json,os;print(json.load(open(os.environ["PANELS_SEED"]))["bad_store"])')"
 rc=0
