@@ -193,6 +193,13 @@ class TestIncompleteFilings:
             ACTOR,
         )
         reg.record_measure_available("c1", AWARE + timedelta(hours=5), "workaround", ACTOR)
+        # Closing needs all three stages (workstream L): the early warning and the notification
+        # are filed first, so this test still isolates the incomplete FINAL filing.
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=2), COMPLETE, ACTOR,
+                          now=NOW)
+        reg.record_filing("c1", Stage.NOTIFICATION, AWARE + timedelta(hours=3),
+                          {"vulnerability_general_information": "Command injection in the service port"},
+                          ACTOR, now=NOW)
         reg.record_filing("c1", Stage.FINAL, AWARE + timedelta(days=2), {}, ACTOR, now=NOW + timedelta(days=3))
         case = reg.case("c1")
         assert case.state == "reportable_open"

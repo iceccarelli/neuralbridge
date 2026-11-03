@@ -44,9 +44,23 @@ from .triage import Answer, Question
 DEFAULT_LEDGER = "art14-register.db"
 
 
-def _register(args: argparse.Namespace) -> Art14Register:
+def _register(
+    args: argparse.Namespace, *, read_only: bool = False, create: bool = False
+) -> Art14Register:
+    """The register on the chosen ledger.
+
+    A verb that only reads (``case``, ``register``, ``verify``, ``export``) uses
+    ``open_existing``: a mistyped path is an error (exit 2), not a new empty ledger, and a
+    ledger from an older build is not given an id or otherwise changed by looking at it. A
+    verb that records opens the ledger for writing; only ``signal`` (the first record of a
+    case) may create the file, so ``awareness``/``file`` on a mistyped path is an error too.
+    """
     path = args.ledger or os.environ.get("ASSURANCE_LEDGER", DEFAULT_LEDGER)
-    return Art14Register(EvidenceLedger(path))
+    if read_only:
+        return Art14Register(EvidenceLedger.open_existing(path))
+    if create:
+        return Art14Register(EvidenceLedger(path))
+    return Art14Register(EvidenceLedger.open_existing(path, writable=True))
 
 
 def _actor(args: argparse.Namespace) -> Actor:
@@ -90,7 +104,7 @@ def _show_outstanding(register: Art14Register, case_id: str) -> None:
 
 # -- commands -------------------------------------------------------------
 def cmd_signal(args: argparse.Namespace) -> int:
-    register = _register(args)
+    register = _register(args, create=True)
     signal = Signal(
         received_at=_when(args.at, "--at") if args.at else utc_now(),
         channel=SignalChannel(args.channel),
@@ -239,7 +253,7 @@ def cmd_fields(args: argparse.Namespace) -> int:
 
 
 def cmd_case(args: argparse.Namespace) -> int:
-    register = _register(args)
+    register = _register(args, read_only=True)
     case = register.case(args.case_id)
     if case.signal is None and case.awareness is None:
         # The same rule as GET /v1/cases/{id} (404): an id nothing was recorded under is not a
@@ -254,7 +268,7 @@ def cmd_case(args: argparse.Namespace) -> int:
 
 
 def cmd_register_cmd(args: argparse.Namespace) -> int:
-    register = _register(args)
+    register = _register(args, read_only=True)
     if args.json:
         print(readiness_json(register))
         return 0
@@ -263,7 +277,7 @@ def cmd_register_cmd(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    register = _register(args)
+    register = _register(args, read_only=True)
     log_path = getattr(args, "attestations", None)
     key_path = getattr(args, "public_key", None)
     if bool(log_path) != bool(key_path):
@@ -312,7 +326,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    register = _register(args)
+    register = _register(args, read_only=True)
     anchor = None
     try:
         if args.attestations:
@@ -465,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
-    except (AssuranceError, ValueError) as exc:
+    except (AssuranceError, ValueError, FileNotFoundError) as exc:
         # A step out of order, an unknown case, a time that cannot be read: the person at the
         # keyboard made a mistake, nothing was written, and a traceback is not an answer.
         print(f"error: {exc}", file=sys.stderr)

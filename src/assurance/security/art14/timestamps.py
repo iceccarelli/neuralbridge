@@ -8,7 +8,7 @@ carries its own UTC offset, in a plausible range, and never guesses. It refuses
 * a non-string (a JSON integer would otherwise be read as an epoch in a unit
   nobody stated);
 * a date with no time of day, or a time with no offset;
-* an offset no inhabited zone uses (valid zones run -12:00 .. +14:00);
+* an offset no inhabited zone uses (valid zones run -12:00 .. +14:00, minutes 00-59);
 * a year outside 2000..2099, where deadline arithmetic is not meaningful.
 """
 
@@ -57,7 +57,13 @@ def legal_timestamp(value: object, field: str = "timestamp") -> datetime:
     if zone not in ("Z", "z"):
         sign = -1 if zone[0] == "-" else 1
         digits = zone[1:].replace(":", "")
-        offset = sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:] or 0))
+        offset_minutes = int(digits[2:] or 0)
+        if offset_minutes >= 60:
+            raise ValueError(
+                f"{field}: UTC offset {zone} has {offset_minutes} minutes; the minutes of an "
+                "offset must be 00-59 (+00:99 is not +01:39). Nothing was guessed."
+            )
+        offset = sign * timedelta(hours=int(digits[:2]), minutes=offset_minutes)
         if not _MIN_OFFSET <= offset <= _MAX_OFFSET:
             raise ValueError(
                 f"{field}: UTC offset {zone} is outside the range any time zone uses "

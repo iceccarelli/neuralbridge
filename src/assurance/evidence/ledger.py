@@ -76,13 +76,29 @@ MAX_SKELETON_ENTRIES = 5_000
 _LEDGER_TABLES = frozenset({"meta", "chain", "sqlite_sequence"})
 
 
+#: Columns the ``chain`` table must have. A superset is tolerated (a newer build may add one);
+#: a table named ``chain`` that lacks any of these is someone else's.
+_CHAIN_COLUMNS = frozenset({
+    "seq", "at", "kind", "subject", "content_hash", "prev_hash", "link_hash", "actor", "payload"})
+
+
 def _holds_foreign_tables(db: sqlite3.Connection) -> bool:
+    """Whether the file holds a table that is not this ledger's, or a mis-shaped ledger table.
+
+    Pure reads. Used before any write (so the schema script never runs inside another
+    application's database) and by the read-only opens (so a file with ledger-looking tables
+    plus an application's own tables is refused to readers as it is to writers).
+    """
     names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if names - _LEDGER_TABLES:
         return True
     if "meta" in names:
         cols = [r[1] for r in db.execute("PRAGMA table_info(meta)")]
         if cols != ["key", "value"]:
+            return True
+    if "chain" in names:
+        chain_cols = {r[1] for r in db.execute("PRAGMA table_info(chain)")}
+        if not _CHAIN_COLUMNS <= chain_cols:
             return True
     return False
 
@@ -216,6 +232,17 @@ class EvidenceLedger:
         ``mode=ro`` then uses the existing files and creates none. A writer that starts in
         the instant between that check and the read is the one case ``immutable`` could
         misread; the next read sees it (same stated limit as the intel store).
+
+        A file that holds any table other than the ledger's (``meta``, ``chain``), or a
+        ``chain`` / ``meta`` of the wrong shape, is refused exactly as the write path refuses
+        it: it is another application's database.
+
+        Known limit: a *crash copy* of a WAL-mode ledger -- the ``-wal`` file copied, the
+        ``-shm`` not -- is read correctly (the committed WAL frames are used), but SQLite must
+        then build its shared-memory index, so a ``-shm`` file appears beside the copy. The
+        ``.db`` and ``-wal`` bytes are not modified. A caller that must leave the directory
+        byte-identical copies the files to a scratch directory first (as ``restore_check``
+        does) and opens the copy.
         """
         p = Path(path)
         if not p.is_file():
@@ -236,6 +263,11 @@ class EvidenceLedger:
                     "SELECT name FROM sqlite_master WHERE type='table'")}
                 if not {"meta", "chain"} <= names:
                     raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
+                if _holds_foreign_tables(db):
+                    raise LedgerIntegrityError(
+                        f"{p} is not a ledger: it is another application's SQLite database "
+                        "(it holds tables that are not the ledger's, or a ledger table of the "
+                        "wrong shape); refusing to read it as evidence.")
                 row = db.execute(
                     "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
                 db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
@@ -291,7 +323,11 @@ class EvidenceLedger:
         resolved = self.path.resolve()
         quiescent = not any(resolved.with_name(resolved.name + sfx).exists()
                             for sfx in ("-wal", "-shm", "-journal"))
-        mode = "mode=ro&immutable=1" if quiescent else "mode=ro"
+        # ``immutable=1`` skips locking and is only safe on a file nobody is writing. A handle
+        # from ``EvidenceLedger(path, mint_id=False)`` is used on LIVE ledgers (export, offboarding),
+        # where a writer may start in the instant after the sidecar check: it never uses it.
+        immutable = quiescent and not getattr(self, "_never_immutable", False)
+        mode = "mode=ro&immutable=1" if immutable else "mode=ro"
         db = sqlite3.connect(f"{resolved.as_uri()}?{mode}", uri=True, timeout=5.0,
                              isolation_level=None)
         db.row_factory = sqlite3.Row
@@ -305,22 +341,63 @@ class EvidenceLedger:
         if not self._upgrade_on_write:
             raise LedgerIntegrityError(
                 f"{self.path} was opened read-only; this ledger cannot be written.")
-        self._init_for_writing(mint_id=True)
+        self._init_for_writing(mint_id=getattr(self, "_mint_on_upgrade", True))
         self._upgraded = True
 
     def __init__(self, path: str | Path, *, mint_id: bool = True) -> None:
         """Open (creating if need be) the ledger at ``path``.
 
-        ``mint_id=False`` never writes: a verifier that opens a backup must not change
-        the bytes the backup's manifest hashed. Such a ledger without an id reports
-        ``ledger_id() is None``.
+        ``mint_id=False`` never writes while the ledger is only read: on a rollback-journal
+        file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
+        sidecar created), so a verifier that opens a backup does not change the bytes the
+        backup's manifest hashed. Such a ledger without an id reports ``ledger_id() is None``.
+        If it is then appended to, it is prepared for writing at that moment (once), still
+        without minting an id. A path that does not exist yet, or an empty file, is created as
+        before.
         """
         self.path = Path(path)
         self._read_only = False
         self._upgrade_on_write = False
         self._upgraded = False
         self._lock = threading.Lock()
+        self._mint_on_upgrade = True
+        if not mint_id and self._is_existing_ledger_file():
+            self._never_immutable = True
+            type(self).open_readonly(self.path)   # the same refusals; raises if not a ledger
+            self._read_only = True
+            self._upgrade_on_write = True
+            self._mint_on_upgrade = False
+            return
         self._init_for_writing(mint_id=mint_id)
+
+    def _is_existing_ledger_file(self) -> bool:
+        """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
+
+        Only a file in rollback-journal mode qualifies (header bytes 18-19 are 1): the old open
+        switched exactly those files to WAL, changing bytes the caller only meant to read. A
+        WAL-mode ledger may have a live writer and needs its sidecars to be read at all, so it
+        keeps the ordinary open, as do a missing, empty, foreign or partly created file (the
+        writing path has its own refusals).
+        """
+        try:
+            if not self.path.is_file() or self.path.stat().st_size == 0:
+                return False
+            with self.path.open("rb") as handle:
+                header = handle.read(100)
+            if len(header) < 100 or header[18:20] != b"\x01\x01":
+                # Not a rollback-journal file. A WAL-mode ledger is the live format that
+                # writers keep open: reading it needs the -wal / -shm sidecars, so it takes
+                # the ordinary open (which only ever sets WAL on a file already in WAL).
+                return False
+            db = self._connect_ro()
+            try:
+                names = {r[0] for r in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+            finally:
+                db.close()
+        except (OSError, sqlite3.Error):
+            return False
+        return {"meta", "chain"} <= names
 
     def _init_for_writing(self, *, mint_id: bool) -> None:
         self._refuse_if_foreign_before_writing()
