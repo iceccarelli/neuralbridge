@@ -31,6 +31,13 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     expect(res.status, res.stderr.toString()).toBe(0);
   }
 
+  // The buyer's browser holds the claim token that POST /v1/checkout returned; Stripe's success URL carries it in
+  // the FRAGMENT (never sent to a server). The seed registers `claim-<session>` the way /v1/checkout does.
+  const claimToken = (sid: string) => `claim-${sid}`;
+  const successUrl = (sid: string) => `/checkout/success?session_id=${sid}#claim=${claimToken(sid)}`;
+  const claim = (request: import('@playwright/test').APIRequestContext, sid: string, token = claimToken(sid)) =>
+    request.post(`${apiBase}/v1/checkout/complete`, { data: { session_id: sid, claim_token: token } });
+
   const stored = (page: Page) => page.evaluate((k) => window.sessionStorage.getItem(k), KEY_STORAGE);
 
   test('Cell: confirm, show the key once, read the plan from /v1/me, open the workspace with that key', async ({
@@ -39,7 +46,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   }) => {
     const sid = `cs_e2e_cell_${Date.now()}`;
     stage(sid, 'cell');
-    await page.goto(`/checkout/success?session_id=${sid}`);
+    await page.goto(successUrl(sid));
 
     const keyBox = page.getByTestId('issued-key');
     await expect(keyBox).toBeVisible({ timeout: 20_000 });
@@ -67,14 +74,15 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     await expect(page.locator('.aw-alert')).toHaveCount(0);
     await expect(page.locator('section#aw-plan').getByTestId('plan-name')).toContainText(me.plan.name);
 
-    // The key was handed over once: the same session cannot be collected again.
-    const again = await request.get(`${apiBase}/v1/checkout/complete?session_id=${sid}`);
-    expect(again.status()).toBe(202);
+    // The key was handed over once: the same session cannot be collected again (410: a definite answer,
+    // not "pending forever"), and the retired GET never returns a key whatever it is given.
+    expect((await claim(request, sid)).status()).toBe(410);
+    expect((await request.get(`${apiBase}/v1/checkout/complete?session_id=${sid}`)).status()).toBe(410);
   });
 
   test('the page waits for the webhook, and picks the key up when it arrives', async ({ page }) => {
     const sid = `cs_e2e_late_${Date.now()}`;
-    await page.goto(`/checkout/success?session_id=${sid}`);
+    await page.goto(successUrl(sid));
     await expect(page.getByText(/Confirming your payment/)).toBeVisible();
     await expect(page.getByTestId('issued-key')).toHaveCount(0);
     // Not collecting anything is not a failure yet, and no workspace link is offered before a key exists.
@@ -90,7 +98,7 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   }) => {
     const sid = `cs_e2e_register_${Date.now()}`;
     stage(sid, 'register');
-    await page.goto(`/checkout/success?session_id=${sid}`);
+    await page.goto(successUrl(sid));
     const key = (await page.getByTestId('issued-key').textContent({ timeout: 20_000 }))!.trim();
     const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': key } })).json();
     await expect(page.getByTestId('checkout-plan')).toContainText(me.plan.name, { timeout: 10_000 });
@@ -108,13 +116,13 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
     test.setTimeout(90_000);
     const sid = `cs_e2e_gone_${Date.now()}`;
     stage(sid, 'cell');
-    expect((await request.get(`${apiBase}/v1/checkout/complete?session_id=${sid}`)).status()).toBe(200);
-    await page.goto(`/checkout/success?session_id=${sid}`);
-    const msg = page.getByTestId('checkout-nokey');
+    expect((await claim(request, sid)).status()).toBe(200);
+    await page.goto(successUrl(sid));
+    const msg = page.getByTestId('checkout-gone');
     await expect(msg).toBeVisible({ timeout: 60_000 });
-    await expect(msg).toContainText(/already collected/i);
+    await expect(msg).toContainText(/already been collected/i);
     await expect(msg).toContainText(/shown once/i);
-    await expect(msg).toContainText(/webhook/i);
+    await expect(msg).toContainText(/treat it as exposed/i);   // a key someone else collected is exposed
     await expect(msg).toContainText(sid);
     await expect(page.getByTestId('issued-key')).toHaveCount(0);
   });

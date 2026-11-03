@@ -18,9 +18,16 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from assurance.api.deps import ENTITLEMENT_GATES, Anyone, get_register, require_machine
+from assurance.api.deps import (
+    ENTITLEMENT_GATES,
+    Anyone,
+    get_register,
+    rate_limited,
+    require_machine,
+)
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
+from assurance.billing.rate_limit import Limit
 from assurance.check import CheckError, run_ad_hoc_check, run_enrolled_check
 from assurance.check.schemas import FleetMachineCheckIn, MachineCheckIn
 from assurance.check.services import service_catalogue
@@ -119,6 +126,10 @@ def services() -> dict[str, Any]:
 @check_router.post(
     "/machine",
     summary="Machine Assurance Check — one manifest, one advisory, no account",
+    # Unmetered and anonymous: bound the request rate per client address (per process; an edge limit is the
+    # operator's job, see assurance.billing.rate_limit).
+    dependencies=[Depends(rate_limited("check_machine", Limit(60, 60.0), "ASSURANCE_RATE_CHECK_MACHINE",
+                                       what="checks"))],
 )
 def check_machine(
     body: MachineCheckIn,
