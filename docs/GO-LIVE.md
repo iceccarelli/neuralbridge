@@ -221,12 +221,19 @@ it is cross-referenced, not repeated.
    After paying, `https://neuralbridge.io/checkout/success?session_id=...`
    should show a key within a few seconds (`SMOKE.md` #4's own pass
    condition). If it instead keeps showing "not ready yet" past ~30s, poll
-   the same thing curl-side to see the exact stuck state:
+   the same thing curl-side to see the exact stuck state (the claim token is the
+   value after `#claim=` in the success URL; the session id and token go in the BODY, never the URL):
    ```bash
-   curl -s "https://<your-fly-app>.fly.dev/v1/checkout/complete?session_id=<id>"
+   curl -s -X POST "https://<your-fly-app>.fly.dev/v1/checkout/complete" \
+     -H 'content-type: application/json' \
+     -d '{"session_id":"<id>","claim_token":"<token from the success URL fragment>"}'
    ```
    A `202 {"status":"pending",...}` forever means the webhook never landed —
-   see the Failure modes table below.
+   see the Failure modes table below. A `403` means a key is waiting but this
+   caller does not hold the claim token; a `410` means it was already collected or
+   expired (the operator recovery is `python -m assurance.billing.issue_key --discard-staged <id>`).
+   Note: whether Stripe preserves a `#fragment` on its success redirect has **not** been
+   verified here (no test-mode credentials); check it in your first test-mode run.
 
 4. **That key opens a First Register case in Console, and does an `/ai` write.**
    Not currently covered by `SMOKE.md` — added here because

@@ -1,10 +1,11 @@
 """Keep capabilities out of the access log.
 
-``GET /v1/checkout/complete?session_id=cs_...`` is how a browser returning from Stripe
-collects its one-time API key: whoever holds that ``session_id`` can claim the key until it
-expires (24 hours) or is claimed. The key itself is never logged, but uvicorn's access log
-writes the request line, query string included, and logs are shipped and retained by other
-systems. The value is replaced before it is formatted.
+A browser returning from Stripe collects its one-time API key with ``POST /v1/checkout/complete``
+(the session id and a claim token travel in the BODY, which no access log records). The retired
+``GET /v1/checkout/complete?session_id=cs_...`` answers 410 and hands over nothing, but a stale
+client may still send it, and uvicorn's access log writes the request line, query string
+included, which logs are shipped and retained by other systems. The value is replaced before
+it is formatted.
 """
 
 from __future__ import annotations
