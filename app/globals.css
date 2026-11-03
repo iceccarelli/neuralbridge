@@ -3080,6 +3080,14 @@ table.status-table tbody tr:last-child td {
 .aw-intel-summary[data-state="unknown"] { border-left-color: var(--danger); border-left-style: dashed; }
 .aw-intel-row[data-state="unchecked"], .aw-intel-row[data-state="unavailable"], .aw-intel-row[data-state="unknown"] { border-left: 4px dashed var(--ink-soft); padding-left: 0.75rem; }
 .aw-store-banner { border-left-style: double; }
+.aw-passport { overflow-wrap: anywhere; }
+.aw-passport h4 { font-size: 0.95rem; margin: 0.75rem 0 0.25rem; }
+.aw-passport .aw-kv { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
+.aw-passport .aw-unstated { color: var(--ink-soft); font-style: italic; }
+.aw-passport .aw-fn-desc, .aw-passport .aw-gap-src { color: var(--ink-soft); font-weight: 400; }
+.aw-passport [data-testid="passport-check"][data-state="problems"], .aw-passport [data-testid="passport-check"][data-state="unchecked"] { border-left: 4px double var(--danger); padding-left: 0.75rem; }
+.aw-passport tr[data-coverage]:not([data-coverage="current"]) th { border-left: 4px dashed var(--ink-soft); }
+.aw-more { margin: 0.75rem 0; }
 
 /* ====================== IMAGERY DISCLOSURE ====================== */
 .imagery-note {

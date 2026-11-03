@@ -10,6 +10,7 @@ import EnrolPanel from './assurance/EnrolPanel';
 import FleetPanel from './assurance/FleetPanel';
 import IntelPanel from './assurance/IntelPanel';
 import InterventionPanel from './assurance/InterventionPanel';
+import PassportPanel from './assurance/PassportPanel';
 import { Refusal } from './assurance/PanelFrame';
 import PlanPanel from './assurance/PlanPanel';
 import { API_BASE, usePanel } from './assurance/usePanel';
@@ -112,6 +113,7 @@ export default function AssuranceWorkspace() {
           void obs.reload();
         }}
       />
+      <PassportPanel apiKey={key} actor={actor} setActor={setActor} />
       <IntelPanel apiKey={key} />
       <PlanPanel apiKey={key} me={me} />
     </div>
