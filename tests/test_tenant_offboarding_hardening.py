@@ -69,6 +69,20 @@ def _contents(path: Path) -> set[str]:
             for e in EvidenceLedger(path, mint_id=False).entries()}
 
 
+def _holds_no_chain(path: Path) -> bool:
+    """True if ``path`` is absent, or exists but has no ledger (no ``chain`` table), e.g. an empty
+    file a late writer's connect created."""
+    if not path.exists():
+        return True
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return db.execute("SELECT 1 FROM sqlite_master WHERE name='chain'").fetchone() is None
+    except sqlite3.DatabaseError:
+        return True                      # not a database at all: it holds no ledger either
+    finally:
+        db.close()
+
+
 def _hashes(path: Path) -> set[str]:
     return {e.content_hash for e in EvidenceLedger(path, mint_id=False).entries()}
 
@@ -162,9 +176,15 @@ def test_acknowledged_writes_are_in_the_export_or_the_delete_was_refused(
         stop = threading.Event()
         delay = random.Random(rnd).uniform(0.0, 0.03)
 
-        def writer(path=path, acked=acked, stop=stop, delay=delay):
-            time.sleep(delay)
+        ready = threading.Event()
+
+        def writer(path=path, acked=acked, stop=stop, delay=delay, ready=ready):
+            # Open the ledger BEFORE the deletion can start, so this thread's constructor can never
+            # run after the unlink and create a fresh, schema-bearing ledger that a later write
+            # would be acknowledged into (a test artefact, not the behaviour under test).
             wl = EvidenceLedger(path, mint_id=False)
+            ready.set()
+            time.sleep(delay)
             n = 1000
             while not stop.is_set() and n < 1040:
                 n += 1
@@ -178,13 +198,20 @@ def test_acknowledged_writes_are_in_the_export_or_the_delete_was_refused(
 
         t = threading.Thread(target=writer)
         t.start()
+        assert ready.wait(10), "the writer never opened its ledger"
         code, _, _ = execute(capsys, root, out)
         stop.set()
         t.join(30)
         if code == 0:
             deleted += 1
             assert set(acked) <= _hashes(out / "ledger.db"), (rnd, "acknowledged write lost")
-            assert not path.exists()
+            # The ledger's data is gone. The FILE can reappear as an empty orphan: the writer thread
+            # here still holds a path, and SQLite creates a missing file on connect, so a write
+            # attempted after the unlink makes a schema-less file that its own append then fails on.
+            # (That is a refused write, never an acknowledged one; the API cannot do this because
+            # get_register answers 410 before any ledger is opened.) Seen on a slower CI runner.
+            assert _holds_no_chain(path), (rnd, "ledger data survived the deletion")
+            assert _marker(root).exists()
         else:
             refused += 1
             assert path.exists()

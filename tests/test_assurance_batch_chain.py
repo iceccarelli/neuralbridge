@@ -11,7 +11,7 @@ All data is SYNTHETIC.
 """
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import sqlite3
 from pathlib import Path
 
@@ -47,7 +47,7 @@ def _rows(n: int, start: int = 0):
 
 def _import(ledger: EvidenceLedger, rows, **kw):
     return import_rows(Path(""), rows, actor=PERSON, source_system="bench",
-                       export_date=datetime.date(2026, 10, 15),
+                       export_date=dt.date(2026, 10, 15),
                        file_sha256="a" * 64, functions=FUNCTIONS, channel="api",
                        ledger=ledger, **kw)
 
@@ -282,5 +282,5 @@ class TestSubjectKindQueriesUseTheSubjectIndex:
 def _manifest(serial: str):
     row = inv.canonical_row(_raw(serial), 1, frozenset({"SF-01"}))
     return inv._manifest_for(row, actor=PERSON, source_system="bench",
-                             export_date=datetime.date(2026, 10, 15), file_sha256="",
+                             export_date=dt.date(2026, 10, 15), file_sha256="",
                              functions=FUNCTIONS)

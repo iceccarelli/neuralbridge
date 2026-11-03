@@ -12,7 +12,7 @@ hide a quadratic CPU term at these sizes.
 """
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import time
 from pathlib import Path
 
@@ -53,7 +53,7 @@ def _import(path: Path, n: int, clock=time.perf_counter):
     rows = _rows(n)
     t = clock()
     report = import_rows(Path(""), rows, actor=PERSON, source_system="smoke",
-                         export_date=datetime.date(2026, 10, 15), file_sha256="b" * 64,
+                         export_date=dt.date(2026, 10, 15), file_sha256="b" * 64,
                          functions=FUNCTIONS, channel="api", ledger=ledger)
     return report, clock() - t, ledger
 
