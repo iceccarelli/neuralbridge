@@ -276,7 +276,13 @@ def test_forked_ledger_still_fails_against_live(volume, tmp_path):
     shutil.copytree(restored, live)
     # same ledger_id, a different record at a shared position
     c = sqlite3.connect(live / "tenants" / f"{ids[0]}.db")
-    c.execute("UPDATE chain SET link_hash = 'f' || substr(link_hash, 2) WHERE seq = 1")
+    # Flip the first hex digit to a *different* one. Setting it to a fixed 'f' changed nothing about 1 run in 16
+    # (the digit was already 'f'), so no fork existed and the check rightly reported none.
+    c.execute(
+        "UPDATE chain SET link_hash = CASE WHEN substr(link_hash, 1, 1) = 'f' THEN '0' ELSE 'f' END"
+        " || substr(link_hash, 2) WHERE seq = 1"
+    )
+    assert c.total_changes == 1
     c.commit()
     c.close()
     before, before_live = snapshot(restored), snapshot(live)
