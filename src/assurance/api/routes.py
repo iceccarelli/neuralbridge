@@ -15,8 +15,9 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import field_validator
 
-from ..billing.accounts import AccountStore, Principal
+from ..billing.accounts import Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
 from ..core.evidence import Actor
 from ..evidence.ledger import AnchorContradictsLedgerError
@@ -31,6 +32,7 @@ from ..security.art14.model import (
 )
 from ..security.art14.report import readiness_report
 from ..security.art14.srp import GLOSSARY_DATE, GLOSSARY_VERSION, fields_for, validate_payload
+from ..security.art14.timestamps import legal_timestamp
 from .attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from .declared_actor import require_declared_name, sanitise_declared_role
 from .deps import (
@@ -38,7 +40,6 @@ from .deps import (
     MeterTicket,
     auth_mode,
     current_principal,
-    get_accounts,
     get_register,
     require_evidence_readout,
     require_register,
@@ -47,18 +48,18 @@ from .deps import (
 from .schemas import (
     ActorIn,
     AvailabilityIn,
-    AwarenessIn,
     CaseOut,
-    FilingIn,
     FilingOut,
-    MeasureIn,
     RecordedOut,
-    SignalIn,
     TriageIn,
-    UserNotificationIn,
     ValidateIn,
     ValidationOut,
 )
+from .schemas import AwarenessIn as _AwarenessIn
+from .schemas import FilingIn as _FilingIn
+from .schemas import MeasureIn as _MeasureIn
+from .schemas import SignalIn as _SignalIn
+from .schemas import UserNotificationIn as _UserNotificationIn
 
 __all__ = ["router", "evidence_router", "free_router", "public_router"]
 
@@ -79,6 +80,53 @@ evidence_router = APIRouter(
 free_router = APIRouter(prefix="/v1", tags=["free"])
 
 public_router = APIRouter(tags=["service"])
+
+
+def _strict_times(*fields: str):
+    """A ``before`` validator that holds the named fields to :func:`legal_timestamp`.
+
+    The base schemas type these as ``datetime``, which pydantic reads leniently: a JSON
+    integer becomes an epoch in a guessed unit, a date alone becomes a naive midnight, and a
+    naive value is only refused later by the domain (as a bare 500 on most routes). A legal
+    timestamp starts or satisfies a statutory clock, so every route that takes one refuses
+    anything but a full ISO-8601 date-time with an offset, as a structured 422, before any
+    domain code runs and before anything can be written.
+    """
+
+    def check(cls, value: Any, info) -> Any:  # noqa: ANN001, ARG001
+        return legal_timestamp(value, info.field_name)
+
+    return field_validator(*fields, mode="before")(check)
+
+
+class SignalIn(_SignalIn):
+    __doc__ = _SignalIn.__doc__  # the published schema description stays the one in schemas.py
+
+    legal_times = _strict_times("received_at")
+
+
+class AwarenessIn(_AwarenessIn):
+    __doc__ = _AwarenessIn.__doc__  # the published schema description stays the one in schemas.py
+
+    legal_times = _strict_times("established_at", "assessment_started_at", "assessment_completed_at")
+
+
+class MeasureIn(_MeasureIn):
+    __doc__ = _MeasureIn.__doc__  # the published schema description stays the one in schemas.py
+
+    legal_times = _strict_times("available_at")
+
+
+class FilingIn(_FilingIn):
+    __doc__ = _FilingIn.__doc__  # the published schema description stays the one in schemas.py
+
+    legal_times = _strict_times("submitted_at")
+
+
+class UserNotificationIn(_UserNotificationIn):
+    __doc__ = _UserNotificationIn.__doc__  # the published schema description stays the one in schemas.py
+
+    legal_times = _strict_times("at")
 
 
 def _actor(payload: ActorIn) -> Actor:
@@ -334,17 +382,33 @@ def post_user_notification(
 # =====================================================================
 @evidence_router.get("/cases", response_model=list[str], summary="List case ids")
 def get_cases(register: Art14Register = Depends(get_register)) -> list[str]:
-    return register.case_ids()
+    try:
+        return register.case_ids()
+    except LedgerIntegrityError as exc:
+        raise _refuse(exc) from exc
 
 
 @evidence_router.get("/cases/{case_id}", response_model=CaseOut, summary="One case, with deadlines")
 def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> CaseOut:
-    case = register.case(case_id)
+    try:
+        case = register.case(case_id)
+    except LedgerIntegrityError as exc:
+        raise _refuse(exc) from exc
     if case.signal is None and case.awareness is None:
         raise HTTPException(
             status_code=404, detail={"error": "no_such_case", "detail": f"no records for {case_id}"}
         )
-    return CaseOut(**case.to_dict())
+    try:
+        view = case.to_dict()
+    except (OverflowError, ValueError) as exc:
+        # A record already in the ledger whose deadlines cannot be computed (written before
+        # such records were refused). Say so; do not answer a bare 500.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "case_unreadable", "case_id": case_id,
+                    "detail": f"this case's records cannot be turned into a view: {exc}"},
+        ) from exc
+    return CaseOut(**view)
 
 
 @evidence_router.get(
@@ -437,12 +501,18 @@ def get_case_export(
 
 @router.get("/register", response_model=dict, summary="Readiness across every case")
 def get_register_report(register: Art14Register = Depends(get_register)) -> dict[str, Any]:
-    return readiness_report(register)
+    try:
+        return readiness_report(register)
+    except LedgerIntegrityError as exc:
+        raise _refuse(exc) from exc
 
 
 @router.get("/register/breaches", response_model=list, summary="Deadlines missed or overdue")
 def get_breaches(register: Art14Register = Depends(get_register)) -> list[dict[str, Any]]:
-    return register.breaches()
+    try:
+        return register.breaches()
+    except LedgerIntegrityError as exc:
+        raise _refuse(exc) from exc
 
 
 def _server_anchor(principal: Principal | None) -> Any:
@@ -612,34 +682,46 @@ def root() -> dict[str, Any]:
     }
 
 
-@public_router.get("/healthz", response_model=dict, summary="Liveness and configuration")
-def healthz(
-    response: Response, accounts: AccountStore = Depends(get_accounts)
-) -> dict[str, Any]:
-    """Reports what is actually true, including an unauthenticated deployment.
+@public_router.get("/livez", response_model=dict, summary="Liveness: the process answers")
+def livez() -> dict[str, str]:
+    """The process is up and the event loop answers. Depends on nothing.
+
+    Not a statement that the service can do its job: that is ``/healthz``. A platform
+    should restart on this one and stop routing traffic on the other.
+    """
+    return {"status": "alive"}
+
+
+@public_router.get("/healthz", response_model=dict, summary="Readiness and configuration")
+def healthz(response: Response) -> dict[str, Any]:
+    """Readiness: reports what is actually true, including an unauthenticated deployment.
 
     Unauthenticated and polled every few seconds, so it is cheap and says
     nothing about the host: no filesystem path, and no chain verification
     (that is O(n) in the ledger and lives at the authenticated
     ``GET /v1/ledger/verify``). It does confirm that both stores open, which
     exercises their schema-version checks, and reports the operator ledger's
-    entry count.
+    entry count. A store or data directory the service cannot use is a 503 with
+    the reason (never a path) in ``ledger_error`` / ``accounts_error`` /
+    ``storage_problems``, not an unhandled 500. ``attestation_key`` is
+    informational: ``not_configured`` is an honest, supported state and does not
+    fail readiness (the attestation routes answer 503 and say so), but it is
+    shown; ``unsafe`` / ``unusable`` additionally degrade the status.
     """
+    from .service import readiness
+
     mode = auth_mode()
-    payload: dict[str, Any] = {"status": "ok", "auth_mode": mode}
-    try:
-        payload["ledger_records"] = len(shared_register().ledger)
-        payload["ledger_ok"] = True
-    except Exception:  # noqa: BLE001 - reported as a state, never echoed
-        payload["ledger_ok"] = False
-    try:
-        accounts.usage_today("healthz")
-        payload["accounts_ok"] = True
-    except Exception:  # noqa: BLE001
-        payload["accounts_ok"] = False
-    if not (payload["ledger_ok"] and payload["accounts_ok"]):
+    state = readiness(lambda: len(shared_register().ledger))
+    payload: dict[str, Any] = {"status": "ok"}
+    payload |= {k: v for k, v in state.items() if k not in ("ready", "problems", "warnings")}
+    if not state["ready"]:
         payload["status"] = "unavailable"
+        payload["problems"] = state["problems"]
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif state["warnings"]:
+        payload["status"] = "degraded"
+    if state["warnings"]:
+        payload["warnings"] = state["warnings"]
     payload |= {
         "field_spec": {"source": "ENISA CRA SRP Glossary", "version": GLOSSARY_VERSION,
                        "dated": GLOSSARY_DATE},

@@ -81,11 +81,18 @@ from ..billing.accounts import (
 )
 from ..billing.metering import allowance_for, payg_available, valid_idempotency_key
 from ..billing.plans import METERED_SCOPES
+from ..billing.rate_limit import Limit, RateLimitedError, RateLimiter, env_limit
 from ..core.identity import format_utc, utc_now
 from ..evidence.ledger import EvidenceLedger
 from ..security.art14.engine import Art14Register
 
 __all__ = [
+    "MIN_OPERATOR_KEY_LENGTH",
+    "StartupConfigError",
+    "limiter_for",
+    "rate_limited",
+    "refuse_rate_limited",
+    "validate_startup_config",
     "get_register",
     "shared_register",
     "tenant_ledger_path",
@@ -186,6 +193,115 @@ def auth_mode() -> str:
     if os.environ.get(_OPEN_ENV) == "1":
         return "open"
     return "unconfigured"
+
+
+#: The shortest operator key accepted at start-up. An operator key is full access with no
+#: quota; ``secrets.token_urlsafe(32)`` is 43 characters, ``openssl rand -hex 16`` is 32.
+MIN_OPERATOR_KEY_LENGTH = 32
+
+_HOST_ENV = "ASSURANCE_HOST"
+
+
+class StartupConfigError(RuntimeError):
+    """The service is configured in a way it refuses to run with."""
+
+
+def _host_is_loopback(host: str) -> bool:
+    host = host.strip().strip("[]")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_startup_config() -> None:
+    """Refuse a configuration that is unsafe to serve. Raises :class:`StartupConfigError`.
+
+    * ``ASSURANCE_ALLOW_UNAUTHENTICATED=1`` (open mode: every caller is the operator, with the
+      shared ledger) only when ``ASSURANCE_HOST`` names a loopback address. The service cannot
+      see the address uvicorn was told to bind (``--host``) -- only ``ASSURANCE_HOST``, which
+      ``assurance-api`` binds -- so an unset or unparseable host is *unknown*, and unknown is
+      refused.
+    * Every ``ASSURANCE_API_KEYS`` entry at least :data:`MIN_OPERATOR_KEY_LENGTH` characters.
+      The message names the position of the short key, never its value.
+
+    Two limits, stated exactly. The key check is a length in *characters*, not entropy: a long
+    repetitive or guessable key passes. ``ASSURANCE_HOST`` is a *declared* value, not the real
+    bind: the service cannot see ``uvicorn --host``, and e.g. the repository ``Dockerfile`` binds
+    ``0.0.0.0`` whatever this variable says, so the open-mode check is only as honest as the
+    operator's declaration.
+    """
+    problems: list[str] = []
+    keys = _operator_keys()
+    for position, key in enumerate(keys, start=1):
+        if len(key) < MIN_OPERATOR_KEY_LENGTH:
+            problems.append(
+                f"operator key #{position} in {_KEYS_ENV} is {len(key)} characters; the "
+                f"minimum is {MIN_OPERATOR_KEY_LENGTH}. Generate one with: "
+                "python -c \"import secrets; print(secrets.token_urlsafe(32))\"")
+    if os.environ.get(_OPEN_ENV) == "1":
+        host = os.environ.get(_HOST_ENV, "").strip()
+        if not host:
+            problems.append(
+                f"{_OPEN_ENV}=1 (no authentication) is refused because {_HOST_ENV} is not "
+                "set, so the bind address cannot be determined. Set "
+                f"{_HOST_ENV}=127.0.0.1 and bind the server to that address, or configure "
+                f"{_KEYS_ENV} instead.")
+        elif not _host_is_loopback(host):
+            problems.append(
+                f"{_OPEN_ENV}=1 (no authentication) is refused on a non-loopback bind "
+                f"address ({_HOST_ENV} is not 127.0.0.1, ::1 or localhost). Configure "
+                f"{_KEYS_ENV} instead.")
+    if problems:
+        raise StartupConfigError("; ".join(problems))
+
+
+def limiter_for(request: Request, route: str) -> RateLimiter:
+    """The limiter of one route, held on the application so each app (and test) has its own."""
+    state = request.app.state
+    limiters = getattr(state, "rate_limiters", None)
+    if limiters is None:
+        limiters = state.rate_limiters = {}
+    limiter = limiters.get(route)
+    if limiter is None:
+        limiter = limiters[route] = RateLimiter()
+    clock = getattr(state, "rate_clock", None)
+    if clock is not None:
+        limiter.set_clock(clock)
+    return limiter
+
+
+def refuse_rate_limited(retry_after: int, *, what: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={"error": "rate_limited", "retry_after_seconds": retry_after,
+                "detail": f"Too many {what}. Retry in {retry_after} seconds."},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def rate_limited(route: str, default: Limit, env: str, *, what: str) -> Callable[..., Any]:
+    """A dependency: at most ``default`` requests per client address to ``route``.
+
+    The address is the one the free-tier quota uses (``_client_address``): the socket peer, or
+    ``Fly-Client-IP`` only when ``ASSURANCE_TRUST_FLY_PROXY=1``; an IPv6 caller is one /64.
+    ``env`` overrides the limit (``<count>`` per minute or ``<count>/<seconds>``; ``0`` turns
+    it off). Per process: a multi-process or multi-machine deployment needs an edge limit
+    as well (see :mod:`assurance.billing.rate_limit`).
+    """
+
+    async def dependency(
+        request: Request, fly_client_ip: str | None = Header(default=None),
+    ) -> None:
+        try:
+            limiter_for(request, route).check(
+                _client_address(request, fly_client_ip), env_limit(env, default))
+        except RateLimitedError as exc:
+            raise refuse_rate_limited(exc.retry_after, what=what) from None
+
+    return dependency
 
 
 @lru_cache(maxsize=8)

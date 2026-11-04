@@ -55,7 +55,7 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
-OPERATOR_KEY = "test-tenancy-operator-key"
+OPERATOR_KEY = "test-tenancy-operator-key-0123456789abcdef0123456789"
 A_NAME = "A-PRIVATE-PROD-DB"
 B_NAME = "B-PRIVATE-WAREHOUSE"
 API = "/api/v1/ai"

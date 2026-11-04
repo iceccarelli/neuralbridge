@@ -47,7 +47,12 @@ from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
-           "AnchorContradictsLedgerError", "DamagedRow", "EvidenceLedger", "LedgerEntry"]
+           "AnchorContradictsLedgerError", "ChainBrokenError", "DamagedRow", "EvidenceLedger",
+           "LedgerEntry"]
+
+
+class ChainBrokenError(LedgerIntegrityError):
+    """The ledger's hash chain does not verify; nothing in it is shown or extended."""
 
 LEDGER_SCHEMA_VERSION = 1
 
@@ -64,6 +69,39 @@ GENESIS = "0" * 64
 #: Past it the skeleton is left out and the bundle says so with
 #: ``skeleton_truncated``; completeness is then unchecked, never silently passed.
 MAX_SKELETON_ENTRIES = 5_000
+
+#: Tables a ledger file may hold. A file with any other table belongs to someone else. (The
+#: schema script is not one transaction, so a ledger being created by a concurrent opener may
+#: briefly hold only some of these; that is not foreign.)
+_LEDGER_TABLES = frozenset({"meta", "chain", "sqlite_sequence"})
+
+
+#: Columns the ``chain`` table must have. A superset is tolerated (a newer build may add one);
+#: a table named ``chain`` that lacks any of these is someone else's.
+_CHAIN_COLUMNS = frozenset({
+    "seq", "at", "kind", "subject", "content_hash", "prev_hash", "link_hash", "actor", "payload"})
+
+
+def _holds_foreign_tables(db: sqlite3.Connection) -> bool:
+    """Whether the file holds a table that is not this ledger's, or a mis-shaped ledger table.
+
+    Pure reads. Used before any write (so the schema script never runs inside another
+    application's database) and by the read-only opens (so a file with ledger-looking tables
+    plus an application's own tables is refused to readers as it is to writers).
+    """
+    names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if names - _LEDGER_TABLES:
+        return True
+    if "meta" in names:
+        cols = [r[1] for r in db.execute("PRAGMA table_info(meta)")]
+        if cols != ["key", "value"]:
+            return True
+    if "chain" in names:
+        chain_cols = {r[1] for r in db.execute("PRAGMA table_info(chain)")}
+        if not _CHAIN_COLUMNS <= chain_cols:
+            return True
+    return False
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -155,34 +193,231 @@ class EvidenceLedger:
     """Durable, append-only, hash-chained store of evidence objects."""
 
     @classmethod
-    def open_existing(cls, path: str | Path) -> EvidenceLedger:
+    def open_existing(cls, path: str | Path, *, writable: bool = False) -> EvidenceLedger:
         """Open a ledger that must already exist; never create one.
 
         For commands that only read: a mistyped path must be an error, not a new
         empty ledger that reads as "no machines", "never ran" or "nothing to report".
+
+        The default open **writes nothing**: no journal-mode switch, no schema script,
+        no id minted, no ``-wal`` / ``-shm`` created (see :meth:`open_readonly`). A file
+        that is not an evidence ledger is refused. If the caller then really appends, the
+        ledger is prepared for writing at that moment (once), exactly as a plain
+        ``EvidenceLedger(path)`` would have been -- so a verb that writes still works, and
+        a verb that only reads leaves the file's bytes alone. ``writable=True`` says up
+        front that the caller writes and prepares the file now.
         """
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(
                 f"{p} does not exist. Nothing was read, and no ledger was created.")
-        return cls(p)
+        if writable:
+            return cls(p)
+        ledger = cls.open_readonly(p)
+        ledger._upgrade_on_write = True
+        return ledger
+
+    @classmethod
+    def open_readonly(cls, path: str | Path) -> EvidenceLedger:
+        """Open an existing ledger for reading ONLY; any write raises.
+
+        Never creates the file, never switches the journal mode, never runs the schema
+        script, never mints a ledger id (a ledger without one reports ``ledger_id() is
+        None``), and creates no ``-wal`` / ``-shm`` / ``-journal`` beside it. A missing
+        file is ``FileNotFoundError``; an empty file, a non-SQLite file or a SQLite file
+        without the ledger tables is refused as "not a ledger".
+
+        With no sidecar beside the file there is no live writer, so ``immutable=1`` reads
+        it with no locking and creates nothing. With a sidecar a writer may be live, and
+        ``mode=ro`` then uses the existing files and creates none. A writer that starts in
+        the instant between that check and the read is the one case ``immutable`` could
+        misread; the next read sees it (same stated limit as the intel store).
+
+        A file that holds any table other than the ledger's (``meta``, ``chain``), or a
+        ``chain`` / ``meta`` of the wrong shape, is refused exactly as the write path refuses
+        it: it is another application's database.
+
+        Known limit: a *crash copy* of a WAL-mode ledger -- the ``-wal`` file copied, the
+        ``-shm`` not -- is read correctly (the committed WAL frames are used), but SQLite must
+        then build its shared-memory index, so a ``-shm`` file appears beside the copy. The
+        ``.db`` and ``-wal`` bytes are not modified. A caller that must leave the directory
+        byte-identical copies the files to a scratch directory first (as ``restore_check``
+        does) and opens the copy.
+        """
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"{p} does not exist. Nothing was read, and no ledger was created.")
+        self = cls.__new__(cls)
+        self.path = p
+        self._lock = threading.Lock()
+        self._read_only = True
+        self._upgrade_on_write = False
+        self._upgraded = False
+        if p.stat().st_size == 0:
+            raise LedgerIntegrityError(f"{p} is empty, so it is not a ledger.")
+        try:
+            db = self._connect_ro()
+            try:
+                names = {r[0] for r in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"meta", "chain"} <= names:
+                    raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
+                if _holds_foreign_tables(db):
+                    raise LedgerIntegrityError(
+                        f"{p} is not a ledger: it is another application's SQLite database "
+                        "(it holds tables that are not the ledger's, or a ledger table of the "
+                        "wrong shape); refusing to read it as evidence.")
+                row = db.execute(
+                    "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+                db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
+            finally:
+                db.close()
+        except sqlite3.Error as exc:
+            raise LedgerIntegrityError(
+                f"{p} is not a ledger: it could not be opened as one "
+                f"({type(exc).__name__}: {exc}).") from exc
+        if row is not None and str(row[0]) != str(LEDGER_SCHEMA_VERSION):
+            raise LedgerIntegrityError(
+                f"{p} was written by ledger schema {row[0]}, this build speaks "
+                f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing.")
+        return self
+
+    def _refuse_if_foreign_before_writing(self) -> None:
+        """Refuse someone else's database BEFORE any write (cf. the intel store, issue #92).
+
+        ``_connect`` switches the journal mode (a write) and the schema script then creates
+        tables; neither may happen to a file that is not a ledger. A missing or empty file
+        is new and proceeds. A non-SQLite file, or a SQLite file that has tables but not
+        this ledger's ``meta`` and ``chain``, is refused with its bytes untouched. The
+        table listing is read over ``immutable`` (nothing created) when there is no sidecar,
+        else over ``mode=ro`` so that uncheckpointed WAL content is seen.
+        """
+        p = self.path
+        try:
+            if not p.is_file() or p.stat().st_size == 0:
+                return
+            with p.open("rb") as handle:
+                header = handle.read(100)
+        except OSError:
+            return          # let the normal open report it
+        if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+            raise LedgerIntegrityError(
+                f"{p} is not a ledger: it is not a SQLite database; refusing to write to it.")
+        try:
+            db = self._connect_ro()
+            try:
+                foreign = _holds_foreign_tables(db)
+            finally:
+                db.close()
+        except sqlite3.Error:
+            raise LedgerIntegrityError(
+                f"{p} is not a ledger: it cannot be read as one; "
+                "refusing to write to it.") from None
+        if foreign:
+            raise LedgerIntegrityError(
+                f"{p} is not a ledger: it is another application's SQLite database; "
+                "refusing to create ledger tables inside it.")
+
+    def _connect_ro(self) -> sqlite3.Connection:
+        resolved = self.path.resolve()
+        quiescent = not any(resolved.with_name(resolved.name + sfx).exists()
+                            for sfx in ("-wal", "-shm", "-journal"))
+        # ``immutable=1`` skips locking and is only safe on a file nobody is writing. A handle
+        # from ``EvidenceLedger(path, mint_id=False)`` is used on LIVE ledgers (export, offboarding),
+        # where a writer may start in the instant after the sidecar check: it never uses it.
+        immutable = quiescent and not getattr(self, "_never_immutable", False)
+        mode = "mode=ro&immutable=1" if immutable else "mode=ro"
+        db = sqlite3.connect(f"{resolved.as_uri()}?{mode}", uri=True, timeout=5.0,
+                             isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA query_only=ON")
+        return db
+
+    def _prepare_for_write(self) -> None:
+        """Turn a read-only open into a normal one, once, at the first real write."""
+        if not getattr(self, "_read_only", False) or self._upgraded:
+            return
+        if not self._upgrade_on_write:
+            raise LedgerIntegrityError(
+                f"{self.path} was opened read-only; this ledger cannot be written.")
+        self._init_for_writing(mint_id=getattr(self, "_mint_on_upgrade", True))
+        self._upgraded = True
 
     def __init__(self, path: str | Path, *, mint_id: bool = True) -> None:
         """Open (creating if need be) the ledger at ``path``.
 
-        ``mint_id=False`` never writes: a verifier that opens a backup must not change
-        the bytes the backup's manifest hashed. Such a ledger without an id reports
-        ``ledger_id() is None``.
+        ``mint_id=False`` never writes while the ledger is only read: on a rollback-journal
+        file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
+        sidecar created), so a verifier that opens a backup does not change the bytes the
+        backup's manifest hashed. Such a ledger without an id reports ``ledger_id() is None``.
+        If it is then appended to, it is prepared for writing at that moment (once), still
+        without minting an id. A path that does not exist yet, or an empty file, is created as
+        before.
         """
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = False
+        self._upgrade_on_write = False
+        self._upgraded = False
         self._lock = threading.Lock()
+        self._mint_on_upgrade = True
+        if not mint_id and self._is_existing_ledger_file():
+            self._never_immutable = True
+            type(self).open_readonly(self.path)   # the same refusals; raises if not a ledger
+            self._read_only = True
+            self._upgrade_on_write = True
+            self._mint_on_upgrade = False
+            return
+        self._init_for_writing(mint_id=mint_id)
+
+    def _is_existing_ledger_file(self) -> bool:
+        """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
+
+        Only a file in rollback-journal mode qualifies (header bytes 18-19 are 1): the old open
+        switched exactly those files to WAL, changing bytes the caller only meant to read. A
+        WAL-mode ledger may have a live writer and needs its sidecars to be read at all, so it
+        keeps the ordinary open, as do a missing, empty, foreign or partly created file (the
+        writing path has its own refusals).
+        """
+        try:
+            if not self.path.is_file() or self.path.stat().st_size == 0:
+                return False
+            with self.path.open("rb") as handle:
+                header = handle.read(100)
+            if len(header) < 100 or header[18:20] != b"\x01\x01":
+                # Not a rollback-journal file. A WAL-mode ledger is the live format that
+                # writers keep open: reading it needs the -wal / -shm sidecars, so it takes
+                # the ordinary open (which only ever sets WAL on a file already in WAL).
+                return False
+            db = self._connect_ro()
+            try:
+                names = {r[0] for r in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+            finally:
+                db.close()
+        except (OSError, sqlite3.Error):
+            return False
+        return {"meta", "chain"} <= names
+
+    def _init_for_writing(self, *, mint_id: bool) -> None:
+        self._refuse_if_foreign_before_writing()
+        try:
+            is_new_file = not self.path.is_file() or self.path.stat().st_size == 0
+        except OSError:
+            is_new_file = False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         # sqlite3's context manager commits or rolls back; it does NOT close.
         # Closing is explicit here because a ledger is constructed once per
         # request in a served deployment, and a leaked handle per construction
         # exhausts the file table under load.
-        db = self._connect()
+        db = self._connect_rw()
         try:
+            # Re-check inside the open (a race with another creator, or an uncheckpointed
+            # WAL the header check could not see): never run the schema over foreign tables.
+            if _holds_foreign_tables(db):
+                raise LedgerIntegrityError(
+                    f"{self.path} is not a ledger: it is another application's SQLite "
+                    "database; refusing to create ledger tables inside it.")
             # Several first opens can race (a new tenant's first parallel
             # requests). The schema script is idempotent and takes no write lock
             # on an existing file. The version row is READ first: a plain open of
@@ -209,6 +444,13 @@ class EvidenceLedger:
                 self._mint_ledger_id(db)
         finally:
             db.close()
+        if is_new_file:
+            # The incremental-verify cache is keyed by (path, inode, device) and filesystems
+            # reuse inodes: a ledger deleted and recreated at the same path (an offboarded
+            # account that is later re-enrolled) can land on the dead file's inode and be
+            # judged against ITS verified head, reading as "truncated". A file this call
+            # just created cannot be one that was verified before.
+            chain_cache.drop(chain_cache.identity(self.path))
 
     @staticmethod
     def _mint_ledger_id(db: sqlite3.Connection) -> None:
@@ -238,6 +480,12 @@ class EvidenceLedger:
 
     # -- plumbing ---------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
+        """A connection for reading (and, in :meth:`_write_txn`, writing)."""
+        if self._read_only and not self._upgraded:
+            return self._connect_ro()
+        return self._connect_rw()
+
+    def _connect_rw(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         enable_wal(db)
@@ -254,6 +502,7 @@ class EvidenceLedger:
         the chain.
         """
         with self._lock:
+            self._prepare_for_write()
             db = self._connect()
             try:
                 # Outside the rollback guard: when BEGIN itself fails (the file
@@ -685,6 +934,25 @@ class EvidenceLedger:
             return problems, head_seq, head_link
         finally:
             db.close()
+
+    def require_intact(self, *, full: bool = False) -> None:
+        """Raise :class:`ChainBrokenError` unless the chain verifies; return None if it does.
+
+        ``full=True`` is a complete walk (:meth:`verify_chain`) and is what a write
+        that settles or extends a legal record pays for. The default is the
+        incremental :meth:`verify_cached`: the last verified head and everything
+        appended since are checked on every call (O(new records)); an in-place edit
+        of an *old* record is seen at the next full pass (within
+        ``ASSURANCE_CHAIN_RECHECK_SECONDS``, default 60 s) or on any full walk. A
+        rebuilt, self-consistent chain is caught by neither; that is what a signed
+        head attestation is for.
+        """
+        ok, problems = self.verify_chain() if full else self.verify_cached()
+        if not ok:
+            raise ChainBrokenError(
+                "the ledger's chain does not verify, so no case in it can be shown or "
+                "extended as fact:\n  " + "\n  ".join(problems[:5])
+                + (f"\n  ... and {len(problems) - 5} more" if len(problems) > 5 else ""))
 
     def verify_cached(self) -> tuple[bool, list[str]]:
         """Does the chain still verify, at O(new records) cost? ``(ok, problems)``.

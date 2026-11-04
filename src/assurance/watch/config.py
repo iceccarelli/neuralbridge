@@ -27,6 +27,23 @@ from assurance.core.identity import content_hash_of
 __all__ = ["INTEL_SOURCES", "IntelSubscription", "WatchConfig", "WatchError", "WatchTarget"]
 
 
+MAX_AGE_HOURS_LIMIT = 24.0 * 366      # a year: beyond it "stale" is not a meaningful statement
+
+
+def _check_max_age(value: Any, what: str) -> float:
+    """``value`` as a validated ``max_age_hours``: a finite number, > 0, at most a year.
+
+    Rejected with a config error (never an OverflowError at read time): a bool is not a
+    number of hours, and an absurd bound ("1e7") would make a watch that never goes stale.
+    """
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value <= 0 or value > MAX_AGE_HOURS_LIMIT):
+        raise WatchError(
+            f"{what} must be a finite number of hours greater than 0 and at most "
+            f"{MAX_AGE_HOURS_LIMIT:g} (got {value!r}).")
+    return float(value)
+
+
 class WatchError(AssuranceError):
     """A watch is malformed, or would watch nothing."""
 
@@ -153,13 +170,8 @@ class IntelSubscription:
     def __post_init__(self) -> None:
         if not self.store.strip():
             raise WatchError("an intel subscription needs a store path.")
-        if self.max_age_hours is not None and (
-                isinstance(self.max_age_hours, bool)
-                or not isinstance(self.max_age_hours, (int, float))
-                or not math.isfinite(self.max_age_hours) or self.max_age_hours <= 0):
-            raise WatchError(
-                "an intel subscription's max_age_hours must be a positive number "
-                f"(got {self.max_age_hours!r}); leave it out to say staleness is not checked.")
+        if self.max_age_hours is not None:
+            _check_max_age(self.max_age_hours, "an intel subscription's max_age_hours")
         if not self.supplier_id.strip():
             raise WatchError("an intel subscription needs a supplier_id label.")
         unknown = [s for s in self.sources if s not in INTEL_SOURCES]
@@ -273,8 +285,7 @@ class WatchConfig:
                 f"watch {self.watch_id!r} has no targets: it would report "
                 "'nothing changed' forever, about nothing."
             )
-        if self.max_age_hours <= 0:
-            raise WatchError("max_age_hours must be positive.")
+        _check_max_age(self.max_age_hours, "max_age_hours")
         seen: set[str] = set()
         for t in self.targets:
             if t.serial in seen:
@@ -340,7 +351,7 @@ class WatchConfig:
             article_14=Article14Duty.from_dict(d.get("article_14")),
             operator=str(d.get("operator", "assurance-watch")),
             organisation=str(d.get("organisation", "")),
-            max_age_hours=float(d.get("max_age_hours", 168.0)),
+            max_age_hours=_check_max_age(d.get("max_age_hours", 168.0), "max_age_hours"),
             notes=str(d.get("notes", "")),
         )
 

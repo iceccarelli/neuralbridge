@@ -60,7 +60,13 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
 from assurance.machinery.intervention import ImpliedIntervention
-from assurance.machinery.manifest import HashSource, ManifestSource, not_a_look
+from assurance.machinery.manifest import (
+    HashSource,
+    ManifestSource,
+    last_attribution,
+    manifest_is_incomplete,
+    not_a_look,
+)
 from assurance.machinery.record import (
     interventions_from_ledger,
     manifests_from_ledger,
@@ -411,6 +417,11 @@ def _already_assessed(ledger: EvidenceLedger) -> frozenset[str]:
     a decision that has been taken.
     """
     out: set[str] = set()
+    ok, _problems = ledger.verify_chain()  # a full walk: the cached head misses an edit below it
+    if not ok:
+        # A row in a chain that does not verify is not a determination anyone can rely on;
+        # skipping it errs towards prompting again, never towards silence.
+        return frozenset()
     for entry in ledger.entries(kind="art14.awareness"):
         evidence = entry.evidence()
         if not evidence.verify():
@@ -517,7 +528,8 @@ def run_watch(
 
         manifest = result.manifest
         missing_items = tuple(o.item_id for o in (*result.missing, *result.unreadable))
-        if not result.complete:
+        if not result.complete and not manifest_is_incomplete(manifest):
+            # (collect() now marks an incomplete manifest itself; do not mark it twice.)
             # Persisted on the manifest record itself, because a case judging
             # "did this machine leave that configuration" reads manifests and
             # must be able to tell a partial look from a configuration.
@@ -530,8 +542,18 @@ def run_watch(
         history = manifests_from_ledger(ledger, machine_key)
         baseline = last_complete_manifest(history)
 
+        # The configuration hash covers the items only. What the manifest DECLARES about the
+        # safety functions (performance level, verified_by, ...) can be weakened with every
+        # item untouched, so a moved declaration is a change too (never "unchanged").
         status = "first_seen" if baseline is None else (
-            "changed" if baseline.configuration_hash() != observed else "observed")
+            "changed" if (baseline.configuration_hash() != observed
+                          or baseline.safety_declaration_hash()
+                          != manifest.safety_declaration_hash()) else "observed")
+        # The newest manifest this machine holds is a partial look and this look is whole
+        # and unchanged from the last complete one. The fleet view is showing the partial
+        # one's gap (and flagging the machine) until a complete manifest is sealed again.
+        recovering = (status == "observed" and result.complete and bool(history)
+                      and manifest_is_incomplete(history[-1]))
 
         drift_severity = ""
         drift_items: tuple[str, ...] = ()
@@ -546,6 +568,10 @@ def run_watch(
         elif status == "first_seen":
             detail = (f"first observation; configuration {observed[:12]}, "
                       f"{len(manifest.items)} item(s)")
+        elif recovering:
+            detail = (f"complete again at {observed[:12]}: the previous look was incomplete, "
+                      "so a complete manifest is sealed again and the fleet view regains "
+                      "the items the gap dropped")
         elif status == "observed" and why_not_a_look:
             detail = (f"same configuration hash {observed[:12]}; this is an export folder, "
                       "not a look at the machine, so it is not reported as unchanged "
@@ -553,13 +579,19 @@ def run_watch(
         elif status == "observed":
             detail = f"unchanged at {observed[:12]}"
         else:
-            divergence = compare(baseline, manifest)
+            # carried_attribution: an item that was credited with safety functions in an earlier complete look
+            # keeps them when a later look drops the attribution, so the two-step drop (drop `implements`, then
+            # change the hash) is caught here as it is on the record path (machinery/record.py).
+            divergence = compare(baseline, manifest, carried_attribution=last_attribution(history))
             worst = divergence.worst
             drift_severity = worst.value if worst else ""
             drift_items = tuple(c.item_id for c in divergence.changes)
             affected = divergence.affected_functions
-            detail = (f"configuration moved {baseline.configuration_hash()[:12]} → "
-                      f"{observed[:12]}: " + ", ".join(
+            moved = (f"configuration moved {baseline.configuration_hash()[:12]} → "
+                     f"{observed[:12]}" if baseline.configuration_hash() != observed
+                     else f"configuration unchanged at {observed[:12]} but the safety-function "
+                          "declaration changed")
+            detail = (moved + ": " + ", ".join(
                           f"{c.item_id} {c.kind.value}" for c in divergence.changes))
             if seal:
                 # The case comes first, before the new manifest becomes the
@@ -586,7 +618,8 @@ def run_watch(
         # An incomplete first look is not sealed: with no complete configuration
         # before it there is nothing for it to differ from, and as the first
         # manifest held it would become the baseline every later look is judged by.
-        if seal and (status == "changed" or (status == "first_seen" and result.complete)):
+        if seal and (status == "changed" or recovering
+                     or (status == "first_seen" and result.complete)):
             record_manifest(ledger, manifest, actor=actor)
             sealed.append(f"manifest {manifest.manifest_id}")
 

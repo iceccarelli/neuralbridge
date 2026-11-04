@@ -40,6 +40,17 @@ const nextConfig = {
         ],
       },
       {
+        // The page Stripe redirects a buyer to. Its URL carries a checkout session id (and, in the
+        // fragment, a claim token) until the page strips them on load, so nothing it loads or
+        // links to may receive the URL as a Referer, and no cache may keep the page. Listed after
+        // '/:path*' so this Referrer-Policy replaces the site-wide one for this path only.
+        source: '/checkout/success',
+        headers: [
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Cache-Control', value: 'no-store' },
+        ],
+      },
+      {
         // Files in public/images are served as-is and never carry a hash in the name, so cache for a day
         // and let a stale copy be served while it revalidates; /_next/static is already immutable.
         source: '/images/:path*',

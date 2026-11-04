@@ -416,7 +416,7 @@ CAPABILITIES: tuple[Capability, ...] = (
        "capabilities"),
     _c("account.checkout", "Start a subscription", (), "POST /v1/checkout",
        gaps={"cli": _d(_ACCOUNT), "mcp": _d(_ACCOUNT)}),
-    _c("account.checkout_complete", "Collect the key after paying", (), "GET /v1/checkout/complete",
+    _c("account.checkout_complete", "Collect the key after paying", (), "POST /v1/checkout/complete",
        gaps={"cli": _d(_ACCOUNT), "mcp": _d(_ACCOUNT)}),
     _c("account.billing_portal", "Manage your subscription", (), "POST /v1/billing/portal",
        gaps={"cli": _d(_ACCOUNT), "mcp": _d(_ACCOUNT)}),

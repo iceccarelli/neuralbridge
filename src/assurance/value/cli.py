@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.ledger.exists():
             print(f"{args.ledger} does not exist.", file=sys.stderr)
             return 2
-        result = assess_position(EvidenceLedger(args.ledger),
+        result = assess_position(EvidenceLedger.open_existing(args.ledger),
                                  now=parse_utc(args.now) if args.now else None)
     except (AssuranceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

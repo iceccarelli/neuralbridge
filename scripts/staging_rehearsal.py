@@ -1065,6 +1065,11 @@ def _webhook_steps(ctx: Ctx, run: Run, http: Http, secret: str, poll_seconds: fl
                  "metadata": {"tier": "register", "company": "Rehearsal (synthetic)"}}}}
     raw = json_bytes(event)
     api_key = ""
+    delivered_ok = False
+    #: A claim token is minted only by POST /v1/checkout (a real Stripe Checkout Session). This rehearsal's synthetic
+    #: session has none, so the claim route is given a made-up one: before delivery it answers 202 without examining
+    #: it, after delivery it must answer 403 (no stored claim: fail closed) and never a key.
+    probe = {"session_id": session, "claim_token": "rehearsal-" + secrets.token_hex(16)}
 
     def post(payload: bytes, header: str) -> httpx.Response:
         return http.request("POST", "/v1/billing/webhook", content=payload, headers={
@@ -1094,7 +1099,7 @@ def _webhook_steps(ctx: Ctx, run: Run, http: Http, secret: str, poll_seconds: fl
             return
 
         # 2. nothing is claimable before delivery
-        before = http.request("GET", "/v1/checkout/complete", params={"session_id": session})
+        before = http.request("POST", "/v1/checkout/complete", json=probe)
         if before.status_code == 202:
             run.add("webhook.pending_before", PASS, "the session is pending (202) before delivery")
         else:
@@ -1109,6 +1114,7 @@ def _webhook_steps(ctx: Ctx, run: Run, http: Http, secret: str, poll_seconds: fl
         body = _json_dict(delivered)
         if delivered.status_code == 200 and body.get("tier") == "register" \
                 and body.get("account_id"):
+            delivered_ok = True
             run.add("webhook.delivered", PASS,
                     "a signed checkout.session.completed (tier register) was accepted (200)")
         else:
@@ -1133,48 +1139,43 @@ def _webhook_steps(ctx: Ctx, run: Run, http: Http, secret: str, poll_seconds: fl
             run.add("webhook.replay_duplicate", FAIL,
                     f"redelivery answered {again.status_code} and was not marked duplicate")
 
-        # 5. the key is handed over exactly once
-        deadline = time.monotonic() + poll_seconds
-        while True:
-            handed = http.request("GET", "/v1/checkout/complete",
-                                  params={"session_id": session})
-            if handed.status_code != 202 or time.monotonic() >= deadline:
-                break
-            time.sleep(0.5)
-        take(handed)
-        payload = _json_dict(handed)
+        # 5. the key handover. It cannot be exercised here: see `probe`. What CAN be established remotely is
+        #    that no route hands a key to someone without the claim token, and that the old GET never does.
+        old_get = http.request("GET", "/v1/checkout/complete", params={"session_id": session})
+        take(old_get)
+        tokenless = http.request("POST", "/v1/checkout/complete", json=probe)
+        take(tokenless)
+        problems = []
         if api_key:
-            problems = []
-            if "no-store" not in handed.headers.get("cache-control", "").lower():
-                problems.append("the response carrying the key is cacheable (no "
-                                "Cache-Control: no-store)")
-            if payload.get("tier") != "register":
-                problems.append(f"the key's tier is {payload.get('tier')!r}")
-            second = http.request("GET", "/v1/checkout/complete",
-                                  params={"session_id": session})
-            if second.status_code != 202:
-                problems.append(f"a second collection answered {second.status_code}: the key "
-                                "was handed over more than once")
-            run.add("webhook.key_handover_once", FAIL if problems else PASS,
-                    "; ".join(problems) if problems else
-                    "the key was collected once (200, no-store) and a second collection was 202")
-        else:
-            run.add("webhook.key_handover_once", FAIL,
-                    f"no key was handed over within {poll_seconds:g}s (last answer "
-                    f"{handed.status_code}); the webhook may not have been processed")
+            problems.append("a key was handed over WITHOUT a valid claim token")
+        if old_get.status_code != 410:
+            problems.append(f"the retired GET answered {old_get.status_code}, expected 410")
+        if tokenless.status_code != 403:
+            problems.append(f"a claim with a made-up token answered {tokenless.status_code}, "
+                            "expected 403")
+        if problems:
+            run.add("webhook.key_handover_once", FAIL, "; ".join(problems))
             return
+        run.add("webhook.key_handover_once", UNCHECKED,
+                "the handover itself (once, no-store, tier) was NOT exercised: a claim token exists only for "
+                "a session created by POST /v1/checkout (a real Stripe test-mode Checkout Session), and this "
+                "rehearsal's synthetic session has none. Established instead: the retired GET answered 410 "
+                "and a claim with a made-up token was refused (403), neither returning a key. Run the real "
+                "handover in Stripe test mode by hand.")
 
-        # 6. the key works (what happens next must not depend on this)
-        me = http.request("GET", "/v1/me", headers={"X-API-Key": api_key})
-        tier = _json_dict(me).get("tier") if me.status_code == 200 else None
-        run.add("webhook.key_works", PASS if tier == "register" else FAIL,
-                "the handed-over key authenticates and is on the Register plan"
-                if tier == "register" else
-                f"GET /v1/me with the new key answered {me.status_code}, tier {tier!r}")
+        # 6. the key works: nothing was handed over, so nothing can be tested
+        run.add("webhook.key_works", UNCHECKED,
+                "no key was handed over (see webhook.key_handover_once), so a key could not be tried")
     finally:
         # 7. whatever happened above, including an interrupt, no live test key is left behind
         if api_key:
             _cleanup_key(run, http, api_key)
+        elif delivered_ok:
+            run.add("webhook.cleanup", UNCHECKED,
+                    "the delivered event created a synthetic account and STAGED a key on the host that this "
+                    "rehearsal cannot claim or revoke remotely. On the host, run: python -m "
+                    f"assurance.billing.issue_key --discard-staged {session} (it deletes and revokes the staged "
+                    f"key), and remove the synthetic account {email}")
 
 
 def json_bytes(obj: Any) -> bytes:

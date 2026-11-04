@@ -39,11 +39,14 @@ from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.machinery.manifest import (
+    INCOMPLETE_COLLECTION_MARK,
     HashSource,
     MachineIdentity,
+    ManifestError,
     ManifestSource,
     SafetyItem,
     SafetyManifest,
+    incomplete_collection_note,
 )
 
 __all__ = [
@@ -400,12 +403,25 @@ def collect(
         "derived from it."
     )
 
+    # A partial collection says so on the manifest itself, wherever it is written (a file,
+    # the ledger, the kit, the watch): the marker is what every later reader uses to tell a
+    # partial look from a configuration the machine was in. Not added twice.
+    missing_ids = tuple(o.item_id for o in (*(o for o in outcomes if o.status == "missing"),
+                                            *(o for o in outcomes if o.status == "unreadable")))
+    if missing_ids and INCOMPLETE_COLLECTION_MARK not in notes:
+        notes = (notes + " " if notes else "") + incomplete_collection_note(missing_ids)
+
+    try:
+        identity = MachineIdentity(
+            manufacturer=plan.manufacturer, model=plan.model, serial=serial, year=year,
+            site=site, country=country.upper()).require_unambiguous()
+    except ManifestError as exc:
+        raise CollectionError(str(exc)) from exc
+
     manifest = SafetyManifest(
         manifest_id=manifest_id or f"{plan.plan_id}-{serial}-"
                                    f"{format_utc(taken_at or utc_now())[:10]}",
-        machine=MachineIdentity(manufacturer=plan.manufacturer, model=plan.model,
-                                serial=serial, year=year, site=site,
-                                country=country.upper()),
+        machine=identity,
         source=source,
         taken_at=taken_at or utc_now(),
         taken_by=taken_by,

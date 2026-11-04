@@ -84,43 +84,44 @@ def fingerprint(root: Path) -> dict[str, str]:
 # H1, L8: the test key is revoked whatever goes wrong after the handover
 # ---------------------------------------------------------------------------
 
-def trip(sr, monkeypatch: pytest.MonkeyPatch, exc: BaseException, on: str = "/v1/me") -> None:
-    """Make the first request to ``on`` raise ``exc`` (a failure no HTTP client would raise)."""
+def trip(sr, monkeypatch: pytest.MonkeyPatch, exc: BaseException, on: str = "/v1/me", nth: int = 1) -> None:
+    """Make the ``nth`` request to ``on`` raise ``exc`` (a failure no HTTP client would raise)."""
     real = sr.Http.request
     seen = {"n": 0}
 
     def wrapper(self, method, target, **kwargs):
         if target == on:
             seen["n"] += 1
-            if seen["n"] == 1:
+            if seen["n"] == nth:
                 raise exc
         return real(self, method, target, **kwargs)
 
     monkeypatch.setattr(sr.Http, "request", wrapper)
 
 
-@pytest.mark.parametrize("defect,extra", [
-    ({"me_hang": True}, ["--timeout", "1"]),        # a timeout between handover and cleanup
-    ({"me_list": True}, []),                        # a JSON list where an object was expected
-])
-def test_the_test_key_is_revoked_even_when_a_step_after_the_handover_fails(
-        sr, capsys, tmp_path, defect, extra):
-    app = fake_checkout(**defect)
-    ran, found = run_webhook(sr, capsys, tmp_path, app, *extra)
-    assert app.state.log["revoke_calls"] == 1, (found, ran.text)
-    assert found["webhook.key_works"] == "FAIL"
-    assert found["webhook.cleanup"] == "PASS" and ran.code == 1
-    assert found["webhook.forged_rejected"] == "PASS"            # earlier steps are kept
+# A key can only reach this rehearsal from a DEFECTIVE host: the real handover needs a claim token that only
+# POST /v1/checkout mints, which a synthetic session has not. `hand_over_without_token` makes the claim route
+# hand a key to a made-up token, and `get_hands_key` makes the retired GET hand one over. In both, the rehearsal must
+# FAIL the handover, revoke the key whatever happens next, never print it, and keep the steps already taken.
+
+def test_a_key_handed_over_without_a_claim_token_fails_and_is_revoked(sr, capsys, tmp_path):
+    app = fake_checkout(hand_over_without_token=True)
+    ran, found = run_webhook(sr, capsys, tmp_path, app)
+    assert found["webhook.key_handover_once"] == "FAIL" and ran.code == 1
+    assert found["webhook.cleanup"] == "PASS" and app.state.log["revoke_calls"] == 1
+    assert found["webhook.key_works"] == "UNCHECKED"      # never PASS: nothing legitimate was handed over
+    assert found["webhook.forged_rejected"] == "PASS"     # earlier steps are kept
+    assert FAKE_KEY not in ran.text and FAKE_KEY not in (tmp_path / "webhook-test.json").read_text()
 
 
-def test_a_non_http_exception_still_revokes_and_keeps_the_steps_already_taken(
+def test_a_non_http_exception_after_the_key_is_taken_still_revokes_and_keeps_the_steps_already_taken(
         sr, capsys, tmp_path, monkeypatch):
-    app = fake_checkout()
-    trip(sr, monkeypatch, RuntimeError(f"boom {SK_TEST} {FAKE_KEY}"))
+    app = fake_checkout(get_hands_key=True)                # the key arrives on the retired GET...
+    # ...and the very next request (the made-up-token claim, 3rd call to this path) blows up.
+    trip(sr, monkeypatch, RuntimeError(f"boom {SK_TEST} {FAKE_KEY}"), on="/v1/checkout/complete", nth=3)
     ran, found = run_webhook(sr, capsys, tmp_path, app)
     assert ran.code == 1 and app.state.log["revoke_calls"] == 1
-    for step in ("webhook.forged_rejected", "webhook.delivered", "webhook.key_handover_once",
-                 "webhook.cleanup"):
+    for step in ("webhook.forged_rejected", "webhook.delivered", "webhook.cleanup"):
         assert found[step] == "PASS", (step, found)
     assert found["webhook.internal_error"] == "FAIL"
     assert "RuntimeError" in ran.err
@@ -128,10 +129,9 @@ def test_a_non_http_exception_still_revokes_and_keeps_the_steps_already_taken(
     assert FAKE_KEY not in ran.text
 
 
-def test_ctrl_c_after_the_handover_revokes_the_key_and_exits_130(
-        sr, capsys, tmp_path, monkeypatch):
-    app = fake_checkout()
-    trip(sr, monkeypatch, KeyboardInterrupt())
+def test_ctrl_c_after_the_key_is_taken_revokes_it_and_exits_130(sr, capsys, tmp_path, monkeypatch):
+    app = fake_checkout(get_hands_key=True)
+    trip(sr, monkeypatch, KeyboardInterrupt(), on="/v1/checkout/complete", nth=3)
     ran, found = run_webhook(sr, capsys, tmp_path, app)
     assert ran.code == 130 and app.state.log["revoke_calls"] == 1
     assert found["webhook.cleanup"] == "PASS" and found["webhook.delivered"] == "PASS"
@@ -142,7 +142,7 @@ def test_ctrl_c_after_the_handover_revokes_the_key_and_exits_130(
 @pytest.mark.parametrize("defect", [{"revoke_500": True}, {"no_revoke": True}])
 def test_a_revoke_that_cannot_be_confirmed_fails_and_names_the_key_by_prefix_only(
         sr, capsys, tmp_path, defect):
-    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(**defect))
+    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(hand_over_without_token=True, **defect))
     assert found["webhook.cleanup"] == "FAIL" and ran.code == 1
     detail = next(s["detail"] for s in record(tmp_path, "webhook-test")["steps"]
                   if s["id"] == "webhook.cleanup")
@@ -155,7 +155,7 @@ def test_a_revoke_that_cannot_be_confirmed_fails_and_names_the_key_by_prefix_onl
 def test_a_cleanup_whose_requests_raise_fails_with_the_warning_and_the_prefix(
         sr, capsys, tmp_path, monkeypatch, exc):
     trip(sr, monkeypatch, exc, on="/v1/keys/revoke")
-    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout())
+    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(hand_over_without_token=True))
     detail = next(s["detail"] for s in record(tmp_path, "webhook-test")["steps"]
                   if s["id"] == "webhook.cleanup")
     assert found["webhook.cleanup"] == "FAIL" and ran.code == 1
@@ -181,16 +181,17 @@ def test_a_host_that_grants_again_on_replay_fails_the_duplicate_check(sr, capsys
     assert found["webhook.replay_duplicate"] == "FAIL" and ran.code == 1
 
 
-@pytest.mark.parametrize("defect", [{"me_tier": "cell"}, {"me_dead": True}])
-def test_a_key_that_is_the_wrong_tier_or_dead_fails_key_works(sr, capsys, tmp_path, defect):
-    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(**defect))
-    assert found["webhook.key_works"] == "FAIL" and found["webhook.cleanup"] == "PASS"
+def test_a_service_that_hands_nothing_over_leaves_the_key_steps_unchecked_never_passed(sr, capsys, tmp_path):
+    """The well-behaved host: no key reaches the rehearsal, so 'the key works' cannot be claimed."""
+    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout())
+    assert found["webhook.key_works"] == "UNCHECKED" and found["webhook.key_handover_once"] == "UNCHECKED"
+    assert found["webhook.cleanup"] == "UNCHECKED" and ran.code == 3
 
 
 def test_a_handed_over_key_with_no_known_shape_is_still_redacted(sr, capsys, tmp_path):
     key = "KEYWITHNOSHAPE_abcdefghijklmnopqrstuvwxyz0123456789"
-    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(key=key, me_echo_key=True))
-    assert found["webhook.key_works"] == "FAIL"           # its tier "is" the key: printed
+    ran, found = run_webhook(sr, capsys, tmp_path, fake_checkout(key=key, hand_over_without_token=True))
+    assert found["webhook.key_handover_once"] == "FAIL"
     assert key not in ran.text and key not in (tmp_path / "webhook-test.json").read_text()
 
 

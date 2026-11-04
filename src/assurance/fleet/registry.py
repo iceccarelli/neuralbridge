@@ -38,6 +38,32 @@ from assurance.machinery.staleness import (
 
 __all__ = ["Fleet", "FleetSummary", "MachineRecord"]
 
+#: What the watch writes into a manifest's notes when it could not read every item its plan
+#: names (``change.service.INCOMPLETE_COLLECTION_MARK``; a test pins the two together,
+#: because this module cannot import the change package at load time).
+_PARTIAL_LOOK_MARK = "[collection incomplete"
+#: Observation statuses that are not a look at the machine (``watch.observations``).
+#: ``watch.observations.OBSERVATION_KIND``, repeated here: the offline kit loads this module
+#: and must not import the watch package (which reaches network clients). A test pins it.
+_OBSERVATION_KIND = "watch.observation"
+_FAILED_LOOK_STATUSES = frozenset({"uncollectable", "incomplete", "manifest_stale"})
+
+
+def _is_partial(manifest: SafetyManifest) -> bool:
+    # Same rule as machinery.manifest.manifest_is_incomplete (case- and whitespace-insensitive).
+    return _PARTIAL_LOOK_MARK in " ".join((manifest.notes or "").split()).lower()
+
+
+def _missing_from_note(manifest: SafetyManifest) -> str:
+    """The items the watch recorded as not collected, from the manifest's own note."""
+    start = manifest.notes.find(_PARTIAL_LOOK_MARK)
+    if start < 0:
+        return ""
+    text = manifest.notes[start + len(_PARTIAL_LOOK_MARK):]
+    end = text.find("]")
+    text = text[1:end] if text.startswith(":") and end > 0 else text[:end if end > 0 else None]
+    return " ".join(text.replace("not collected", "").split()).strip(" :,")
+
 
 @dataclass(frozen=True)
 class MachineRecord:
@@ -55,6 +81,14 @@ class MachineRecord:
     #: The enrolment plus its amendments (:class:`~assurance.machinery.amend.EffectiveIdentity`),
     #: when the machine is enrolled. Without one, the site is the manifest's.
     identity: Any = None
+    #: Why the latest look at this machine is not a complete one ("" when it is). The
+    #: ``manifest`` above is then the last COMPLETE configuration, kept as the machine's
+    #: effective configuration; a fleet advisory matched on it cannot clear the machine.
+    look_problems: tuple[str, ...] = ()
+
+    @property
+    def latest_look_incomplete(self) -> bool:
+        return bool(self.look_problems)
 
     @property
     def verdict(self) -> str:
@@ -65,8 +99,8 @@ class MachineRecord:
         edited, so the weaker verdict is not a safe harbour either.
         """
         if self.coverage.verdict in ("covered", "covered_at_community") \
-                and not self.chain_verified:
-            return "gaps"
+                and (not self.chain_verified or self.look_problems):
+            return "gaps"   # also: the latest look failed or was partial, so nothing is current
         return self.coverage.verdict
 
     @property
@@ -103,6 +137,8 @@ class MachineRecord:
                 "identity_amendments": [a.to_dict() for a in self.identity.amendments]}
                if self.site_amended else {}),
             "manifest_id": self.manifest.manifest_id,
+            "latest_look_incomplete": self.latest_look_incomplete,
+            "look_problems": list(self.look_problems),
             "configuration_hash": self.manifest.configuration_hash(),
             "taken_at": self.manifest.taken_at.isoformat().replace("+00:00", "Z"),
             "verdict": self.verdict,
@@ -182,14 +218,18 @@ class Fleet:
         # Which manifest is "the machine"? What was found on it, most recently.
         #
         # * an ``as_intended`` manifest is a plan, not a fact, and never current;
-        # * an observation (``as_found``) outranks a declaration, so a baseline
+        # * a COMPLETE observation (``as_found``) outranks a declaration, so a baseline
         #   filed after an observation does not make the machine look like its
         #   paperwork;
+        # * a partial look (the watch could not read every item its plan names) is not a
+        #   configuration the machine was in: it never displaces the last complete one,
+        #   and while it is the machine's latest look the machine is flagged, not cleared;
         # * within a kind, the later ``taken_at`` wins, then the later ledger
         #   entry — and a ``taken_at`` later than the moment the manifest was
         #   filed (plus a day for clocks) is not believed: it is dated by its
         #   filing, so a future date cannot pin a manifest as current for ever.
         best: dict[str, tuple[tuple[int, Any, int], SafetyManifest]] = {}
+        latest_found: dict[str, tuple[tuple[Any, int], SafetyManifest]] = {}
         # A manifest that cannot be read (seal, shape, not JSON) cannot be "the machine"; it
         # is not trusted, and it is not ignored either: ``interventions_from_ledger`` turns
         # it into a change assumed to touch everything, so the machine it belongs to cannot
@@ -209,12 +249,35 @@ class Fleet:
             when = manifest.taken_at
             if when > filed + timedelta(days=1):
                 when = filed
-            rank = (1 if manifest.source is ManifestSource.AS_FOUND else 0,
-                    when, entry.seq)
+            partial = _is_partial(manifest)
+            found = manifest.source is ManifestSource.AS_FOUND
+            tier = (3 if not partial else 2) if found else 1
+            rank = (tier, when, entry.seq)
             key = manifest.machine.key
             if key not in best or rank > best[key][0]:
                 best[key] = (rank, manifest)
+            if found:
+                seen = (when, entry.seq)
+                if key not in latest_found or seen > latest_found[key][0]:
+                    latest_found[key] = (seen, manifest)
         latest = {k: v[1] for k, v in best.items()}
+
+        # The latest look at each machine, as the watch recorded it. A failed attempt
+        # (export gone, plan only partly read) is a failure to check; it is never read
+        # as a successful look, so the machine it concerns is not cleared on older data.
+        latest_obs: dict[str, dict[str, Any]] = {}
+        observed, _, _ = ledger.read_subject(None, _OBSERVATION_KIND)
+        for entry in observed:
+            try:
+                evidence = entry.evidence()
+                if not evidence.verify():
+                    continue
+                body = evidence.body
+            except (AssuranceError, KeyError, ValueError, TypeError, AttributeError):
+                continue
+            who = str(body.get("machine") or entry.subject or "")
+            if who:
+                latest_obs[who] = body
 
         # One claim map for the whole fleet: every machine's read asks it which unit holds a
         # recording instead of re-walking and re-verifying the ledger (linear, not quadratic).
@@ -232,11 +295,29 @@ class Fleet:
                 identity = None   # a damaged enrolment record is for `machinery enrol` to say
             vfs = VerificationRecord.from_ledger(
                 ledger, subject=key, recorder_trust=recorder_trust, claims=claims)
+            problems: list[str] = []
+            looked = latest_found.get(key)
+            if looked is not None and _is_partial(looked[1]):
+                gone = _missing_from_note(looked[1])
+                problems.append(
+                    "the latest look at this machine was incomplete"
+                    + (f" ({gone} not collected)" if gone else "")
+                    + ": that manifest covers less than the plan, so the last complete "
+                    "configuration is used and the machine is not cleared")
+            obs = latest_obs.get(key)
+            if obs is not None and (str(obs.get("status", "")) in _FAILED_LOOK_STATUSES
+                                    or obs.get("complete", True) is False):
+                if not problems or str(obs.get("status", "")) in _FAILED_LOOK_STATUSES:
+                    problems.append(
+                        f"the latest recorded look at this machine failed "
+                        f"(status {obs.get('status') or 'incomplete'}): it was not "
+                        "observed, so older data is not evidence about it now")
             records.append(MachineRecord(
                 machine_key=key, manifest=manifest,
                 coverage=assess_coverage(manifest, vfs, ivs),
                 interventions=tuple(ivs), verifications=tuple(vfs),
                 chain_verified=chain_ok, identity=identity,
+                look_problems=tuple(problems),
             ))
 
         return cls(records=tuple(records), chain_verified=chain_ok,

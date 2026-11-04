@@ -221,12 +221,32 @@ it is cross-referenced, not repeated.
    After paying, `https://neuralbridge.io/checkout/success?session_id=...`
    should show a key within a few seconds (`SMOKE.md` #4's own pass
    condition). If it instead keeps showing "not ready yet" past ~30s, poll
-   the same thing curl-side to see the exact stuck state:
+   the same thing curl-side to see the exact stuck state. The session id is `cs_...` in the success URL.
+   The claim token is **not** in that URL (Stripe stores the success URL on the Checkout Session, so a token
+   there would be readable by anyone with Stripe access): `POST /v1/checkout` returns it, with the
+   `session_id`, in its response only, and the site keeps it in the buying tab's `sessionStorage` under
+   `nb-checkout-claim:<session_id>` (per tab: a different tab, browser or device does not have it). Whoever
+   saw that response, or can read that tab's `sessionStorage`, holds the token. The session id and token go in
+   the BODY, never the URL:
    ```bash
-   curl -s "https://<your-fly-app>.fly.dev/v1/checkout/complete?session_id=<id>"
+   curl -s -X POST "https://<your-fly-app>.fly.dev/v1/checkout/complete" \
+     -H 'content-type: application/json' \
+     -d '{"session_id":"<id>","claim_token":"<token from the POST /v1/checkout response>"}'
    ```
    A `202 {"status":"pending",...}` forever means the webhook never landed —
-   see the Failure modes table below.
+   see the Failure modes table below. A `403` means a key is waiting but this
+   caller does not hold the claim token (the success page shows this to a buyer who returns in another
+   tab or on another device); a `410` means it was already collected or expired (the operator recovery
+   is `python -m assurance.billing.issue_key --discard-staged <id>`, then a re-issue). An uncollected key
+   is revoked, not just made unclaimable, when its 24-hour hold ends.
+   Checkout is also budgeted: each client address may start at most 20 Stripe checkouts per hour
+   (`ASSURANCE_STRIPE_CHECKOUT_BUDGET_PER_ADDRESS`, `<count>[/<seconds>]`) inside the process-wide 120 per
+   hour (`ASSURANCE_STRIPE_CHECKOUT_BUDGET`); 429 with `Retry-After` either way. Both are per process, and
+   many addresses can still exhaust the process-wide cap: an edge limit (Fly proxy, Cloudflare, Vercel
+   firewall) is yours to set. Start-up validation checks operator-key **length in characters**, not
+   entropy, and `ASSURANCE_HOST` is a **declared** value, not the address actually bound (`uvicorn
+   --host` is invisible to the service; the `Dockerfile` binds `0.0.0.0`): open mode is gated on what you
+   declare, so declare it truthfully.
 
 4. **That key opens a First Register case in Console, and does an `/ai` write.**
    Not currently covered by `SMOKE.md` — added here because

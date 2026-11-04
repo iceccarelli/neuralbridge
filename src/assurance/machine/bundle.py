@@ -143,7 +143,7 @@ class EvidenceBundle:
 
 def _body(result: VerificationResult, envelope: SafetyEnvelope,
           limits: LimitsTable | None, trace: Trace,
-          unit_key: str = "") -> dict[str, Any]:
+          unit_key: str = "", configuration_hash: str = "") -> dict[str, Any]:
     body = {
         "schema": BUNDLE_SCHEMA,
         "product": envelope.product,
@@ -185,6 +185,13 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         # Omitted for a product line (no unit): a bundle without it is capped at
         # ``community`` under a unit-key subject.
         body["unit_key"] = unit_key
+    if configuration_hash:
+        # The ``SafetyManifest.configuration_hash`` of the machine configuration this
+        # verification was run against, as the filer states it. Optional and additive: a
+        # body without it is exactly the body older builds sealed, and its currency is by
+        # time alone. With it, staleness reads the verification as stale once the machine's
+        # current complete manifest has another configuration hash.
+        body["configuration_hash"] = configuration_hash
     return body
 
 
@@ -350,6 +357,7 @@ def build_bundle(
     ledger: EvidenceLedger | None = None,
     result: VerificationResult | None = None,
     subject: str = "",
+    configuration_hash: str = "",
 ) -> EvidenceBundle:
     """Verify, seal, and optionally append to the ledger.
 
@@ -376,7 +384,18 @@ def build_bundle(
     verification of *these* inputs: a result for another trace or envelope, or one
     claiming a tier its inputs cannot support, is refused rather than sealed under
     a trace it says nothing about.
+
+    ``configuration_hash`` optionally binds the verification to the machine configuration
+    (``SafetyManifest.configuration_hash``) it was run against. It is the filer's statement,
+    not something this function can check against a manifest; when present and different
+    from the machine's current complete manifest, the verification reads stale. Absent, its
+    currency is judged by time alone.
     """
+    cfg = configuration_hash.strip().lower()
+    if configuration_hash and (len(cfg) != 64 or set(cfg) - set("0123456789abcdef")):
+        raise ValueError(
+            "configuration_hash must be the 64-hex-digit SafetyManifest.configuration_hash; "
+            f"got {configuration_hash[:20]!r}.")
     serial = resolve_machine_serial(subject, machine_serial)
     unit_key = subject if "#" in subject else ""
     res = result if result is not None else verify(
@@ -394,7 +413,7 @@ def build_bundle(
 
     evidence = Evidence(
         kind=BUNDLE_KIND,
-        body=_body(res, envelope, limits, trace, unit_key),
+        body=_body(res, envelope, limits, trace, unit_key, cfg),
         actor=actor,
         origin=Origin(
             system="assurance.machine",
@@ -1301,8 +1320,12 @@ def _replay_differences(
     # It is compared for coherence with the serial (``unit_key_problems``), so the replay
     # takes the recorded one rather than reporting it as a difference.
     recorded_unit = body.get("unit_key")
+    # Likewise the configuration binding: a statement by the filer about the machine, not a
+    # product of the engine, so the replay takes the recorded one.
+    recorded_cfg = body.get("configuration_hash")
     expected = _body(replay, envelope, limits, trace,
-                     recorded_unit if isinstance(recorded_unit, str) else "")
+                     recorded_unit if isinstance(recorded_unit, str) else "",
+                     recorded_cfg if isinstance(recorded_cfg, str) else "")
     expected = _without_assessed_on(expected)
     body = _without_assessed_on(body)
     for key in sorted(set(expected) | set(body), key=str):

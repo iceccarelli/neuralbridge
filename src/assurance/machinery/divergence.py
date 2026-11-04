@@ -18,14 +18,20 @@ declared items means nothing was seen, not that nothing changed.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from assurance.core.tiers import AssuranceTier
-from assurance.machinery.manifest import SafetyItem, SafetyManifest, normalised_digest
+from assurance.machinery.manifest import (
+    SafetyFunction,
+    SafetyItem,
+    SafetyManifest,
+    normalised_digest,
+)
 
-__all__ = ["Change", "ChangeKind", "Divergence", "Severity", "compare"]
+__all__ = ["FUNCTION_CHANGE_PREFIX", "Change", "ChangeKind", "Divergence", "Severity", "compare"]
 
 
 class ChangeKind(StrEnum):
@@ -37,6 +43,23 @@ class ChangeKind(StrEnum):
     VERSION_RELABELLED = "version_relabelled"
     #: The safety functions this item is credited with were re-declared.
     ATTRIBUTION_CHANGED = "attribution_changed"
+    #: A safety function's declaration (required performance, the checks that verify it, its
+    #: description) differs. ``item_id`` is ``function:<id>``: the change is to a claim, not
+    #: to an artefact on the machine.
+    FUNCTION_DECLARATION_CHANGED = "function_declaration_changed"
+    #: A safety function declared in the baseline is no longer declared.
+    FUNCTION_REMOVED = "function_removed"
+    #: A safety function is declared that the baseline did not declare.
+    FUNCTION_ADDED = "function_added"
+
+    @property
+    def concerns_function(self) -> bool:
+        return self in (ChangeKind.FUNCTION_DECLARATION_CHANGED,
+                        ChangeKind.FUNCTION_REMOVED, ChangeKind.FUNCTION_ADDED)
+
+
+#: Prefix of the ``item_id`` of a change to a function declaration rather than to an item.
+FUNCTION_CHANGE_PREFIX = "function:"
 
 
 class Severity(StrEnum):
@@ -123,11 +146,19 @@ class Divergence:
     #: re-verifies, so it cannot be loosened; this is what keeps a relabelled digest from
     #: reading as drift.
     equivalent: bool = False
+    #: ``SafetyManifest.safety_declaration_hash`` of each side: what the manifest says its
+    #: safety functions are and what verifies them. ``configuration_hash`` does not cover
+    #: this and cannot change (it is in stored ledgers), so it is compared separately. Empty
+    #: for a divergence built by hand; two empty values are equal.
+    baseline_declaration: str = ""
+    observed_declaration: str = ""
 
     @property
     def identical(self) -> bool:
-        """True only when the configuration hashes match exactly."""
-        return self.baseline_configuration == self.observed_configuration
+        """True only when the configuration hashes match exactly AND the safety-function
+        declarations are the same."""
+        return (self.baseline_configuration == self.observed_configuration
+                and self.baseline_declaration == self.observed_declaration)
 
     @property
     def safety_relevant(self) -> tuple[Change, ...]:
@@ -158,7 +189,8 @@ class Divergence:
         ``unverifiable``: nothing was seen, which is not the same as nothing
         changed.
         """
-        if (self.identical or self.equivalent) and not self.changes:
+        if (self.identical or self.equivalent) and not self.changes \
+                and self.baseline_declaration == self.observed_declaration:
             if self.uncompared or not self.observed_as_found:
                 return "unverifiable"
             return "matches"
@@ -172,9 +204,11 @@ class Divergence:
             "verdict": self.verdict,
             "identical": self.identical,
             "baseline": {"manifest_id": self.baseline_id, "hash": self.baseline_hash,
-                         "configuration": self.baseline_configuration},
+                         "configuration": self.baseline_configuration,
+                         "safety_declaration": self.baseline_declaration},
             "observed": {"manifest_id": self.observed_id, "hash": self.observed_hash,
-                         "configuration": self.observed_configuration},
+                         "configuration": self.observed_configuration,
+                         "safety_declaration": self.observed_declaration},
             "changes": [c.to_dict() for c in self.changes],
             "affected_functions": list(self.affected_functions),
             "uncompared": list(self.uncompared),
@@ -205,17 +239,89 @@ class Divergence:
         return "\n".join(lines)
 
 
-def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
+def _function_changes(baseline: SafetyManifest, observed: SafetyManifest) -> list[Change]:
+    """Differences in what the two manifests declare their safety functions to be.
+
+    ``configuration_hash`` covers items, not functions, so without this emptying a
+    function's ``verified_by``, swapping it for a trivial check, or lowering its required
+    performance level compared as identical. Every one of those weakens what a past
+    verification showed, so each is safety-relevant. A function that vanished is
+    safety-relevant too: its verification no longer has anything to be current against.
+    """
+    out: list[Change] = []
+    b_fn = {f.function_id: f for f in baseline.functions}
+    o_fn = {f.function_id: f for f in observed.functions}
+
+    def _fsummary(f: SafetyFunction) -> dict[str, Any]:
+        return {"function_id": f.function_id, "description": f.description,
+                "required_performance": f.required_performance,
+                "verified_by": sorted(f.verified_by)}
+
+    for fid in sorted(b_fn.keys() - o_fn.keys()):
+        out.append(Change(
+            item_id=f"{FUNCTION_CHANGE_PREFIX}{fid}", kind=ChangeKind.FUNCTION_REMOVED,
+            severity=Severity.SAFETY_RELEVANT, name=b_fn[fid].description,
+            detail=f"safety function {fid} is declared in the baseline and not in the "
+                   "observed manifest. Its verification has nothing left to be current "
+                   "against; dropping a declaration is not evidence the function stopped "
+                   "mattering.",
+            before=_fsummary(b_fn[fid]), functions=(fid,)))
+    for fid in sorted(o_fn.keys() - b_fn.keys()):
+        out.append(Change(
+            item_id=f"{FUNCTION_CHANGE_PREFIX}{fid}", kind=ChangeKind.FUNCTION_ADDED,
+            severity=Severity.NOTABLE, name=o_fn[fid].description,
+            detail=f"safety function {fid} is declared in the observed manifest and not in "
+                   "the baseline. It has never been verified against this baseline.",
+            after=_fsummary(o_fn[fid]), functions=(fid,)))
+    for fid in sorted(b_fn.keys() & o_fn.keys()):
+        b, o = b_fn[fid], o_fn[fid]
+        what: list[str] = []
+        weakening = False
+        if b.required_performance != o.required_performance:
+            what.append(f"required performance {b.required_performance!r} → "
+                        f"{o.required_performance!r}")
+            weakening = True
+        if set(b.verified_by) != set(o.verified_by):
+            what.append(f"verified by {sorted(b.verified_by)} → {sorted(o.verified_by)}")
+            weakening = True
+        if b.description != o.description:
+            what.append(f"description {b.description!r} → {o.description!r}")
+        if not what:
+            continue
+        out.append(Change(
+            item_id=f"{FUNCTION_CHANGE_PREFIX}{fid}",
+            kind=ChangeKind.FUNCTION_DECLARATION_CHANGED,
+            severity=Severity.SAFETY_RELEVANT if weakening else Severity.NOTABLE,
+            name=o.description,
+            detail=f"the declaration of safety function {fid} changed: "
+                   + "; ".join(what) + ". A verification run against the earlier "
+                   "declaration does not show the new one.",
+            before=_fsummary(b), after=_fsummary(o), functions=(fid,)))
+    return out
+
+
+def compare(
+    baseline: SafetyManifest, observed: SafetyManifest,
+    *, carried_attribution: Mapping[str, Sequence[str]] | None = None,
+) -> Divergence:
     """Compare an as-declared baseline against what was found on the machine.
 
     Refuses to compare two different machines: a divergence report that silently
     compared serial 0412 against serial 0413 would be worse than none.
+
+    ``carried_attribution`` maps an item to the safety functions it was credited with in the
+    latest COMPLETE manifest that credited it (see
+    :func:`~assurance.machinery.manifest.last_attribution`). A caller holding the ledger's
+    history passes it: an item whose attribution was dropped in an earlier step is not
+    thereby out of scope, so a change to it (or its removal) is still safety-relevant for
+    the functions it used to implement. Without it only the two manifests are read.
     """
     if baseline.machine.key != observed.machine.key:
         raise ValueError(
             f"these manifests are about different machines: "
             f"{baseline.machine.key} and {observed.machine.key}."
         )
+    carried = carried_attribution or {}
 
     changes: list[Change] = []
     caveats: list[str] = []
@@ -240,14 +346,17 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
     for item_id in sorted(b_ids - o_ids):
         item = baseline.item(item_id)
         assert item is not None
+        removed_fns = tuple(item.implements) or tuple(carried.get(item_id, ()))
         changes.append(Change(
             item_id=item_id, kind=ChangeKind.REMOVED,
-            severity=Severity.SAFETY_RELEVANT if item.is_safety_bearing
-            else Severity.NOTABLE,
+            severity=Severity.SAFETY_RELEVANT if removed_fns else Severity.NOTABLE,
             name=item.name,
             detail=f"in the baseline and not found on the machine "
-                   f"({item.kind.value} {item.name} {item.version}).",
-            before=_summary(item), functions=item.implements,
+                   f"({item.kind.value} {item.name} {item.version})."
+                   + ("" if item.implements or not removed_fns else
+                      f" It was last credited with {', '.join(removed_fns)} before that "
+                      "attribution was dropped."),
+            before=_summary(item), functions=removed_fns,
         ))
 
     for item_id in sorted(b_ids & o_ids):
@@ -256,6 +365,11 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         assert b is not None and o is not None
         safety = b.is_safety_bearing or o.is_safety_bearing
         functions = tuple(sorted(set(b.implements) | set(o.implements)))
+        if not safety and carried.get(item_id):
+            # Neither manifest credits this item, but an earlier complete one did and the
+            # attribution was dropped since. Still the same artefact on the same machine.
+            safety = True
+            functions = tuple(sorted(carried[item_id]))
 
         if not (b.is_comparable and o.is_comparable):
             uncompared.append(item_id)
@@ -304,15 +418,29 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
             ))
 
         if set(b.implements) != set(o.implements):
+            dropped = sorted(set(b.implements) - set(o.implements))
             changes.append(Change(
                 item_id=item_id, kind=ChangeKind.ATTRIBUTION_CHANGED,
-                severity=Severity.NOTABLE, name=o.name,
+                # Dropping an attribution takes the item out of every later comparison for
+                # that function: a changed firmware hash on it would grade only NOTABLE.
+                # Nothing on the machine need have changed, but what the verification was
+                # shown to cover did, so it is not left at NOTABLE. A new attribution
+                # (nothing dropped) widens what is claimed and stays NOTABLE.
+                severity=Severity.SAFETY_RELEVANT if dropped else Severity.NOTABLE,
+                name=o.name,
                 detail="the safety functions this item is credited with were "
                        f"re-declared: {sorted(b.implements)} → {sorted(o.implements)}. "
-                       "Nothing on the machine need have changed; what changed is "
+                       + (f"{', '.join(dropped)} no longer attributed to it: a later change "
+                          "to this item would not be read as touching "
+                          f"{'it' if len(dropped) == 1 else 'them'}, so the dropping is "
+                          "itself treated as safety-relevant. "
+                          if dropped else "")
+                       + "Nothing on the machine need have changed; what changed is "
                        "what we claim about it.",
                 before=_summary(b), after=_summary(o), functions=functions,
             ))
+
+    changes.extend(_function_changes(baseline, observed))
 
     asserted = [i for i in observed.items if i.hash_source.describes_this_unit]
     if asserted:
@@ -368,4 +496,6 @@ def compare(baseline: SafetyManifest, observed: SafetyManifest) -> Divergence:
         uncompared=tuple(dict.fromkeys(uncompared)),
         observed_as_found=observed.source.value == "as_found",
         equivalent=_shape(baseline) == _shape(observed),
+        baseline_declaration=baseline.safety_declaration_hash(),
+        observed_declaration=observed.safety_declaration_hash(),
     )

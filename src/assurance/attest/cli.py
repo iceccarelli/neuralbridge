@@ -36,8 +36,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "describe that ledger. Default: the log's only basis, else "
                         "read_from_ledger (a declared head describes the holder's own "
                         "ledger, not the one the signer read)")
+    v.add_argument("--min-sequence", type=int, default=None, metavar="N",
+                   help="the newest attestation sequence you saw at your LAST check. A log "
+                        "whose newest attestation is older fails as a rollback or a withheld "
+                        "newer attestation; without it that cannot be detected")
+    v.add_argument("--expect-head", default=None, metavar="HASH",
+                   help="the head link hash of that newest attestation (12+ hex characters, "
+                        "printed by the last verify). A log that no longer contains it fails")
+    v.add_argument("--max-age", type=float, default=None, metavar="HOURS",
+                   help="fail unless the newest attestation is no older than this many hours")
     v.add_argument("--json", action="store_true")
 
     _preflight_parser(verbs)
@@ -288,16 +299,33 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     return 0
 
 
+def _remember(verdict: Any) -> dict[str, Any] | None:
+    latest = verdict.latest
+    if latest is None:
+        return None
+    return {"min_sequence": latest.sequence, "expect_head": latest.head_link_hash}
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     log = AttestationLog(args.log)
     keys = [VerifyingKey.from_file(p) for p in args.public_key]
     records, torn = log.scan()
     basis = AttestationBasis(args.basis) if args.basis else None
+    if args.min_sequence is not None and args.min_sequence < 1:
+        raise ValueError("--min-sequence must be at least 1.")
+    max_age = None
+    if args.max_age is not None:
+        if not math.isfinite(args.max_age) or args.max_age <= 0:
+            raise ValueError("--max-age must be a positive number of hours.")
+        max_age = timedelta(hours=args.max_age)
+    expectation: dict[str, Any] = {
+        "min_sequence": args.min_sequence, "expect_head": args.expect_head, "max_age": max_age}
     if len(keys) == 1:
-        verdict = verify_log(records, keys[0], ledger=ledger, basis=basis)
+        verdict = verify_log(records, keys[0], ledger=ledger, basis=basis, **expectation)
     else:
-        verdict = verify_log_across_rotation(records, keys, ledger=ledger, basis=basis)
+        verdict = verify_log_across_rotation(
+            records, keys, ledger=ledger, basis=basis, **expectation)
     ok = verdict.ok and not torn
     problems = [*verdict.problems, *([_TORN_MESSAGE] if torn else [])]
 
@@ -312,6 +340,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 "notes": verdict.notes,
                 "torn_tail": torn,
                 "latest": verdict.latest.to_dict() if verdict.latest else None,
+                # what to pass to the next check so a rollback cannot hide
+                "remember_for_next_check": _remember(verdict),
             },
             indent=2, sort_keys=True))
     else:
@@ -329,6 +359,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print("\n  not checked:")
         for skipped in verdict.checks_skipped:
             print(f"    - {skipped}")
+        remember = _remember(verdict)
+        if remember and ok:
+            print("\n  keep for your next check (so a rollback or a withheld newer "
+                  "attestation is caught):\n"
+                  f"    --min-sequence {remember['min_sequence']} "
+                  f"--expect-head {remember['expect_head']}")
     if not verdict.ok:
         return 1
     return TORN_TAIL_EXIT if torn else 0

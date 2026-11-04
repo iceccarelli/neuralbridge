@@ -40,6 +40,7 @@ from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.watch.config import WatchConfig
+from assurance.watch.freshness import assess_status_freshness
 from assurance.watch.intel_source import StoreAges, store_ages
 from assurance.watch.runner import last_run, run_watch
 
@@ -278,26 +279,44 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     config = WatchConfig.from_json(args.config)
-    body = last_run(EvidenceLedger.open_existing(args.ledger), config.watch_id)
+    ledger = EvidenceLedger.open_existing(args.ledger)
+    body = last_run(ledger, config.watch_id)
     if body is None:
         print(f"{config.watch_id}: this watch has never run against this ledger.",
               file=sys.stderr)
         return 2
     code = _exit_code(str(body.get("verdict", "degraded")))
     clock = args.now or utc_now()
+    # The stored verdict is what the last run found; it is not what is true now. Judged
+    # against the clock: a stale, future-dated or unreadable last run, or a machine not
+    # looked at within max_age_hours, can only make the status worse, never better.
+    fresh = assess_status_freshness(body, config, ledger, now=clock)
+    stored_verdict = str(body.get("verdict", "degraded"))
+    if fresh.degraded:
+        code = max(code, 2)
     ages = [store_ages(sub, clock) for sub in config.intel]
     if any(not a.ok for a in ages):
         code = 2          # only ever ADDS the intel condition, and only when one is subscribed
     if args.json:
         doc = dict(body)
+        doc["freshness"] = fresh.to_dict()
+        if fresh.degraded:
+            doc["stored_verdict"] = stored_verdict
+            doc["verdict"] = "degraded"
         if ages:
             doc["intel_staleness"] = {
                 "assessed_at": format_utc(clock), "ok": all(a.ok for a in ages),
                 "subscriptions": [a.to_dict() for a in ages]}
         print(json.dumps(doc, indent=2, sort_keys=True))
     else:
-        print(f"{config.watch_id} — last run {body.get('started_at')} — "
-              f"{str(body.get('verdict', '')).upper()}")
+        shown = "DEGRADED" if fresh.degraded else str(body.get("verdict", "")).upper()
+        age = f" ({fresh.age_hours:.2f} h ago)" if fresh.age_hours is not None else ""
+        print(f"{config.watch_id} — last run {body.get('started_at')}{age} — {shown}")
+        if fresh.degraded:
+            print(f"  stored verdict of that run: {stored_verdict.upper()} "
+                  "(not current; see below)")
+            for reason in fresh.reasons:
+                print(f"  !! {neutralise(reason)}")
         for o in body.get("outcomes", []):
             print(f"  {o.get('status', ''):<14} {o.get('serial', '')}  "
                   f"{o.get('detail', '')}")

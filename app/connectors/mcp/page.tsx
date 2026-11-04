@@ -125,7 +125,7 @@ export default function McpConnectorPage() {
               <strong>{API_BASE ? 'This deployment has a live base URL' : 'No live base URL on this deployment'}</strong>
               <span>
                 {API_BASE
-                  ? `Point ASSURANCE_API_URL at ${API_BASE} and the two free tools (plans, spec_validate) work with no key.`
+                  ? `Point ASSURANCE_API_URL at ${API_BASE} and the tools that need no account (for example plans and spec_validate) work with no key; every other tool needs an API key on a plan that includes it.`
                   : 'That only affects this marketing site’s own playground — the MCP server itself works against any deployment you point it at, including your own local run: uvicorn assurance.api.service:app.'}
               </span>
             </div>

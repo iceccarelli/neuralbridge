@@ -2,7 +2,6 @@
 
 import RepoLink from '../../components/RepoLink';
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { QUICKSTART, SALES } from '../../lib/links';
 import { API_KEY_STORAGE } from '../../lib/apiKey';
 import { call, describeOutcome, type ApiOutcome, type Me } from '../../lib/assuranceApi';
@@ -18,12 +17,58 @@ type KeyResponse = {
 };
 
 // Mirrors the real contract in src/assurance/api/billing_routes.py exactly:
-// GET /v1/checkout/complete?session_id=... returns 202 while Stripe's
-// webhook is still in flight (poll again), or 200 with the one-time key once
-// the webhook has minted it. Landing on this page proves only that a browser
-// followed a Stripe redirect — it never mints anything itself.
+// POST /v1/checkout/complete with {session_id, claim_token} in the BODY returns 202 while
+// Stripe's webhook is still in flight (poll again), 200 with the one-time key once the webhook
+// has minted it, 403 when a key is staged but this browser does not hold its claim token
+// (nothing is consumed), and 410 when it was already collected or has expired. Landing on this
+// page proves only that a browser followed a Stripe redirect — it never mints anything itself,
+// and entitlement comes only from the signed webhook.
+//
+// The Stripe redirect puts only the session id in the query string. The claim token is NOT in the
+// URL (Stripe stores the success URL, so a token in it would be readable by anyone with Stripe
+// access): POST /v1/checkout returned it to the browser that started checkout, and
+// app/components/PricingPlans.tsx stored it in THAT TAB's sessionStorage under
+// `nb-checkout-claim:<session_id>`. sessionStorage is per tab, so a different tab, browser or device
+// has no token: it gets the 'claim' state below (the key is held; an operator discards it and
+// re-issues). Whoever can read this tab's sessionStorage, or saw the reply to POST /v1/checkout,
+// holds the token.
+// The session id is removed from the address bar with history.replaceState as the very first thing
+// the page does, before any network call, and is then held in memory only. The page is served with
+// Referrer-Policy: no-referrer and Cache-Control: no-store (next.config.js).
 const MAX_ATTEMPTS = 10;
 const POLL_MS = 2000;
+
+type Captured = { sessionId: string; claim: string };
+
+// Keep in step with app/components/PricingPlans.tsx.
+const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
+
+function storedClaim(sessionId: string): string {
+  try {
+    return window.sessionStorage.getItem(`${CLAIM_STORAGE_PREFIX}${sessionId}`) || '';
+  } catch {
+    return '';
+  }
+}
+
+// Module scope, not component state: React strict mode (development) runs the effect twice, and
+// the second run would otherwise find the URL already stripped.
+let captured: Captured | null = null;
+
+function captureAndStripUrl(): Captured | null {
+  try {
+    const url = new URL(window.location.href);
+    const sessionId = url.searchParams.get('session_id') || '';
+    if (url.search || url.hash) {
+      // Keep the entry's state: Next's router keeps its own bookkeeping in it.
+      window.history.replaceState(window.history.state, '', url.pathname);
+    }
+    if (sessionId) captured = { sessionId, claim: storedClaim(sessionId) };
+  } catch {
+    /* an unparsable URL has nothing to capture */
+  }
+  return captured;
+}
 
 function savedKey(): string {
   try {
@@ -64,10 +109,11 @@ function PlanFromApi({ me, label }: { me: ApiOutcome<Me> | null; label: string }
 }
 
 export default function CheckoutSuccessClient() {
-  const params = useSearchParams();
-  const sessionId = params.get('session_id');
+  const [sessionId, setSessionId] = useState('');
 
-  const [state, setState] = useState<'polling' | 'ready' | 'nokey' | 'error' | 'no-session' | 'no-api'>('polling');
+  const [state, setState] = useState<
+    'polling' | 'ready' | 'nokey' | 'error' | 'no-session' | 'no-api' | 'claim' | 'gone'
+  >('polling');
   const [key, setKey] = useState<KeyResponse | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -80,25 +126,40 @@ export default function CheckoutSuccessClient() {
   const startedFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!sessionId) {
+    // First, before anything else: take the session id and claim token out of the address bar.
+    const got = captureAndStripUrl();
+    if (!got) {
       setState('no-session');
       return;
     }
+    const { sessionId: sid, claim } = got;
+    setSessionId(sid);
     if (!API_BASE) {
       setState('no-api');
       return;
     }
-    if (startedFor.current === sessionId) return;
-    startedFor.current = sessionId;
+    if (startedFor.current === sid) return;
+    startedFor.current = sid;
 
     const poll = async (n: number) => {
       try {
-        const res = await fetch(`${API_BASE}/v1/checkout/complete?session_id=${encodeURIComponent(sessionId)}`);
+        // The id and token travel in the body of a POST: never in a URL, so never in a log,
+        // a history entry or a Referer.
+        const res = await fetch(`${API_BASE}/v1/checkout/complete`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, claim_token: claim }),
+          cache: 'no-store',
+          referrerPolicy: 'no-referrer',
+        });
         if (res.status === 200) {
           const data = (await res.json()) as KeyResponse;
           // Persist before anything else can fail: this tab's sessionStorage only, the same store
-          // /console, /ai and /assurance read (see ../../lib/apiKey). If it throws, the key shown
-          // below and its Copy button are the fallback.
+          // /console, /ai and /assurance read (see ../../lib/apiKey). That is a deliberate
+          // trade: any script on this origin can read it, which is the same exposure as the key
+          // sitting on this page, and it is gone when the tab closes; the workspace needs it to
+          // open without a retype. Never localStorage, never a URL, never a cookie. If it
+          // throws, the key shown below and its Copy button are the fallback.
           try {
             window.sessionStorage.setItem(API_KEY_STORAGE, data.api_key);
           } catch {
@@ -109,9 +170,21 @@ export default function CheckoutSuccessClient() {
           setMe(await call<Me>(API_BASE, data.api_key, '/v1/me'));
           return;
         }
+        if (res.status === 403) {
+          // A key is staged and this browser does not hold its claim token. Nothing was
+          // consumed, and polling again cannot change that, so stop.
+          setState('claim');
+          return;
+        }
+        if (res.status === 410) {
+          setState('gone');
+          return;
+        }
         if (res.status === 202) {
           if (n >= MAX_ATTEMPTS) {
-            setState('nokey');
+            // Without a token in this tab the buyer cannot be told "collected already": the key
+            // may well be held for the tab that started checkout. Say that instead.
+            setState(claim ? 'nokey' : 'claim');
             return;
           }
           setAttempt(n + 1);
@@ -127,7 +200,7 @@ export default function CheckoutSuccessClient() {
     };
 
     void poll(0);
-  }, [sessionId]);
+  }, []);
 
   // When no key arrived, a key already saved in this tab is offered, with its plan read from the API.
   useEffect(() => {
@@ -200,6 +273,36 @@ export default function CheckoutSuccessClient() {
               shown once, then deleted from the staging store, so reloading this page cannot show it again. If you lost
               it, issue another with <code>POST /v1/keys</code> from a key you still hold. Otherwise{' '}
               <a href={SALES}>contact sales</a> with your session ID: <code>{sessionId}</code>
+            </p>
+          </div>
+        )}
+
+        {state === 'claim' && (
+          <div className="section-head" data-testid="checkout-claim">
+            <span className="eyebrow">Checkout</span>
+            <h2>A key is waiting, but this browser can&apos;t collect it</h2>
+            <p>
+              Your payment went through and a key is held for you, but this tab does not hold the claim
+              token that proves it started the checkout. The token is kept only in the tab that
+              started checkout (session storage is per tab), never in the address, and never by Stripe, so a
+              different tab, browser or device cannot collect the key. Nothing was collected: the key is still
+              held (for up to 24 hours). <a href={SALES}>Contact sales</a> with your session ID{' '}
+              <code>{sessionId}</code> and an operator will discard the held key and issue you a new one.
+            </p>
+          </div>
+        )}
+
+        {state === 'gone' && (
+          <div className="section-head" data-testid="checkout-gone">
+            <span className="eyebrow">Checkout</span>
+            <h2>This key has already been collected</h2>
+            <p>
+              Your payment completed, but no key is waiting any more: it was collected already, it expired (a
+              key is held for 24 hours), or it was lost in a restore. It is shown once and cannot be shown
+              again. If you did not collect it yourself, treat it as exposed. If you hold another key for this
+              account, issue a new one with <code>POST /v1/keys</code>; otherwise{' '}
+              <a href={SALES}>contact sales</a> with your session ID <code>{sessionId}</code> and an operator
+              will issue a new key and revoke the old.
             </p>
           </div>
         )}

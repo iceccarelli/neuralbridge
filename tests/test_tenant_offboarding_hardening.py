@@ -313,7 +313,7 @@ def test_anchor_all_flags_a_ledger_that_reappeared_under_a_marker(capsys, data, 
 
 
 # ------------------------------------------------------------------- 2b. the API
-OPERATOR_KEY = "operator-key-test-offboarding"
+OPERATOR_KEY = "operator-key-test-offboarding-0123456789abcdef0123456789"
 
 
 @pytest.fixture()

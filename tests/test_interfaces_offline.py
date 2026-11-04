@@ -38,6 +38,9 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 NETWORKED_MODULES = {
     "assurance/watch/push.py",           # `watch push`, opt-in, lazy import
     "assurance/supplier/publish.py",     # `supplier publish --api-url`, lazy import
+    "assurance/supplier/netpolicy.py",   # `supplier fetch` only: the outbound policy (https, public
+                                         # addresses only, pinned connection, no redirects, bounded);
+                                         # reached by a lazy import from publish.fetch_feed, never by the kit
     "assurance/intel/transport_urllib.py",   # `intel refresh --live`, lazy import; exact-host
                                          # allow-list, https only, same-host redirects
     "assurance/billing/stripe_gateway.py",   # the hosted service talking to Stripe
@@ -232,6 +235,25 @@ def _network_imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             found.add(node.module.split(".")[0])
     return found & _NETWORK_ROOTS
+
+
+class TestTheSupplierFetchPolicyIsNotReachableFromTheOfflineKit:
+    """supplier/netpolicy.py imports a network client (httpx): it must only ever load for `supplier fetch`."""
+
+    @pytest.mark.parametrize("entry", ["assurance.kit.cli", "assurance.report.cli", "assurance.collect.cli",
+                                       "assurance.machinery.cli", "assurance.fleet.cli", "assurance.watch.cli",
+                                       "assurance.security.art14.cli",
+                                       "assurance.attest.cli", "assurance.check.cli"])
+    def test_importing_an_offline_entry_point_loads_neither_netpolicy_nor_httpx(self, entry):
+        import subprocess
+        import sys
+
+        code = (f"import sys, {entry}; "
+                "bad = [m for m in ('assurance.supplier.netpolicy', 'httpx') if m in sys.modules]; "
+                "print(','.join(bad)); raise SystemExit(1 if bad else 0)")
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,  # noqa: S603
+                              env={"PATH": "", "PYTHONPATH": str(SRC)}, timeout=120)
+        assert done.returncode == 0, (entry, done.stdout, done.stderr[-400:])
 
 
 class TestNoOtherModuleCanReachTheNetwork:

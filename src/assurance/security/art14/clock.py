@@ -35,7 +35,7 @@ show, so a case view can display both and explain the difference.
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -68,6 +68,11 @@ def add_one_month(moment: datetime) -> datetime:
     Article 14(4)(c) says "within one month", which is a calendar month, not 30
     days. 31 January plus one month is the last day of February, not 3 March.
     Time of day is preserved.
+
+    The arithmetic is done on the UTC instant, not in the submitter's own UTC offset. A
+    submission near local midnight can therefore have a due time up to one calendar day earlier
+    than the same wall-clock rule applied in the submitter's zone would give. That is the
+    conservative direction (the deadline is never later than it should be); it is not corrected.
     """
     year = moment.year + (1 if moment.month == 12 else 0)
     month = 1 if moment.month == 12 else moment.month + 1
@@ -94,19 +99,49 @@ class Deadline:
     runs_from_fact: str
     provision: str
     submitted_at: datetime | None = None
+    #: False when the only filing counted for this stage failed the field
+    #: specification's blocking checks (see ``srp.validate_payload``).
+    content_complete: bool = True
+    #: True when the counted filing carries a platform reference. It is the
+    #: caller's own declaration; nothing here checks it against the platform.
+    has_platform_reference: bool = False
 
     @property
     def met(self) -> bool | None:
-        """True/False once submitted; None while still open."""
+        """True/False once the outcome is knowable; None while open or unprovable.
+
+        A submission recorded after the due time is late whatever it contained (False). One
+        recorded in time whose content failed the blocking field checks is neither met nor
+        missed (None): the product cannot say a submission with blocking gaps satisfied the
+        duty, and will not say it did not. Its recorded time is kept (``submitted_at``).
+        """
         if self.submitted_at is None:
             return None
-        return self.submitted_at <= self.due_at
+        if self.submitted_at > self.due_at:
+            return False
+        return True if self.content_complete else None
 
     @property
     def status(self) -> str:
-        if self.submitted_at is not None:
-            return "filed_on_time" if self.met else "filed_late"
-        return "open"
+        if self.submitted_at is None:
+            return "open"
+        if self.submitted_at > self.due_at:
+            return "filed_late"
+        return "filed_on_time" if self.content_complete else "recorded_incomplete"
+
+    @property
+    def recorded_after_due(self) -> bool | None:
+        """Whether the recorded submission time is later than the due time (None if open)."""
+        if self.submitted_at is None:
+            return None
+        return self.submitted_at > self.due_at
+
+    @property
+    def submission_evidence(self) -> str | None:
+        """What stands behind the recorded submission. Always a declaration, never a check."""
+        if self.submitted_at is None:
+            return None
+        return "declared_with_platform_reference" if self.has_platform_reference else "declared"
 
     def hours_remaining(self, now: datetime | None = None) -> float:
         """Negative once the deadline has passed."""
@@ -123,6 +158,12 @@ class Deadline:
             "provision": self.provision,
             "status": self.status,
             "submitted_at": format_utc(self.submitted_at) if self.submitted_at else None,
+            "content_complete": self.content_complete if self.submitted_at else None,
+            "recorded_after_due": self.recorded_after_due,
+            # What was recorded is the manufacturer's own statement that it submitted. This
+            # product has no channel to the reporting platform and verifies nothing about it.
+            "submission_evidence": self.submission_evidence,
+            "verified_by_platform": False,
         }
         if self.submitted_at is None:
             d["hours_remaining"] = self.hours_remaining(now)
@@ -144,6 +185,22 @@ class Deadlines:
     notification_submitted_at: datetime | None = None
     early_warning_submitted_at: datetime | None = None
     final_submitted_at: datetime | None = None
+    #: Stage values whose counted filing is content-incomplete.
+    incomplete_stages: frozenset[str] = frozenset()
+    #: Stage values whose counted filing carries a declared platform reference.
+    referenced_stages: frozenset[str] = frozenset()
+    #: The earliest notification recorded of any kind, complete or not. The one-month incident
+    #: final-report clock runs from it, so a complete notification recorded later than an
+    #: incomplete one cannot move the deadline later.
+    notification_first_recorded_at: datetime | None = None
+    #: Stages recorded with more than one distinct filing time -> those times, ascending.
+    conflicting_filing_times: dict[str, tuple[datetime, ...]] = field(default_factory=dict)
+
+    def _flags(self, stage: Stage) -> dict[str, bool]:
+        return {
+            "content_complete": stage.value not in self.incomplete_stages,
+            "has_platform_reference": stage.value in self.referenced_stages,
+        }
 
     # -- individual stages -------------------------------------------------
     @property
@@ -155,6 +212,7 @@ class Deadlines:
             runs_from_fact="becoming aware",
             provision="Art. 14(2)(a)" if self.track is Track.VULNERABILITY else "Art. 14(4)(a)",
             submitted_at=self.early_warning_submitted_at,
+            **self._flags(Stage.EARLY_WARNING),
         )
 
     @property
@@ -166,6 +224,7 @@ class Deadlines:
             runs_from_fact="becoming aware",
             provision="Art. 14(2)(b)" if self.track is Track.VULNERABILITY else "Art. 14(4)(b)",
             submitted_at=self.notification_submitted_at,
+            **self._flags(Stage.NOTIFICATION),
         )
 
     @property
@@ -185,16 +244,21 @@ class Deadlines:
                 runs_from_fact="a corrective or mitigating measure became available",
                 provision="Art. 14(2)(c)",
                 submitted_at=self.final_submitted_at,
+                **self._flags(Stage.FINAL),
             )
         if self.notification_submitted_at is None:
             return None
+        run_from = self.notification_submitted_at
+        if self.notification_first_recorded_at is not None:
+            run_from = min(run_from, self.notification_first_recorded_at)
         return Deadline(
             stage=Stage.FINAL,
-            due_at=add_one_month(self.notification_submitted_at),
-            runs_from=self.notification_submitted_at,
+            due_at=add_one_month(run_from),
+            runs_from=run_from,
             runs_from_fact="submission of the 72-hour incident notification",
             provision="Art. 14(4)(c)",
             submitted_at=self.final_submitted_at,
+            **self._flags(Stage.FINAL),
         )
 
     def require_final(self) -> Deadline:
@@ -224,8 +288,12 @@ class Deadlines:
         return [d for d in self.all() if d.submitted_at is None]
 
     def breaches(self) -> list[Deadline]:
-        """Filings that were late. Does not include deadlines still open."""
+        """Complete filings that were late. Does not include deadlines still open."""
         return [d for d in self.all() if d.met is False]
+
+    def incomplete(self) -> list[Deadline]:
+        """Stages recorded as submitted whose content failed the blocking checks."""
+        return [d for d in self.all() if d.status == "recorded_incomplete"]
 
     def next_due(self, now: datetime | None = None) -> Deadline | None:
         pending = self.open_deadlines()
@@ -259,6 +327,11 @@ class Deadlines:
             "deadlines": [x.to_dict(now) for x in self.all()],
             "pending_facts": self.pending_facts(),
             "breaches": [x.stage.value for x in self.breaches()],
+            "recorded_incomplete": [x.stage.value for x in self.incomplete()],
+            "conflicting_filing_times": {
+                stage: [format_utc(t) for t in times]
+                for stage, times in sorted(self.conflicting_filing_times.items())
+            },
         }
         if self.early_warning_submitted_at is not None:
             shown = platform_displayed_notification_due(self.early_warning_submitted_at)

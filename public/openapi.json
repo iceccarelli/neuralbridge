@@ -527,8 +527,18 @@
             "title": "Checkout Url",
             "type": "string"
           },
+          "claim_token": {
+            "default": "",
+            "title": "Claim Token",
+            "type": "string"
+          },
           "price": {
             "title": "Price",
+            "type": "string"
+          },
+          "session_id": {
+            "default": "",
+            "title": "Session Id",
             "type": "string"
           },
           "tier": {
@@ -542,29 +552,6 @@
           "price"
         ],
         "title": "CheckoutOut",
-        "type": "object"
-      },
-      "ClaimIn": {
-        "additionalProperties": false,
-        "properties": {
-          "actor": {
-            "default": "",
-            "description": "optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps",
-            "maxLength": 200,
-            "title": "Actor",
-            "type": "string"
-          },
-          "owner": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Owner",
-            "type": "string"
-          }
-        },
-        "required": [
-          "owner"
-        ],
-        "title": "ClaimIn",
         "type": "object"
       },
       "CoverageIn": {
@@ -2488,6 +2475,27 @@
         "title": "VerifyIn",
         "type": "object"
       },
+      "assurance__api__billing_routes__ClaimIn": {
+        "additionalProperties": false,
+        "properties": {
+          "claim_token": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Claim Token",
+            "type": "string"
+          },
+          "session_id": {
+            "pattern": "^[A-Za-z0-9_\\-]{1,255}$",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "ClaimIn",
+        "type": "object"
+      },
       "assurance__api__change_routes__AdvisoryIn": {
         "additionalProperties": false,
         "properties": {
@@ -2518,6 +2526,29 @@
           "advisory"
         ],
         "title": "AdvisoryIn",
+        "type": "object"
+      },
+      "assurance__api__change_routes__ClaimIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "description": "optional with an operator key (then it must match the operator); required with an account-level key on non-decision steps",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "owner": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Owner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner"
+        ],
+        "title": "ClaimIn",
         "type": "object"
       },
       "assurance__api__fleet_routes__AdvisoryIn": {
@@ -2664,7 +2695,7 @@
     },
     "/healthz": {
       "get": {
-        "description": "Reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count.",
+        "description": "Readiness: reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count. A store or data directory the service cannot use is a 503 with\nthe reason (never a path) in ``ledger_error`` / ``accounts_error`` /\n``storage_problems``, not an unhandled 500. ``attestation_key`` is\ninformational: ``not_configured`` is an honest, supported state and does not\nfail readiness (the attestation routes answer 503 and say so), but it is\nshown; ``unsafe`` / ``unusable`` additionally degrade the status.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -2680,7 +2711,31 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Liveness and configuration",
+        "summary": "Readiness and configuration",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/livez": {
+      "get": {
+        "description": "The process is up and the event loop answers. Depends on nothing.\n\nNot a statement that the service can do its job: that is ``/healthz``. A platform\nshould restart on this one and stop routing traffic on the other.",
+        "operationId": "livez_livez_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Livez Livez Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness: the process answers",
         "tags": [
           "service"
         ]
@@ -4334,7 +4389,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ClaimIn"
+                "$ref": "#/components/schemas/assurance__api__change_routes__ClaimIn"
               }
             }
           },
@@ -5082,22 +5137,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          },
-          {
-            "in": "header",
             "name": "fly-client-ip",
             "required": false,
             "schema": {
@@ -5110,6 +5149,22 @@
                 }
               ],
               "title": "Fly-Client-Ip"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
             }
           }
         ],
@@ -5183,22 +5238,6 @@
         "parameters": [
           {
             "in": "header",
-            "name": "x-api-key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          },
-          {
-            "in": "header",
             "name": "fly-client-ip",
             "required": false,
             "schema": {
@@ -5211,6 +5250,22 @@
                 }
               ],
               "title": "Fly-Client-Ip"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
             }
           }
         ],
@@ -5253,27 +5308,44 @@
       }
     },
     "/v1/checkout/complete": {
-      "get": {
-        "description": "Hand over the key the webhook minted for this checkout session.\n\nReturns 202 while the webhook is still in flight. It does not mint a key\nhere: landing on this URL proves only that a browser followed a redirect.",
-        "operationId": "get_checkout_complete_v1_checkout_complete_get",
+      "post": {
+        "description": "Hand over, once, the key the webhook minted for this checkout session.\n\nThe browser's redirect proves nothing about payment and this route mints nothing: the key\nexists only after a signed ``checkout.session.completed``. What this adds is who may\ncollect it: the caller must present the session id **and** the claim token that ``POST\n/v1/checkout`` returned, bound to that session and stored hashed. A leaked session id\nalone (history, ``Referer``, an analytics beacon, a log) claims nothing.\n\nThe limit, stated plainly: the token is still a bearer secret. Whoever holds both values\n(anyone who saw the reply to ``POST /v1/checkout``, a script or extension that can read the\nbuyer's tab ``sessionStorage``, a shared screen) can collect the key first. Stripe holds the\nsession id but never the token.\n\n* 200: the key, exactly once.\n* 202 ``pending``: the webhook has not landed. Poll again.\n* 403 ``claim_token_required`` / ``claim_token_invalid``: a key is staged and this caller\n  is not its holder. **Nothing is consumed**, so a stranger's guess does not lock the real\n  buyer out.\n* 410 ``already_collected_or_expired``: the key was collected (by the buyer, or by whoever\n  held both values), expired after 24 hours, or was lost in a restore. The buyer does not\n  wait on this: an operator re-issues a key (``python -m assurance.billing.issue_key\n  --account acc_...``, with ``--discard-staged cs_...`` first if one is still staged), and\n  a key someone else collected is to be treated as exposed.",
+        "operationId": "post_checkout_complete_v1_checkout_complete_post",
         "parameters": [
           {
-            "in": "query",
-            "name": "session_id",
-            "required": true,
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
             "schema": {
-              "title": "Session Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/assurance__api__billing_routes__ClaimIn"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
                   "additionalProperties": true,
-                  "title": "Response Get Checkout Complete V1 Checkout Complete Get",
+                  "title": "Response Post Checkout Complete V1 Checkout Complete Post",
                   "type": "object"
                 }
               }

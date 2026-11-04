@@ -35,6 +35,13 @@ backup: ``attest verify`` with the public key does that). It says so in its outp
     python -m assurance.evidence.restore_check backup  <data dir> <backup dir>
     python -m assurance.evidence.restore_check verify  [--live] [--against-live <live data dir>] <dir>
 
+``verify`` is read-only, including on a volume a service has opened: it creates, changes,
+renames and deletes nothing under the directory it checks (nor under ``--against-live``).
+Databases are inspected through private temporary copies, so SQLite never writes ``-wal`` /
+``-shm`` beside them. A ``-wal`` / ``-journal`` beside a database the manifest lists is not an
+"unlisted file"; if it holds content it is read, reported under ``sidecars`` and
+``not_established``, and is a finding in strict mode (the manifest hash covers the main file only).
+
 ``backup`` exits 1 and writes ``degraded: true`` when the source already fails a check (a
 broken chain, or an attestation log that claims more than its ledger holds); the snapshot is
 kept, and ``verify`` fails it. Every ledger carries a random ``ledger_id`` (its lineage, kept
@@ -56,6 +63,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -306,16 +314,80 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
         os.umask(previous)
 
 
-def _integrity(path: Path) -> str:
-    db = sqlite3.connect(_ro_uri(path), uri=True, timeout=30)
+#: SQLite's companion files. ``verify`` never opens a database *in place*: even ``mode=ro`` on
+#: a WAL-mode file creates ``-wal`` and ``-shm`` beside it, and ``EvidenceLedger`` switches the
+#: journal mode. Both are writes to the directory under test.
+_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+class _Views:
+    """Private, throwaway copies of the databases ``verify`` has to open.
+
+    ``verify`` is read-only: it may not create, modify, rename or delete anything under the
+    directory it checks (nor under ``--against-live``'s live volume). SQLite cannot open a
+    WAL-mode file without writing beside it, so each database is copied, with its ``-wal`` and
+    ``-journal`` sidecars when present, into a temporary directory outside the target, and
+    opened there. SQLite recovers the sidecar's committed frames in the copy, so what is checked
+    is what the next opener of the real file would see, including content that has not been
+    checkpointed into the main file. ``-shm`` is a rebuildable index and is not copied.
+
+    The copy is a point-in-time read of files that may still be written by a running service
+    (``--live``); a database changing underneath the copy can read as damaged, which is a
+    finding to re-run, not a pass.
+    """
+
+    def __init__(self, avoid: tuple[Path, ...]) -> None:
+        self._dir = Path(tempfile.mkdtemp(prefix="nb-verify-"))
+        resolved = self._dir.resolve()
+        for root in avoid:
+            if resolved == root.resolve() or root.resolve() in resolved.parents:
+                shutil.rmtree(self._dir, ignore_errors=True)
+                raise OSError(f"the temporary directory {resolved} is inside {root}; "
+                              "set TMPDIR elsewhere so verify can stay read-only")
+        self._made: dict[Path, Path] = {}
+
+    def of(self, path: Path) -> Path:
+        key = Path(path).resolve()
+        if key not in self._made:
+            slot = self._dir / str(len(self._made))
+            slot.mkdir()
+            dest = slot / key.name
+            shutil.copyfile(key, dest)
+            for suffix in ("-wal", "-journal"):
+                side = key.with_name(key.name + suffix)
+                if side.is_file():
+                    shutil.copyfile(side, slot / (key.name + suffix))
+            self._made[key] = dest
+        return self._made[key]
+
+    def close(self) -> None:
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def _use(views: _Views | None, path: Path) -> Path:
+    return path if views is None else views.of(path)
+
+
+def _sidecar_bytes(path: Path) -> dict[str, int]:
+    """Non-empty ``-wal`` / ``-journal`` files beside ``path`` (name suffix -> size)."""
+    out: dict[str, int] = {}
+    for suffix in ("-wal", "-journal"):
+        side = path.with_name(path.name + suffix)
+        if side.is_file() and not side.is_symlink() and (size := side.stat().st_size) > 0:
+            out[suffix] = size
+    return out
+
+
+def _integrity(path: Path, views: _Views | None = None) -> str:
+    db = sqlite3.connect(_ro_uri(_use(views, path)), uri=True, timeout=30)
     try:
         return str(db.execute("PRAGMA integrity_check").fetchone()[0])
     finally:
         db.close()
 
 
-def _account_ids(accounts: Path) -> set[str]:
-    db = sqlite3.connect(_ro_uri(accounts), uri=True, timeout=30)
+def _account_ids(accounts: Path, views: _Views | None = None) -> set[str]:
+    db = sqlite3.connect(_ro_uri(_use(views, accounts)), uri=True, timeout=30)
     try:
         return {r[0] for r in db.execute("SELECT id FROM accounts")}
     finally:
@@ -340,7 +412,7 @@ def _safe_rel(rel: object) -> bool:
 
 def _check_manifest(
     root: Path, manifest: dict[str, Any], known: set[str], allow_growth: bool,
-    problems: list[str],
+    problems: list[str], views: _Views | None = None,
 ) -> None:
     """Compare what is on disk with what the backup recorded."""
     files = manifest.get("files")
@@ -358,7 +430,7 @@ def _check_manifest(
             continue
         size, digest = entry.get("size"), entry.get("sha256")
         if allow_growth and _is_ledger(rel):
-            _ledger_only_grew(path, rel, entry, problems)
+            _ledger_only_grew(path, rel, entry, problems, views)
         elif allow_growth and rel.startswith(("attestations/", "supplier-feeds/")):
             # append-only logs: the recorded bytes must still be the start of the file
             if not isinstance(size, int) or path.stat().st_size < size \
@@ -374,6 +446,12 @@ def _check_manifest(
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         rel = path.relative_to(root).as_posix()
         if rel == MANIFEST_NAME or rel in listed:
+            continue
+        if any(rel.endswith(sfx) and rel[:-len(sfx)] in listed and rel[:-len(sfx)].endswith(".db")
+               for sfx in _SIDECAR_SUFFIXES):
+            # SQLite's own companion of a database the manifest lists (the service left it
+            # when it opened the volume). Not an added file; its content is accounted for in
+            # `verify` (a non-empty -wal / -journal is reported, and strict mode fails on it).
             continue
         if allow_growth and (rel.startswith(("tenants/", "attestations/", "supplier-feeds/"))
                              or rel == _OPERATOR_LEDGER):
@@ -391,9 +469,10 @@ def _check_manifest(
                             + ", ".join(extra[:5]))
 
 
-def _ledger_only_grew(path: Path, rel: str, entry: dict[str, Any], problems: list[str]) -> None:
+def _ledger_only_grew(path: Path, rel: str, entry: dict[str, Any], problems: list[str],
+                      views: _Views | None = None) -> None:
     try:
-        ledger = EvidenceLedger(path, mint_id=False)
+        ledger = EvidenceLedger(_use(views, path), mint_id=False)
         entries = ledger.entries()
     except Exception as exc:  # noqa: BLE001
         problems.append(f"{rel}: unreadable ({type(exc).__name__})")
@@ -425,7 +504,8 @@ def _safe_records(path: Path) -> list[Any]:
 
 
 def _check_attestation_logs(
-    root: Path, problems: list[str], records_seen: dict[str, int]
+    root: Path, problems: list[str], records_seen: dict[str, int],
+    views: _Views | None = None,
 ) -> None:
     """Every attestation log must still fit the ledger it was signed over.
 
@@ -456,7 +536,7 @@ def _check_attestation_logs(
             continue
         try:
             found, _ = check_log_against_ledger(
-                mine, EvidenceLedger(ledger_path, mint_id=False), basis=AttestationBasis.READ_FROM_LEDGER,
+                mine, EvidenceLedger(_use(views, ledger_path), mint_id=False), basis=AttestationBasis.READ_FROM_LEDGER,
                 chain=False)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{label}: cross-check against its ledger failed "
@@ -472,7 +552,8 @@ def _ledger_files(root: Path) -> dict[str, Path]:
     return out
 
 
-def _check_lineage(root: Path, live: Path, problems: list[str]) -> None:
+def _check_lineage(root: Path, live: Path, problems: list[str],
+                   views: _Views | None = None) -> None:
     """A restored ledger must not be a second writable copy of one the live volume holds.
 
     Same ``ledger_id`` and the same records up to the shorter of the two is one lineage
@@ -483,14 +564,14 @@ def _check_lineage(root: Path, live: Path, problems: list[str]) -> None:
     held: dict[str, tuple[str, dict[int, str]]] = {}
     for rel, path in _ledger_files(live).items():
         try:
-            lg = EvidenceLedger(path, mint_id=False)
+            lg = EvidenceLedger(_use(views, path), mint_id=False)
             if (lid := lg.ledger_id()):
                 held[lid] = (rel, {e.seq: e.link_hash for e in lg.entries()})
         except Exception:  # noqa: BLE001, S112 - the live volume's own problem
             continue
     for rel, path in _ledger_files(root).items():
         try:
-            lg = EvidenceLedger(path, mint_id=False)
+            lg = EvidenceLedger(_use(views, path), mint_id=False)
             lid = lg.ledger_id()
             mine = {e.seq: e.link_hash for e in lg.entries()}
         except Exception:  # noqa: BLE001, S112 - reported by check_ledger
@@ -511,20 +592,36 @@ def verify(
 ) -> dict[str, object]:
     """Check a data directory or backup. Never raises on a corrupt database.
 
+    **Read-only.** Nothing under ``root`` (or ``live_dir``) is created, modified, renamed or
+    deleted: databases are inspected through private copies (see :class:`_Views`). A restored
+    volume the service has opened carries ``<db>-wal`` / ``<db>-shm`` files; for a database the
+    manifest lists they are not "added files". A non-empty ``-wal`` or ``-journal`` is content
+    the main file does not hold (and the manifest's hash does not cover): it is read, reported
+    under ``sidecars``, a finding in strict mode and a note under ``--live``.
+
     ``status`` is ``ok`` (checked against the backup's manifest), ``failed`` (a finding) or
     ``unchecked`` (no manifest: nothing says nothing is missing). ``allow_growth`` is for a
     volume that has been running since the backup: ledgers and logs may be longer, never
     shorter or different.
     """
+    views = _Views((root,) if live_dir is None else (root, live_dir))
+    try:
+        return _verify(root, allow_growth, live_dir, views)
+    finally:
+        views.close()
+
+
+def _verify(root: Path, allow_growth: bool, live_dir: Path | None,
+            views: _Views) -> dict[str, object]:
     problems: list[str] = []
     checked: dict[str, int] = {}
 
     def check_ledger(path: Path, label: str) -> None:
         try:
-            if (res := _integrity(path)) != "ok":
+            if (res := _integrity(path, views)) != "ok":
                 problems.append(f"{label}: SQLite integrity_check says {res}")
                 return
-            ledger = EvidenceLedger(path, mint_id=False)
+            ledger = EvidenceLedger(views.of(path), mint_id=False)
             ok, found = ledger.verify_chain()
             checked[label] = len(ledger.entries())
             if not ok:
@@ -544,10 +641,10 @@ def verify(
         problems.append(f"{_ACCOUNTS} is missing — keys and entitlements cannot be restored")
     else:
         try:
-            if (res := _integrity(accounts)) != "ok":
+            if (res := _integrity(accounts, views)) != "ok":
                 problems.append(f"{_ACCOUNTS}: SQLite integrity_check says {res}")
             else:
-                known = _account_ids(accounts)
+                known = _account_ids(accounts, views)
                 checked[_ACCOUNTS] = len(known)
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{_ACCOUNTS}: unreadable ({type(exc).__name__})")
@@ -571,7 +668,7 @@ def verify(
             checked[f"{name}/"] = sum(1 for _ in (root / name).glob("*"))
 
     attestation_records: dict[str, int] = {}
-    _check_attestation_logs(root, problems, attestation_records)
+    _check_attestation_logs(root, problems, attestation_records, views)
 
     unchecked: list[str] = []
     manifest_path = root / MANIFEST_NAME
@@ -590,14 +687,27 @@ def verify(
             "not write one, or is not a backup. Whatever is here is consistent as far as it "
             "can be read, but nothing says that no ledger or file is missing.")
     if manifest is not None:
-        _check_manifest(root, manifest, known, allow_growth, problems)
+        _check_manifest(root, manifest, known, allow_growth, problems, views)
 
     if manifest is not None and manifest.get("degraded"):
         found = manifest.get("source_findings")
         problems.extend(f"taken from a damaged source: {p}" for p in
                         (found if isinstance(found, list) and found else ["(no detail recorded)"]))
     if live_dir is not None:
-        _check_lineage(root, live_dir, problems)
+        _check_lineage(root, live_dir, problems, views)
+
+    sidecars: dict[str, dict[str, int]] = {}
+    for db_path in [root / _ACCOUNTS, *_ledger_files(root).values()]:
+        if db_path.is_file() and (found_side := _sidecar_bytes(db_path)):
+            sidecars[db_path.relative_to(root).as_posix()] = found_side
+    for rel_db, side in sorted(sidecars.items()):
+        desc = ", ".join(f"{rel_db}{sfx} ({n} bytes)" for sfx, n in sorted(side.items()))
+        if not allow_growth and manifest is not None:
+            problems.append(
+                f"{desc}: committed content beside a database the manifest lists. The manifest's "
+                "sha256 covers the main file only, so this is a change since the backup that the "
+                "hash cannot show (a service wrote to the volume, or it was not shut down "
+                "cleanly). It was read, not ignored: the checks above include it.")
 
     not_established = [
         "That nothing was removed by someone who also rewrote the manifest and the "
@@ -617,11 +727,25 @@ def verify(
             "verifies after records are removed from its end. No attestation log covers "
             + ", ".join(bare[:5]) + (" and others" if len(bare) > 5 else "") + ".")
 
+    if sidecars:
+        not_established.append(
+            "Write-ahead-log / journal content beside "
+            + ", ".join(sorted(sidecars)) + ": read through a private copy so that nothing "
+            "under the target changed, and included in the checks above, but not covered by "
+            "the manifest's sha256 (it hashes the main file). Stop the service and let it "
+            "checkpoint, or re-take the backup, to establish the main files alone.")
+    if allow_growth:
+        not_established.append(
+            "A consistent view of a volume a service is still writing: each database is read "
+            "from a point-in-time copy. A copy taken mid-write that reads as damaged is a "
+            "reason to run again, not a conclusion.")
+
     status = "failed" if problems else ("ok" if manifest is not None else "unchecked")
     return {
         "ok": status == "ok",
         "status": status,
         "checked": checked,
+        "sidecars": sidecars,
         "attestation_records": attestation_records,
         "problems": problems,
         "unchecked": unchecked,

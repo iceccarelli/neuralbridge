@@ -87,8 +87,30 @@ def payment_failed_event(customer: str, created: int, sub: str = "",
     return evt("invoice.payment_failed", obj, created, event_id)
 
 
+def claim_token_for(session: str) -> str:
+    """The claim token a test's "browser" holds for ``session``.
+
+    Production mints it in ``POST /v1/checkout`` and stores its hash against the Stripe session
+    id. Tests that drive the webhook directly (no ``POST /v1/checkout``) register the same row
+    here, once, so the handover is exercised through the real claim route and not around it.
+    """
+    from assurance.api import deps
+
+    token = f"claim-{session}"
+    deps.get_accounts().register_checkout_claim(session, token)
+    return token
+
+
+def claim(client: TestClient, session: str, token: str | None = None):
+    """``POST /v1/checkout/complete``: the session id and claim token travel in the body."""
+    return client.post("/v1/checkout/complete", json={
+        "session_id": session,
+        "claim_token": claim_token_for(session) if token is None else token,
+    })
+
+
 def collect_key(client: TestClient, session: str) -> str:
-    r = client.get("/v1/checkout/complete", params={"session_id": session})
+    r = claim(client, session)
     assert r.status_code == 200, r.text
     return r.json()["api_key"]
 

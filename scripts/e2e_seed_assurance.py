@@ -23,7 +23,7 @@ with the real ``assurance supplier`` CLI and hosts the feed through the real API
 
 The third form does what Stripe's webhook does after a payment, through the real
 ``AccountStore.apply_checkout``: it creates the account and stages the one-time key that
-``GET /v1/checkout/complete?session_id=...`` hands over. Stripe itself is not reachable
+``POST /v1/checkout/complete`` hands over to the holder of the claim token. Stripe itself is not reachable
 from a test; everything after the webhook is real.
 
 These are local test credentials for a throwaway database. Never run against a
@@ -102,6 +102,9 @@ def advisory(advisory_id: str, *, supplier: str, name: str, versions: list[str] 
 def stage_checkout(session_id: str, tier: str) -> int:
     """What Stripe's webhook does after a payment, through the real store."""
     store = AccountStore(accounts_path())
+    # POST /v1/checkout stores the hash of the claim token it returns; the test browser holds `claim-<session>`
+    # (the specs put it in the buyer tab's sessionStorage under `nb-checkout-claim:<session>`), so the claim route is exercised through its real check.
+    store.register_checkout_claim(session_id, f"claim-{session_id}")
     result = store.apply_checkout(
         event_id=f"evt_e2e_{session_id}", session_id=session_id,
         email=f"{session_id}@e2e.invalid", company=f"Checkout {session_id}", tier=tier,

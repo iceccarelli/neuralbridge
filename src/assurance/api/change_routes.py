@@ -55,7 +55,12 @@ from assurance.fleet.impact import assess_impact
 from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import compare
-from assurance.machinery.manifest import SafetyManifest
+from assurance.machinery.manifest import (
+    ManifestSource,
+    SafetyManifest,
+    last_attribution,
+    manifest_is_incomplete,
+)
 from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 from assurance.watch.config import INTEL_SOURCES
@@ -300,10 +305,11 @@ def assess_drift_route(
     source = "ledger" if sealed is not None else "request"
     used = sealed if sealed is not None else baseline
     try:
-        divergence = compare(used, observed)
+        carried = (last_attribution(manifests_from_ledger(register.ledger, key))
+                   if sealed is not None else None)
+        divergence = compare(used, observed, carried_attribution=carried)
     except ValueError as exc:
         raise _bad(exc, "comparison") from exc
-
 
     verifications = VerificationRecord.from_ledger(
         register.ledger, subject=key, recorder_trust=reader_recorder_trust())
@@ -323,16 +329,22 @@ def assess_drift_route(
 
 
 def _sealed_baseline(ledger: Any, observed: SafetyManifest) -> SafetyManifest | None:
-    """The newest manifest sealed for this machine in a *different* configuration.
+    """The last COMPLETE, AS_FOUND manifest sealed for this machine that differs from ``observed``.
 
-    The same rule the watch ingest applies (compare against what the ledger last
-    held), except that a manifest equal to the observed configuration is not a
-    baseline for it: a watch may already have sealed what it saw, and the change
-    is from the configuration before that.
+    The same rule the watch applies (compare against what the machine was last seen to be):
+    an intended or declared plan is not a configuration the machine was found in, and a
+    manifest marked incomplete lacks items its plan names, so neither can be a baseline.
+    A manifest equal to the observed configuration (and declaration) is not a baseline for
+    it either: a watch may already have sealed what it saw, and the change is from the
+    configuration before that.
     """
     observed_hash = observed.configuration_hash()
+    observed_decl = observed.safety_declaration_hash()
     for sealed in reversed(manifests_from_ledger(ledger, observed.machine.key)):
-        if sealed.configuration_hash() != observed_hash:
+        if sealed.source is not ManifestSource.AS_FOUND or manifest_is_incomplete(sealed):
+            continue
+        if (sealed.configuration_hash() != observed_hash
+                or sealed.safety_declaration_hash() != observed_decl):
             return sealed
     return None
 

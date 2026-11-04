@@ -27,7 +27,7 @@ pytest.importorskip(
            "covered without this SDK in tests/test_assurance_machine.py.",
 )
 
-KEY = "mcp-test-key-do-not-ship"
+KEY = "mcp-test-key-do-not-ship-0123456789abcdef0123456789"
 
 
 def _free_port() -> int:

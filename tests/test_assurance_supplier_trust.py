@@ -606,7 +606,9 @@ class TestImpactClassification:
         record_manifest(led, manifest("0005", fw(FIXED_FW, "3.9.0"),
                                       source=ManifestSource.AS_DECLARED))
         r = assess_impact(_adv(), Fleet.from_ledger(led))
-        assert r.verdict == "clear"
+        # An UNKNOWN machine means nothing about it was established, so the report is never `clear` (it used to be
+        # `clear` with clear_is_complete False, which an exit code or a headline read as a pass).
+        assert r.verdict == "needs_review"
         assert r.unknown_machines and not r.clear_is_complete
         assert "UNKNOWN" in r.summary()
         assert r.to_dict()["clear_is_complete"] is False

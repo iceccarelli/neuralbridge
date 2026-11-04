@@ -42,9 +42,12 @@ from assurance.machinery.intervention import (
     UnreadableIntervention,
 )
 from assurance.machinery.manifest import (
+    INCOMPLETE_COLLECTION_MARK,
     MachineIdentity,
+    ManifestError,
     ManifestSource,
     SafetyManifest,
+    manifest_is_incomplete,
     normalised_digest,
 )
 from assurance.machinery.staleness import (
@@ -62,8 +65,10 @@ __all__ = [
     "PASSPORT_SCHEMA",
     "PASSPORT_SCHEMA_V2",
     "MachinePassport",
+    "IdentityConflictError",
     "PassportError",
     "build_passport",
+    "check_identity_for_sealing",
     "InterventionRefusedError",
     "UnknownFunctionError",
     "UnknownMachineError",
@@ -96,6 +101,51 @@ class PassportError(AssuranceError):
 # -- sealing ---------------------------------------------------------------
 
 
+class IdentityConflictError(ManifestError):
+    """Two different (manufacturer, model, serial) tuples map to one machine key."""
+
+
+def check_identity_for_sealing(ledger: EvidenceLedger, machine: MachineIdentity) -> None:
+    """Refuse to start a record for an identity whose key is ambiguous.
+
+    ``MachineIdentity.key`` is a plain concatenation: ``A``/``B#1``/``2`` and
+    ``A``/``B``/``1#2`` are both ``A/B#1#2``, and filing the second under the first's key
+    would give one unit the other's evidence. Two rules, applied where a NEW record is
+    made (never where one is read back):
+
+    * a key already held by manifests of a DIFFERENT component tuple is an
+      :class:`IdentityConflictError` (``identity_conflict`` for enrolment), and
+    * an identity with an ambiguous component (:meth:`MachineIdentity.ambiguity_problems`)
+      is refused unless this ledger already holds a manifest of exactly that tuple. That
+      exception is the documented read-path tolerance: a ledger sealed before this check
+      keeps working for the machine it already knows, and can be read in full either way.
+
+    Identities without separator characters cannot collide (the key is then injective), so
+    they cost nothing here.
+    """
+    problems = machine.ambiguity_problems()
+    if not problems:
+        return
+    same = False
+    for entry in ledger.entries(kind=MANIFEST_KIND, subject=machine.key):
+        try:
+            evidence = entry.evidence()
+            if not evidence.verify():
+                continue
+            held = MachineIdentity.from_dict(evidence.body["manifest"]["machine"])
+        except (AssuranceError, KeyError, ValueError, TypeError, AttributeError):
+            continue
+        if held.components != machine.components:
+            raise IdentityConflictError(
+                f"identity_conflict: key {machine.key!r} is already used by manifests of "
+                f"{held.components!r}, which is a different manufacturer/model/serial than "
+                f"{machine.components!r}. Their parts run together into one key, so one "
+                "would inherit the other's evidence. Nothing was recorded.")
+        same = True
+    if not same:
+        machine.require_unambiguous()
+
+
 def record_manifest(
     ledger: EvidenceLedger, manifest: SafetyManifest, *, actor: Actor | None = None,
 ) -> Evidence:
@@ -103,8 +153,10 @@ def record_manifest(
 
     The actor defaults to whoever the manifest says took it, because a manifest
     that arrives with no taker is refused at seal time rather than filed to a
-    placeholder.
+    placeholder. An identity whose key is ambiguous is refused
+    (:func:`check_identity_for_sealing`).
     """
+    check_identity_for_sealing(ledger, manifest.machine)
     who = actor or manifest.taken_by
     evidence = Evidence(
         kind=MANIFEST_KIND,
@@ -243,8 +295,8 @@ def manifests_from_ledger(
 #: What the watch writes into a manifest's notes when it could not read every item its plan
 #: names (``change.service.INCOMPLETE_COLLECTION_MARK``; a test pins the two together,
 #: because this module cannot import the change package). Such a look is not a
-#: configuration the machine was in.
-_PARTIAL_LOOK_MARK = "[collection incomplete"
+#: configuration the machine was in. Defined once in ``manifest``.
+_PARTIAL_LOOK_MARK = INCOMPLETE_COLLECTION_MARK
 
 _READER = Actor(identifier="assurance.ledger-reader", role="derived, not recorded",
                 kind="automation")
@@ -335,6 +387,8 @@ def _explains(
     record of that kind of event; a version moving on an item with no hash, by any record
     of the item.
     """
+    if change.kind.concerns_function:
+        return False    # a change to a claim, not to an item: no item record accounts for it
     if i.item_id != change.item_id or not after < i.occurred_at <= until:
         return False
     if change.kind is ChangeKind.CONTENT_CHANGED:
@@ -386,18 +440,29 @@ def implied_interventions(
     explicit = recorded
     out: list[Intervention] = list(lost)
     prior: tuple[datetime, SafetyManifest] | None = None
+    #: item -> the functions it was last credited with in a complete manifest, kept after the
+    #: attribution is dropped (see ``compare(carried_attribution=)``).
+    carried: dict[str, tuple[str, ...]] = {}
     for filed, seq, manifest in sealed:
         if manifest.machine.key != machine_key:
             continue
         if manifest.source is ManifestSource.AS_INTENDED:
             continue
-        partial = _PARTIAL_LOOK_MARK in manifest.notes
+        partial = manifest_is_incomplete(manifest)
         if prior is not None and manifest.source is ManifestSource.AS_FOUND:
             _, before = prior
-            divergence = compare(before, manifest)
+            divergence = compare(before, manifest, carried_attribution=carried)
             for change in divergence.changes:
                 if partial and change.kind is ChangeKind.REMOVED:
                     continue    # not collected is not gone
+                # Re-declaring which functions an unchanged artefact implements is a change
+                # to a claim, not to the machine: `compare` grades dropping one
+                # safety-relevant (a case is opened, a person asked), but it is not a
+                # change to the software, so it does not by itself end a verification.
+                # What keeps the item in scope afterwards is `carried`: the next change
+                # to its artefact is still read against the functions it used to carry.
+                if change.kind is ChangeKind.ATTRIBUTION_CHANGED:
+                    continue
                 moved = change.severity is Severity.SAFETY_RELEVANT or (
                     change.kind is ChangeKind.VERSION_RELABELLED
                     and change.severity is Severity.NOTABLE and bool(change.functions))
@@ -430,6 +495,9 @@ def implied_interventions(
                 ))
         if not partial:
             prior = (filed, manifest)
+            for it in manifest.items:
+                if it.implements:
+                    carried[it.item_id] = tuple(it.implements)
     return out
 
 

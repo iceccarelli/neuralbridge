@@ -23,6 +23,7 @@ from .support_billing import (  # noqa: F401
     _billing_env_fixture,
     account_state,
     checkout_event,
+    claim,
     collect_key,
     payment_failed_event,
     send,
@@ -45,14 +46,14 @@ def test_an_unset_secret_fails_closed_and_grants_nothing(billing_client, monkeyp
     r = _post_signed_with(billing_client, checkout_event("cs_1", "cus_1", "sub_1", "cell", T), "")
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "signature_rejected"
-    assert billing_client.get("/v1/checkout/complete", params={"session_id": "cs_1"}).status_code == 202
+    assert claim(billing_client, "cs_1").status_code == 202
 
 
 def test_an_empty_secret_fails_closed_and_grants_nothing(billing_client, monkeypatch):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "")
     r = _post_signed_with(billing_client, checkout_event("cs_1", "cus_1", "sub_1", "cell", T), "")
     assert r.status_code == 400
-    assert billing_client.get("/v1/checkout/complete", params={"session_id": "cs_1"}).status_code == 202
+    assert claim(billing_client, "cs_1").status_code == 202
 
 
 def test_verify_webhook_refuses_an_empty_key_even_with_a_matching_signature(monkeypatch):

@@ -125,6 +125,23 @@ MAX_ACTIVE_KEYS = 10
 #: How long a processed webhook event id is remembered. Stripe retries for at
 #: most three days; this is comfortably beyond that.
 _EVENT_RETENTION = timedelta(days=35)
+#: How long a checkout claim secret (its hash) is kept if it is never used. Longer than
+#: PENDING_KEY_TTL on purpose: a delayed payment method can complete days after checkout.
+_CLAIM_RETENTION = timedelta(days=35)
+#: Marker rows (``session:<id>``) are never purged by age: see :meth:`AccountStore._purge_db`.
+_SESSION_MARKER_PREFIX = "session:"
+
+#: Refund and dispute states, lowest rank first. A report can only raise a hold's rank, so a
+#: duplicate, a late or a reordered event never lowers it. Active (the subscription is not
+#: entitled while it stands): a full refund, a dispute that is open or was lost.
+#: ``noted`` (a partial refund, a warning-stage inquiry) and ``released`` (a dispute that was
+#: won or closed as a warning) never revoke.
+_HOLD_RANK = {
+    "refund": {"partial": 1, "full": 3},
+    "dispute": {"noted": 0, "held": 1, "released": 2, "lost": 3},
+}
+_HOLD_ACTIVE = {"refund": {"full"}, "dispute": {"held", "lost"}}
+
 #: A subscription state received for a customer we have not seen yet is held
 #: this long, waiting for the checkout event that creates the account.
 _ORPHAN_RETENTION = timedelta(days=7)
@@ -170,6 +187,20 @@ def _effective_phase(sub: sqlite3.Row, failed_at: int) -> str:
     if sub["phase"] == "entitled" and failed_at and failed_at >= sub["state_at"]:
         return "past_due"
     return str(sub["phase"])
+
+
+def _held_phase(phase: str, born: int, held_at: int | None) -> str:
+    """A subscription bought before an active refund or dispute is not entitled while it stands.
+
+    ``suspended`` is the existing "not paying, not over" phase: the account reads
+    ``cancelled`` with the tier remembered, so it is on the free plan (and, having paid, keeps
+    read/verify/export, ``plans.EVIDENCE_READOUT_AFTER_LAPSE``), and releasing the hold
+    restores exactly what the subscription states say. A subscription bought *after* the
+    hold (a customer who comes back and pays again) is not touched by it.
+    """
+    if held_at is not None and phase in ("entitled", "past_due") and born <= held_at:
+        return "suspended"
+    return phase
 
 
 def _parse_stamp(text: str) -> datetime:
@@ -231,6 +262,27 @@ CREATE TABLE IF NOT EXISTS pending_keys (
     api_key    TEXT NOT NULL,
     tier       TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+-- The claim secret behind a checkout handover. POST /v1/checkout mints a random token, returns
+-- it to the buyer's browser and keeps only its SHA-256 here, against the Stripe session id.
+-- POST /v1/checkout/complete hands the staged key over only to a caller that presents both the
+-- session id and this token, so a leaked session id alone claims nothing.
+CREATE TABLE IF NOT EXISTS checkout_claims (
+    session_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+-- Refunds and disputes, per customer. A hold is a fact about money coming back, kept apart from
+-- the subscription states so that no ordering of events can lose or invent one: ``state`` only
+-- ever moves up its rank (see _HOLD_RANK), and the account is derived from the rows.
+CREATE TABLE IF NOT EXISTS entitlement_holds (
+    stripe_customer_id TEXT NOT NULL,
+    hold_id            TEXT NOT NULL,
+    kind               TEXT NOT NULL CHECK (kind IN ('refund','dispute')),
+    state              TEXT NOT NULL,
+    held_at            INTEGER NOT NULL,
+    recorded_at        TEXT NOT NULL,
+    PRIMARY KEY (stripe_customer_id, hold_id)
 );
 CREATE TABLE IF NOT EXISTS processed_events (
     event_id     TEXT PRIMARY KEY,
@@ -898,7 +950,9 @@ class AccountStore:
             # The record holds an end newer than anything that wrote the row: the row is
             # the older word here and must not bring the subscription back.
             return
-        eff = _effective_phase(existing, cls._failed_at(db, customer, sub))
+        eff = _held_phase(
+            _effective_phase(existing, cls._failed_at(db, customer, sub)),
+            existing["born"], cls._held_at(db, customer))
         tier = "free" if eff == "terminal" else (existing["tier"] or row["tier"])
         if (_STATUS_OF_PHASE[eff], tier) != (row["status"], row["tier"]):
             db.execute(
@@ -1026,8 +1080,12 @@ class AccountStore:
                 "WHERE stripe_customer_id=?", (customer,))
         }
 
+        held_at = AccountStore._held_at(db, customer)
+
         def phase_of(r: sqlite3.Row) -> str:
-            return _effective_phase(r, failed.get(r["stripe_subscription_id"], 0))
+            return _held_phase(
+                _effective_phase(r, failed.get(r["stripe_subscription_id"], 0)),
+                r["born"], held_at)
 
         # Paying (active, past_due) beats paused beats ended; within each, the newest-bought
         # (then the latest report). The same view the reconciler takes of Stripe.
@@ -1175,9 +1233,22 @@ class AccountStore:
     @staticmethod
     def _purge_db(db: sqlite3.Connection) -> None:
         now = utc_now()
+        # A ``session:<id>`` marker is what stops a correctly signed, late resend of
+        # checkout.session.completed from minting a second key once the staged key has been
+        # collected or has expired. It is kept for as long as the database exists (one short
+        # row per paid checkout); only the per-delivery event ids age out.
         db.execute(
-            "DELETE FROM processed_events WHERE processed_at < ?",
-            (format_utc(now - _EVENT_RETENTION),),
+            "DELETE FROM processed_events WHERE processed_at < ? AND event_id NOT LIKE ?",
+            (format_utc(now - _EVENT_RETENTION), f"{_SESSION_MARKER_PREFIX}%"),
+        )
+        db.execute(
+            "DELETE FROM checkout_claims WHERE created_at < ?",
+            (format_utc(now - _CLAIM_RETENTION),),
+        )
+        db.execute(
+            "DELETE FROM entitlement_holds WHERE recorded_at < ? AND stripe_customer_id "
+            "NOT IN (SELECT stripe_customer_id FROM accounts WHERE stripe_customer_id <> '')",
+            (format_utc(now - _ORPHAN_RETENTION),),
         )
         db.execute(
             "DELETE FROM orphan_states WHERE recorded_at < ?",
@@ -1193,10 +1264,100 @@ class AccountStore:
             "NOT IN (SELECT stripe_customer_id FROM accounts WHERE stripe_customer_id <> '')",
             (format_utc(now - _ORPHAN_RETENTION),),
         )
-        db.execute(
-            "DELETE FROM pending_keys WHERE created_at < ?",
-            (format_utc(now - PENDING_KEY_TTL),),
-        )
+        # An expired, uncollected key is no longer claimable, so it must not stay usable: its
+        # api_keys row is revoked in this same transaction (matched by the hash of the staged
+        # plaintext) before the plaintext is deleted. Otherwise the key would stay active (and
+        # count against the account's key cap) with nobody able to receive it.
+        expired_before = format_utc(now - PENDING_KEY_TTL)
+        for stale in db.execute(
+            "SELECT api_key FROM pending_keys WHERE created_at < ?", (expired_before,)
+        ).fetchall():
+            db.execute(
+                "UPDATE api_keys SET revoked_at = ? WHERE key_hash = ? AND revoked_at IS NULL",
+                (format_utc(now), hash_key(stale["api_key"])),
+            )
+        db.execute("DELETE FROM pending_keys WHERE created_at < ?", (expired_before,))
+
+    @staticmethod
+    def _held_at(db: sqlite3.Connection, customer: str) -> int | None:
+        """The time of the newest active refund or dispute hold on a customer, or None."""
+        if not customer:
+            return None
+        at = [
+            int(r["held_at"]) for r in db.execute(
+                "SELECT kind, state, held_at FROM entitlement_holds WHERE stripe_customer_id=?",
+                (customer,))
+            if r["state"] in _HOLD_ACTIVE[r["kind"]]
+        ]
+        return max(at) if at else None
+
+    def apply_entitlement_hold(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        stripe_customer_id: str,
+        hold_id: str,
+        kind: str,
+        state: str,
+        event_created: int,
+    ) -> str:
+        """Record a refund or dispute report and re-derive the account. Never grants.
+
+        ``kind`` is ``refund`` or ``dispute``; ``state`` one of that kind's ranks in
+        :data:`_HOLD_RANK`. The row for ``(customer, hold_id)`` only ever moves *up* its
+        rank, so a redelivery, a late ``dispute.created`` after ``dispute.closed`` or a
+        partial refund after a full one changes nothing, whatever order Stripe sent them in.
+        The event id is recorded in the same transaction (at most once per event).
+
+        Returns ``duplicate``, ``recorded`` (stored; the account is unchanged), ``applied``
+        (the stored account moved). A customer with no account yet is ``recorded``: the hold
+        waits and applies when the checkout creates the account.
+        It creates no account, no key and no handover.
+        """
+        if kind not in _HOLD_RANK or state not in _HOLD_RANK[kind]:
+            raise ValueError(f"unknown hold {kind!r}/{state!r}")
+        with self._txn() as db:
+            if event_id and self._seen_event(db, event_id):
+                return "duplicate"
+            self._purge_db(db)
+            row = db.execute(
+                "SELECT * FROM accounts WHERE stripe_customer_id = ?", (stripe_customer_id,)
+            ).fetchone()
+            if row is not None:
+                # Read the account row back into its subscription record while the old holds
+                # still explain it; after the hold changes, the row would look like a stale
+                # writer's and be re-read as the truth.
+                self._sync_from_account(db, row)
+            at = event_created or int(utc_now().timestamp())
+            ranks = _HOLD_RANK[kind]
+            cur = db.execute(
+                "SELECT * FROM entitlement_holds WHERE stripe_customer_id=? AND hold_id=?",
+                (stripe_customer_id, hold_id)).fetchone()
+            now = format_utc(utc_now())
+            if cur is None:
+                db.execute(
+                    "INSERT INTO entitlement_holds (stripe_customer_id, hold_id, kind, state, "
+                    "held_at, recorded_at) VALUES (?,?,?,?,?,?)",
+                    (stripe_customer_id, hold_id, kind, state, at, now))
+            elif ranks[state] > ranks.get(cur["state"], -1):
+                db.execute(
+                    "UPDATE entitlement_holds SET state=?, held_at=MIN(held_at, ?), recorded_at=? "
+                    "WHERE stripe_customer_id=? AND hold_id=?",
+                    (state, at, now, stripe_customer_id, hold_id))
+            elif ranks[state] == ranks.get(cur["state"], -1) and at < cur["held_at"]:
+                db.execute(
+                    "UPDATE entitlement_holds SET held_at=? "
+                    "WHERE stripe_customer_id=? AND hold_id=?",
+                    (at, stripe_customer_id, hold_id))
+            result = "recorded"
+            if row is not None:
+                self._write_current(db, row, 0)
+                after = db.execute("SELECT * FROM accounts WHERE id=?", (row["id"],)).fetchone()
+                if (after["status"], after["tier"]) != (row["status"], row["tier"]):
+                    result = "applied"
+            self._mark_event(db, event_id, event_kind)
+            return result
 
     def apply_subscription_event(
         self,
@@ -1287,7 +1448,7 @@ class AccountStore:
         account derived from all of them, so a checkout that arrives after the
         cancellation of an older subscription still grants what was bought.
         """
-        marker = f"session:{session_id}"
+        marker = f"{_SESSION_MARKER_PREFIX}{session_id}"
         with self._txn() as db:
             if self._seen_event(db, event_id) or self._seen_event(db, marker):
                 self._mark_event(db, event_id, "checkout.session.completed")
@@ -1791,8 +1952,8 @@ class AccountStore:
         This is the one place a key exists in plaintext at rest. It stays there
         until :meth:`claim_pending_key` collects it, which deletes the row, or
         until :data:`PENDING_KEY_TTL` (24 hours) passes, after which it is
-        purged and the key can no longer be handed over — only its SHA-256
-        remains. The checkout webhook stages through :meth:`apply_checkout`
+        purged, its ``api_keys`` row is revoked and the key can no longer be handed over —
+        only its SHA-256 remains. The checkout webhook stages through :meth:`apply_checkout`
         instead, in the same transaction as the account and the key.
         """
         if not session_id:
@@ -1835,6 +1996,96 @@ class AccountStore:
             "account_id": row["account_id"],
             "tier": row["tier"],
         }
+
+    def register_checkout_claim(self, session_id: str, claim_token: str) -> None:
+        """Bind a Stripe checkout session to the secret only its buyer's browser holds.
+
+        Only the SHA-256 of ``claim_token`` is stored. The token is a bearer secret: it
+        narrows who can collect the key to someone who saw the response to ``POST
+        /v1/checkout`` (the success URL carries only the session id) as well as the session id; it does not
+        authenticate a person.
+        """
+        if not session_id or not claim_token:
+            return
+        with self._txn() as db:
+            self._purge_db(db)
+            db.execute(
+                "INSERT OR REPLACE INTO checkout_claims (session_id, token_hash, created_at) "
+                "VALUES (?,?,?)",
+                (session_id, hash_key(claim_token), format_utc(utc_now())),
+            )
+
+    def claim_checkout(
+        self, session_id: str, claim_token: str
+    ) -> tuple[str, dict[str, str] | None]:
+        """Collect the staged key for a session, if this caller holds its claim token.
+
+        Returns ``(outcome, key)``:
+
+        * ``claimed``: the key, deleted from staging together with the claim secret.
+        * ``pending``: nothing is staged and the session has not completed: the webhook is
+          still in flight (or never will arrive). The token is not looked at.
+        * ``forbidden``: a key is staged but the token is missing or wrong. **Nothing is
+          consumed**, so the real buyer can still collect it; a wrong guess costs them nothing.
+        * ``gone``: the checkout completed (its marker is kept for ever) but no key is staged:
+          it was already collected, expired after :data:`PENDING_KEY_TTL`, or was lost in a
+          restore. The real buyer must not wait on this; the recovery is an operator
+          re-issue (``python -m assurance.billing.issue_key``).
+        """
+        # Unauthenticated: look without the write lock first, so a flood of guesses cannot
+        # queue behind real billing writes.
+        probe = self._connect()
+        try:
+            staged = probe.execute(
+                "SELECT 1 FROM pending_keys WHERE session_id = ?", (session_id,)).fetchone()
+            marked = probe.execute(
+                "SELECT 1 FROM processed_events WHERE event_id = ?",
+                (f"{_SESSION_MARKER_PREFIX}{session_id}",)).fetchone()
+        finally:
+            probe.close()
+        if staged is None:
+            return ("gone" if marked is not None else "pending"), None
+        with self._txn() as db:
+            self._purge_db(db)
+            row = db.execute(
+                "SELECT * FROM pending_keys WHERE session_id = ?", (session_id,)).fetchone()
+            if row is None:
+                return "gone", None
+            claim = db.execute(
+                "SELECT token_hash FROM checkout_claims WHERE session_id = ?",
+                (session_id,)).fetchone()
+            presented = hash_key(claim_token) if claim_token else ""
+            if claim is None or not presented or not secrets.compare_digest(
+                    presented, claim["token_hash"]):
+                return "forbidden", None
+            db.execute("DELETE FROM pending_keys WHERE session_id = ?", (session_id,))
+            db.execute("DELETE FROM checkout_claims WHERE session_id = ?", (session_id,))
+        return "claimed", {
+            "api_key": row["api_key"],
+            "account_id": row["account_id"],
+            "tier": row["tier"],
+        }
+
+    def discard_pending_key(self, session_id: str) -> str | None:
+        """Operator action: delete a staged key and its claim secret, and revoke that key.
+
+        For a handover that must not complete: the buyer lost their claim token, or the key
+        may be in the wrong hands. Returns the account id the key belonged to, or None if
+        nothing was staged. The key stops working as it is discarded, so the staged copy can
+        never be collected and used; the operator then issues a fresh one
+        (``python -m assurance.billing.issue_key``).
+        """
+        with self._txn() as db:
+            row = db.execute(
+                "SELECT * FROM pending_keys WHERE session_id = ?", (session_id,)).fetchone()
+            if row is None:
+                return None
+            db.execute("DELETE FROM pending_keys WHERE session_id = ?", (session_id,))
+            db.execute("DELETE FROM checkout_claims WHERE session_id = ?", (session_id,))
+            db.execute(
+                "UPDATE api_keys SET revoked_at = ? WHERE key_hash = ? AND revoked_at IS NULL",
+                (format_utc(utc_now()), hash_key(row["api_key"])))
+            return str(row["account_id"])
 
     # -- quota ------------------------------------------------------------
     def consume(

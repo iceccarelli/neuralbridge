@@ -40,7 +40,7 @@ from assurance.billing.accounts import (
 )
 from assurance.billing.plans import PLANS
 
-OPERATOR_KEY = "operator-key-usage"
+OPERATOR_KEY = "operator-key-usage-0123456789abcdef0123456789"
 VALIDATE = {"track": "actively_exploited_vulnerability", "stage": "early_warning",
             "payload": {}}
 SEPARATION = {"robot_speed_mm_s": 250, "reaction_time_s": 0.1, "stop_time_s": 0.2,

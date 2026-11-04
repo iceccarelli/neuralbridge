@@ -69,7 +69,7 @@
       "surfaces": {
         "api": {
           "names": [
-            "GET /v1/checkout/complete"
+            "POST /v1/checkout/complete"
           ],
           "status": "available"
         },

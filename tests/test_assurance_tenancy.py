@@ -21,7 +21,7 @@ from assurance.billing.accounts import Account, Principal
 
 from .test_assurance_check import advisory, manifest
 
-OPERATOR_KEY = "operator-key-test-tenancy"
+OPERATOR_KEY = "operator-key-test-tenancy-0123456789abcdef0123456789"
 ACTOR = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
 SECRET = "Integrator A observed exploitation of the SK-4200 service port"
 
@@ -180,6 +180,7 @@ class TestOperatorAndOpenMode:
         monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
         monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
         monkeypatch.setenv("ASSURANCE_ALLOW_UNAUTHENTICATED", "1")
+        monkeypatch.setenv("ASSURANCE_HOST", "127.0.0.1")  # open mode is refused off loopback
         monkeypatch.delenv("ASSURANCE_TENANT_LEDGERS", raising=False)
         deps._register_for.cache_clear()
         deps._tenant_register_for.cache_clear()

@@ -17,7 +17,9 @@ __all__ = ["NoStoreMiddleware", "is_no_store"]
 
 #: (method, path) pairs that mint or hand over a plaintext key.
 _KEY_ROUTES = frozenset({
-    ("POST", "/v1/keys"), ("POST", "/v1/operators"), ("GET", "/v1/checkout/complete"),
+    ("POST", "/v1/keys"), ("POST", "/v1/operators"),
+    ("POST", "/v1/checkout/complete"),   # the claim: hands the key over once
+    ("GET", "/v1/checkout/complete"),    # retired (410), kept so no response from it is ever cached
 })
 _REPORTS = frozenset({("GET", "/v1/fleet/report")})
 

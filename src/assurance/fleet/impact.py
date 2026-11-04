@@ -76,6 +76,9 @@ class MachineClassification:
     item_ids: tuple[str, ...] = ()
     #: Why this machine cannot be cleared (empty when nothing stands in the way).
     unknown_reasons: tuple[str, ...] = ()
+    #: The latest look at this machine did not finish or did not happen. The match was made
+    #: on the last COMPLETE configuration, which may no longer describe the machine.
+    look_problems: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +86,8 @@ class MachineClassification:
             "classification": self.classification, "basis": self.basis,
             "uncertainty": self.uncertainty, "item_ids": list(self.item_ids),
             "unknown_reasons": list(self.unknown_reasons),
+            "latest_look_incomplete": bool(self.look_problems),
+            "look_problems": list(self.look_problems),
         }
 
 
@@ -210,6 +215,26 @@ class ImpactReport:
                      if c.classification == "unknown")
 
     @property
+    def look_incomplete_machines(self) -> tuple[str, ...]:
+        """Machines whose latest look at the machine did not finish or did not happen."""
+        return tuple(c.machine_key for c in self.classifications if c.look_problems)
+
+    @property
+    def not_clear_reasons(self) -> tuple[str, ...]:
+        """Why this report, with no exposure, must not read as ``clear`` (else empty).
+
+        Nothing assessed (no machine enrolled) and machines whose latest look was
+        incomplete are both "we could not check", which is not "nothing matched".
+        """
+        out: list[str] = []
+        if self.machines_in_fleet == 0:
+            out.append("no machine is enrolled, so nothing was assessed and nothing is cleared")
+        for c in self.classifications:
+            for problem in c.look_problems:
+                out.append(f"{c.machine_key}: {problem}")
+        return tuple(out)
+
+    @property
     def clear_is_complete(self) -> bool:
         """A ``clear`` verdict that no unknown machine or function qualifies.
 
@@ -217,6 +242,7 @@ class ImpactReport:
         statement about no machines, not evidence that the advisory is irrelevant.
         """
         return (self.verdict == "clear" and self.machines_in_fleet > 0
+                and not self.not_clear_reasons
                 and not self.unknown_machines
                 and not self.unknown_functions)
 
@@ -250,16 +276,22 @@ class ImpactReport:
         """``clear`` | ``exposed`` | ``needs_review``.
 
         ``clear`` means the fleet was read from a ledger that verifies, the advisory
-        is a complete statement of what its source said, and no enrolled machine
-        matches. If the chain does not verify, an empty list of matches is not
+        is a complete statement of what its source said, at least one machine was
+        assessed, no machine's latest look was incomplete, and no enrolled machine
+        matches. An empty fleet and an incomplete latest look are ``needs_review``:
+        nothing was checked, which is not the same as nothing matching. If the chain does not verify, an empty list of matches is not
         evidence of anything — records may have been dropped — so the answer is
         ``needs_review``; so it is when the advisory is a partial translation
         (:attr:`incomplete`), because the product that was dropped may be the one on
         a machine.
         """
         if not self.exposures:
+            # Unknown machines/functions are machines the assessment could neither include
+            # nor exclude: a failure to check must never read as a successful check.
             return ("clear" if self.chain_verified and not self.incomplete
-                    else "needs_review")
+                    and not self.not_clear_reasons
+                    and not self.unknown_machines
+                    and not self.unknown_functions else "needs_review")
         if any(e.newly_in_question for e in self.exposures):
             return "exposed"
         return "needs_review"
@@ -289,6 +321,8 @@ class ImpactReport:
             "advisory_import": dict(self.advisory_import) if self.advisory_import else None,
             "incomplete": self.incomplete,
             "incomplete_reasons": list(self.incomplete_reasons),
+            "not_clear_reasons": list(self.not_clear_reasons),
+            "look_incomplete_machines": list(self.look_incomplete_machines),
         }
 
     def summary(self) -> str:
@@ -298,12 +332,29 @@ class ImpactReport:
             "needs_review": "NEEDS REVIEW — matches found, none with standing evidence",
         }[self.verdict]
         if self.verdict == "needs_review" and not self.exposures:
-            head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
-                    "verify, so the absence of a match is not evidence")
-            if self.incomplete:
+            # Evidence integrity outranks every other reason: if the chain does not verify, nothing
+            # below it can be relied on, and the headline must say so first.
+            head = ("NEEDS REVIEW — no match was found, but it cannot be established that "
+                    "nothing is affected, so nothing is cleared")
+            if not self.chain_verified:
+                head = ("NEEDS REVIEW — no match was found, but the ledger chain does not "
+                        "verify, so the absence of a match is not evidence")
+            elif self.incomplete:
                 head = ("NEEDS REVIEW — INCOMPLETE TRANSLATION: no machine matched what "
                         "was imported, but the advisory is partial, so a machine running "
                         "what was left out is not cleared")
+            elif self.machines_in_fleet == 0:
+                head = ("NOT ASSESSED — no machine is enrolled, so nothing was checked "
+                        "and nothing is cleared")
+            elif self.unknown_machines or self.unknown_functions:
+                head = ("NEEDS REVIEW — no match was found among the machines that could "
+                        f"be assessed, but {len(self.unknown_machines)} machine(s) and "
+                        f"{len(self.unknown_functions)} safety function(s) are UNKNOWN "
+                        "and are not cleared")
+            elif self.look_incomplete_machines:
+                head = ("NEEDS REVIEW — no match on the last complete configuration, but "
+                        f"{len(self.look_incomplete_machines)} machine(s) were last looked "
+                        "at incompletely, so they are not cleared")
         lines = []
         record = self.advisory_import
         if record:
@@ -513,6 +564,13 @@ def assess_impact(
             + "): what is installed on them was never observed, so a match or a clear "
             "here is about the paperwork."
         )
+    looked_badly = [r.machine_key for r in fleet.records if r.look_problems]
+    if looked_badly:
+        caveats.insert(0, (
+            f"{len(looked_badly)} machine(s) were last looked at incompletely or not at all "
+            "(" + ", ".join(looked_badly[:5]) + ("…" if len(looked_badly) > 5 else "")
+            + "). They are matched on their last COMPLETE configuration, which may no "
+            "longer describe them, and are not cleared."))
     if len(fleet) == 0:
         caveats.insert(0, (
             "no machine is enrolled in this ledger, so no machine was assessed. A "
@@ -535,6 +593,8 @@ def assess_impact(
                            "never observed")
         if not fleet.chain_verified:
             reasons.append("the ledger chain does not verify, so records may be missing")
+        look_problems = tuple(record.look_problems)
+        reasons.extend(look_problems)
         for item, why in _candidate_unknown_items(advisory, record, matched_ids):
             reasons.append(f"{item.item_id}: {why}")
             for fn in record.manifest.functions_of(item):
@@ -557,7 +617,8 @@ def assess_impact(
         classifications.append(MachineClassification(
             machine_key=record.machine_key, site=record.manifest.machine.site,
             classification=classification, basis=basis_value, uncertainty=uncertainty,
-            item_ids=tuple(sorted(matched_ids)), unknown_reasons=tuple(reasons)))
+            item_ids=tuple(sorted(matched_ids)), unknown_reasons=tuple(reasons),
+            look_problems=look_problems))
 
     for e in exposures:
         for f in e.functions:

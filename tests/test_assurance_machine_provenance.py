@@ -338,6 +338,7 @@ class TestTheSealedActorFollowsTheCredential:
         monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
         monkeypatch.delenv("ASSURANCE_API_KEYS", raising=False)
         monkeypatch.setenv("ASSURANCE_ALLOW_UNAUTHENTICATED", "1")
+        monkeypatch.setenv("ASSURANCE_HOST", "127.0.0.1")  # open mode is refused off loopback
         for cache in (deps._register_for, deps._tenant_register_for, deps._accounts_for):
             cache.cache_clear()
         try:

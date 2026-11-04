@@ -216,8 +216,19 @@ class TestWorkflow:
         assert "BREACHES" in capsys.readouterr().out
 
     def test_register_exits_zero_when_nothing_is_overdue(self, ledger_path, capsys):
+        from assurance.evidence.ledger import EvidenceLedger
+
+        EvidenceLedger(ledger_path)         # an existing, empty ledger: nothing is overdue in it
         assert run(ledger_path, "register") == 0
         assert "chain verified       yes" in capsys.readouterr().out
+
+    def test_register_on_a_path_that_is_not_a_ledger_is_an_error_not_nothing_overdue(self, ledger_path, capsys):
+        # A mistyped --ledger must never read as a clean register (and must not create a file).
+        import os
+
+        assert not os.path.exists(ledger_path)
+        assert run(ledger_path, "register") == 2
+        assert not os.path.exists(ledger_path)
 
 
 class TestStandaloneCommands:

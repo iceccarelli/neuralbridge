@@ -13,6 +13,9 @@ return 503 and say so.
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -28,7 +31,16 @@ from .cache_headers import NoStoreMiddleware
 from .capabilities_routes import capabilities_router
 from .change_routes import change_router
 from .check_routes import check_router
-from .deps import BodySizeLimitMiddleware, allowed_origins, auth_mode, too_deep_body
+from .deps import (
+    BodySizeLimitMiddleware,
+    accounts_path,
+    allowed_origins,
+    auth_mode,
+    get_accounts,
+    ledger_path,
+    tenant_ledgers_dir,
+    too_deep_body,
+)
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
 from .intel_routes import intel_router
@@ -41,7 +53,9 @@ from .supplier_routes import supplier_router
 from .value_routes import value_router
 from .watch_routes import watch_router
 
-__all__ = ["create_app", "app"]
+__all__ = ["create_app", "app", "attestation_key_state", "readiness"]
+
+_log = logging.getLogger("assurance.api.service")
 
 _DESCRIPTION = """
 Register for **Regulation (EU) 2024/2847, Article 14** — reporting of actively
@@ -68,6 +82,143 @@ confirms the duty outlives a product's support period.
 It does not give legal advice, and it does not decide a judgement for you:
 triage returns *undetermined* until a human answers.
 """
+
+
+# =====================================================================
+# readiness
+# =====================================================================
+def _scrub(text: str) -> str:
+    """Remove the server's configured paths from an error text before it is shown."""
+    for raw in (ledger_path(), accounts_path(), str(tenant_ledgers_dir()),
+                os.environ.get("ASSURANCE_ATTEST_LOGS", ""),
+                os.environ.get("ASSURANCE_ATTEST_KEY", "")):
+        if not raw:
+            continue
+        for variant in {raw, str(Path(raw).resolve()), str(Path(raw).resolve().parent)}:
+            if variant and variant not in ("/", "."):
+                text = text.replace(variant, "<path>")
+    return text
+
+
+def _reason(exc: BaseException) -> str:
+    return _scrub(f"{type(exc).__name__}: {exc}")[:200]
+
+
+def _directory_problem(configured: str, what: str, *, must_exist: bool) -> str | None:
+    """Why files could not be created under ``configured`` (or beside it), else ``None``.
+
+    ``must_exist`` is for the directory itself; otherwise the path is a file and its parent
+    is checked. A missing directory is fine when some ancestor exists, is a directory and is
+    writable (it is created on first use); an ancestor that is a file, or that the service
+    cannot write, is not. Only ``stat`` and ``access`` are used: nothing is created.
+    """
+    target = Path(configured).absolute()
+    folder = target if must_exist else target.parent
+    probe = folder
+    try:
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        if not probe.is_dir():
+            return f"{what}: a path component is not a directory"
+        if not os.access(probe, os.W_OK | os.X_OK):
+            return f"{what}: the directory is not writable by the service account"
+    except OSError as exc:
+        return f"{what}: {type(exc).__name__}"
+    return None
+
+
+def attestation_key_state() -> str:
+    """``configured`` / ``not_configured`` / ``unsafe`` / ``unusable`` (never the key).
+
+    Informational. An unconfigured key is an honest, supported state (the attest routes
+    answer 503 and say so); it must be visible, not fatal.
+    """
+    from fastapi import HTTPException
+
+    from .attest_routes import _service_key
+    try:
+        _service_key()
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return {"no_attestation_key_configured": "not_configured",
+                "attestation_key_unsafe": "unsafe"}.get(
+                    str(detail.get("error")), "unusable")
+    except Exception:  # noqa: BLE001 - reported as a state, never echoed
+        return "unusable"
+    return "configured"
+
+
+def _environment() -> tuple[dict[str, Any], list[str], list[str]]:
+    """Checks that touch no database: data directories and the attestation key.
+
+    Safe to run at import time (opens and creates nothing). ``(fields, problems, warnings)``.
+    """
+    out: dict[str, Any] = {}
+    problems: list[str] = []
+    warnings: list[str] = []
+    storage = [
+        _directory_problem(accounts_path(), "ASSURANCE_ACCOUNTS", must_exist=False),
+        _directory_problem(ledger_path(), "ASSURANCE_LEDGER", must_exist=False),
+        _directory_problem(str(tenant_ledgers_dir()), "ASSURANCE_TENANT_LEDGERS",
+                           must_exist=True),
+    ]
+    storage = [x for x in storage if x]
+    out["storage_ok"] = not storage
+    if storage:
+        out["storage_problems"] = [_scrub(x) for x in storage]
+        problems.append("a data directory is not usable")
+    key = attestation_key_state()
+    out["attestation_key"] = key
+    if key in ("unsafe", "unusable"):
+        warnings.append(
+            f"The attestation key is {key}: the attestation routes answer 503 until it is "
+            "fixed. `assurance attest preflight` names the problem.")
+    elif key == "configured":
+        logs = _directory_problem(os.environ.get("ASSURANCE_ATTEST_LOGS", "attestations"),
+                                  "ASSURANCE_ATTEST_LOGS", must_exist=True)
+        if logs:
+            out["attestation_logs_ok"] = False
+            warnings.append(_scrub(logs) + "; attestations cannot be recorded")
+    return out, problems, warnings
+
+
+def readiness(operator_ledger_records: Any = None) -> dict[str, Any]:
+    """What the service can actually do right now. ``ready`` is False -> answer 503.
+
+    Never raises. Cheap (no chain walk). Reasons name an error class and a scrubbed message,
+    never a configured path. ``operator_ledger_records`` is a callable returning the operator
+    ledger's entry count (the unauthenticated ``/healthz`` hands it in; the architecture test
+    allows only ``routes.py`` to reach the shared register). A startup environment the service cannot work in (an accounts
+    database or tenant-ledger directory it cannot write) makes it not ready; a broken
+    attestation key only degrades (the attest routes 503), and a missing one is reported
+    without changing the status.
+    """
+    out: dict[str, Any] = {"auth_mode": auth_mode()}
+    problems: list[str] = []
+    warnings: list[str] = []
+    try:
+        if operator_ledger_records is not None:
+            out["ledger_records"] = operator_ledger_records()
+        out["ledger_ok"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["ledger_ok"] = False
+        out["ledger_error"] = _reason(exc)
+        problems.append("the operator ledger cannot be opened")
+    try:
+        get_accounts().usage_today("healthz")
+        out["accounts_ok"] = True
+    except Exception as exc:  # noqa: BLE001 - building the store is inside the guard
+        out["accounts_ok"] = False
+        out["accounts_error"] = _reason(exc)
+        problems.append("the accounts database cannot be opened")
+    env_out, env_problems, env_warnings = _environment()
+    out |= env_out
+    problems += env_problems
+    warnings += env_warnings
+    out["ready"] = not problems
+    out["problems"] = problems
+    out["warnings"] = warnings
+    return out
 
 
 def create_app(**kwargs: Any) -> FastAPI:
@@ -178,7 +329,23 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(intel_router)
     application.include_router(router)
     application.include_router(evidence_router)
+    _log_startup_problems()
     return application
+
+
+def _log_startup_problems() -> None:
+    """Say at start-up what /healthz will say, so the first line of the log is not silence.
+
+    The service still starts: ``/livez`` must answer so the platform restarts nothing that
+    a readiness failure alone explains, and ``/healthz`` carries the detail. Best effort;
+    a failure here must not stop the app being created (import time).
+    """
+    try:
+        _, problems, warnings = _environment()
+    except Exception:  # noqa: BLE001
+        return
+    for item in [*problems, *warnings]:
+        _log.warning("startup: %s", item)
 
 
 app = create_app()

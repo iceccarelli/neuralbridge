@@ -984,7 +984,7 @@ class TestUnderHostileLoad:
         env = {**os.environ, "PYTHONPATH": str(SRC),
                "ASSURANCE_LEDGER": str(tmp_path / "l.db"),
                "ASSURANCE_ACCOUNTS": str(tmp_path / "a.db"),
-               "ASSURANCE_API_KEYS": "operator-key-load"}
+               "ASSURANCE_API_KEYS": "operator-key-load-0123456789abcdef0123456789"}
         server = subprocess.Popen(  # noqa: S603
             [sys.executable, "-m", "uvicorn", "assurance.api.service:app", "--port", str(port),
              "--workers", "1", "--log-level", "warning"],

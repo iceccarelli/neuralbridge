@@ -34,9 +34,15 @@ from assurance.core.text import neutralise
 from assurance.core.tiers import AssuranceTier
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machine.recorder_attestation import RecorderTrust
-from assurance.machinery.divergence import Divergence, Severity
+from assurance.machinery.divergence import FUNCTION_CHANGE_PREFIX, Divergence, Severity
 from assurance.machinery.intervention import IMPLIED_PREFIX, Intervention
-from assurance.machinery.manifest import SafetyManifest, not_a_look
+from assurance.machinery.manifest import (
+    INCOMPLETE_COLLECTION_MARK,
+    SafetyManifest,
+    manifest_is_incomplete,
+    not_a_look,
+    notes_mark_incomplete,
+)
 from assurance.machinery.record import (
     MANIFEST_KIND,
     interventions_from_ledger,
@@ -176,11 +182,12 @@ def _require_human(actor: Actor, what: str) -> None:
             "service or anonymous actor can detect and report, but it cannot decide.")
 
 
-#: Written into a manifest's ``notes`` by the watch when a collection did not
-#: find or read every item its plan names. Such a manifest is a partial look,
-#: not a configuration the machine was in, so it cannot count as "left that
-#: configuration" when judging whether a closed case recurred.
-INCOMPLETE_COLLECTION_MARK = "[collection incomplete"
+# ``INCOMPLETE_COLLECTION_MARK`` (re-exported here; defined in
+# ``assurance.machinery.manifest``) is written into a manifest's ``notes`` when a collection
+# did not find or read every item its plan names. Such a manifest is a partial look, not a
+# configuration the machine was in, so it cannot count as "left that configuration" when
+# judging whether a closed case recurred, and it is never proof of a machine's state after a
+# change (see :func:`reverify`).
 
 
 def _entry_machine(case: ChangeAssuranceCase, entry: str) -> str | None:
@@ -414,8 +421,7 @@ def _recurrence(
             evidence = entry.evidence()
             if not evidence.verify():
                 continue
-            if INCOMPLETE_COLLECTION_MARK in str(
-                    evidence.body.get("manifest", {}).get("notes", "")):
+            if notes_mark_incomplete(evidence.body.get("manifest", {}).get("notes", "")):
                 continue
             other = str(evidence.body.get("configuration_hash", ""))
             if other and other != settled.trigger_id:
@@ -621,6 +627,23 @@ def assess_drift(
     for fid in affected:
         fc = next((f for f in coverage.functions if f.function_id == fid), None)
         if fc is None:
+            # The change touched a function the observed manifest does not declare (it
+            # was dropped, or the item lost its attribution and the declaration with it).
+            # Coverage is read over the observed manifest, so it has no row for it, and
+            # skipping it here would leave a safety-relevant case with nothing to
+            # re-verify: claim, advance, ready to close. The function WAS declared and
+            # verified; nothing the observed manifest says can show it current. It stays
+            # required until a verification of a manifest that declares it clears it, or a
+            # named person waives it.
+            action = (
+                f"{fid} was affected by this change and is not declared in the observed "
+                f"manifest of {divergence.machine_key}, so it cannot be shown current from "
+                "it. Declare it again and re-verify it, or have a named person waive it "
+                "with a reason; it is not closed by being absent.")
+            evidence_current[fid] = "unknown"
+            required_actions.append(action)
+            required_reverifications.append(fid)
+            actions_by_fid.setdefault(fid, []).append(action)
             continue
         if fc.coverage is Coverage.STALE:
             invalidation_reason = invalidation_reason or fc.detail
@@ -772,9 +795,10 @@ def assess_advisory(
     machine, and forty copies of it would not be forty findings.
 
     Opens a case only when the report is not ``clear``: an advisory that
-    matches nothing in the fleet is not a change to anyone's evidence.
+    matches nothing in the fleet is not a change to anyone's evidence. An EMPTY fleet is not ``clear`` (nothing
+    was assessed) but has no machine to open a case about either, so it opens none; the report still says so.
     """
-    if impact.verdict == "clear":
+    if impact.verdict == "clear" or (impact.machines_in_fleet == 0 and not impact.exposures):
         return None
     marker = _untrusted_marker(impact, actor, accept_unsigned, reason)
     imported = impact.advisory_import is not None
@@ -1111,6 +1135,28 @@ def _trace_filed_elsewhere(ledger: object, verification_hash: str, key: str) -> 
     return ""
 
 
+def _changed_items_missing_from(case: ChangeAssuranceCase, sealed: SafetyManifest) -> list[str]:
+    """Changed items (drift and intervention cases) that ``sealed`` does not list.
+
+    An item the change REMOVED is expected to be absent; a change to a function declaration
+    (``function:<id>``) is not an item on the machine; an advisory's rows name
+    ``machine/artefact`` pairs and are judged per machine elsewhere.
+    """
+    if case.trigger_type not in (TriggerType.MACHINE_DRIFT, TriggerType.INTERVENTION):
+        return []
+    out: list[str] = []
+    for row in case.changed_items:
+        item_id = str(row.get("item_id", ""))
+        kind = str(row.get("kind", ""))
+        if not item_id or item_id.startswith(FUNCTION_CHANGE_PREFIX):
+            continue
+        if kind in ("removed", "removal"):
+            continue
+        if sealed.item(item_id) is None and item_id not in out:
+            out.append(item_id)
+    return out
+
+
 def reverify(
     store: CaseStore, case_id: str,
     manifest: SafetyManifest, verifications: list[VerificationRecord],
@@ -1181,7 +1227,22 @@ def reverify(
         raise CaseTransitionError(
             f"the ledger holds no manifest sealed for {key}, so there is nothing to "
             "check a re-verification against. Record the machine's manifest first.")
-    sealed = sealed_manifests[-1]
+    # The post-change state is shown only by a COMPLETE look. A manifest marked
+    # `[collection incomplete: ...]` lacks items its plan names, so it can leave out the very
+    # item that changed: reading it as the newest word on the machine would clear a case on
+    # a look that never looked at the change. It is skipped, not trusted.
+    complete = [m for m in sealed_manifests if not manifest_is_incomplete(m)]
+    if not complete:
+        raise CaseTransitionError(
+            f"every manifest sealed for {key} is marked as an incomplete collection, so "
+            "none of them shows the machine after the change. Collect it completely, seal "
+            "that, then re-verify.")
+    sealed = complete[-1]
+    if manifest_is_incomplete(manifest):
+        raise CaseTransitionError(
+            f"the manifest handed to this re-check is marked as an incomplete collection "
+            f"({manifest.manifest_id!r}); a partial look cannot show the machine after the "
+            "change. Collect it completely, seal that, then re-verify.")
     not_looked = not_a_look(sealed)
     if not_looked:
         raise CaseTransitionError(
@@ -1214,6 +1275,12 @@ def reverify(
             f"the newest manifest sealed for {key} was taken {format_utc(sealed.taken_at)}, "
             f"which predates this case's trigger ({format_utc(floor)}). Collect and seal "
             "the machine's manifest again after the change, then re-verify.")
+    unlisted = _changed_items_missing_from(case, sealed)
+    if unlisted:
+        raise CaseTransitionError(
+            f"the newest complete manifest sealed for {key} ({sealed.manifest_id!r}) does not "
+            f"list the changed item(s) {', '.join(unlisted)}, so it does not show what they "
+            "are after the change. Collect them, seal that manifest, then re-verify.")
     if record.effective_at < floor:
         raise CaseTransitionError(
             f"verification {record.content_hash[:12]} describes a state before "

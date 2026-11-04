@@ -17,9 +17,14 @@ retrieved from the EU Publications Office (https://publications.europa.eu/resour
 These tests keep the software's clocks and the public wording equal to that text. They do not make the product a
 legal-compliance tool: it computes and records clocks; people decide and file.
 
-NOT pinned, on purpose: the Machinery Regulation (EU) 2023/1230 application date. The Official Journal text retrieved
-the same way (English and French copies) says Art. 54 "shall apply from 14 January 2027", while this repository says
-20 January 2027 in about a dozen places. That conflict is unresolved and is for the owner to confirm on EUR-Lex.
+Machinery Regulation (EU) 2023/1230, application date: **20 January 2027** (Art. 54), resolved 2026-11-03.
+The Official Journal text as first published (OJ L 165, 29.6.2023) carries 14 January 2027; that was a material error
+corrected by Corrigendum OJ L 169, 4.7.2023, p. 35. The consolidated text of 27.07.2026 (CELEX 02023R1230-20260727,
+same Publications Office route) states it as "Corrected by: C1 Corrigendum ..." and shows 20 January 2027 in
+Art. 54 (and 20 January 2024 for Arts. 26-42, 20 October 2026 for Art. 50(1), 20 July 2024 for Arts. 6(2)-(6), (8),
+(11), 47 and 53(3)). Regulation (EU) 2026/1744 (Digital Omnibus on AI, OJ L 24.7.2026) amends 2023/1230 only in
+Arts. 8, 20 and 47 (AI-related presumptions and delegated acts); it does NOT amend Art. 54, so it is not the source
+of the 20 January date and must not be cited as such. Annex III 1.1.9 is unchanged by it.
 """
 
 from __future__ import annotations
@@ -57,3 +62,20 @@ def test_application_dates_stated_for_article_14():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "Applies since **11 Sep 2026**" in readme  # Art. 71(2)
     assert "Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027" in readme
+
+
+def test_machinery_application_date_is_20_january_2027_everywhere_and_never_14():
+    """Pinned to the consolidated, corrigendum-marked text (see the module docstring)."""
+    import re
+
+    paths = [
+        "README.md", "app/page.tsx", "app/lib/solutions.ts", "app/lib/productPages.ts",
+        "src/assurance/machinery/__init__.py", "src/assurance/machinery/manifest.py",
+        "deploy/assurance/MACHINERY.md", "deploy/assurance/MACHINE.md",
+    ]
+    mentions = 0
+    for rel in paths:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert not re.search(r"14 Jan(uary)? 2027", text), rel  # the uncorrected, erroneous date
+        mentions += len(re.findall(r"20 Jan(uary)? 2027", text))
+    assert mentions >= 8
