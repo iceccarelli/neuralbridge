@@ -32,8 +32,13 @@ than the cadence the watch declared.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from assurance.change.model import ChangeAssuranceCase, TriggerType
@@ -55,7 +60,7 @@ from assurance.core.evidence import (
     Origin,
     ValidationState,
 )
-from assurance.core.identity import format_utc, utc_now
+from assurance.core.identity import content_hash_of, format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
@@ -81,8 +86,9 @@ from assurance.machinery.staleness import (
 )
 from assurance.supplier.trust import SupplierTrustStore
 from assurance.watch.advisories import AdvisoryPass, check_feeds
-from assurance.watch.config import WatchConfig, WatchTarget
+from assurance.watch.config import WatchConfig, WatchError, WatchTarget
 from assurance.watch.filings import FilingsPass, draft_filings
+from assurance.watch.freshness import interrupted_work
 from assurance.watch.intel_source import check_intel, merge_passes
 from assurance.watch.observations import (
     OBSERVATION_KIND,
@@ -194,6 +200,8 @@ class WatchRun:
     previous_run_hash: str = ""
     checks_skipped: tuple[str, ...] = field(default_factory=tuple)
     sealed: tuple[str, ...] = field(default_factory=tuple)
+    #: Records an EARLIER run sealed and never reported because it died before its run record.
+    interrupted_prior_run: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def findings(self) -> tuple[MachineOutcome, ...]:
@@ -226,7 +234,7 @@ class WatchRun:
         and also degrades the run: a watch with feeds but nothing to assess has
         not established that anything is clear (see ``watch.advisories``).
         """
-        if self.uncollectable or self.stale_observations \
+        if self.uncollectable or self.stale_observations or self.interrupted_prior_run \
                 or self.advisories.degraded or self.unwitnessed \
                 or self.advisories.not_assessed:
             return "degraded"
@@ -249,6 +257,7 @@ class WatchRun:
             "advisories": self.advisories.to_dict(),
             "filings": self.filings.to_dict(),
             "sealed": list(self.sealed),
+            "interrupted_prior_run": list(self.interrupted_prior_run),
             "checks_skipped": list(self.checks_skipped),
         }
 
@@ -286,6 +295,12 @@ class WatchRun:
                 lines.append(f"           intervention case {cid}")
             for w in o.warnings:
                 lines.append(f"           ! {w}")
+        if self.interrupted_prior_run:
+            lines.append("")
+            lines.append("  AN EARLIER RUN DID NOT FINISH. It sealed, and never reported: "
+                         + "; ".join(self.interrupted_prior_run))
+            lines.append("  Its changes are already in the baseline, so this run cannot see "
+                         "them as new. Read those records.")
         if self.stale_observations:
             lines.append("")
             lines.append("  NOT LOOKED AT RECENTLY ENOUGH: "
@@ -468,6 +483,37 @@ def _previous_state(run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     return {o["serial"]: o for o in run.get("outcomes", [])}
 
 
+@contextlib.contextmanager
+def hold_run_lock(ledger: EvidenceLedger, config: WatchConfig) -> Iterator[None]:
+    """One sealing run of a watch against a ledger at a time (an exclusive, non-blocking flock).
+
+    Two runs at once each read the same baseline, each find the same drift and each seal it:
+    duplicate divergences and manifests, and a run record that does not describe the ledger.
+    The lock lives in the temp directory, keyed by the ledger's resolved path and the watch id,
+    so it never adds a file to a data directory a backup manifest is checked against. The
+    kernel drops it when the process dies, so a killed run does not wedge the next one.
+    """
+    try:
+        import fcntl
+    except ImportError:                  # not POSIX: no lock is available, and none is claimed
+        yield
+        return
+    key = content_hash_of({"ledger": str(Path(ledger.path).resolve()), "watch": config.watch_id})
+    path = Path(tempfile.gettempdir()) / f"assurance-watch-{key[:24]}.lock"
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise WatchError(
+                f"another run of watch {config.watch_id} is already in progress against this "
+                "ledger. Nothing was looked at or sealed by this one: two runs at once would "
+                "each seal the same change.") from None
+        yield
+    finally:
+        os.close(fd)
+
+
 def run_watch(
     config: WatchConfig,
     ledger: EvidenceLedger,
@@ -476,6 +522,19 @@ def run_watch(
     seal: bool = True,
 ) -> WatchRun:
     """Look at every target once, seal what changed, and report what is new."""
+    if not seal:
+        return _run_watch(config, ledger, now=now, seal=False)
+    with hold_run_lock(ledger, config):
+        return _run_watch(config, ledger, now=now, seal=True)
+
+
+def _run_watch(
+    config: WatchConfig,
+    ledger: EvidenceLedger,
+    *,
+    now: datetime | None,
+    seal: bool,
+) -> WatchRun:
     # When a caller supplies the clock, the whole run reads from it. Mixing an
     # injected start with a wall-clock finish produces a run that appears to end
     # before it began, which is the kind of detail an auditor notices first.
@@ -485,6 +544,8 @@ def run_watch(
                   kind="automation")
     previous = last_run(ledger, config.watch_id)
     prior = _previous_state(previous)
+    # Work an earlier run sealed and died before reporting: the baseline already contains it.
+    interrupted = interrupted_work(ledger, config)
 
     store = CaseStore(ledger)
     outcomes: list[MachineOutcome] = []
@@ -758,6 +819,7 @@ def run_watch(
         previous_run_hash=str(previous.get("self_hash", "")) if previous else "",
         checks_skipped=tuple(dict.fromkeys(caveats)),
         sealed=tuple(sealed),
+        interrupted_prior_run=interrupted,
     )
 
     if seal:

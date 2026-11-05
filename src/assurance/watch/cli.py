@@ -31,6 +31,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -166,8 +167,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 2
     config = WatchConfig.from_json(args.config)
-    ledger = EvidenceLedger(args.ledger)
-    run = run_watch(config, ledger, seal=not args.dry_run, now=args.now)
+    if args.dry_run:
+        # A dry run seals nothing, so it must not write anything either: the writable
+        # constructor runs the schema script (a committed write into a WAL, new sidecars, a
+        # moved directory mtime) and CREATES a ledger at a mistyped path. Read the real
+        # ledger read-only; with no ledger yet, assess against an empty one kept in a
+        # throwaway directory, which is what "nothing is enrolled" means.
+        if Path(args.ledger).is_file() and Path(args.ledger).stat().st_size > 0:
+            run = run_watch(config, EvidenceLedger.open_existing(args.ledger), seal=False,
+                            now=args.now)
+        else:
+            with tempfile.TemporaryDirectory(prefix="assurance-dry-run-") as scratch:
+                run = run_watch(config, EvidenceLedger(Path(scratch) / "empty.db"), seal=False,
+                                now=args.now)
+    else:
+        ledger = EvidenceLedger(args.ledger)
+        run = run_watch(config, ledger, seal=True, now=args.now)
 
     if args.out:
         Path(args.out).write_text(
