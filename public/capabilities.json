@@ -220,6 +220,29 @@
       "title": "Establish the moment every deadline runs from"
     },
     {
+      "id": "art14.awareness_supersession",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/cases/{case_id}/awareness/supersede"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 supersede-awareness"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "Correct a wrongly recorded awareness by appending a superseding record (never an edit)"
+    },
+    {
       "id": "art14.breaches",
       "service": "art14",
       "surfaces": {
@@ -385,6 +408,29 @@
         }
       },
       "title": "Record a submission, validated against the platform field spec"
+    },
+    {
+      "id": "art14.history",
+      "service": "art14",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/cases/{case_id}/history"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 case"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "the MCP tool art14_case returns the case; the history is not offered to agents yet",
+          "status": "planned"
+        }
+      },
+      "title": "The audit history of one case: every ledger record, oldest first"
     },
     {
       "id": "art14.measure",
@@ -2850,6 +2896,7 @@
       "notify-users",
       "register",
       "signal",
+      "supersede-awareness",
       "triage",
       "validate",
       "verify"
@@ -2977,26 +3024,26 @@
     ]
   },
   "counts": {
-    "api_routes": 91,
-    "capabilities": 124,
-    "cli_commands": 108,
+    "api_routes": 93,
+    "capabilities": 126,
+    "cli_commands": 109,
     "cli_domains": 20,
     "mcp_tools": 43,
     "surfaces": {
       "api": {
-        "available": 85,
+        "available": 87,
         "by_design": 39,
         "planned": 0
       },
       "cli": {
-        "available": 110,
+        "available": 112,
         "by_design": 13,
         "planned": 1
       },
       "mcp": {
         "available": 42,
-        "by_design": 82,
-        "planned": 0
+        "by_design": 83,
+        "planned": 1
       }
     }
   },

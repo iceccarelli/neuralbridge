@@ -7,6 +7,8 @@ outstanding, because the next question is always "and now what".
 
     assurance art14 signal      CASE-001 --at ... --channel customer --by ... --description ...
     assurance art14 awareness   CASE-001 --at ... --started ... --completed ... --by ... --because ...
+    assurance art14 supersede-awareness CASE-001 --supersedes <record hash> --at ... --started ...
+                                --completed ... --because ... --reason ... --by ...
     assurance art14 triage      CASE-001 --answer reliable_evidence=yes ... --by ...
     assurance art14 availability CASE-001 --from product.json --by ...
     assurance art14 measure     CASE-001 --at ... --description ... --by ...
@@ -184,11 +186,58 @@ def cmd_measure(args: argparse.Namespace) -> int:
     print(f"recorded measure  {evidence.content_hash[:16]}")
     case = register.case(args.case_id)
     deadlines = case.deadlines
-    if deadlines and deadlines.final:
+    if deadlines and deadlines.final and case.track is Track.VULNERABILITY:
         print(
             f"  the 14-day final-report clock now runs to "
             f"{format_utc(deadlines.final.due_at)} ({deadlines.final.provision})"
         )
+    elif case.track is Track.INCIDENT:
+        print(
+            "  recorded, but a measure does not start a clock on the incident track: the "
+            "one-month final report runs from the 72-hour notification (Art. 14(4)(c))."
+        )
+    _show_outstanding(register, args.case_id)
+    return 0
+
+
+def cmd_supersede_awareness(args: argparse.Namespace) -> int:
+    register = _register(args)
+    actor = _actor(args)
+    awareness = Awareness(
+        established_at=_when(args.at, "--at"),
+        assessment_started_at=_when(args.started, "--started"),
+        assessment_completed_at=_when(args.completed, "--completed"),
+        determined_by=args.determined_by or actor.identifier,
+        reasoning=args.because,
+    )
+    evidence = register.supersede_awareness(
+        args.case_id, awareness, args.reason, args.supersedes, actor
+    )
+    print(f"recorded awareness supersession  {evidence.content_hash[:16]}")
+    print(
+        "  the earlier awareness record stays in the ledger and in the case history; nothing "
+        "was edited or deleted."
+    )
+    print(
+        "  Art. 14 and guidance C(2026) 5252 do not provide for correcting a recorded "
+        "awareness moment; this register applies the newest record and lists every deadline "
+        "it moves."
+    )
+    case = register.case(args.case_id)
+    shifts = [x for x in case.deadline_shifts if x["record"] == evidence.content_hash]
+    if not shifts:
+        print("  no awareness-derived deadline moved.")
+    for x in shifts:
+        print(
+            f"  deadline recomputed: {x['stage_label']} from {x['from_due_at']} to "
+            f"{x['to_due_at']} by {x['by']}, reason: {x['reason']}"
+        )
+        if x["moved_later"] and x["original_already_passed"]:
+            print(
+                "    WARNING: the original deadline had already passed when this was "
+                "recorded and the new one is later. It is reported as a breach until a "
+                "person confirms the correction."
+            )
     _show_outstanding(register, args.case_id)
     return 0
 
@@ -205,7 +254,11 @@ def cmd_file(args: argparse.Namespace) -> int:
         args.reference or "",
     )
     print(validation.summary())
-    print(f"\nrecorded filing  {evidence.content_hash[:16]}")
+    print(
+        f"\nrecorded filing declaration  {evidence.content_hash[:16]}\n"
+        "  this is your declaration that the submission was made; nothing here checked it "
+        "against the reporting platform."
+    )
     _show_outstanding(register, args.case_id)
     return 0 if validation.submittable else 2
 
@@ -261,7 +314,7 @@ def cmd_case(args: argparse.Namespace) -> int:
         print(f"error: no case {args.case_id!r}.", file=sys.stderr)
         return 2
     if args.json:
-        print(json.dumps(case.to_dict(), indent=2, ensure_ascii=False))
+        print(json.dumps({**case.to_dict(), "history": case.history}, indent=2, ensure_ascii=False))
         return 0
     print(case_report(case))
     return 0
@@ -398,6 +451,24 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--determined-by")
     a.add_argument("--because", required=True, help="the reasoning; required, not decorative")
     a.set_defaults(func=cmd_awareness)
+
+    sa = with_case(
+        sub.add_parser(
+            "supersede-awareness",
+            help="correct a wrongly recorded awareness by appending a superseding record",
+        )
+    )
+    sa.add_argument("--supersedes", required=True,
+                    help="content hash (at least 12 characters) of the awareness record in "
+                         "force, as shown by `art14 case`")
+    sa.add_argument("--at", required=True, help="the corrected moment of awareness (UTC)")
+    sa.add_argument("--started", required=True, help="when the initial assessment started")
+    sa.add_argument("--completed", required=True, help="when the initial assessment completed")
+    sa.add_argument("--determined-by")
+    sa.add_argument("--because", required=True, help="the reasoning for the corrected moment")
+    sa.add_argument("--reason", required=True,
+                    help="why the earlier awareness was wrong; required, kept with the record")
+    sa.set_defaults(func=cmd_supersede_awareness)
 
     t = with_case(sub.add_parser("triage", help="work the reportability decision path"))
     t.add_argument("--answer", action="append", metavar="question=yes|no|undetermined")

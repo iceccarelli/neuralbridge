@@ -437,15 +437,22 @@ class TestFutureAndOrdering:
             reg.record_user_notification("c1", NOW + timedelta(days=2), "s", "c", PERSON, now=NOW)
         reg.record_measure_available("c1", AWARE, "at awareness is fine", PERSON, now=NOW)
 
-    def test_awareness_message_does_not_promise_a_supersede_that_does_not_exist(self, tmp_path):
+    def test_awareness_message_names_only_a_supersession_that_exists(self, tmp_path):
         reg = make(tmp_path)
         with pytest.raises(CaseError) as exc:
             reg.record_awareness("c1", Awareness(
                 established_at=AWARE + timedelta(hours=1), assessment_started_at=AWARE,
                 assessment_completed_at=AWARE + timedelta(hours=1), determined_by="a",
                 reasoning="r"), Track.VULNERABILITY, PERSON, now=NOW)
+        # The message may point at a correction only if the CLI verb and the route it names
+        # exist (they did not when this guard was written, and it then forbade the promise).
         assert "supersede it explicitly" not in str(exc.value)
-        assert "no supersede record" in str(exc.value)
+        assert "art14 supersede-awareness" in str(exc.value)
+        from assurance.api.routes import router
+        from assurance.security.art14.cli import build_parser
+        assert "supersede-awareness" in build_parser().format_help()
+        assert "/v1/cases/{case_id}/awareness/supersede" in {r.path for r in router.routes}
+        assert "Nothing was recorded" in str(exc.value)
 
     def test_parse_helper_agrees_with_engine_iso(self):
         assert parse_utc("2026-09-19T06:30:00Z") == AWARE

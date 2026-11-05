@@ -33,6 +33,7 @@ __all__ = [
 CASE_KIND = {
     "signal": "art14.signal",
     "awareness": "art14.awareness",
+    "awareness_supersession": "art14.awareness_supersession",
     "triage": "art14.triage",
     "non_report": "art14.non_report",
     "filing": "art14.filing",

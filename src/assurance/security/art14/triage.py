@@ -217,6 +217,16 @@ def triage(track: Track, answers: dict[Question | str, Answer | str], reasoning:
         normalised[k] = value if isinstance(value, Answer) else Answer(str(value))
 
     path = path_for(track)
+    known = {step.question.value for step in path}
+    unknown = sorted(set(normalised) - known)
+    if unknown:
+        # A misspelt question would otherwise be read as "undetermined" with no word said, and
+        # the person would believe the answer they typed had been recorded.
+        raise ValueError(
+            f"unknown triage question(s) for the {track.label.lower()} track: "
+            f"{', '.join(unknown)}. Known questions: {', '.join(sorted(known))}. "
+            "Nothing was recorded."
+        )
     answered: dict[str, str] = {}
     notes: list[str] = []
 
