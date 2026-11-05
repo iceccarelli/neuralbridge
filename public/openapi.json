@@ -2087,6 +2087,64 @@
         "title": "SignedAssessIn",
         "type": "object"
       },
+      "SupersedeAwarenessIn": {
+        "additionalProperties": false,
+        "description": "A correction of a wrongly recorded awareness: a NEW record that supersedes the one in force.\n\nThe earlier record is never edited or deleted. ``supersedes`` is the content hash of the\nawareness record in force (``awareness_record`` on the case); ``reason`` says why the earlier\none was wrong. Art. 14 and guidance C(2026) 5252 do not provide for such a correction; the\nregister keeps the original, applies the newest record and lists every deadline it moves.",
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorIn"
+          },
+          "assessment_completed_at": {
+            "format": "date-time",
+            "title": "Assessment Completed At",
+            "type": "string"
+          },
+          "assessment_started_at": {
+            "format": "date-time",
+            "title": "Assessment Started At",
+            "type": "string"
+          },
+          "determined_by": {
+            "default": "",
+            "title": "Determined By",
+            "type": "string"
+          },
+          "established_at": {
+            "format": "date-time",
+            "title": "Established At",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "reasoning": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "supersedes": {
+            "maxLength": 64,
+            "minLength": 12,
+            "title": "Supersedes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "supersedes",
+          "reason",
+          "established_at",
+          "assessment_started_at",
+          "assessment_completed_at",
+          "reasoning",
+          "actor"
+        ],
+        "title": "SupersedeAwarenessIn",
+        "type": "object"
+      },
       "TriageIn": {
         "additionalProperties": false,
         "description": "Answers to the reportability decision path.\n\nUnanswered questions default to *undetermined*; an undetermined answer is\nnever treated as a negative.",
@@ -3168,6 +3226,93 @@
         ]
       }
     },
+    "/v1/cases/{case_id}/awareness/supersede": {
+      "post": {
+        "description": "Append-only: the earlier awareness stays; the newest record is the one in force.\n\nRefused (409) on a closed case and on any case with a filing recorded, and when\n``supersedes`` does not name the record in force. The response lists each deadline the\ncorrection moved, with the person and the reason; one that had already passed and moved\nlater keeps appearing in ``GET /v1/register/breaches``.",
+        "operationId": "post_awareness_supersession_v1_cases__case_id__awareness_supersede_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupersedeAwarenessIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Awareness Supersession V1 Cases  Case Id  Awareness Supersede Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Correct a wrongly recorded awareness by appending a superseding record",
+        "tags": [
+          "article 14"
+        ]
+      }
+    },
     "/v1/cases/{case_id}/export": {
       "get": {
         "description": "Refuses if the chain does not verify.\n\n``?skeleton=true`` adds a ``skeleton`` of the account's other entries\n(positions, kinds, subjects, times and hashes; no evidence) so removed entries\nare visible. It is **off by default**: the link hash covers the plain subject,\nso the skeleton cannot be anonymised and names every other case and incident of\nthe account. Without it the bundle is internally consistent but its\ncompleteness cannot be checked. The bundle carries the account's newest\n*server-read* signed attestation as ``anchor`` when it has one (409\n``anchor_contradicts_ledger`` if that does not match this ledger; counter-signed\nheads the customer declared are never embedded). Records after the anchor are\ncovered by no signature; for a hosted ledger the service holds the signing key\ntoo, so the anchor helps only a customer who kept their own copy of a signed\nattestation.\n\nAn export is the moment records leave the system and start being relied on.\nFor a paying account it is gated on the plan's ``export`` entitlement as\nwell as on the register itself, so the ``verifiable_export`` limit on\n``GET /v1/plans`` is a statement about code that runs. A customer whose\nsubscription has ended still gets it (``require_evidence_readout``): their\nevidence is not held hostage to a payment.\n\n**Completeness.** Without ``skeleton`` a bundle is internally consistent but a\nremoved entry of the case cannot be seen, and a verifier reports completeness as\n*not checked*. With ``skeleton`` and a signed ``anchor``, a verifier holding the\nsigner's public key can show nothing was removed up to the anchor; records after\nit are covered by no signature.\n\n**Anchor.** ``anchor`` is the newest attestation the service *read from this\naccount's own ledger* (``read_from_ledger``). No customer route creates one: the\noperator runs ``assurance attest sign`` against the hosted ledger\n(``deploy/assurance/ATTEST.md``). Until then the export carries no ``anchor`` and\nits completeness is not checked. Counter-signed heads you declared about your own\nledger (``POST /v1/ledger/attest``) are never embedded. If the embedded\nattestation does not match this ledger the answer is 409\n``anchor_contradicts_ledger``, a rewind signal, and nothing is exported. A damaged\nattestation log is 500 ``attestation_log_damaged``, never a silently unanchored\nexport; ``?anchor=false`` is the explicit way to export without one.",
@@ -3367,6 +3512,83 @@
           }
         },
         "summary": "Record a submission, validated against the platform field spec",
+        "tags": [
+          "article 14"
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/history": {
+      "get": {
+        "description": "Who recorded what and when, from the ledger itself.\n\nIncludes every awareness record (the original and each supersession, with which is in\nforce) and the deadlines a supersession moved. A filing appears as the manufacturer's\ndeclaration; nothing here verifies it against the reporting platform.",
+        "operationId": "get_case_history_v1_cases__case_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Case History V1 Cases  Case Id  History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The audit history of one case: every ledger record, oldest first",
         "tags": [
           "article 14"
         ]
