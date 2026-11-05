@@ -282,9 +282,10 @@ class TestCapabilityIdsAndNamedThings:
         for cap in ("kit.init", "kit.check", "kit.run", "attest.keygen", "machine.recorder_sign", "ops.cycle",
                     "tenant.export", "tenant.delete", "intel.ingest", "intel.refresh"):
             assert cell(cap, "api") == "by_design", cap
-        # the one planned item anywhere is the CLI verb for the signed advisory case route
-        planned = [(c["id"], s) for c in CONTRACT["capabilities"] for s, v in c["surfaces"].items() if v["status"] == "planned"]
-        assert planned == [("change.assess_advisory_signed", "cli")]
+        # the planned items anywhere: the CLI verb for the signed advisory case route, and the read-only
+        # case history (safe to offer to an agent, not yet an MCP tool)
+        planned = sorted((c["id"], s) for c in CONTRACT["capabilities"] for s, v in c["surfaces"].items() if v["status"] == "planned")
+        assert planned == [("art14.history", "mcp"), ("change.assess_advisory_signed", "cli")]
         assert cell("change.assess_advisory_signed", "api") == "available"
         # reads that the pages say MCP offers
         for cap in ("machinery.coverage", "machinery.diff", "machinery.passport_check", "art14.case", "art14.register",
