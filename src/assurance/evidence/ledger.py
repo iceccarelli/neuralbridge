@@ -232,6 +232,32 @@ class _GuardedConnection(sqlite3.Connection):
             guard()
 
 
+_VOIDED_READ_ATTEMPTS = 8
+
+
+def _retry_voided(fn: Any) -> Any:
+    """Re-run a whole read whose snapshot was voided by a writer (see ``_connect_ro``).
+
+    Only :class:`LedgerChangedWhileReadError` is retried, and only by re-reading from scratch:
+    a voided read's partial result is never returned. After the last attempt the error propagates
+    (an integrity error, so never a pass).
+    """
+    import functools
+    import time
+
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        for attempt in range(_VOIDED_READ_ATTEMPTS):
+            try:
+                return fn(self, *args, **kwargs)
+            except LedgerChangedWhileReadError:
+                if attempt == _VOIDED_READ_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+
+    return wrapper
+
+
 @dataclass(frozen=True)
 class ChainCheck:
     """The answer of :meth:`EvidenceLedger.verify_cached_detail`, with its depth.
@@ -312,23 +338,23 @@ class EvidenceLedger:
         self._upgraded = False
         if p.stat().st_size == 0:
             raise LedgerIntegrityError(f"{p} is empty, so it is not a ledger.")
+        def probe(db: sqlite3.Connection) -> Any:
+            names = {r[0] for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"meta", "chain"} <= names:
+                raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
+            if _holds_foreign_tables(db):
+                raise LedgerIntegrityError(
+                    f"{p} is not a ledger: it is another application's SQLite database "
+                    "(it holds tables that are not the ledger's, or a ledger table of the "
+                    "wrong shape); refusing to read it as evidence.")
+            found = db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
+            return found
+
         try:
-            db = self._connect_ro()
-            try:
-                names = {r[0] for r in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-                if not {"meta", "chain"} <= names:
-                    raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
-                if _holds_foreign_tables(db):
-                    raise LedgerIntegrityError(
-                        f"{p} is not a ledger: it is another application's SQLite database "
-                        "(it holds tables that are not the ledger's, or a ledger table of the "
-                        "wrong shape); refusing to read it as evidence.")
-                row = db.execute(
-                    "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-                db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
-            finally:
-                db.close()
+            row = self._ro_probe(probe)
         except sqlite3.Error as exc:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it could not be opened as one "
@@ -338,6 +364,53 @@ class EvidenceLedger:
                 f"{p} was written by ledger schema {row[0]}, this build speaks "
                 f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing.")
         return self
+
+    def _ro_probe(self, fn: Any, *, retry_errors: bool = False) -> Any:
+        """Run ``fn(db)`` on a read-only connection, re-running it if a writer voids the read.
+
+        A read that raised while the file was being changed under it (the guard trips on close)
+        is a voided read, not a finding, and is re-run too. ``retry_errors`` also re-runs after any
+        SQLite error (a file still being created by another process can be momentarily unreadable);
+        the last attempt's error propagates.
+        """
+        import time
+
+        last = _VOIDED_READ_ATTEMPTS - 1
+        for attempt in range(_VOIDED_READ_ATTEMPTS):
+            voided = False
+            try:
+                db = self._connect_ro()
+            except LedgerChangedWhileReadError:
+                if attempt == last:
+                    raise
+                voided = True
+            else:
+                try:
+                    result = fn(db)
+                except BaseException as exc:
+                    try:
+                        db.close()
+                    except LedgerChangedWhileReadError:
+                        if attempt == last:
+                            raise
+                        voided = True
+                    if not voided:
+                        if retry_errors and isinstance(exc, sqlite3.Error) and attempt < last:
+                            voided = True
+                        else:
+                            raise
+                else:
+                    try:
+                        db.close()
+                    except LedgerChangedWhileReadError:
+                        if attempt == last:
+                            raise
+                        voided = True
+                    else:
+                        return result
+            if voided:
+                time.sleep(0.02 * (attempt + 1))
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _refuse_if_foreign_before_writing(self) -> None:
         """Refuse someone else's database BEFORE any write (cf. the intel store, issue #92).
@@ -361,11 +434,11 @@ class EvidenceLedger:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it is not a SQLite database; refusing to write to it.")
         try:
-            db = self._connect_ro()
-            try:
-                foreign = _holds_foreign_tables(db)
-            finally:
-                db.close()
+            foreign = self._ro_probe(_holds_foreign_tables, retry_errors=True)
+        except LedgerChangedWhileReadError:
+            # Other processes are creating or writing this file right now. This check is only
+            # an early refusal: the read-write open re-checks inside its own connection.
+            return
         except sqlite3.Error:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it cannot be read as one; "
@@ -411,14 +484,34 @@ class EvidenceLedger:
                         "file was replaced after it was found idle). The read is voided, not "
                         "served: nothing was verified from it. Retry.")
         elif "-shm" not in present:
+            before_copy = _file_state(resolved)
             scratch = Path(tempfile.mkdtemp(prefix="ledger-ro-"))
             target = scratch / resolved.name
-            shutil.copy2(resolved, target)
-            for sfx in ("-wal", "-journal"):
-                if sfx in present:
-                    shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
-            mode = "mode=ro"
             cleanup = lambda: shutil.rmtree(scratch, ignore_errors=True)  # noqa: E731
+            try:
+                shutil.copy2(resolved, target)
+                for sfx in ("-wal", "-journal"):
+                    if sfx in present:
+                        shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
+            except OSError as exc:
+                cleanup()
+                raise LedgerChangedWhileReadError(
+                    f"{resolved} or a sidecar vanished while a private copy was being taken "
+                    f"({exc}). The read is voided, not served. Retry.") from exc
+            mode = "mode=ro"
+            # A live writer creates ``-wal`` a moment before ``-shm``. A copy taken in that gap
+            # would be torn, so the source is checked again after copying and the read voided
+            # (and retried by the caller) if anything about it moved.
+            try:
+                moved = (_file_state(resolved) != before_copy
+                         or any(sidecars[sfx].exists() for sfx in ("-shm",)))
+            except OSError:
+                moved = True
+            if moved:
+                cleanup()
+                raise LedgerChangedWhileReadError(
+                    f"{resolved} changed while a private copy of it was being taken. The read "
+                    "is voided, not served. Retry.")
         else:
             mode = "mode=ro"
         try:
@@ -484,12 +577,8 @@ class EvidenceLedger:
                 header = handle.read(100)
             if len(header) < 100 or header[18:20] not in (b"\x01\x01", b"\x02\x02"):
                 return False
-            db = self._connect_ro()
-            try:
-                names = {r[0] for r in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-            finally:
-                db.close()
+            names = self._ro_probe(lambda db: {r[0] for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")})
         except (OSError, sqlite3.Error):
             return False
         return {"meta", "chain"} <= names
@@ -1218,7 +1307,6 @@ class EvidenceLedger:
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             "exported_at": format_utc(utc_now()),
             "subject": subject or "",
-            "ledger_id": self.ledger_id(),
             "chain_verified": True,
             "attestation": {
                 "ledger_schema_version": LEDGER_SCHEMA_VERSION,
@@ -1278,3 +1366,10 @@ class EvidenceLedger:
                     f"links it as {current[:12] or '(nothing)'}. The history at that "
                     "position differs from what was signed, or the anchor belongs to "
                     "another ledger. Nothing was exported.")
+
+
+for _name in ("ledger_id", "entries", "get", "__len__", "read_subject", "filing_clock",
+              "verify_full", "_verify_since", "verify_report", "head_attestation", "export",
+              "snapshot_to"):
+    setattr(EvidenceLedger, _name, _retry_voided(getattr(EvidenceLedger, _name)))
+del _name

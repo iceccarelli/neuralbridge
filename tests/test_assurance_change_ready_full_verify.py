@@ -47,14 +47,28 @@ def store(ledger):
     return CaseStore(ledger)
 
 
+def _hide_the_write(ledger: EvidenceLedger) -> None:
+    """Make the in-place change look like one made alongside an append.
+
+    A write that is NOT an append (file changed, head did not move) now escalates the cached check
+    to a full walk, so the blind window these tests exercise only exists when a record is appended
+    in the same breath (a concurrent writer). Append an unrelated record to recreate it.
+    """
+    from assurance.core.evidence import Actor, Evidence, Origin
+
+    ledger.append(Evidence(kind="test.unrelated", body={"masking": True}, actor=Actor("t"),
+                           origin=Origin("pytest")).seal(), subject="unrelated-subject")
+
+
 def delete_row(ledger: EvidenceLedger, where: str) -> int:
     db = sqlite3.connect(ledger.path)
     try:
         n = db.execute(f"DELETE FROM chain WHERE {where}").rowcount  # noqa: S608
         db.commit()
-        return n
     finally:
         db.close()
+    _hide_the_write(ledger)
+    return n
 
 
 OLD_VERIFICATION = ("seq = (SELECT MIN(seq) FROM chain WHERE kind LIKE '%verification%' "
@@ -71,6 +85,7 @@ def edit_row(ledger: EvidenceLedger) -> None:
         db.commit()
     finally:
         db.close()
+    _hide_the_write(ledger)
 
 
 def _awaiting(ledger, store):

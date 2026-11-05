@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
 
 from assurance.attest import (
-    ATTESTATION_FORMAT,
+    ATTESTATION_FORMAT_BOUND,
     AttestationBasis,
     AttestationError,
     AttestationLog,
@@ -133,7 +133,9 @@ class TestAttesting:
         assert record.ledger_length == 4
         assert record.head_seq == 4
         assert record.basis is AttestationBasis.READ_FROM_LEDGER
-        assert record.format == ATTESTATION_FORMAT
+        # A ledger with a lineage id is signed together with it (v2); v1 is the unbound legacy form.
+        assert record.format == ATTESTATION_FORMAT_BOUND
+        assert record.ledger_id == led.ledger_id()
         assert record.verified_by(key.verifying)
 
     def test_the_basis_says_whether_the_signer_saw_the_ledger(self, tmp_path):

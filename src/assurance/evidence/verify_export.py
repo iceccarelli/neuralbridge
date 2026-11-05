@@ -111,7 +111,7 @@ ANCHOR_CLOCK_SKEW_SECONDS = 60
 MAX_PROBLEMS = 50
 
 _TOP_LEVEL_FIELDS = frozenset({"ledger_schema_version", "exported_at", "subject",
-                               "chain_verified", "attestation", "entries", "anchor", "ledger_id",
+                               "chain_verified", "attestation", "entries", "anchor",
                                "skeleton", "skeleton_truncated"})
 _ATTESTATION_FIELDS = frozenset({"ledger_schema_version", "length", "head_seq",
                                  "head_link_hash", "attested_at"})
@@ -787,23 +787,13 @@ def _check_anchors(
             continue
         # The signature is genuine. Whose ledger does it say it is? A bound head names the
         # ledger id it was read from; the bundle names the ledger it was exported from.
-        bundle_lid = bundle.get("ledger_id")
+        # The bundle format deliberately carries no ledger id, so a bound head's ledger cannot be
+        # compared with the bundle's: say so rather than let a bound anchor read as matched.
         if att.binding == "bound":
-            if isinstance(bundle_lid, str) and bundle_lid:
-                if bundle_lid != att.ledger_id:
-                    reject(f"{label}: signed for ledger {att.ledger_id[:12]}, but this bundle "
-                           f"was exported from ledger {bundle_lid[:12]} — a head from another "
-                           "ledger (cross-tenant replay or head substitution)")
-                    continue
-                skipped.append(
-                    f"{label} names the same ledger id as this bundle, but the bundle's "
-                    "`ledger_id` is the exporter's own statement: the hash chain does not "
-                    "cover it, so whoever built the file could have written any id there.")
-            else:
-                skipped.append(
-                    f"{label} is bound to ledger {att.ledger_id[:12]}, but this bundle names "
-                    "no ledger id (an older export), so which ledger it came from was NOT "
-                    "checked.")
+            skipped.append(
+                f"{label} is bound to ledger {att.ledger_id[:12]}, but an export bundle names no "
+                "ledger id, so whether the bundle came from that ledger was NOT checked "
+                "(verify the log against the live ledger with `assurance attest verify`).")
         else:
             skipped.append(
                 f"{label} is UNBOUND (a v1 attestation): its signature covers no ledger id, so "
