@@ -173,7 +173,11 @@ class TestAnOldEditIsSeenByTheNextFullPass:
         assert ledger.verify_cached()[0]
         self.edit_old(ledger)
         clock[0] += 59
-        assert ledger.verify_cached()[0], "an incremental pass does not re-read old records"
+        # Was: "an incremental pass does not re-read old records" and the edit passed for up to
+        # 60 s. A write that is not an append (file bytes changed, head did not move) is now
+        # escalated to a full walk, so it is seen at once.
+        ok, problems = ledger.verify_cached()
+        assert not ok and any("seq 100" in p for p in problems)
         clock[0] += 2
         ok, problems = ledger.verify_cached()
         assert not ok and any("seq 100" in p for p in problems)
@@ -206,6 +210,7 @@ class TestAnOldEditIsSeenByTheNextFullPass:
     def test_every_full_verify_refreshes_and_a_failing_one_drops_the_cache(self, ledger):
         assert ledger.verify_cached()[0]
         self.edit_old(ledger)
+        ledger.append(sealed(), subject="x")      # the append hides the write from the stat check
         assert ledger.verify_cached()[0]          # inside the interval: not yet seen
         ok, _ = ledger.verify_chain()             # export / replay / /v1/ledger/verify
         assert not ok
@@ -332,3 +337,43 @@ def test_the_copy_of_a_ledger_does_not_borrow_the_originals_cache(tmp_path):
     shutil.copy(ledger.path, copy)
     sql(copy, "UPDATE chain SET payload = replace(payload, '\"n\":1', '\"n\":2') WHERE seq = 3")
     assert not EvidenceLedger(copy).verify_cached()[0]
+
+
+class TestInWindowEditsAreDetectedOrLabelled:
+    """What a reader can be told inside the recheck window (PR #106 limitation 2)."""
+
+    @staticmethod
+    def edit_old(ledger, seq=100):
+        sql(ledger.path, "UPDATE chain SET payload = replace(payload, '\"n\":1', '\"n\":2') "
+            "WHERE seq = ?", seq)
+
+    def test_an_edit_with_no_append_inside_the_window_is_detected_at_once(self, ledger):
+        assert ledger.verify_cached_detail().ok
+        self.edit_old(ledger)
+        check = ledger.verify_cached_detail()       # well inside the 60 s window
+        assert not check.ok and any("seq 100" in p for p in check.problems)
+        assert check.depth == "full"
+
+    def test_an_edit_made_with_an_append_is_labelled_incremental_not_full(self, ledger):
+        first = ledger.verify_cached_detail()
+        assert first.ok and first.depth == "full"
+        self.edit_old(ledger)
+        ledger.append(sealed(), subject="x")        # an append hides the write from a stat
+        check = ledger.verify_cached_detail()
+        # Inside the window this edit cannot be seen without a full walk; the answer must
+        # therefore say it was not one, and must never read as a full verification.
+        assert check.ok and check.depth == "incremental" and not check.full
+        assert check.full_pass_age_seconds >= 0.0
+        ledger.verify_chain()                       # a full walk is what sees it
+        assert not ledger.verify_cached_detail().ok
+
+    def test_an_unchanged_file_stays_incremental_and_cheap(self, ledger):
+        assert ledger.verify_cached_detail().depth == "full"
+        assert ledger.verify_cached_detail().depth == "incremental"
+        assert ledger.verify_cached_detail().depth == "incremental"
+
+    def test_the_tuple_api_agrees_with_the_detail_api(self, ledger):
+        assert ledger.verify_cached() == (True, [])
+        self.edit_old(ledger)
+        ok, problems = ledger.verify_cached()
+        assert not ok and problems

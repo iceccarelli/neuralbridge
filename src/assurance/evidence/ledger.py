@@ -189,6 +189,26 @@ class DamagedRow:
     why: str
 
 
+@dataclass(frozen=True)
+class ChainCheck:
+    """The answer of :meth:`EvidenceLedger.verify_cached_detail`, with its depth.
+
+    ``depth`` is ``"full"`` (every record re-read by this call) or ``"incremental"``
+    (the head and what was appended since; older records rest on a full walk
+    ``full_pass_age_seconds`` ago, so an edit made alongside an append in that span is not
+    yet seen). A reader must not present ``incremental`` as a full verification.
+    """
+
+    ok: bool
+    problems: list[str]
+    depth: str
+    full_pass_age_seconds: float
+
+    @property
+    def full(self) -> bool:
+        return self.depth == "full"
+
+
 class EvidenceLedger:
     """Durable, append-only, hash-chained store of evidence objects."""
 
@@ -961,28 +981,47 @@ class EvidenceLedger:
         is older than ``ASSURANCE_CHAIN_RECHECK_SECONDS`` (default 60; ``0`` =
         always), and whenever the file is not the one last verified. Otherwise the
         remembered head is re-read and re-checked and every record appended since is
-        verified completely. An edit to an *old* record is therefore seen by the
-        next full walk, not by every call; see :mod:`assurance.evidence.chain_cache`
-        for the trade-off and what still needs a signed head attestation.
+        verified completely. A write to the file that is not an append (the head did not
+        move but the file's mtime/size did) is escalated to a full walk. An edit made
+        in the same breath as an append is seen by the next full walk, not by every
+        call; see :mod:`assurance.evidence.chain_cache` for the trade-off. A caller that
+        must tell its reader how deep the answer was uses :meth:`verify_cached_detail`.
         """
+        check = self.verify_cached_detail()
+        return check.ok, check.problems
+
+    def verify_cached_detail(self) -> ChainCheck:
+        """:meth:`verify_cached`, plus how deep the check went (``depth``) and how old
+        the full walk it rests on is. ``depth == "incremental"`` means records older than
+        the remembered head were NOT re-read by this call."""
         key = chain_cache.identity(self.path)
         known = chain_cache.lookup(key)
         now = chain_cache.now()
         interval = chain_cache.recheck_seconds()
-        if known is None or interval <= 0 or now - known.full_pass_at >= interval:
-            problems, head_seq, head_link = self.verify_full()
-            started = now
-        else:
+        sig = chain_cache.file_signature(self.path)
+        incremental = not (known is None or interval <= 0 or now - known.full_pass_at >= interval)
+        if incremental:
+            assert known is not None
             try:
                 problems, head_seq, head_link = self._verify_since(known.seq, known.link_hash)
             except ValueError as exc:
                 problems, head_seq, head_link = [_UNREADABLE_ROW.format(exc=exc)], 0, GENESIS
+            if not problems and head_seq == known.seq and (sig is None or sig != known.stat_sig):
+                # Bytes were written but nothing was appended: not an append, so not
+                # something an incremental pass is entitled to wave through.
+                incremental = False
+        if incremental:
+            assert known is not None
             started = known.full_pass_at
+        else:
+            problems, head_seq, head_link = self.verify_full()
+            started = now
+        depth = "incremental" if incremental else "full"
         if problems:
             chain_cache.drop(key)
-            return False, problems
-        chain_cache.remember(key, head_seq, head_link, started)
-        return True, []
+            return ChainCheck(False, problems, depth, max(0.0, now - started))
+        chain_cache.remember(key, head_seq, head_link, started, sig)
+        return ChainCheck(True, [], depth, max(0.0, now - started))
 
     def head_attestation(self) -> dict[str, Any]:
         """The value to sign or publish so the chain cannot be silently rewound.
