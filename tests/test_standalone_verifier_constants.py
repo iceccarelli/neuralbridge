@@ -64,3 +64,35 @@ def test_it_verifies_a_real_export_and_refuses_the_same_export_edited(tmp_path):
     out.write_text(json.dumps(doc))
     run = subprocess.run([sys.executable, str(SCRIPT), str(out)], capture_output=True, text=True)
     assert run.returncode == 1 and "edited" in run.stdout
+
+
+def test_the_standalone_file_accepts_a_v2_anchor_and_says_what_it_could_not_bind(tmp_path):
+    """A head attested for a ledger that has an id is v2. The standalone verifier must verify it (it used to
+    reject every such anchor) and must say a bundle cannot show which ledger the anchor was signed for."""
+    from assurance.attest import AttestationLog, SigningKey, attest
+    from assurance.core.evidence import Actor, Evidence, Origin
+
+    ledger = EvidenceLedger(tmp_path / "l.db")
+    for n in range(3):
+        ledger.append(Evidence(
+            kind="signal", body={"n": n, "note": f"synthetic {n}"},
+            actor=Actor("t.analyst", "analyst", "person"), origin=Origin("test")).seal(), subject=f"C{n}")
+    key = SigningKey.generate()
+    att = attest(ledger, key, AttestationLog(tmp_path / "log.jsonl"))
+    assert att.format.endswith(".v2")
+    pub = tmp_path / "signer.pub"
+    pub.write_text(key.verifying.pem(), encoding="ascii")
+    out = tmp_path / "e.json"
+    out.write_text(json.dumps(ledger.export(anchor=att.to_dict())), encoding="utf-8")
+    run = subprocess.run([sys.executable, str(SCRIPT), str(out), "--public-key", str(pub), "--json"],
+                         capture_output=True, text=True)
+    doc = json.loads(run.stdout)
+    assert run.returncode == 0, run.stdout
+    assert any("NOT checked" in a for a in doc["assumed"]), doc["assumed"]
+    # editing the signed ledger_id is a forged anchor, not a quiet downgrade
+    bundle = json.loads(out.read_text())
+    bundle["anchor"]["ledger_id"] = "someone-else"
+    out.write_text(json.dumps(bundle))
+    run = subprocess.run([sys.executable, str(SCRIPT), str(out), "--public-key", str(pub)],
+                         capture_output=True, text=True)
+    assert run.returncode == 1
