@@ -3,14 +3,17 @@
 Product: **Industrial Autonomous Assurance** (`src/assurance/`) — evidence and
 change-assurance for machines whose software can affect safety. `src/neuralbridge/`
 is the integration platform it grew out of; adapters are *evolving* unless the
-README marks them Supported. `HANDOFF.md` is the current-state document, but
-verify it against code and tests — it has been stale before.
+README marks them Supported. There is no separate hand-off document: current state is
+the code and its tests, `src/assurance/capabilities.py` (what each surface offers; `python -m assurance
+capabilities --check`), `docs/claims-registry.md` (every public claim and where it is enforced) and
+`docs/GO-LIVE.md` (what is and is not deployed). Verify any prose against those — prose has been stale before.
 
 ## Business boundaries
 - NeuralBridge and GridForge / Time-to-Power are independent businesses. Do not
   merge their products, customers, data or infrastructure.
 - Zero revenue, zero customers, zero pilots and no production deployment are
-  the standing facts until `HANDOFF.md` §4.4 says otherwise with evidence.
+  the standing facts until `docs/pmf/pilot-ledger.csv` holds a real, dated row (named customer or pilot, with a
+  source document). Today it holds only its header.
   Never write a customer, price validation, market size or valuation claim that
   is not sourced to a named file or document.
 - Prices (€390 / €3,900 / €1,290) are unvalidated assertions. Do not create

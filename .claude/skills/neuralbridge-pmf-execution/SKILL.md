@@ -23,8 +23,8 @@ deployment boundaries in `CLAUDE.md` still apply unchanged.
    --no-cov`, `ruff check src tests`, `npx tsc --noEmit`) before changing
    anything so old failures are not mistaken for regressions. Start Postgres for
    the `/ai` tests if a server binary exists.
-2. **Find the next unresolved blocker.** Read the "Remaining" section of
-   `HANDOFF.md` and `docs/pmf/PILOT-PROGRAMME.md`; check what real customer
+2. **Find the next unresolved blocker.** Read the open limits in the
+   latest merged PR description, `docs/claims-registry.md` and `docs/GO-LIVE.md`; check what real customer
    input (if any) has arrived in `docs/pmf/pilot-ledger.csv`. Customer input
    outranks the roadmap.
 3. **Delegate independent investigation** (`.claude/agents/`): one reality
@@ -39,7 +39,7 @@ deployment boundaries in `CLAUDE.md` still apply unchanged.
 6. **Independent review** by an agent that did not write the code, given the
    diff, not your conclusion. Fix what it proves; rebut what it cannot.
 7. **Integrate.** Lead owns merge, final test results, Git, claims. Update
-   `HANDOFF.md` only where state changed. Commit small; push to the session
+   `docs/claims-registry.md` / `docs/GO-LIVE.md` only where state changed. Commit small; push to the session
    branch; open a PR only if asked.
 8. **Continue** to the next blocker. Do not end with a plan when a safe,
    testable slice remains.

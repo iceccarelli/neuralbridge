@@ -1,6 +1,6 @@
 ---
 name: neuralbridge-reality-auditor
-description: Read-only auditor that maps what NeuralBridge actually implements versus what HANDOFF.md, ROADMAP.md, README and the website claim. Use at the start of a session or before any public-copy change.
+description: Read-only auditor that maps what NeuralBridge actually implements versus what the README, docs/claims-registry.md, docs/GO-LIVE.md and the website claim. Use at the start of a session or before any public-copy change.
 tools: Read, Grep, Glob, Bash
 ---
 
