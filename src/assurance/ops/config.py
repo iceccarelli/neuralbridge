@@ -298,9 +298,20 @@ def load_config(path: str | Path) -> OpsConfig:
             max_age_hours=_number(a.get("max_age_hours", 24), "attest.max_age_hours",
                                   minimum=0))
 
+    data_dir = _path(top["data_dir"], "data_dir", base)
+    backup_dir = _path(top["backup_dir"], "backup_dir", base)
+    resolved_data, resolved_backup = data_dir.resolve(), backup_dir.resolve()
+    if (resolved_backup == resolved_data or resolved_backup.is_relative_to(resolved_data)
+            or resolved_data.is_relative_to(resolved_backup)):
+        # Inside the data directory every cycle's backup would contain every earlier backup
+        # (the copy grows without bound and a restore check lists them as foreign files); the
+        # other way round the "data" would be the backups themselves.
+        raise _fail("backup_dir must be a directory of its own, neither inside data_dir nor "
+                    "containing it: a backup taken into the data it copies backs up its own "
+                    "backups")
     return OpsConfig(
-        path=p, ops_id=ops_id, data_dir=_path(top["data_dir"], "data_dir", base),
-        record=record, lock=lock, backup_dir=_path(top["backup_dir"], "backup_dir", base),
+        path=p, ops_id=ops_id, data_dir=data_dir,
+        record=record, lock=lock, backup_dir=backup_dir,
         max_cycle_age_hours=_number(top.get("max_cycle_age_hours", 26), "max_cycle_age_hours",
                                     minimum=0.01),
         min_free_disk_mb=_number(top.get("min_free_disk_mb", 1024), "min_free_disk_mb",
