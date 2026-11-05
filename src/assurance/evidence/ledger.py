@@ -30,7 +30,10 @@ a key the insider does not hold, or an external anchor — see
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -47,8 +50,8 @@ from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
-           "AnchorContradictsLedgerError", "ChainBrokenError", "DamagedRow", "EvidenceLedger",
-           "LedgerEntry"]
+           "AnchorContradictsLedgerError", "ChainBrokenError", "ChainCheck", "DamagedRow",
+           "EvidenceLedger", "LedgerChangedWhileReadError", "LedgerEntry"]
 
 
 class ChainBrokenError(LedgerIntegrityError):
@@ -189,6 +192,46 @@ class DamagedRow:
     why: str
 
 
+class LedgerChangedWhileReadError(LedgerIntegrityError):
+    """A file read without locking (``immutable=1``) was written during the read.
+
+    Not a finding about the chain: the read is voided because its bytes cannot be trusted
+    to be one consistent snapshot. Retry. It is an integrity error so that no caller can
+    mistake a voided read for a pass.
+    """
+
+
+def _file_state(path: Path) -> tuple[Any, ...]:
+    """(inode, size, mtime_ns) of the database and which sidecars exist beside it."""
+    st = os.stat(path)
+    return (st.st_ino, st.st_size, st.st_mtime_ns,
+            tuple(path.with_name(path.name + sfx).exists() for sfx in ("-wal", "-shm", "-journal")))
+
+
+class _GuardedConnection(sqlite3.Connection):
+    """A read-only connection that cleans up after itself and can void its own reads.
+
+    ``guard`` runs when the connection is closed (after the handle is released) and raises if
+    the file moved under an ``immutable=1`` read; ``cleanup`` removes a private scratch copy.
+    Every read in this module closes its connection in a ``finally``, after the values it
+    returns are built, so raising here discards the result instead of serving it.
+    """
+
+    guard: Any = None
+    cleanup: Any = None
+
+    def close(self) -> None:
+        guard, cleanup = self.guard, self.cleanup
+        self.guard = self.cleanup = None
+        try:
+            super().close()
+        finally:
+            if cleanup is not None:
+                cleanup()
+        if guard is not None:
+            guard()
+
+
 @dataclass(frozen=True)
 class ChainCheck:
     """The answer of :meth:`EvidenceLedger.verify_cached_detail`, with its depth.
@@ -247,22 +290,15 @@ class EvidenceLedger:
         file is ``FileNotFoundError``; an empty file, a non-SQLite file or a SQLite file
         without the ledger tables is refused as "not a ledger".
 
-        With no sidecar beside the file there is no live writer, so ``immutable=1`` reads
-        it with no locking and creates nothing. With a sidecar a writer may be live, and
-        ``mode=ro`` then uses the existing files and creates none. A writer that starts in
-        the instant between that check and the read is the one case ``immutable`` could
-        misread; the next read sees it (same stated limit as the intel store).
+        See :meth:`_connect_ro` for how each state of the sidecars is read. With no sidecar
+        the read is ``immutable=1`` and is checked when it ends: a writer that started after the
+        file was found idle voids the read (:class:`LedgerChangedWhileReadError`) instead of
+        letting it be served. A crash copy (``-wal`` without ``-shm``) is read from a private
+        scratch copy, so no file is created beside the original.
 
         A file that holds any table other than the ledger's (``meta``, ``chain``), or a
         ``chain`` / ``meta`` of the wrong shape, is refused exactly as the write path refuses
         it: it is another application's database.
-
-        Known limit: a *crash copy* of a WAL-mode ledger -- the ``-wal`` file copied, the
-        ``-shm`` not -- is read correctly (the committed WAL frames are used), but SQLite must
-        then build its shared-memory index, so a ``-shm`` file appears beside the copy. The
-        ``.db`` and ``-wal`` bytes are not modified. A caller that must leave the directory
-        byte-identical copies the files to a scratch directory first (as ``restore_check``
-        does) and opens the copy.
         """
         p = Path(path)
         if not p.is_file():
@@ -340,16 +376,59 @@ class EvidenceLedger:
                 "refusing to create ledger tables inside it.")
 
     def _connect_ro(self) -> sqlite3.Connection:
+        """A connection that cannot write or alter any file beside the ledger.
+
+        * **No sidecar** (a quiescent file): ``immutable=1``, which locks nothing and creates
+          nothing (``mode=ro`` alone would create ``-wal`` / ``-shm`` for a WAL file). The one
+          thing ``immutable`` cannot do is notice a writer that starts afterwards, so the file's
+          inode/size/mtime and its sidecars are recorded now and checked again when the
+          connection is closed: a difference raises :class:`LedgerChangedWhileReadError` and
+          the read is discarded.
+        * **Sidecars incl. ``-shm``** (a live writer): ``mode=ro`` on the files that exist; it
+          creates none and never checkpoints.
+        * **A ``-wal`` / ``-journal`` but no ``-shm``** (a crash copy): SQLite would have to
+          create the ``-shm``, so the read is made from a private copy in a temporary directory
+          that is removed on close. Nothing is created beside the original.
+        """
         resolved = self.path.resolve()
-        quiescent = not any(resolved.with_name(resolved.name + sfx).exists()
-                            for sfx in ("-wal", "-shm", "-journal"))
-        # ``immutable=1`` skips locking and is only safe on a file nobody is writing. A handle
-        # from ``EvidenceLedger(path, mint_id=False)`` is used on LIVE ledgers (export, offboarding),
-        # where a writer may start in the instant after the sidecar check: it never uses it.
-        immutable = quiescent and not getattr(self, "_never_immutable", False)
-        mode = "mode=ro&immutable=1" if immutable else "mode=ro"
-        db = sqlite3.connect(f"{resolved.as_uri()}?{mode}", uri=True, timeout=5.0,
-                             isolation_level=None)
+        sidecars = {sfx: resolved.with_name(resolved.name + sfx) for sfx in ("-wal", "-shm", "-journal")}
+        present = {sfx for sfx, q in sidecars.items() if q.exists()}
+        cleanup = None
+        guard = None
+        target = resolved
+        if not present:
+            mode = "mode=ro&immutable=1"
+            before = _file_state(resolved)
+
+            def guard() -> None:
+                try:
+                    after = _file_state(resolved)
+                except OSError:
+                    after = None
+                if after != before:
+                    raise LedgerChangedWhileReadError(
+                        f"{resolved} changed while it was being read (a writer started, or the "
+                        "file was replaced after it was found idle). The read is voided, not "
+                        "served: nothing was verified from it. Retry.")
+        elif "-shm" not in present:
+            scratch = Path(tempfile.mkdtemp(prefix="ledger-ro-"))
+            target = scratch / resolved.name
+            shutil.copy2(resolved, target)
+            for sfx in ("-wal", "-journal"):
+                if sfx in present:
+                    shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
+            mode = "mode=ro"
+            cleanup = lambda: shutil.rmtree(scratch, ignore_errors=True)  # noqa: E731
+        else:
+            mode = "mode=ro"
+        try:
+            db = sqlite3.connect(f"{target.as_uri()}?{mode}", uri=True, timeout=5.0,
+                                 isolation_level=None, factory=_GuardedConnection)
+        except BaseException:
+            if cleanup is not None:
+                cleanup()
+            raise
+        db.guard, db.cleanup = guard, cleanup
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA query_only=ON")
         return db
@@ -368,7 +447,7 @@ class EvidenceLedger:
         """Open (creating if need be) the ledger at ``path``.
 
         ``mint_id=False`` never writes while the ledger is only read: on a rollback-journal
-        file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
+        or WAL file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
         sidecar created), so a verifier that opens a backup does not change the bytes the
         backup's manifest hashed. Such a ledger without an id reports ``ledger_id() is None``.
         If it is then appended to, it is prepared for writing at that moment (once), still
@@ -382,7 +461,6 @@ class EvidenceLedger:
         self._lock = threading.Lock()
         self._mint_on_upgrade = True
         if not mint_id and self._is_existing_ledger_file():
-            self._never_immutable = True
             type(self).open_readonly(self.path)   # the same refusals; raises if not a ledger
             self._read_only = True
             self._upgrade_on_write = True
@@ -393,21 +471,18 @@ class EvidenceLedger:
     def _is_existing_ledger_file(self) -> bool:
         """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
 
-        Only a file in rollback-journal mode qualifies (header bytes 18-19 are 1): the old open
-        switched exactly those files to WAL, changing bytes the caller only meant to read. A
-        WAL-mode ledger may have a live writer and needs its sidecars to be read at all, so it
-        keeps the ordinary open, as do a missing, empty, foreign or partly created file (the
-        writing path has its own refusals).
+        Both journal modes qualify (header bytes 18-19 are 1 for a rollback journal, 2 for WAL):
+        the old open switched the first to WAL and, for the second, opened it read-write, which
+        checkpoints a ``-wal`` into the main file and deletes it on close -- bytes changed by a
+        call that only meant to read. A missing, empty, foreign or partly created file keeps the
+        ordinary open (the writing path has its own refusals).
         """
         try:
             if not self.path.is_file() or self.path.stat().st_size == 0:
                 return False
             with self.path.open("rb") as handle:
                 header = handle.read(100)
-            if len(header) < 100 or header[18:20] != b"\x01\x01":
-                # Not a rollback-journal file. A WAL-mode ledger is the live format that
-                # writers keep open: reading it needs the -wal / -shm sidecars, so it takes
-                # the ordinary open (which only ever sets WAL on a file already in WAL).
+            if len(header) < 100 or header[18:20] not in (b"\x01\x01", b"\x02\x02"):
                 return False
             db = self._connect_ro()
             try:
@@ -1143,6 +1218,7 @@ class EvidenceLedger:
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             "exported_at": format_utc(utc_now()),
             "subject": subject or "",
+            "ledger_id": self.ledger_id(),
             "chain_verified": True,
             "attestation": {
                 "ledger_schema_version": LEDGER_SCHEMA_VERSION,

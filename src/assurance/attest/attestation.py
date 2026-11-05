@@ -52,6 +52,8 @@ from .keys import SigningKey, VerifyingKey
 
 __all__ = [
     "ATTESTATION_FORMAT",
+    "ATTESTATION_FORMAT_BOUND",
+    "KNOWN_ATTESTATION_FORMATS",
     "LOCK_TIMEOUT_SECONDS",
     "NO_EXPECTATION_NOTE",
     "AttestationBasis",
@@ -74,6 +76,11 @@ __all__ = [
 #: the signature were. Changing what is signed without changing this would make
 #: old signatures unverifiable for a reason nobody could diagnose.
 ATTESTATION_FORMAT = "assurance.head-attestation.v1"
+#: The format of a head that is signed together with the identity of the ledger (and,
+#: optionally, the tenant) it describes. A verifier that only knows ``v1`` reports ``v2`` as an
+#: unknown format rather than checking a signature over bytes it cannot recompute.
+ATTESTATION_FORMAT_BOUND = "assurance.head-attestation.v2"
+KNOWN_ATTESTATION_FORMATS = (ATTESTATION_FORMAT, ATTESTATION_FORMAT_BOUND)
 
 
 #: How long a writer waits for the log's lock before giving up. Signing one head is
@@ -147,6 +154,10 @@ class LedgerHead:
     head_seq: int
     head_link_hash: str
     basis: AttestationBasis = AttestationBasis.DECLARED_BY_HOLDER
+    #: The lineage id of the ledger this head was read from (``READ_FROM_LEDGER``), or ""
+    #: when the ledger has none (opened read-only, never minted) or the head was merely
+    #: declared. "" is signed as an *unbound* attestation, never as one for "any ledger".
+    ledger_id: str = ""
 
     def __post_init__(self) -> None:
         if self.length < 0 or self.head_seq < 0:
@@ -191,6 +202,7 @@ def head_of(ledger: EvidenceLedger) -> LedgerHead:
         head_seq=head.seq if head else 0,
         head_link_hash=head.link_hash if head else GENESIS,
         basis=AttestationBasis.READ_FROM_LEDGER,
+        ledger_id=ledger.ledger_id() or "",
     )
 
 
@@ -215,9 +227,27 @@ class HeadAttestation:
     previous: str
     note: str = ""
     signature: str = ""
+    #: Inside the signed bytes of a ``v2`` attestation; "" for ``v1`` (unbound).
+    ledger_id: str = ""
+    tenant: str = ""
+
+    @property
+    def binding(self) -> str:
+        """``"bound"`` when the signature covers a ledger id, else ``"unbound"``."""
+        return "bound" if (self.format == ATTESTATION_FORMAT_BOUND and self.ledger_id) else "unbound"
 
     # -- bytes under the signature ---------------------------------------
     def _body(self) -> dict[str, Any]:
+        body = self._v1_body()
+        if self.format == ATTESTATION_FORMAT_BOUND:
+            # Only a v2 record signs these, so every v1 signature still recomputes. Stripping
+            # them from a v2 record changes the bytes (and the format string is signed too),
+            # so a bound head cannot be downgraded to an unbound one that still verifies.
+            body["ledger_id"] = self.ledger_id
+            body["tenant"] = self.tenant
+        return body
+
+    def _v1_body(self) -> dict[str, Any]:
         return {
             "format": self.format,
             "sequence": self.sequence,
@@ -280,6 +310,12 @@ class HeadAttestation:
                 previous=str(data["previous"]),
                 note=str(data.get("note", "")),
                 signature=str(data.get("signature", "")),
+                # Only a v2 record signs these. On a v1 record they are unsigned text someone
+                # added, so they are dropped rather than believed.
+                ledger_id=(str(data.get("ledger_id", ""))
+                           if data["format"] == ATTESTATION_FORMAT_BOUND else ""),
+                tenant=(str(data.get("tenant", ""))
+                        if data["format"] == ATTESTATION_FORMAT_BOUND else ""),
             )
         except OverflowError as exc:
             # ``int(1e999)``: JSON accepts a number no integer can hold. The file chose
@@ -641,8 +677,15 @@ def attest(
     note: str = "",
     rotating: bool = False,
     now: datetime | None = None,
+    tenant: str = "",
 ) -> HeadAttestation:
     """Sign a ledger head, refusing every case that would lie.
+
+    A head read from a ledger that has a lineage id is signed **together with that id** (and
+    *tenant*, if given): format ``v2``. A ledger without one is signed as before (``v1``,
+    *unbound*) and every verdict says so. A log is one ledger's: signing a head of ledger B into
+    a log that holds heads bound to ledger A is refused, and so is appending an unbound head to
+    a log of bound ones (that would be a downgrade).
 
     *source* is either a ledger, which is read and verified here, or a
     :class:`LedgerHead` somebody else has declared — the counter-signature
@@ -687,6 +730,24 @@ def attest(
 
         history = log._read_for_append()
         previous = history[-1] if history else None
+        bound_ids = {r.ledger_id for r in history if r.binding == "bound"}
+        if head.ledger_id and bound_ids and head.ledger_id not in bound_ids:
+            raise AttestationError(
+                f"refusing to attest: this log holds heads bound to ledger "
+                f"{', '.join(sorted(i[:12] for i in bound_ids))}, and this head was read from "
+                f"ledger {head.ledger_id[:12]}. A log belongs to one ledger; signing another "
+                "ledger's head into it is a cross-ledger substitution."
+            )
+        if not head.ledger_id and bound_ids and head.basis is AttestationBasis.READ_FROM_LEDGER:
+            raise AttestationError(
+                "refusing to attest: this ledger has no lineage id, but the log holds heads "
+                "bound to a ledger id. An unbound head in a bound log would be a downgrade."
+            )
+        tenants = {r.tenant for r in history if r.tenant}
+        if tenant and tenants and tenant not in tenants:
+            raise AttestationError(
+                f"refusing to attest: this log is for tenant {', '.join(sorted(tenants))}, "
+                f"not {tenant}.")
         same_basis = [r for r in history if r.basis is head.basis]
         prior = same_basis[-1] if same_basis else None
 
@@ -738,8 +799,11 @@ def attest(
                     "like when nobody checks the fingerprint."
                 )
 
+        bound = bool(head.ledger_id or tenant)
         attestation = HeadAttestation(
-            format=ATTESTATION_FORMAT,
+            format=ATTESTATION_FORMAT_BOUND if bound else ATTESTATION_FORMAT,
+            ledger_id=head.ledger_id,
+            tenant=tenant,
             sequence=(previous.sequence + 1) if previous else 1,
             ledger_length=head.length,
             head_seq=head.head_seq,
@@ -771,14 +835,24 @@ class LogVerdict:
     #: the requester's free text (``note_is_tenant_supplied``), signed along with the
     #: head; it is not a statement by the key holder about the ledger.
     notes: list[dict[str, Any]] = field(default_factory=list)
+    #: ``"bound"`` (every attestation signs a ledger id), ``"unbound"`` (none does: a v1
+    #: record, which says nothing about WHICH ledger it describes) or ``"mixed"``.
+    binding: str = "unbound"
+    #: Sequences of attestations that are not bound to any ledger.
+    unbound: list[int] = field(default_factory=list)
+    #: True only when a ledger id (from *ledger* or ``expect_ledger_id``) was available and
+    #: every attestation was bound to exactly that id (and nothing else was wrong).
+    bound_to_this_ledger: bool = False
 
     def summary(self) -> str:
         if self.checked == 0:
             return "no attestations to check"
         if self.ok:
+            weak = "" if self.binding == "bound" else (
+                f"; {len(self.unbound)} UNBOUND (not tied to any ledger id)")
             return (
                 f"{self.checked} attestation(s) verify against key "
-                f"{self.key_fingerprint}"
+                f"{self.key_fingerprint}{weak}"
             )
         return f"{len(self.problems)} problem(s) across {self.checked} attestation(s)"
 
@@ -842,6 +916,52 @@ def _expectation_problems(
     return problems
 
 
+def _binding_problems(
+    records: Sequence[HeadAttestation], ledger_id: str | None, *, require_bound: bool = False,
+    expect_tenant: str | None = None,
+) -> tuple[list[str], list[str], bool]:
+    """``(problems, skipped, bound_to_this_ledger)`` for who the records say they describe.
+
+    A bound record whose id differs from *ledger_id* is a head from another ledger (cross-tenant
+    replay or head substitution): a problem. A bound record when *ledger_id* is unknown cannot be
+    shown to belong here: a problem. An unbound record is never a problem on its own, but it is
+    never counted as verified for this ledger either: it is listed in ``skipped``.
+    """
+    problems: list[str] = []
+    skipped: list[str] = []
+    for r in records:
+        where = f"attestation {r.sequence}"
+        if expect_tenant is not None and r.tenant != expect_tenant:
+            problems.append(
+                f"{where}: signed for tenant {r.tenant or '(none)'}, expected {expect_tenant} "
+                "— a head from another tenant's log, or one that was never bound to a tenant")
+        if r.binding != "bound":
+            continue
+        if not ledger_id:
+            problems.append(
+                f"{where}: signed for ledger {r.ledger_id[:12]}, but no ledger id is available "
+                "to compare it with (the ledger has none, or none was given), so it cannot be "
+                "shown to describe this ledger")
+        elif r.ledger_id != ledger_id:
+            problems.append(
+                f"{where}: signed for ledger {r.ledger_id[:12]}, this is ledger "
+                f"{ledger_id[:12]} — a head from a different ledger (cross-tenant replay or head "
+                "substitution)")
+    unbound = [r.sequence for r in records if r.binding != "bound"]
+    if require_bound:
+        problems.extend(
+            f"attestation {n}: unbound (a v1 record) but a bound head was required"
+            for n in unbound)
+    elif unbound:
+        skipped.append(
+            "Attestation(s) " + ", ".join(str(n) for n in unbound)
+            + " are UNBOUND: their signature covers no ledger id, so they show that a head "
+            "with these numbers was signed, not that it was this ledger's. A signed head from "
+            "another tenant's ledger with the same numbers would verify the same way.")
+    ok_here = bool(records) and bool(ledger_id) and not problems and not unbound
+    return problems, skipped, ok_here
+
+
 def check_log_against_ledger(
     records: Sequence[HeadAttestation],
     ledger: EvidenceLedger,
@@ -850,6 +970,8 @@ def check_log_against_ledger(
     chain: bool = True,
     min_sequence: int | None = None,
     expect_head: str | None = None,
+    require_bound: bool = False,
+    expect_tenant: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Whether *ledger* still holds every head the log attests. ``(problems, skipped)``.
 
@@ -869,6 +991,10 @@ def check_log_against_ledger(
         records, min_sequence=min_sequence, expect_head=expect_head))
     if min_sequence is None and expect_head is None:
         skipped.append(NO_EXPECTATION_NOTE)
+    bind_problems, bind_skipped, _ = _binding_problems(
+        records, ledger.ledger_id(), require_bound=require_bound, expect_tenant=expect_tenant)
+    problems.extend(bind_problems)
+    skipped.extend(bind_skipped)
     if chain:
         chain_ok, chain_problems = ledger.verify_chain()
         if not chain_ok:
@@ -930,6 +1056,9 @@ def verify_log(
     expect_head: str | None = None,
     max_age: timedelta | None = None,
     now: datetime | None = None,
+    expect_ledger_id: str | None = None,
+    expect_tenant: str | None = None,
+    require_bound: bool = False,
 ) -> LogVerdict:
     """Check an attestation log, and optionally check a ledger against it.
 
@@ -954,6 +1083,14 @@ def verify_log(
     **Rollback.** Everything above is relative to the log in hand. An operator with write
     access to the ledger who truncates it to an older signed head and cuts the log to
     match leaves a pair that verifies. Only the verifier's memory closes that:
+    **Which ledger.** A ``v2`` attestation signs the ledger's lineage id (and tenant, if any). With
+    *ledger*, or *expect_ledger_id* when only the id is known, a bound attestation for a different
+    ledger is a problem (a head signed for tenant A's ledger replayed as tenant B's). A ``v1``
+    attestation is **unbound**: it still verifies as before, but ``binding``/``unbound`` on the
+    verdict and a ``checks_skipped`` entry say it is not tied to any ledger, and
+    ``bound_to_this_ledger`` stays False. ``require_bound=True`` turns an unbound record into a
+    problem.
+
     ``min_sequence`` (the newest attestation sequence seen at the last check) and
     ``expect_head`` (its head link hash) fail the verdict with a "rollback or withheld newer
     attestation" problem when the log's newest head is older; ``max_age`` fails a log whose
@@ -979,11 +1116,11 @@ def verify_log(
 
     for record in records:
         where = f"attestation {record.sequence}"
-        if record.format != ATTESTATION_FORMAT:
+        if record.format not in KNOWN_ATTESTATION_FORMATS:
             problems.append(
                 f"{where}: format is {record.format!r}, this build verifies "
-                f"{ATTESTATION_FORMAT!r} — the signed bytes may not be what is "
-                "recomputed here, so a failure below would be uninformative"
+                f"{' and '.join(KNOWN_ATTESTATION_FORMATS)} — the signed bytes may not be what "
+                "is recomputed here, so a failure below would be uninformative"
             )
         if record.sequence != expected_sequence:
             problems.append(
@@ -1056,7 +1193,17 @@ def verify_log(
     if min_sequence is None and expect_head is None:
         skipped.append(NO_EXPECTATION_NOTE)
 
+    bound_here = False
     if ledger is None:
+        b_problems, b_skipped, bound_here = _binding_problems(
+            records, expect_ledger_id, require_bound=require_bound, expect_tenant=expect_tenant)
+        if expect_ledger_id is None:
+            # No id to compare with: nothing was checked, and a bound record must not read as if
+            # it had been. Only the unbound note and tenant/require_bound findings stand.
+            b_problems = [p for p in b_problems if "no ledger id is available" not in p]
+            bound_here = False
+        problems.extend(b_problems)
+        skipped.extend(b_skipped)
         skipped.append(
             "The ledger itself was not examined. This says the attestations are "
             "genuine and consistent with each other; it does not say the ledger "
@@ -1064,7 +1211,15 @@ def verify_log(
         )
     else:
         ledger_problems, ledger_skipped = check_log_against_ledger(
-            records, ledger, basis=basis)
+            records, ledger, basis=basis, require_bound=require_bound,
+            expect_tenant=expect_tenant)
+        _, _, bound_here = _binding_problems(
+            records, ledger.ledger_id(), require_bound=require_bound,
+            expect_tenant=expect_tenant)
+        if expect_ledger_id is not None and ledger.ledger_id() != expect_ledger_id:
+            problems.append(
+                f"the ledger's id is {(ledger.ledger_id() or '(none)')[:12]}, not the expected "
+                f"{expect_ledger_id[:12]}")
         problems.extend(ledger_problems)
         skipped.extend(x for x in ledger_skipped if x != NO_EXPECTATION_NOTE)
 
@@ -1075,6 +1230,7 @@ def verify_log(
         "attestations arrived on."
     )
 
+    unbound_seqs = [r.sequence for r in records if r.binding != "bound"]
     return LogVerdict(
         ok=not problems,
         checked=len(records),
@@ -1083,4 +1239,8 @@ def verify_log(
         key_fingerprint=key.fingerprint,
         latest=records[-1] if records else None,
         notes=notes,
+        binding=("bound" if records and not unbound_seqs else
+                 "mixed" if len(unbound_seqs) < len(records) else "unbound"),
+        unbound=unbound_seqs,
+        bound_to_this_ledger=bound_here and not problems,
     )
