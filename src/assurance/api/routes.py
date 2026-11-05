@@ -479,7 +479,9 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
     return CaseOut(**view)
 
 
-@evidence_router.get(
+# Register-gated, not part of the lapsed read-out: the read-out set is exactly the four documented routes
+# (plans.EVIDENCE_READOUT_AFTER_LAPSE); the verifiable export carries the same records for a lapsed account.
+@router.get(
     "/cases/{case_id}/history",
     response_model=dict,
     summary="The audit history of one case: every ledger record, oldest first",

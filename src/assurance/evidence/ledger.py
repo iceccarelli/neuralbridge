@@ -281,6 +281,9 @@ class ChainCheck:
 class EvidenceLedger:
     """Durable, append-only, hash-chained store of evidence objects."""
 
+    #: True for a handle opened on an existing ledger without minting (see ``_connect_rw``).
+    _never_create = False
+
     @classmethod
     def open_existing(cls, path: str | Path, *, writable: bool = False) -> EvidenceLedger:
         """Open a ledger that must already exist; never create one.
@@ -533,6 +536,13 @@ class EvidenceLedger:
         if not self._upgrade_on_write:
             raise LedgerIntegrityError(
                 f"{self.path} was opened read-only; this ledger cannot be written.")
+        # This handle was opened on an existing ledger. If that file is gone (or emptied, or no longer a
+        # ledger) the first write must not quietly create a new one at the old path and acknowledge a
+        # record into it: that resurrects a deleted tenant's ledger, with the record in no export.
+        if not self._is_existing_ledger_file():
+            raise LedgerIntegrityError(
+                f"{self.path} was a ledger when this handle was opened and is not any more (it was "
+                "removed or replaced). Refusing to create a new ledger in its place; nothing was written.")
         self._init_for_writing(mint_id=getattr(self, "_mint_on_upgrade", True))
         self._upgraded = True
 
@@ -553,10 +563,12 @@ class EvidenceLedger:
         self._upgraded = False
         self._lock = threading.Lock()
         self._mint_on_upgrade = True
+        self._never_create = False
         if not mint_id and self._is_existing_ledger_file():
             type(self).open_readonly(self.path)   # the same refusals; raises if not a ledger
             self._read_only = True
             self._upgrade_on_write = True
+            self._never_create = True
             self._mint_on_upgrade = False
             return
         self._init_for_writing(mint_id=mint_id)
@@ -670,7 +682,20 @@ class EvidenceLedger:
         return self._connect_rw()
 
     def _connect_rw(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+        if self._never_create:
+            # This handle was opened on an existing ledger. Opening for writing must never create a
+            # file: a plain connect() would, if the files were removed in between (``tenant delete``),
+            # and the schema step after it would turn that into a fresh ledger that acknowledges
+            # records the deletion's export never held. ``mode=rw`` fails when the file is missing.
+            try:
+                db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True,
+                                     timeout=30.0, isolation_level=None)
+            except sqlite3.OperationalError as exc:
+                raise LedgerIntegrityError(
+                    f"{self.path} was a ledger when this handle was opened and cannot be opened for "
+                    f"writing now ({exc}); it was removed or replaced. Nothing was written.") from exc
+        else:
+            db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         enable_wal(db)
         db.execute("PRAGMA synchronous=FULL")
