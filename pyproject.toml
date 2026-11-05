@@ -178,3 +178,55 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+# Per-module debt table for src/assurance/. CI runs `mypy src/neuralbridge/ src/assurance/`
+# (.github/workflows/ci.yml). Every module not listed here is checked under the strict settings
+# above. The modules listed had 155 errors in 39 modules when src/assurance/ was
+# first put under mypy (mypy 2.4.1, Python 3.11); they are silenced EXPLICITLY, by name, and the
+# number after each name is its error count then. There is deliberately no wildcard: a new
+# module is strict from its first commit, and a module that has been cleaned up must be deleted
+# from this list. Do not add a module to hide a new error.
+# tests/test_mypy_ignore_table.py checks that every name here is a real module.
+[[tool.mypy.overrides]]
+module = [
+    "assurance.api.change_routes",  # 2
+    "assurance.api.evidence_routes",  # 2
+    "assurance.api.machine_routes",  # 1
+    "assurance.api.routes",  # 4
+    "assurance.api.service",  # 2
+    "assurance.billing.accounts",  # 6
+    "assurance.billing.reconcile",  # 28
+    "assurance.billing.stripe_gateway",  # 2
+    "assurance.billing.subscription_state",  # 1
+    "assurance.capabilities",  # 1
+    "assurance.change.service",  # 1
+    "assurance.core.tiers",  # 2
+    "assurance.evidence.ledger",  # 1
+    "assurance.evidence.restore_check",  # 1
+    "assurance.fleet.cli",  # 8
+    "assurance.fleet.csaf",  # 1
+    "assurance.fleet.registry",  # 2
+    "assurance.intel.cli",  # 2
+    "assurance.intel.csaf_live",  # 3
+    "assurance.intel.fetch",  # 1
+    "assurance.intel.parsers",  # 3
+    "assurance.intel.store",  # 1
+    "assurance.machinery.amend",  # 1
+    "assurance.machinery.inventory",  # 2
+    "assurance.machinery.record",  # 2
+    "assurance.ops.check",  # 6
+    "assurance.ops.cli",  # 7
+    "assurance.ops.cycle",  # 5
+    "assurance.ops.notify",  # 1
+    "assurance.security.art14.cli",  # 5
+    "assurance.security.art14.clock",  # 1
+    "assurance.supplier.netpolicy",  # 19
+    "assurance.supplier.trust",  # 8
+    "assurance.value.position",  # 15
+    "assurance.watch.cli",  # 1
+    "assurance.watch.ingest",  # 1
+    "assurance.watch.open_case",  # 1
+    "assurance.watch.push",  # 2
+    "assurance.watch.runner",  # 3
+]
+ignore_errors = true

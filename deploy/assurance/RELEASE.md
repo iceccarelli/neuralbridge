@@ -24,9 +24,9 @@ index; `scripts/lock.sh --check` reports drift without writing.
 
 | Lock | Input | Used by |
 |---|---|---|
-| `requirements/assurance-service.lock` | `requirements/assurance-service.txt` (fastapi, uvicorn[standard], pydantic, httpx, cryptography) | the service in `deploy/assurance/Dockerfile` (not yet wired in, see below), `OPS.md` section 1 |
+| `requirements/assurance-service.lock` | `requirements/assurance-service.txt` (fastapi, uvicorn[standard], pydantic, httpx, cryptography) | the service in `deploy/assurance/Dockerfile` (`pip install --require-hashes --no-deps`; `tests/test_assurance_dockerfile_deps.py` pins that), `OPS.md` section 1 |
 | `requirements/prod.lock` | `requirements/prod.txt` (which includes `base.txt`) | root `Dockerfile` (the NeuralBridge platform image; the image `publish-docker.yml` and `release.yml` build) |
-| `requirements/test.lock` | `requirements/test.txt` | reproducing the test environment locally; CI does not use it yet |
+| `requirements/test.lock` | `requirements/test.txt` | the Python 3.11 leg of the CI `test` job (`pip install --require-hashes --no-deps`); also for reproducing the test environment locally |
 
 All three are `--universal` (environment markers; valid on linux amd64/arm64, macOS, Windows).
 Install form, which makes pip refuse any file whose hash is not listed:
@@ -79,16 +79,21 @@ to the configured one, rejects a token whose header names another algorithm or `
 like PEM, SSH or DER key material (`tests/test_security_jwt_hardening.py`). That is hardening of
 one module, not an audit of the platform's authentication, and a clean pip-audit means only that
 the advisory database lists nothing for the pinned versions today. The assurance service never
-used python-jose. The CI `security` job still runs `safety check -r requirements/base.txt || true`,
-so it never fails on a finding and does not scan the lock.
+used python-jose. The CI `security` job runs the same `pip-audit` command against all three locks and fails on
+any finding (no `|| true`; an unfixable advisory may only be allow-listed by its id, with a
+reason, in the workflow). It also runs bandit over `src/neuralbridge/` and `src/assurance/`.
 
 ## 4. SBOM
 
 **What CI produces.** The `sbom` job in `.github/workflows/ci.yml` runs only on `main`, after the
-`test` job: `cyclonedx-py requirements requirements/base.txt -o sbom.json --of JSON`, uploaded as
-the `sbom` artifact. It is built from `base.txt`, i.e. from the `>=` lower bounds, so it lists
-the requested names and ranges, not the versions an image actually contains, and it omits the
-`prod.txt` additions (gunicorn, OTLP exporter, sentry). It is not tied to an image digest.
+`test` job: `cyclonedx-py requirements` over `requirements/prod.lock` and
+`requirements/assurance-service.lock`, uploaded as the `sbom` artifact (`sbom-platform.json`,
+`sbom-assurance-service.json`). It is built from the locks, so it lists exact versions and
+SHA-256s, not the `>=` lower bounds. It is not tied to an image digest.
+On a push to `main` the job also runs GitHub's `actions/attest-build-provenance` over those two
+files (keyless, no secret or key). That attests that the workflow run produced those files; it is
+not an image signature. The step has not yet run on GitHub: check the first `main` run after
+merge.
 
 **Locally, from the lock** (verified with `cyclonedx-bom` 7.6.0, `cyclonedx-py requirements`,
 offline from the lock file):
@@ -107,20 +112,30 @@ this project's own package. An image-level SBOM would need an image scanner and 
 
 ## 5. What is NOT established
 
-- **No signed provenance or attestation exists.** No SLSA level is claimed. There is no build
-  attestation, no image signature (cosign or similar), and no SBOM attestation. `publish-docker.yml`
-  and `release.yml` push images without provenance or signing steps.
-- **The lock is not yet what the service image installs.** `deploy/assurance/Dockerfile` still
-  installs with `>=`; `tests/test_assurance_dockerfile_deps.py` parses that `pip install` line, so
-  switching it to the lock means changing that test in the same commit. The root `Dockerfile`
-  now installs `prod.lock` with `--require-hashes`; the pip invocation was exercised in a Python
-  3.11 venv, but the image has **not been built** (the sandbox had a docker client and no daemon).
+- **No image signature or image provenance exists.** No SLSA level is claimed. The only
+  attestation is the SBOM-file provenance step described in section 4 (unrun until the first
+  `main` push). Not done, and needs a decision before it is wired into `publish-docker.yml` /
+  `release.yml`: `actions/attest-build-provenance` with `subject-name`/`subject-digest` of the
+  pushed image (`push-to-registry: true`, permissions `id-token: write`, `attestations: write`),
+  and/or keyless `cosign sign` of the digest. Neither workflow does either today.
+- **Both images now install from their locks, but neither image build has been run by the
+  author.** `deploy/assurance/Dockerfile` installs `requirements/assurance-service.lock` and the
+  root `Dockerfile` installs `prod.lock`, each with `pip install --require-hashes --no-deps`
+  (`tests/test_assurance_dockerfile_deps.py` pins the service image's command). The sandbox these
+  changes were made in had a docker client and no daemon, so no image was built there; the pip
+  invocation was exercised with real pip in Python 3.11 venvs. The CI `assurance-image` job builds
+  the service image and smoke-tests it (non-root, `/livez`, honest `/healthz`); its first run on
+  GitHub is the first time that image is built from the lock. The root image has a CI build job
+  (`docker`) that runs `import neuralbridge` only.
 - **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`, `node:22-alpine`),
   nor are apt packages (`curl`), nor the GitHub Actions (`@v4` tags). The npm side of the root image
   runs `npm install` in `src/dashboard`, not `npm ci`.
-- **CI tests do not run from the lock**: they install `requirements/test.txt`, so a green CI run does
-  not prove the locked versions pass. The `Lock drift (advisory)` job checks only that the lock still
-  matches its input; it is `continue-on-error` and not a required check.
+- **Only one CI test leg runs from the lock**: Python 3.11 installs `requirements/test.lock` with
+  `--require-hashes`; 3.12 and 3.13 install `requirements/test.txt` (latest allowed versions) on
+  purpose, to see forward drift. The service lock (`assurance-service.lock`, Python 3.12) is not
+  used by any test leg; its coverage is the import-closure test and the `assurance-image` job. The
+  `Lock drift` job (`scripts/lock.sh --check`) fails the run when a lock no longer matches its
+  input; whether it is a *required* status check is a repository setting, not a file.
 - A hash proves a file is the one that was locked, not that the upstream release is benign.
 - The lock is generated from the index at generation time; if PyPI yanks or alters a file later,
   `--require-hashes` will fail the install rather than substitute.

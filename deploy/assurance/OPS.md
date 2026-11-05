@@ -28,11 +28,12 @@ What the repository pins, stated plainly:
   `prod.lock` (the NeuralBridge platform image, Python 3.11) and `test.lock` (CI-equivalent
   test environment, universal for >=3.11). The `.txt` files and `pyproject.toml` still carry
   `>=` bounds; the lock is what gets installed.
-- **Not yet using the lock:** `deploy/assurance/Dockerfile` still installs with `>=` (its test,
-  `tests/test_assurance_dockerfile_deps.py`, parses that line), and CI's `test` and `lint` jobs
-  still install the `.txt` files. The root `Dockerfile` installs `prod.lock`; that change was not
-  built (no Docker daemon was available). `deploy/assurance/RELEASE.md` states what is and is
-  not established.
+- **Where the lock is used:** `deploy/assurance/Dockerfile` installs `assurance-service.lock` and
+  the root `Dockerfile` installs `prod.lock`, both with `pip install --require-hashes --no-deps`;
+  the CI `test` job's Python 3.11 leg installs `test.lock`. CI's `lint` job and the 3.12/3.13 test
+  legs still install the `.txt` files. No image was built when these Dockerfiles were changed
+  (no Docker daemon was available); CI's `assurance-image` job is the first build of the service
+  image. `deploy/assurance/RELEASE.md` states what is and is not established.
 - The **website** is locked (`package-lock.json`; use `npm ci`). That does not cover the service.
 
 Install the service from the lock:

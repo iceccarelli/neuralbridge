@@ -27,8 +27,12 @@ jobs:
       # Same scope as CLAUDE.md's definition of done: src/ AND tests/.
       - name: Run ruff linter
         run: ruff check src/ tests/
+      # src/neuralbridge/ is clean under strict mode. src/assurance/ is strict too, except the
+      # modules named one by one in the [[tool.mypy.overrides]] table in pyproject.toml (no
+      # wildcard; tests/test_mypy_ignore_table.py keeps that table honest). A new module there is
+      # checked strictly from its first commit.
       - name: Run mypy type checker
-        run: mypy src/neuralbridge/ --ignore-missing-imports
+        run: mypy src/neuralbridge/ src/assurance/ --ignore-missing-imports
 
   # ── Marketing / workspace site (Next.js, repo root) ────────
   # Until this job existed nothing in CI installed, type-checked or built the root Next.js site
@@ -105,7 +109,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      # Python 3.11 installs from the hash-checked lock (requirements/test.lock, scripts/lock.sh):
+      # pip refuses any file whose SHA-256 is not listed and resolves nothing, so this leg tests
+      # exactly the pinned versions. `--no-deps -e .` adds only this package; the lock already
+      # holds every dependency (tests/test_requirements_lock.py). The 3.12 and 3.13 legs
+      # deliberately keep installing the latest allowed versions from requirements/test.txt, so
+      # forward drift still shows up here before the lock is regenerated.
+      - name: Install dependencies (hash-checked lock)
+        if: matrix.python-version == '3.11'
+        run: |
+          pip install --require-hashes --no-deps -r requirements/test.lock
+          pip install --no-deps -e .
+          pip check
+      - name: Install dependencies (latest allowed versions)
+        if: matrix.python-version != '3.11'
         run: |
           pip install -r requirements/test.txt
           pip install -e .
@@ -127,46 +144,84 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
-        run: pip install bandit safety
-      - name: Run Bandit security linter
-        run: bandit -r src/neuralbridge/ -ll
-      - name: Check dependencies for vulnerabilities
-        run: safety check -r requirements/base.txt || true
+      - name: Install scanners
+        run: pip install "bandit==1.9.4" "pip-audit==2.10.1"
+      # Both packages, medium severity and up. scripts/bandit-baseline.json lists the two
+      # B608 findings that existed when src/assurance/ was first scanned, reviewed as false
+      # positives (src/assurance/evidence/ledger.py and src/assurance/intel/store.py build SQL
+      # from constant fragments and bind every value with `?`). Bandit reports only findings
+      # NOT in the baseline, so any new medium/high finding fails the job. Preferred follow-up:
+      # `# nosec B608` with a reason on those two lines, then delete the baseline.
+      - name: Run Bandit security linter (src/neuralbridge and src/assurance)
+        run: bandit -r src/neuralbridge/ src/assurance/ -ll -b scripts/bandit-baseline.json
+      # Audits the exact pinned versions that ship, not the loose lower bounds. pip-audit exits
+      # non-zero on any known vulnerability, and so does this step: there is no `|| true`. If a
+      # finding cannot be fixed by regenerating the lock, allow-list that ONE advisory with
+      # `--ignore-vuln <ID>` on the line below and a comment giving the reason and a review date.
+      # Never ignore a whole package or severity.
+      - name: Audit the pinned dependencies (fails on any finding)
+        run: |
+          for lock in assurance-service prod test; do
+            echo "== requirements/${lock}.lock"
+            pip-audit -r "requirements/${lock}.lock" --require-hashes --disable-pip
+          done
 
   # ── SBOM Generation ────────────────────────────────────────
+  # Built from the hash-pinned lock files, so it lists the exact versions (and SHA-256s) that the
+  # two images install, not the `>=` lower bounds. It does not describe base-image OS packages or
+  # the Python interpreter, and it is not tied to an image digest (deploy/assurance/RELEASE.md §4).
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write       # lets the attestation step below obtain a Sigstore identity
+      attestations: write   # lets it store the attestation on this repository
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install CycloneDX
-        run: pip install cyclonedx-bom
-      - name: Generate SBOM
-        run: cyclonedx-py requirements requirements/base.txt -o sbom.json --of JSON
+        run: pip install "cyclonedx-bom==8.0.1"
+      - name: Generate SBOMs from the lock files
+        run: |
+          cyclonedx-py requirements requirements/prod.lock -o sbom-platform.json --of JSON
+          cyclonedx-py requirements requirements/assurance-service.lock -o sbom-assurance-service.json --of JSON
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom.json
+          path: |
+            sbom-platform.json
+            sbom-assurance-service.json
+      # Signed build-provenance attestation for the two SBOM files (GitHub's built-in
+      # attestations, keyless via the workflow's OIDC identity; no secret or key is used or
+      # stored). It states that THIS workflow run on THIS commit produced those files. It is NOT
+      # an image signature and says nothing about a container image: images are signed and
+      # attested in a release workflow that does not exist yet (deploy/assurance/RELEASE.md §5).
+      # Runs only for a push to main, never for a pull request. Not yet exercised on GitHub.
+      - name: Attest SBOM provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            sbom-platform.json
+            sbom-assurance-service.json
 
-  # ── Lock drift (NON-GATING, additive) ──────────────────────
+  # ── Lock drift (GATING) ────────────────────────────────────
   # Checks that requirements/*.lock still equal what uv resolves from requirements/*.txt,
-  # keeping the already-pinned versions (scripts/lock.sh --check). It is a separate job that
-  # no other job `needs`, and continue-on-error keeps a drift from turning the run red, so it
-  # cannot break the existing checks (lint, site, test, security, docker). Nothing installs
-  # from the lock here: the test and docker jobs still use the .txt files, except the root
-  # Dockerfile, which now installs from requirements/prod.lock. Read the job result in the
-  # log; it is advisory until a maintainer decides to make it required.
+  # keeping the already-pinned versions (scripts/lock.sh --check; uv is pinned below). A red
+  # job means a .txt input was edited without regenerating, or a locked release changed on the
+  # index: run scripts/lock.sh and commit. It was advisory (continue-on-error) until
+  # `scripts/lock.sh --check` was run against the committed locks with uv 0.11.32 and was
+  # clean for all three; the locks are what the root image, the assurance image and the
+  # Python 3.11 test leg now install, so a silent mismatch is a real defect.
   lock-drift:
-    name: Lock drift (advisory)
+    name: Lock drift
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -204,6 +259,62 @@ jobs:
         run: docker build -t neuralbridge:test .
       - name: Test Docker image
         run: docker run --rm neuralbridge:test python -c "import neuralbridge; print(neuralbridge.__version__)"
+
+  # ── Assurance service image: build and smoke test ──────────
+  # deploy/assurance/Dockerfile is the image that gets deployed, and nothing built it before this
+  # job. It builds from the repository root (the Dockerfile COPYs requirements/ and src/), starts
+  # the container with NO API keys, Stripe keys or attestation key, and checks:
+  #   - the process runs as a non-root user (uid 10001), as the Dockerfile says;
+  #   - /livez answers 200;
+  #   - /healthz answers 200 and says `degraded` / `unconfigured` / `not_configured`, i.e. it does
+  #     not claim a readiness it does not have (scripts/smoke_assurance_service.py);
+  #   - the pinned fastapi, uvicorn and cryptography imported from the hash-installed lock.
+  # It does not push the image anywhere, use any secret, or touch a network beyond the build's
+  # PyPI downloads and the container's loopback port.
+  assurance-image:
+    name: Assurance image (build + smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build deploy/assurance/Dockerfile
+        run: docker build -f deploy/assurance/Dockerfile -t assurance:ci .
+      - name: Image runs as a non-root user
+        run: |
+          user="$(docker image inspect --format '{{.Config.User}}' assurance:ci)"
+          echo "image USER: ${user}"
+          test "${user}" = "assurance" || { echo "::error::image USER is '${user}', expected 'assurance'"; exit 1; }
+      - name: Start the container (no keys, no Stripe, no attestation key)
+        run: |
+          # The service runs as uid 10001 and must be able to write its volume.
+          mkdir -p "${RUNNER_TEMP}/assurance-data"
+          sudo chown 10001:10001 "${RUNNER_TEMP}/assurance-data"
+          docker run -d --name assurance-smoke \
+            -p 127.0.0.1:8080:8080 \
+            -v "${RUNNER_TEMP}/assurance-data:/data" \
+            assurance:ci
+      - name: The process inside is not root, and the pinned packages are the ones imported
+        run: |
+          uid="$(docker exec assurance-smoke id -u)"
+          echo "container uid: ${uid}"
+          test "${uid}" != "0" || { echo "::error::container runs as root"; exit 1; }
+          docker exec assurance-smoke python -c "import fastapi, uvicorn, cryptography, httpx, pydantic; print('fastapi', fastapi.__version__, '| cryptography', cryptography.__version__)"
+          docker exec assurance-smoke pip --version
+          # the locked version of fastapi is the installed one
+          locked="$(grep -m1 -E '^fastapi==' requirements/assurance-service.lock | cut -d= -f3 | cut -d' ' -f1)"
+          installed="$(docker exec assurance-smoke python -c 'import fastapi; print(fastapi.__version__)')"
+          echo "fastapi locked=${locked} installed=${installed}"
+          test "${locked}" = "${installed}" || { echo "::error::installed fastapi is not the locked one"; exit 1; }
+      - name: /livez answers and /healthz reports the unconfigured state honestly
+        run: python scripts/smoke_assurance_service.py http://127.0.0.1:8080
+      - name: Container logs
+        if: always()
+        run: docker logs assurance-smoke || true
+      - name: Remove the container
+        if: always()
+        run: docker rm -f assurance-smoke || true
 
   # ── Docs Build & Deploy ────────────────────────────────────
   # Deploys via the native GitHub Pages Actions flow (configure-pages +
