@@ -67,6 +67,25 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
                 f"  signal → awareness: {case.awareness.lag_hours_from(case.signal)} h"
             )
 
+    if len(case.awareness_history) > 1:
+        out += ["", "AWARENESS HISTORY  —  earlier records are kept, never edited"]
+        for h in case.awareness_history:
+            tag = "IN FORCE " if h["status"] == "in_force" else "SUPERSEDED"
+            out.append(
+                f"  {tag} seq {h['ledger_seq']:<4} {h['content_hash'][:16]}  established "
+                f"{h['established_at']}  recorded {h['recorded_at']} by {h['recorded_by']}"
+            )
+            if h["supersedes"]:
+                out.append(
+                    f"             supersedes {h['supersedes'][:16]}; reason: "
+                    f"{h['supersession_reason']}"
+                )
+        for x in case.deadline_shifts:
+            out.append(
+                f"  deadline recomputed: {x['stage_label']} from {x['from_due_at']} to "
+                f"{x['to_due_at']} by {x['by']}, reason: {x['reason']}"
+            )
+
     if case.triage_result:
         t = case.triage_result
         out += ["", f"TRIAGE  —  {t.status}"]
@@ -127,6 +146,10 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
     out.extend(f"  • {item}" for item in outstanding) if outstanding else out.append(
         "  nothing outstanding"
     )
+    out += ["", "AUDIT HISTORY  —  every ledger record of this case, oldest first"]
+    for h in case.history:
+        out.append(f"  seq {h['ledger_seq']:<4} {h['recorded_at']}  {h['recorded_by']}")
+        out.append(f"      {h['summary']}")
     out += ["", _RULE]
     return _lines(*out)
 

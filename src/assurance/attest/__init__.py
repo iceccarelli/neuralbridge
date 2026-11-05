@@ -9,6 +9,8 @@ database's holder does not have proves nothing was *removed*.
 
 from assurance.attest.attestation import (
     ATTESTATION_FORMAT,
+    ATTESTATION_FORMAT_BOUND,
+    KNOWN_ATTESTATION_FORMATS,
     AttestationBasis,
     AttestationBusyError,
     AttestationError,
@@ -29,6 +31,8 @@ from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
 
 __all__ = [
     "ATTESTATION_FORMAT",
+    "ATTESTATION_FORMAT_BOUND",
+    "KNOWN_ATTESTATION_FORMATS",
     "AttestationBasis",
     "AttestationBusyError",
     "AttestationError",

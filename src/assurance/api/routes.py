@@ -12,10 +12,11 @@ is actionable.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from pydantic import field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.accounts import Principal
 from ..core.errors import ClockError, EvidenceIncompleteError, LedgerIntegrityError
@@ -127,6 +128,29 @@ class UserNotificationIn(_UserNotificationIn):
     __doc__ = _UserNotificationIn.__doc__  # the published schema description stays the one in schemas.py
 
     legal_times = _strict_times("at")
+
+
+class SupersedeAwarenessIn(BaseModel):
+    """A correction of a wrongly recorded awareness: a NEW record that supersedes the one in force.
+
+    The earlier record is never edited or deleted. ``supersedes`` is the content hash of the
+    awareness record in force (``awareness_record`` on the case); ``reason`` says why the earlier
+    one was wrong. Art. 14 and guidance C(2026) 5252 do not provide for such a correction; the
+    register keeps the original, applies the newest record and lists every deadline it moves.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    supersedes: str = Field(min_length=12, max_length=64)
+    reason: str = Field(min_length=1, max_length=4000)
+    established_at: datetime
+    assessment_started_at: datetime
+    assessment_completed_at: datetime
+    determined_by: str = ""
+    reasoning: str = Field(min_length=1, max_length=4000)
+    actor: ActorIn
+
+    legal_times = _strict_times("established_at", "assessment_started_at", "assessment_completed_at")
 
 
 def _actor(payload: ActorIn) -> Actor:
@@ -245,6 +269,46 @@ def post_awareness(
 
 
 @router.post(
+    "/cases/{case_id}/awareness/supersede",
+    response_model=dict,
+    status_code=status.HTTP_201_CREATED,
+    summary="Correct a wrongly recorded awareness by appending a superseding record",
+)
+def post_awareness_supersession(
+    case_id: str, body: SupersedeAwarenessIn, register: Art14Register = Depends(get_register)
+) -> dict[str, Any]:
+    """Append-only: the earlier awareness stays; the newest record is the one in force.
+
+    Refused (409) on a closed case and on any case with a filing recorded, and when
+    ``supersedes`` does not name the record in force. The response lists each deadline the
+    correction moved, with the person and the reason; one that had already passed and moved
+    later keeps appearing in ``GET /v1/register/breaches``.
+    """
+    try:
+        awareness = Awareness(
+            established_at=body.established_at,
+            assessment_started_at=body.assessment_started_at,
+            assessment_completed_at=body.assessment_completed_at,
+            determined_by=body.determined_by or body.actor.identifier,
+            reasoning=body.reasoning,
+        )
+        evidence = register.supersede_awareness(
+            case_id, awareness, body.reason, body.supersedes, _actor(body.actor)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail={"error": "bad_awareness", "detail": str(exc)}
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _refuse(exc) from exc
+    recorded = _recorded(register, case_id, evidence)
+    shifts = [
+        x for x in register.case(case_id).deadline_shifts if x["record"] == evidence.content_hash
+    ]
+    return {**recorded.model_dump(), "deadline_shifts": shifts}
+
+
+@router.post(
     "/cases/{case_id}/triage",
     response_model=dict,
     status_code=status.HTTP_201_CREATED,
@@ -261,6 +325,10 @@ def post_triage(
             body.reasoning,
             reopen_trigger=body.reopen_trigger,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail={"error": "bad_triage_answer", "detail": str(exc)}
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
     recorded = _recorded(register, case_id, evidence)
@@ -409,6 +477,37 @@ def get_case(case_id: str, register: Art14Register = Depends(get_register)) -> C
                     "detail": f"this case's records cannot be turned into a view: {exc}"},
         ) from exc
     return CaseOut(**view)
+
+
+# Register-gated, not part of the lapsed read-out: the read-out set is exactly the four documented routes
+# (plans.EVIDENCE_READOUT_AFTER_LAPSE); the verifiable export carries the same records for a lapsed account.
+@router.get(
+    "/cases/{case_id}/history",
+    response_model=dict,
+    summary="The audit history of one case: every ledger record, oldest first",
+)
+def get_case_history(case_id: str, register: Art14Register = Depends(get_register)) -> dict[str, Any]:
+    """Who recorded what and when, from the ledger itself.
+
+    Includes every awareness record (the original and each supersession, with which is in
+    force) and the deadlines a supersession moved. A filing appears as the manufacturer's
+    declaration; nothing here verifies it against the reporting platform.
+    """
+    try:
+        case = register.case(case_id)
+    except LedgerIntegrityError as exc:
+        raise _refuse(exc) from exc
+    if case.signal is None and case.awareness is None:
+        raise HTTPException(
+            status_code=404, detail={"error": "no_such_case", "detail": f"no records for {case_id}"}
+        )
+    return {
+        "case_id": case_id,
+        "history": case.history,
+        "awareness_history": case.awareness_history,
+        "deadline_shifts": case.deadline_shifts,
+        "anomalies": case.anomalies,
+    }
 
 
 @evidence_router.get(

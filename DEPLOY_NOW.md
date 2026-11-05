@@ -4,7 +4,7 @@
 tool below has never been run against a hosted staging host; it has only been
 exercised against local servers in `tests/test_staging_rehearsal.py` and
 `tests/test_staging_rehearsal_hardening.py`. Every step here is yours, with your
-own credentials. Standing facts (`HANDOFF.md` §4.4): zero revenue, zero customers,
+own credentials. Standing facts (`docs/pmf/pilot-ledger.csv` holds no row): zero revenue, zero customers,
 zero pilots, no production deployment. The prices (€390 / €3,900 / €1,290) are
 unvalidated assertions, and nothing here tells you to set a live Stripe key — live
 mode is a separate, later decision that is yours.
@@ -241,7 +241,7 @@ the above): they mint a Cell key through `AccountStore` and need
 - `deploy/assurance/ADR-0001-supplier-api.md` documents the second-payer
   (component supplier) API surface that exists in code but has no self-serve
   price yet.
-- `HANDOFF.md` §5 lists what is still ahead, ordered by proximity to cash.
+- `docs/claims-registry.md` and the open limits in the latest merged PR list what is still ahead.
 
 ## Not established by any of the above
 

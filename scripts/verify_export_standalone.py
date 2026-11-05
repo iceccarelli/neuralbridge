@@ -55,6 +55,9 @@ FLOAT_NOISE_TOLERANCE = 1e-9
 SEAL_EXACT_INT = 2**53
 CANONICAL_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 ATTESTATION_FORMAT = "assurance.head-attestation.v1"
+#: v2 signs the ledger's lineage id and tenant as well (an export bundle names no ledger id, so a
+#: bound anchor cannot be matched to the bundle's ledger here; that is said, not assumed).
+ATTESTATION_FORMAT_BOUND = "assurance.head-attestation.v2"
 MAX_LISTED = 25
 
 TOP_FIELDS = {"ledger_schema_version", "exported_at", "subject", "chain_verified", "attestation",
@@ -258,7 +261,8 @@ def check_anchor(bundle, entries, key_path: str, f: Findings):
     need = ("format", "sequence", "ledger_length", "head_seq", "head_link_hash", "basis",
             "attested_at", "key_fingerprint", "previous", "signature")
     if not isinstance(anchor, dict) or any(k not in anchor for k in need) \
-            or anchor["format"] != ATTESTATION_FORMAT or anchor["basis"] not in BASES \
+            or anchor["format"] not in (ATTESTATION_FORMAT, ATTESTATION_FORMAT_BOUND) \
+            or anchor["basis"] not in BASES \
             or any(not exact_int(anchor[k]) for k in ("sequence", "ledger_length", "head_seq")) \
             or any(not isinstance(anchor[k], str) for k in
                    ("head_link_hash", "attested_at", "key_fingerprint", "previous", "signature")):
@@ -271,6 +275,12 @@ def check_anchor(bundle, entries, key_path: str, f: Findings):
     body = {k: anchor[k] for k in ("format", "sequence", "ledger_length", "head_seq",
                                    "head_link_hash", "basis", "attested_at", "key_fingerprint",
                                    "previous")}
+    bound = anchor["format"] == ATTESTATION_FORMAT_BOUND
+    if bound:
+        if not isinstance(anchor.get("ledger_id"), str) or not isinstance(anchor.get("tenant"), str):
+            f.bad("the anchor is a v2 attestation without a readable ledger_id and tenant")
+            return
+        body["ledger_id"], body["tenant"] = anchor["ledger_id"], anchor["tenant"]
     body["note"] = anchor.get("note", "") if isinstance(anchor.get("note", ""), str) else None
     if body["note"] is None:
         f.bad("the anchor's note is not text")
@@ -282,6 +292,12 @@ def check_anchor(bundle, entries, key_path: str, f: Findings):
     except (InvalidSignature, ValueError):
         f.bad("the anchor's signature does not verify against the trusted key - edited or forged")
         return
+    if bound:
+        f.assumed.append(f"the anchor is bound to ledger {anchor['ledger_id'][:12]}, but an export bundle names "
+                         "no ledger id, so whether this bundle came from that ledger was NOT checked")
+    else:
+        f.assumed.append("the anchor is UNBOUND (a v1 attestation): its signature covers no ledger id, so it is "
+                         "not shown to describe the ledger this bundle came from")
     chain_len = entries[-1]["seq"] if entries else 0
     links = {e["seq"]: e["link_hash"] for e in entries}
     if chain_len < anchor["ledger_length"] or chain_len < anchor["head_seq"]:

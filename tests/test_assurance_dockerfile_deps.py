@@ -1,20 +1,24 @@
-"""The deploy image installs everything the service imports.
+"""The deploy image installs everything the service imports, from a hash-checked lock.
 
-``deploy/assurance/Dockerfile`` installs a short list of packages on purpose. It once
-omitted ``cryptography``, which ``assurance.attest.keys`` imports at module level, and
-``assurance.api.service`` imports that: an image built from it could not start. Nothing
-caught it because every test runs in an environment that has the full requirements.
+``deploy/assurance/Dockerfile`` installs ``requirements/assurance-service.lock`` with
+``pip install --require-hashes --no-deps``. It once omitted ``cryptography``, which
+``assurance.attest.keys`` imports at module level, and ``assurance.api.service`` imports that:
+an image built from it could not start. Nothing caught it because every test runs in an
+environment that has the full requirements.
 
-Three checks, none of which builds an image (no daemon is assumed) or touches a network:
+Checks, none of which builds an image (no daemon is assumed) or touches a network:
 
-1. only the ``RUN pip install`` lines are read, with comment lines removed, so a package
-   named in a comment cannot mask its removal from the real command;
-2. every third-party import anywhere under ``src/assurance`` (the whole tree is copied into
+1. only the ``RUN pip install`` commands are read, with comment lines removed, so a package or
+   flag named in a comment cannot mask its removal from the real command;
+2. every ``pip install`` of the service's dependencies is ``--require-hashes`` and ``--no-deps``
+   from a lock file that exists, is COPYed into the build stage, and pins every package with
+   a hash (no ranges, no bare ``pip install fastapi``);
+3. every third-party import anywhere under ``src/assurance`` (the whole tree is copied into
    the image), including ``importlib.import_module("x")`` and ``__import__("x")`` with a
-   literal name, must be provided by those packages or their *transitive* requirements,
-   read from the installed metadata, unless it is listed here as deliberately not shipped;
-3. ``import assurance.api.service`` is run in a fresh interpreter whose import system
-   refuses every top-level package outside the standard library and that same closure,
+   literal name, must be provided by a package pinned in that lock, unless it is listed here
+   as deliberately not shipped;
+4. ``import assurance.api.service`` is run in a fresh interpreter whose import system
+   refuses every top-level package outside the standard library and the locked packages,
    which is what the image's interpreter would see. This catches an implicit runtime
    requirement of a dependency (it raises ``ModuleNotFoundError`` exactly as the image would).
 """
@@ -30,7 +34,6 @@ from importlib import metadata
 from pathlib import Path
 
 import pytest
-from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 REPO = Path(__file__).resolve().parents[1]
@@ -44,8 +47,8 @@ NOT_SHIPPED = {
 }
 
 
-def pip_install_requirements(text: str) -> list[Requirement]:
-    """The quoted requirement specs on ``pip install`` lines, comments removed."""
+def pip_install_commands(text: str) -> list[str]:
+    """Each logical ``pip install`` command (continuations joined), comments removed."""
     logical: list[str] = []
     pending = ""
     for line in text.splitlines():
@@ -55,43 +58,33 @@ def pip_install_requirements(text: str) -> list[Requirement]:
         if pending.endswith("\\"):
             pending = pending[:-1]
             continue
-        logical.append(pending)
+        logical.append(" ".join(pending.split()))
         pending = ""
-    found: list[Requirement] = []
-    for line in logical:
-        if "pip install" not in line:
-            continue
-        for spec in re.findall(r"'([^']+)'", line):
-            try:
-                found.append(Requirement(spec))
-            except InvalidRequirement:
-                continue
-    return found
+    return [ln for ln in logical if "pip install" in ln]
 
 
-def closure(roots: list[Requirement]) -> set[str]:
-    """Canonical names of ``roots`` and everything they require that is installed here."""
-    seen: set[str] = set()
-    stack = [(r.name, set(r.extras)) for r in roots]
-    done: set[tuple[str, frozenset[str]]] = set()
-    while stack:
-        name, extras = stack.pop()
-        key = (canonicalize_name(name), frozenset(extras))
-        if key in done:
-            continue
-        done.add(key)
-        try:
-            dist = metadata.distribution(name)
-        except metadata.PackageNotFoundError:
-            continue
-        seen.add(canonicalize_name(name))
-        for raw in dist.requires or []:
-            req = Requirement(raw)
-            if req.marker is not None and not any(
-                    req.marker.evaluate({"extra": e}) for e in (extras | {""})):
-                continue
-            stack.append((req.name, set(req.extras)))
-    return seen
+def locked_requirements_files(text: str) -> list[str]:
+    """Paths given to ``-r`` on pip install commands that install the service's dependencies."""
+    paths: list[str] = []
+    for cmd in pip_install_commands(text):
+        paths += re.findall(r"(?:^|\s)-r\s+(\S+)", cmd)
+    return paths
+
+
+def locked_names(lock_text: str) -> set[str]:
+    """Canonical names pinned (``name==version``) in a uv-generated lock."""
+    names: set[str] = set()
+    for line in lock_text.splitlines():
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==", line)
+        if m:
+            names.add(canonicalize_name(m.group(1)))
+    return names
+
+
+def image_lock() -> Path:
+    paths = locked_requirements_files(DOCKERFILE.read_text(encoding="utf-8"))
+    assert len(paths) == 1, f"expected one locked install in the Dockerfile, found {paths}"
+    return REPO / "requirements" / Path(paths[0]).name
 
 
 def top_levels(dists: set[str]) -> set[str]:
@@ -121,26 +114,46 @@ def imports_of(path: Path) -> set[str]:
 
 
 def shipped() -> set[str]:
-    return top_levels(closure(pip_install_requirements(DOCKERFILE.read_text(encoding="utf-8"))))
+    return top_levels(locked_names(image_lock().read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------
 
-def test_the_dockerfile_names_the_packages_the_service_needs():
-    names = {canonicalize_name(r.name)
-             for r in pip_install_requirements(DOCKERFILE.read_text(encoding="utf-8"))}
-    assert {"fastapi", "uvicorn", "pydantic", "httpx", "cryptography"} <= names, names
+def assert_hash_checked_install(text: str) -> None:
+    commands = pip_install_commands(text)
+    assert commands, "no pip install in the Dockerfile"
+    for cmd in commands:
+        assert "--upgrade pip" not in cmd, f"an unpinned pip self-upgrade defeats the lock: {cmd}"
+        assert "--require-hashes" in cmd and "--no-deps" in cmd and re.search(
+            r"\s-r\s+\S+\.lock\b", cmd), f"not a hash-checked install from a lock: {cmd}"
+        assert not re.search(r"[A-Za-z][\w.-]*(\[[^\]]*\])?\s*[<>=!~]=", cmd), (
+            f"a ranged requirement on the command line: {cmd}")
+    # the file the RUN reads must be copied into the stage first
+    assert re.search(r"^COPY\s+requirements/assurance-service\.lock\s", text, re.M), (
+        "requirements/assurance-service.lock is not COPYed into the build stage")
 
 
-def test_a_package_named_only_in_a_comment_is_not_counted_as_installed():
+def test_the_dockerfile_installs_the_service_lock_with_hashes_and_no_resolution():
+    assert_hash_checked_install(DOCKERFILE.read_text(encoding="utf-8"))
+    lock = image_lock()
+    assert lock.name == "assurance-service.lock" and lock.is_file()
+
+
+def test_the_locked_install_names_the_packages_the_service_needs():
+    names = locked_names(image_lock().read_text(encoding="utf-8"))
+    assert {"fastapi", "uvicorn", "pydantic", "httpx", "cryptography", "starlette"} <= names, names
+
+
+def test_a_package_or_flag_named_only_in_a_comment_is_not_counted():
     text = (
         "# 'cryptography>=42.0.0' is needed, says this comment\n"
-        "RUN pip install --no-cache-dir 'fastapi>=0.110.0' \\\n"
-        "      # 'also-in-a-comment>=1'\n"
-        "      'httpx>=0.27.0'\n"
+        "# RUN pip install --require-hashes --no-deps -r requirements/assurance-service.lock\n"
+        "RUN pip install --no-cache-dir -r /tmp/x.lock \\\n"
+        "      # --require-hashes\n"
+        "      --no-deps\n"
         "RUN echo 'cryptography' && pip --version\n")
-    names = {canonicalize_name(r.name) for r in pip_install_requirements(text)}
-    assert names == {"fastapi", "httpx"}, names
+    cmds = pip_install_commands(text)
+    assert len(cmds) == 1 and "--require-hashes" not in cmds[0], cmds
 
 
 def test_every_third_party_import_in_the_shipped_tree_is_provided_by_the_image():
@@ -205,12 +218,23 @@ def test_the_blocker_really_blocks(tmp_path):
 
 
 @pytest.mark.parametrize("dropped", ["cryptography", "httpx"])
-def test_removing_a_package_from_the_real_pip_line_is_noticed(dropped):
-    text = DOCKERFILE.read_text(encoding="utf-8")
-    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
-    stripped = "\n".join(ln.replace(f"'{dropped}>=42.0.0'", "").replace(
-        f"'{dropped}>=0.27.0'", "") for ln in lines)
-    # commented mentions are kept, as a reviewer's masking attempt would
-    text = f"# '{dropped}>=1'\n" + stripped
-    remaining = {canonicalize_name(r.name) for r in pip_install_requirements(text)}
-    assert dropped not in remaining
+def test_removing_a_package_from_the_lock_is_noticed(dropped):
+    lock = image_lock().read_text(encoding="utf-8")
+    assert dropped in locked_names(lock)
+    stripped = "\n".join(ln for ln in lock.splitlines()
+                         if not ln.lower().startswith(f"{dropped}=="))
+    assert dropped not in locked_names(f"# {dropped}==1\n" + stripped)
+
+
+@pytest.mark.parametrize("weakened", [
+    "RUN pip install --no-cache-dir -r /tmp/assurance-service.lock",
+    "RUN pip install --require-hashes -r /tmp/assurance-service.lock",
+    "RUN pip install --require-hashes --no-deps 'fastapi>=0.110.0'",
+    "RUN pip install --upgrade pip --require-hashes --no-deps -r /tmp/a.lock",
+])
+def test_a_weakened_install_command_is_rejected(weakened):
+    copy = "COPY requirements/assurance-service.lock /tmp/\n"
+    with pytest.raises(AssertionError):
+        assert_hash_checked_install(copy + weakened + "\n")
+    good = "RUN pip install --require-hashes --no-deps --prefix=/install -r /tmp/assurance-service.lock"
+    assert_hash_checked_install(copy + good + "\n")

@@ -57,6 +57,10 @@ def _operator_message(exc: BaseException) -> str:
     if isinstance(exc, sqlite3.DatabaseError) and "not a database" in str(exc):
         return ("error: that file is not a ledger (it is not a SQLite database). Check the path "
                 "you gave for --ledger, or ASSURANCE_LEDGER.")
+    if isinstance(exc, sqlite3.OperationalError) and any(
+            w in str(exc).lower() for w in ("locked", "busy")):
+        return ("error: the ledger is locked by another process (a running service, watch or backup). "
+                "Nothing was written. Wait for it to finish and run the command again.")
     if isinstance(exc, AssuranceError | OSError | ValueError):
         return f"error: {exc}"
     return (f"error: could not complete ({type(exc).__name__}: {exc}). The input may have the "

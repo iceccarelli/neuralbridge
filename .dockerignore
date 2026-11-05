@@ -1,0 +1,18 @@
+# Keep the build context to what the images copy. Nothing here is read by Dockerfile or
+# deploy/assurance/Dockerfile (their COPY lines are src/, requirements/, pyproject and the README).
+.git
+.claude
+**/node_modules
+.next
+out
+htmlcov
+test-results
+tests-e2e
+reports
+**/__pycache__
+**/*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*

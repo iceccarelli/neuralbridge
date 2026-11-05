@@ -30,7 +30,10 @@ a key the insider does not hold, or an external anchor — see
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
+import tempfile
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -47,8 +50,8 @@ from ..core.sqlite import enable_wal, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
-           "AnchorContradictsLedgerError", "ChainBrokenError", "DamagedRow", "EvidenceLedger",
-           "LedgerEntry"]
+           "AnchorContradictsLedgerError", "ChainBrokenError", "ChainCheck", "DamagedRow",
+           "EvidenceLedger", "LedgerChangedWhileReadError", "LedgerEntry"]
 
 
 class ChainBrokenError(LedgerIntegrityError):
@@ -189,8 +192,97 @@ class DamagedRow:
     why: str
 
 
+class LedgerChangedWhileReadError(LedgerIntegrityError):
+    """A file read without locking (``immutable=1``) was written during the read.
+
+    Not a finding about the chain: the read is voided because its bytes cannot be trusted
+    to be one consistent snapshot. Retry. It is an integrity error so that no caller can
+    mistake a voided read for a pass.
+    """
+
+
+def _file_state(path: Path) -> tuple[Any, ...]:
+    """(inode, size, mtime_ns) of the database and which sidecars exist beside it."""
+    st = os.stat(path)
+    return (st.st_ino, st.st_size, st.st_mtime_ns,
+            tuple(path.with_name(path.name + sfx).exists() for sfx in ("-wal", "-shm", "-journal")))
+
+
+class _GuardedConnection(sqlite3.Connection):
+    """A read-only connection that cleans up after itself and can void its own reads.
+
+    ``guard`` runs when the connection is closed (after the handle is released) and raises if
+    the file moved under an ``immutable=1`` read; ``cleanup`` removes a private scratch copy.
+    Every read in this module closes its connection in a ``finally``, after the values it
+    returns are built, so raising here discards the result instead of serving it.
+    """
+
+    guard: Any = None
+    cleanup: Any = None
+
+    def close(self) -> None:
+        guard, cleanup = self.guard, self.cleanup
+        self.guard = self.cleanup = None
+        try:
+            super().close()
+        finally:
+            if cleanup is not None:
+                cleanup()
+        if guard is not None:
+            guard()
+
+
+_VOIDED_READ_ATTEMPTS = 8
+
+
+def _retry_voided(fn: Any) -> Any:
+    """Re-run a whole read whose snapshot was voided by a writer (see ``_connect_ro``).
+
+    Only :class:`LedgerChangedWhileReadError` is retried, and only by re-reading from scratch:
+    a voided read's partial result is never returned. After the last attempt the error propagates
+    (an integrity error, so never a pass).
+    """
+    import functools
+    import time
+
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        for attempt in range(_VOIDED_READ_ATTEMPTS):
+            try:
+                return fn(self, *args, **kwargs)
+            except LedgerChangedWhileReadError:
+                if attempt == _VOIDED_READ_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+
+    return wrapper
+
+
+@dataclass(frozen=True)
+class ChainCheck:
+    """The answer of :meth:`EvidenceLedger.verify_cached_detail`, with its depth.
+
+    ``depth`` is ``"full"`` (every record re-read by this call) or ``"incremental"``
+    (the head and what was appended since; older records rest on a full walk
+    ``full_pass_age_seconds`` ago, so an edit made alongside an append in that span is not
+    yet seen). A reader must not present ``incremental`` as a full verification.
+    """
+
+    ok: bool
+    problems: list[str]
+    depth: str
+    full_pass_age_seconds: float
+
+    @property
+    def full(self) -> bool:
+        return self.depth == "full"
+
+
 class EvidenceLedger:
     """Durable, append-only, hash-chained store of evidence objects."""
+
+    #: True for a handle opened on an existing ledger without minting (see ``_connect_rw``).
+    _never_create = False
 
     @classmethod
     def open_existing(cls, path: str | Path, *, writable: bool = False) -> EvidenceLedger:
@@ -227,22 +319,15 @@ class EvidenceLedger:
         file is ``FileNotFoundError``; an empty file, a non-SQLite file or a SQLite file
         without the ledger tables is refused as "not a ledger".
 
-        With no sidecar beside the file there is no live writer, so ``immutable=1`` reads
-        it with no locking and creates nothing. With a sidecar a writer may be live, and
-        ``mode=ro`` then uses the existing files and creates none. A writer that starts in
-        the instant between that check and the read is the one case ``immutable`` could
-        misread; the next read sees it (same stated limit as the intel store).
+        See :meth:`_connect_ro` for how each state of the sidecars is read. With no sidecar
+        the read is ``immutable=1`` and is checked when it ends: a writer that started after the
+        file was found idle voids the read (:class:`LedgerChangedWhileReadError`) instead of
+        letting it be served. A crash copy (``-wal`` without ``-shm``) is read from a private
+        scratch copy, so no file is created beside the original.
 
         A file that holds any table other than the ledger's (``meta``, ``chain``), or a
         ``chain`` / ``meta`` of the wrong shape, is refused exactly as the write path refuses
         it: it is another application's database.
-
-        Known limit: a *crash copy* of a WAL-mode ledger -- the ``-wal`` file copied, the
-        ``-shm`` not -- is read correctly (the committed WAL frames are used), but SQLite must
-        then build its shared-memory index, so a ``-shm`` file appears beside the copy. The
-        ``.db`` and ``-wal`` bytes are not modified. A caller that must leave the directory
-        byte-identical copies the files to a scratch directory first (as ``restore_check``
-        does) and opens the copy.
         """
         p = Path(path)
         if not p.is_file():
@@ -256,23 +341,23 @@ class EvidenceLedger:
         self._upgraded = False
         if p.stat().st_size == 0:
             raise LedgerIntegrityError(f"{p} is empty, so it is not a ledger.")
+        def probe(db: sqlite3.Connection) -> Any:
+            names = {r[0] for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"meta", "chain"} <= names:
+                raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
+            if _holds_foreign_tables(db):
+                raise LedgerIntegrityError(
+                    f"{p} is not a ledger: it is another application's SQLite database "
+                    "(it holds tables that are not the ledger's, or a ledger table of the "
+                    "wrong shape); refusing to read it as evidence.")
+            found = db.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+            db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
+            return found
+
         try:
-            db = self._connect_ro()
-            try:
-                names = {r[0] for r in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-                if not {"meta", "chain"} <= names:
-                    raise LedgerIntegrityError(f"{p} is not a ledger: it has no evidence chain.")
-                if _holds_foreign_tables(db):
-                    raise LedgerIntegrityError(
-                        f"{p} is not a ledger: it is another application's SQLite database "
-                        "(it holds tables that are not the ledger's, or a ledger table of the "
-                        "wrong shape); refusing to read it as evidence.")
-                row = db.execute(
-                    "SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
-                db.execute("SELECT seq FROM chain LIMIT 1").fetchall()
-            finally:
-                db.close()
+            row = self._ro_probe(probe)
         except sqlite3.Error as exc:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it could not be opened as one "
@@ -282,6 +367,53 @@ class EvidenceLedger:
                 f"{p} was written by ledger schema {row[0]}, this build speaks "
                 f"{LEDGER_SCHEMA_VERSION}. Refusing rather than guessing.")
         return self
+
+    def _ro_probe(self, fn: Any, *, retry_errors: bool = False) -> Any:
+        """Run ``fn(db)`` on a read-only connection, re-running it if a writer voids the read.
+
+        A read that raised while the file was being changed under it (the guard trips on close)
+        is a voided read, not a finding, and is re-run too. ``retry_errors`` also re-runs after any
+        SQLite error (a file still being created by another process can be momentarily unreadable);
+        the last attempt's error propagates.
+        """
+        import time
+
+        last = _VOIDED_READ_ATTEMPTS - 1
+        for attempt in range(_VOIDED_READ_ATTEMPTS):
+            voided = False
+            try:
+                db = self._connect_ro()
+            except LedgerChangedWhileReadError:
+                if attempt == last:
+                    raise
+                voided = True
+            else:
+                try:
+                    result = fn(db)
+                except BaseException as exc:
+                    try:
+                        db.close()
+                    except LedgerChangedWhileReadError:
+                        if attempt == last:
+                            raise
+                        voided = True
+                    if not voided:
+                        if retry_errors and isinstance(exc, sqlite3.Error) and attempt < last:
+                            voided = True
+                        else:
+                            raise
+                else:
+                    try:
+                        db.close()
+                    except LedgerChangedWhileReadError:
+                        if attempt == last:
+                            raise
+                        voided = True
+                    else:
+                        return result
+            if voided:
+                time.sleep(0.02 * (attempt + 1))
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _refuse_if_foreign_before_writing(self) -> None:
         """Refuse someone else's database BEFORE any write (cf. the intel store, issue #92).
@@ -305,11 +437,11 @@ class EvidenceLedger:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it is not a SQLite database; refusing to write to it.")
         try:
-            db = self._connect_ro()
-            try:
-                foreign = _holds_foreign_tables(db)
-            finally:
-                db.close()
+            foreign = self._ro_probe(_holds_foreign_tables, retry_errors=True)
+        except LedgerChangedWhileReadError:
+            # Other processes are creating or writing this file right now. This check is only
+            # an early refusal: the read-write open re-checks inside its own connection.
+            return
         except sqlite3.Error:
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it cannot be read as one; "
@@ -320,16 +452,79 @@ class EvidenceLedger:
                 "refusing to create ledger tables inside it.")
 
     def _connect_ro(self) -> sqlite3.Connection:
+        """A connection that cannot write or alter any file beside the ledger.
+
+        * **No sidecar** (a quiescent file): ``immutable=1``, which locks nothing and creates
+          nothing (``mode=ro`` alone would create ``-wal`` / ``-shm`` for a WAL file). The one
+          thing ``immutable`` cannot do is notice a writer that starts afterwards, so the file's
+          inode/size/mtime and its sidecars are recorded now and checked again when the
+          connection is closed: a difference raises :class:`LedgerChangedWhileReadError` and
+          the read is discarded.
+        * **Sidecars incl. ``-shm``** (a live writer): ``mode=ro`` on the files that exist; it
+          creates none and never checkpoints.
+        * **A ``-wal`` / ``-journal`` but no ``-shm``** (a crash copy): SQLite would have to
+          create the ``-shm``, so the read is made from a private copy in a temporary directory
+          that is removed on close. Nothing is created beside the original.
+        """
         resolved = self.path.resolve()
-        quiescent = not any(resolved.with_name(resolved.name + sfx).exists()
-                            for sfx in ("-wal", "-shm", "-journal"))
-        # ``immutable=1`` skips locking and is only safe on a file nobody is writing. A handle
-        # from ``EvidenceLedger(path, mint_id=False)`` is used on LIVE ledgers (export, offboarding),
-        # where a writer may start in the instant after the sidecar check: it never uses it.
-        immutable = quiescent and not getattr(self, "_never_immutable", False)
-        mode = "mode=ro&immutable=1" if immutable else "mode=ro"
-        db = sqlite3.connect(f"{resolved.as_uri()}?{mode}", uri=True, timeout=5.0,
-                             isolation_level=None)
+        sidecars = {sfx: resolved.with_name(resolved.name + sfx) for sfx in ("-wal", "-shm", "-journal")}
+        present = {sfx for sfx, q in sidecars.items() if q.exists()}
+        cleanup = None
+        guard = None
+        target = resolved
+        if not present:
+            mode = "mode=ro&immutable=1"
+            before = _file_state(resolved)
+
+            def guard() -> None:
+                try:
+                    after = _file_state(resolved)
+                except OSError:
+                    after = None
+                if after != before:
+                    raise LedgerChangedWhileReadError(
+                        f"{resolved} changed while it was being read (a writer started, or the "
+                        "file was replaced after it was found idle). The read is voided, not "
+                        "served: nothing was verified from it. Retry.")
+        elif "-shm" not in present:
+            before_copy = _file_state(resolved)
+            scratch = Path(tempfile.mkdtemp(prefix="ledger-ro-"))
+            target = scratch / resolved.name
+            cleanup = lambda: shutil.rmtree(scratch, ignore_errors=True)  # noqa: E731
+            try:
+                shutil.copy2(resolved, target)
+                for sfx in ("-wal", "-journal"):
+                    if sfx in present:
+                        shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
+            except OSError as exc:
+                cleanup()
+                raise LedgerChangedWhileReadError(
+                    f"{resolved} or a sidecar vanished while a private copy was being taken "
+                    f"({exc}). The read is voided, not served. Retry.") from exc
+            mode = "mode=ro"
+            # A live writer creates ``-wal`` a moment before ``-shm``. A copy taken in that gap
+            # would be torn, so the source is checked again after copying and the read voided
+            # (and retried by the caller) if anything about it moved.
+            try:
+                moved = (_file_state(resolved) != before_copy
+                         or any(sidecars[sfx].exists() for sfx in ("-shm",)))
+            except OSError:
+                moved = True
+            if moved:
+                cleanup()
+                raise LedgerChangedWhileReadError(
+                    f"{resolved} changed while a private copy of it was being taken. The read "
+                    "is voided, not served. Retry.")
+        else:
+            mode = "mode=ro"
+        try:
+            db = sqlite3.connect(f"{target.as_uri()}?{mode}", uri=True, timeout=5.0,
+                                 isolation_level=None, factory=_GuardedConnection)
+        except BaseException:
+            if cleanup is not None:
+                cleanup()
+            raise
+        db.guard, db.cleanup = guard, cleanup
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA query_only=ON")
         return db
@@ -341,6 +536,13 @@ class EvidenceLedger:
         if not self._upgrade_on_write:
             raise LedgerIntegrityError(
                 f"{self.path} was opened read-only; this ledger cannot be written.")
+        # This handle was opened on an existing ledger. If that file is gone (or emptied, or no longer a
+        # ledger) the first write must not quietly create a new one at the old path and acknowledge a
+        # record into it: that resurrects a deleted tenant's ledger, with the record in no export.
+        if not self._is_existing_ledger_file():
+            raise LedgerIntegrityError(
+                f"{self.path} was a ledger when this handle was opened and is not any more (it was "
+                "removed or replaced). Refusing to create a new ledger in its place; nothing was written.")
         self._init_for_writing(mint_id=getattr(self, "_mint_on_upgrade", True))
         self._upgraded = True
 
@@ -348,7 +550,7 @@ class EvidenceLedger:
         """Open (creating if need be) the ledger at ``path``.
 
         ``mint_id=False`` never writes while the ledger is only read: on a rollback-journal
-        file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
+        or WAL file that already is a ledger it opens read-only (no journal-mode switch, no schema script, no id minted, no
         sidecar created), so a verifier that opens a backup does not change the bytes the
         backup's manifest hashed. Such a ledger without an id reports ``ledger_id() is None``.
         If it is then appended to, it is prepared for writing at that moment (once), still
@@ -361,11 +563,12 @@ class EvidenceLedger:
         self._upgraded = False
         self._lock = threading.Lock()
         self._mint_on_upgrade = True
+        self._never_create = False
         if not mint_id and self._is_existing_ledger_file():
-            self._never_immutable = True
             type(self).open_readonly(self.path)   # the same refusals; raises if not a ledger
             self._read_only = True
             self._upgrade_on_write = True
+            self._never_create = True
             self._mint_on_upgrade = False
             return
         self._init_for_writing(mint_id=mint_id)
@@ -373,28 +576,21 @@ class EvidenceLedger:
     def _is_existing_ledger_file(self) -> bool:
         """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
 
-        Only a file in rollback-journal mode qualifies (header bytes 18-19 are 1): the old open
-        switched exactly those files to WAL, changing bytes the caller only meant to read. A
-        WAL-mode ledger may have a live writer and needs its sidecars to be read at all, so it
-        keeps the ordinary open, as do a missing, empty, foreign or partly created file (the
-        writing path has its own refusals).
+        Both journal modes qualify (header bytes 18-19 are 1 for a rollback journal, 2 for WAL):
+        the old open switched the first to WAL and, for the second, opened it read-write, which
+        checkpoints a ``-wal`` into the main file and deletes it on close -- bytes changed by a
+        call that only meant to read. A missing, empty, foreign or partly created file keeps the
+        ordinary open (the writing path has its own refusals).
         """
         try:
             if not self.path.is_file() or self.path.stat().st_size == 0:
                 return False
             with self.path.open("rb") as handle:
                 header = handle.read(100)
-            if len(header) < 100 or header[18:20] != b"\x01\x01":
-                # Not a rollback-journal file. A WAL-mode ledger is the live format that
-                # writers keep open: reading it needs the -wal / -shm sidecars, so it takes
-                # the ordinary open (which only ever sets WAL on a file already in WAL).
+            if len(header) < 100 or header[18:20] not in (b"\x01\x01", b"\x02\x02"):
                 return False
-            db = self._connect_ro()
-            try:
-                names = {r[0] for r in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'")}
-            finally:
-                db.close()
+            names = self._ro_probe(lambda db: {r[0] for r in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")})
         except (OSError, sqlite3.Error):
             return False
         return {"meta", "chain"} <= names
@@ -486,7 +682,20 @@ class EvidenceLedger:
         return self._connect_rw()
 
     def _connect_rw(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+        if self._never_create:
+            # This handle was opened on an existing ledger. Opening for writing must never create a
+            # file: a plain connect() would, if the files were removed in between (``tenant delete``),
+            # and the schema step after it would turn that into a fresh ledger that acknowledges
+            # records the deletion's export never held. ``mode=rw`` fails when the file is missing.
+            try:
+                db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True,
+                                     timeout=30.0, isolation_level=None)
+            except sqlite3.OperationalError as exc:
+                raise LedgerIntegrityError(
+                    f"{self.path} was a ledger when this handle was opened and cannot be opened for "
+                    f"writing now ({exc}); it was removed or replaced. Nothing was written.") from exc
+        else:
+            db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
         db.row_factory = sqlite3.Row
         enable_wal(db)
         db.execute("PRAGMA synchronous=FULL")
@@ -961,28 +1170,47 @@ class EvidenceLedger:
         is older than ``ASSURANCE_CHAIN_RECHECK_SECONDS`` (default 60; ``0`` =
         always), and whenever the file is not the one last verified. Otherwise the
         remembered head is re-read and re-checked and every record appended since is
-        verified completely. An edit to an *old* record is therefore seen by the
-        next full walk, not by every call; see :mod:`assurance.evidence.chain_cache`
-        for the trade-off and what still needs a signed head attestation.
+        verified completely. A write to the file that is not an append (the head did not
+        move but the file's mtime/size did) is escalated to a full walk. An edit made
+        in the same breath as an append is seen by the next full walk, not by every
+        call; see :mod:`assurance.evidence.chain_cache` for the trade-off. A caller that
+        must tell its reader how deep the answer was uses :meth:`verify_cached_detail`.
         """
+        check = self.verify_cached_detail()
+        return check.ok, check.problems
+
+    def verify_cached_detail(self) -> ChainCheck:
+        """:meth:`verify_cached`, plus how deep the check went (``depth``) and how old
+        the full walk it rests on is. ``depth == "incremental"`` means records older than
+        the remembered head were NOT re-read by this call."""
         key = chain_cache.identity(self.path)
         known = chain_cache.lookup(key)
         now = chain_cache.now()
         interval = chain_cache.recheck_seconds()
-        if known is None or interval <= 0 or now - known.full_pass_at >= interval:
-            problems, head_seq, head_link = self.verify_full()
-            started = now
-        else:
+        sig = chain_cache.file_signature(self.path)
+        incremental = not (known is None or interval <= 0 or now - known.full_pass_at >= interval)
+        if incremental:
+            assert known is not None
             try:
                 problems, head_seq, head_link = self._verify_since(known.seq, known.link_hash)
             except ValueError as exc:
                 problems, head_seq, head_link = [_UNREADABLE_ROW.format(exc=exc)], 0, GENESIS
+            if not problems and head_seq == known.seq and (sig is None or sig != known.stat_sig):
+                # Bytes were written but nothing was appended: not an append, so not
+                # something an incremental pass is entitled to wave through.
+                incremental = False
+        if incremental:
+            assert known is not None
             started = known.full_pass_at
+        else:
+            problems, head_seq, head_link = self.verify_full()
+            started = now
+        depth = "incremental" if incremental else "full"
         if problems:
             chain_cache.drop(key)
-            return False, problems
-        chain_cache.remember(key, head_seq, head_link, started)
-        return True, []
+            return ChainCheck(False, problems, depth, max(0.0, now - started))
+        chain_cache.remember(key, head_seq, head_link, started, sig)
+        return ChainCheck(True, [], depth, max(0.0, now - started))
 
     def head_attestation(self) -> dict[str, Any]:
         """The value to sign or publish so the chain cannot be silently rewound.
@@ -1163,3 +1391,10 @@ class EvidenceLedger:
                     f"links it as {current[:12] or '(nothing)'}. The history at that "
                     "position differs from what was signed, or the anchor belongs to "
                     "another ledger. Nothing was exported.")
+
+
+for _name in ("ledger_id", "entries", "get", "__len__", "read_subject", "filing_clock",
+              "verify_full", "_verify_since", "verify_report", "head_attestation", "export",
+              "snapshot_to"):
+    setattr(EvidenceLedger, _name, _retry_voided(getattr(EvidenceLedger, _name)))
+del _name

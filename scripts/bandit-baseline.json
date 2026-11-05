@@ -1,0 +1,46 @@
+{
+ "results": [
+  {
+   "code": "673                            else (f\"subject = ? AND {_KIND_AFTER_SUBJECT} = ?\", [subject, kind]))\n674             for row in db.execute(f\"SELECT * FROM chain WHERE {where} ORDER BY seq\", args):\n675                 try:\n",
+   "col_offset": 34,
+   "end_col_offset": 83,
+   "filename": "src/assurance/evidence/ledger.py",
+   "issue_confidence": "MEDIUM",
+   "issue_cwe": {
+    "id": 89,
+    "link": "https://cwe.mitre.org/data/definitions/89.html"
+   },
+   "issue_severity": "MEDIUM",
+   "issue_text": "Possible SQL injection vector through string-based query construction.",
+   "line_number": 674,
+   "line_range": [
+    674
+   ],
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+   "test_id": "B608",
+   "test_name": "hardcoded_sql_expressions"
+  },
+  {
+   "code": "666         \"\"\"The newest accepted observation of each (source, url) series, oldest first.\"\"\"\n667         sql = (\"SELECT * FROM observations WHERE seq IN (SELECT max(seq) FROM observations \"\n668                \"WHERE parse_result='ok'\" + (\" AND source=?\" if source else \"\")\n669                + \" GROUP BY source, url) ORDER BY seq\")\n",
+   "col_offset": 15,
+   "end_col_offset": 40,
+   "filename": "src/assurance/intel/store.py",
+   "issue_confidence": "LOW",
+   "issue_cwe": {
+    "id": 89,
+    "link": "https://cwe.mitre.org/data/definitions/89.html"
+   },
+   "issue_severity": "MEDIUM",
+   "issue_text": "Possible SQL injection vector through string-based query construction.",
+   "line_number": 667,
+   "line_range": [
+    667,
+    668
+   ],
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+   "test_id": "B608",
+   "test_name": "hardcoded_sql_expressions"
+  }
+ ],
+ "errors": []
+}

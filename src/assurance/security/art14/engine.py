@@ -71,6 +71,92 @@ def _not_in_future(at: datetime, field: str, reference: datetime) -> None:
         )
 
 
+def _require_open_case(case: Case, case_id: str, what: str) -> None:
+    """A record belongs to a case that exists: one opened by a signal.
+
+    Without this a mistyped case id silently opens a phantom case with no signal and no
+    deadlines, which the register would list beside the real ones.
+    """
+    if case.signal is None:
+        raise CaseError(
+            f"case {case_id} has no signal, so {what} has nothing to attach to. Record the "
+            "signal first (or check the case id). Nothing was recorded."
+        )
+
+
+def _who(entry: Any) -> str:
+    actor = entry.payload.get("actor") or {}
+    ident = str(actor.get("identifier", "")) or "(unnamed)"
+    role = str(actor.get("role", ""))
+    return f"{ident} ({role})" if role else ident
+
+
+def _awareness_item(entry: Any, awareness: Awareness, *, status: str) -> dict[str, Any]:
+    return {
+        "ledger_seq": entry.seq,
+        "content_hash": entry.content_hash,
+        "recorded_at": entry.at,
+        "recorded_by": _who(entry),
+        "established_at": format_utc(awareness.established_at),
+        "reasoning": awareness.reasoning,
+        "status": status,
+        "supersedes": None,
+        "supersession_reason": None,
+        "superseded_by": None,
+    }
+
+
+def _history_item(entry: Any, body: dict[str, Any]) -> dict[str, Any]:
+    """One ledger record of a case in words. Never carries a filing payload or free text bodies."""
+    kind = entry.kind
+    try:
+        if kind == CASE_KIND["signal"]:
+            s = body["signal"]
+            text = f"signal received {s['received_at']} via {s.get('channel', '')}"
+        elif kind == CASE_KIND["awareness"]:
+            text = (
+                f"awareness established at {body['awareness']['established_at']} "
+                f"(track {body.get('track', '')})"
+            )
+        elif kind == CASE_KIND["awareness_supersession"]:
+            text = (
+                f"awareness SUPERSEDED: {body['previous_awareness']['established_at']} -> "
+                f"{body['awareness']['established_at']}; reason: {body.get('reason', '')}; "
+                f"supersedes record {str(body.get('supersedes', ''))[:16]}"
+            )
+        elif kind in (CASE_KIND["triage"], CASE_KIND["non_report"]):
+            t = body["triage"]
+            text = f"triage: {t.get('status', '')}" + (
+                f" (ground {t['ground']})" if t.get("ground") else ""
+            )
+        elif kind == "art14.availability":
+            text = f"product and Member States recorded for {body['product'].get('product_name', '')}"
+        elif kind == "art14.measure":
+            text = f"measure available at {body['available_at']}"
+        elif kind == CASE_KIND["filing"]:
+            text = (
+                f"{body['stage']} filing DECLARED by the manufacturer as submitted "
+                f"{body['submitted_at']}; not verified by the reporting platform; content "
+                + ("complete" if (body.get("validation") or {}).get("submittable", True)
+                   else "INCOMPLETE")
+            )
+        elif kind == CASE_KIND["user_notice"]:
+            text = f"users notified at {body['at']} (scope: {body.get('scope', '')})"
+        else:
+            text = kind
+    except (KeyError, TypeError):
+        text = f"{kind} (body could not be summarised)"
+    return {
+        "ledger_seq": entry.seq,
+        "recorded_at": entry.at,
+        "kind": kind,
+        "recorded_by": _who(entry),
+        "actor_kind": str((entry.payload.get("actor") or {}).get("kind", "")),
+        "content_hash": entry.content_hash,
+        "summary": text,
+    }
+
+
 @dataclass
 class Case:
     """The live view of one Article 14 case, rebuilt from the ledger.
@@ -101,8 +187,27 @@ class Case:
     filing_times: dict[str, list[datetime]] = None  # type: ignore[assignment]
     #: Decisions recorded (in a ledger written before this was enforced) by a non-person actor.
     non_person_records: list[str] = None  # type: ignore[assignment]
+    #: Content hash of the awareness record that is currently in force.
+    awareness_hash: str = ""
+    #: Every awareness record in order (the original and each supersession), with which one is
+    #: in force. The earlier ones are never removed or edited: they are what was recorded.
+    awareness_history: list[dict[str, Any]] = None  # type: ignore[assignment]
+    #: Each awareness-derived deadline a supersession moved, who moved it and why.
+    deadline_shifts: list[dict[str, Any]] = None  # type: ignore[assignment]
+    #: Records whose references do not fit the case they sit in; shown, never dropped.
+    anomalies: list[str] = None  # type: ignore[assignment]
+    #: The audit history: every ledger record of this case, oldest first, in words.
+    history: list[dict[str, Any]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.awareness_history is None:
+            self.awareness_history = []
+        if self.deadline_shifts is None:
+            self.deadline_shifts = []
+        if self.anomalies is None:
+            self.anomalies = []
+        if self.history is None:
+            self.history = []
         if self.filings is None:
             self.filings = {}
         if self.filing_times is None:
@@ -162,6 +267,49 @@ class Case:
             for stage in (Stage.EARLY_WARNING, Stage.NOTIFICATION, Stage.FINAL)
         )
 
+    def _supersession_notes(self) -> list[str]:
+        """What a correction of the awareness moment did to the deadlines, in plain words.
+
+        Always listed, for as long as the case exists: a deadline that moved is a fact a
+        reader of the case must meet, not one they have to dig for in the history.
+        """
+        notes: list[str] = []
+        for shift in self.deadline_shifts:
+            late_move = shift["original_already_passed"] and shift["moved_later"]
+            lead = (
+                "DEADLINE MOVED LATER AFTER THE ORIGINAL HAD ALREADY PASSED"
+                if late_move
+                else "DEADLINE RECOMPUTED"
+            )
+            tail = (
+                " The original deadline had passed when this was recorded, so the case still "
+                "reports it as a breach until a person confirms the correction."
+                if late_move
+                else ""
+            )
+            notes.append(
+                f"{lead}: {shift['stage_label']} from {shift['from_due_at']} to "
+                f"{shift['to_due_at']} by {shift['by']}, reason: {shift['reason']} "
+                f"(superseding record {shift['record'][:16]}; the original awareness record "
+                f"{shift['supersedes'][:16]} stays in the ledger).{tail}"
+            )
+        superseded = [h for h in self.awareness_history if h.get("supersedes")]
+        if superseded and not self.deadline_shifts:
+            last = superseded[-1]
+            notes.append(
+                f"AWARENESS SUPERSEDED by {last['recorded_by']}, reason: "
+                f"{last['supersession_reason']}; no awareness-derived deadline moved."
+            )
+        if superseded:
+            notes.append(
+                "Art. 14 and guidance C(2026) 5252 do not provide for correcting a recorded "
+                "awareness moment. This register keeps the original, treats the latest "
+                "superseding record as the awareness in force, and does not decide whether an "
+                "authority accepts the correction."
+            )
+        notes.extend(f"ANOMALY: {a}" for a in self.anomalies)
+        return notes
+
     def outstanding(self, now: datetime | None = None) -> list[str]:
         """What still has to happen, worst first.
 
@@ -186,6 +334,7 @@ class Case:
             return out
         if self.triage_result is None:
             out.append("triage has not been recorded")
+        out.extend(self._supersession_notes())
         deadlines = self.deadlines
         if deadlines is not None:
             for d in deadlines.all():
@@ -267,6 +416,9 @@ class Case:
             "track": self.track.value if self.track else None,
             "signal": self.signal.to_dict() if self.signal else None,
             "awareness": self.awareness.to_dict() if self.awareness else None,
+            "awareness_record": self.awareness_hash or None,
+            "awareness_history": [dict(h) for h in self.awareness_history],
+            "deadline_shifts": [dict(x) for x in self.deadline_shifts],
             "assessment_lag_hours": (
                 self.awareness.lag_hours_from(self.signal)
                 if self.awareness and self.signal
@@ -377,10 +529,10 @@ class Art14Register:
             raise CaseError(
                 f"case {case_id} already has an awareness record at "
                 f"{format_utc(case.awareness.established_at)}. Moving it would move a legal "
-                "deadline. This version has no supersede record for a wrong awareness: the "
-                "original stays in the ledger, and a correction has to be made outside the "
-                "register by the operator (for example by opening a new case that cites this "
-                "one). Nothing was recorded."
+                "deadline, so this call never replaces it. A wrongly recorded awareness is "
+                "corrected by an explicit, reasoned supersession (art14 supersede-awareness; "
+                "POST /v1/cases/{case_id}/awareness/supersede): it appends a new record, keeps "
+                "this one in the ledger, and shows every deadline it moves. Nothing was recorded."
             )
         if case.users_informed_at is not None and case.users_informed_at < awareness.established_at:
             raise CaseError(
@@ -421,6 +573,126 @@ class Art14Register:
                     "the reporting platform does not currently capture this fact for "
                     "vulnerabilities, and records detection rather than awareness for incidents; "
                     "this record is the compensating control"
+                ),
+            ),
+            expect_head=head,
+        )
+
+    def supersede_awareness(
+        self,
+        case_id: str,
+        awareness: Awareness,
+        reason: str,
+        supersedes: str,
+        actor: Actor,
+        *,
+        now: datetime | None = None,
+    ) -> Evidence:
+        """Correct a wrongly recorded awareness by APPENDING a record that supersedes it.
+
+        Nothing is edited or deleted: the earlier awareness stays in the ledger and in the case
+        history, and the deadlines are computed from the newest awareness in force. What this
+        guards, because a deadline is a legal fact:
+
+        * a named person records it (``actor.kind == "person"``) and gives a reason;
+        * ``supersedes`` must be the content hash (or a prefix of at least 12 characters) of the
+          awareness record currently in force, so a stale view cannot supersede the wrong record;
+        * a closed case is refused, and so is a case with ANY filing recorded: a declared
+          submission was made against the deadlines as they stood, and moving them under it
+          would rewrite what that filing answered. Art. 14 does not say how a filed awareness is
+          corrected, and this register does not invent a rule; that is for a person outside it;
+        * the track is not changed (a different track is a different set of provisions);
+        * a deadline that moves is listed on the case with the person and the reason, and one
+          that was already past when the correction was recorded, and is moved later, keeps
+          appearing as a breach.
+        """
+        _require_person(actor, "superseding a recorded awareness")
+        case, head = self._load_for_write(case_id)
+        if case.awareness is None or case.track is None:
+            raise CaseError(
+                f"case {case_id} has no awareness record to supersede. Record the awareness "
+                "first. Nothing was recorded."
+            )
+        if case.state.startswith("closed"):
+            raise CaseError(
+                f"case {case_id} is closed ({case.state}). An awareness is not superseded on a "
+                "closed case: a person reopens the question outside this register. Nothing was "
+                "recorded."
+            )
+        filed = sorted(
+            set(case.filing_times) | {f["stage"] for f in case.uncounted_filings}
+        )
+        if filed:
+            raise CaseError(
+                f"case {case_id} already has a filing recorded ({', '.join(filed)}). A filing is "
+                "the manufacturer's declaration that it answered the deadlines as they stood; "
+                "superseding the awareness would move the deadlines under it. Art. 14 does not "
+                "provide a correction after filing and this register does not invent one. The "
+                "filing and the awareness stay as recorded. Nothing was recorded."
+            )
+        if not str(reason).strip():
+            raise EvidenceIncompleteError(
+                "a supersession needs a reason: why the awareness recorded earlier was wrong. "
+                "Nothing was recorded."
+            )
+        ref = str(supersedes).strip().lower()
+        if len(ref) < 12 or not case.awareness_hash.startswith(ref):
+            raise CaseError(
+                "supersedes must name the awareness record currently in force "
+                f"({case.awareness_hash[:16]}…) by its content hash, at least 12 characters; got "
+                f"{str(supersedes).strip()[:20]!r}. Nothing was recorded."
+            )
+        if not awareness.reasoning.strip():
+            raise EvidenceIncompleteError(
+                "an awareness record without reasoning is not evidence. Guidance §213 "
+                "makes this a judgement about reasonable certainty; record the judgement."
+            )
+        if case.signal is not None and awareness.established_at < case.signal.received_at:
+            raise CaseError(
+                "awareness cannot precede the signal that produced it "
+                f"({format_utc(awareness.established_at)} < "
+                f"{format_utc(case.signal.received_at)}). Nothing was recorded."
+            )
+        if case.users_informed_at is not None and case.users_informed_at < awareness.established_at:
+            raise CaseError(
+                f"users were recorded as informed at {format_utc(case.users_informed_at)}, before "
+                f"this awareness ({format_utc(awareness.established_at)}). Users cannot be "
+                "informed before the manufacturer became aware. Nothing was recorded."
+            )
+        if (
+            case.measure_available_at is not None
+            and case.measure_available_at < awareness.established_at
+        ):
+            raise CaseError(
+                f"a measure was recorded as available at {format_utc(case.measure_available_at)}, "
+                f"before this awareness ({format_utc(awareness.established_at)}). Nothing was "
+                "recorded."
+            )
+        reference = now or utc_now()
+        _not_in_future(awareness.established_at, "awareness established_at", reference)
+        _not_in_future(awareness.assessment_started_at, "assessment_started_at", reference)
+        _not_in_future(awareness.assessment_completed_at, "assessment_completed_at", reference)
+        require_deadline_arithmetic(
+            awareness.established_at, case.measure_available_at, field="established_at"
+        )
+        return self._append(
+            case_id,
+            CASE_KIND["awareness_supersession"],
+            {
+                "track": case.track.value,
+                "supersedes": case.awareness_hash,
+                "reason": str(reason).strip(),
+                "awareness": awareness.to_dict(),
+                "previous_awareness": case.awareness.to_dict(),
+            },
+            actor,
+            state=ValidationState.UNVERIFIED,
+            confidence=Confidence.NONE,
+            checks_skipped=(
+                (
+                    "Art. 14 and guidance C(2026) 5252 do not provide for correcting a recorded "
+                    "awareness moment; this is the manufacturer's own correction, kept beside "
+                    "the original, and no authority has accepted or checked it"
                 ),
             ),
             expect_head=head,
@@ -487,7 +759,8 @@ class Art14Register:
 
     def record_availability(self, case_id: str, product: ProductVersion, actor: Actor) -> Evidence:
         """Attach the product and Member State record the filing needs."""
-        self._guard(write=True)  # the only write that does not read the case first
+        case, head = self._load_for_write(case_id)
+        _require_open_case(case, case_id, "a product and Member State record")
         gaps = product.gaps()
         return self._append(
             case_id,
@@ -496,6 +769,7 @@ class Art14Register:
             actor,
             state=ValidationState.VERIFIED if not gaps else ValidationState.INDETERMINATE,
             checks_skipped=tuple(gaps),
+            expect_head=head,
         )
 
     def record_measure_available(
@@ -642,6 +916,7 @@ class Art14Register:
         technical detail would itself increase risk.
         """
         case, head = self._load_for_write(case_id)
+        _require_open_case(case, case_id, "a user notification")
         _not_in_future(at, "user notification time", now or utc_now())
         if case.awareness is not None and at < case.awareness.established_at:
             raise CaseError(
@@ -700,6 +975,7 @@ class Art14Register:
             actor_kind = str((entry.payload.get("actor") or {}).get("kind", "person"))
             if actor_kind != "person" and kind in (
                 CASE_KIND["awareness"],
+                CASE_KIND["awareness_supersession"],
                 CASE_KIND["triage"],
                 CASE_KIND["non_report"],
                 CASE_KIND["filing"],
@@ -708,11 +984,18 @@ class Art14Register:
                     f"ledger seq {entry.seq} ({kind}) was recorded by an actor of kind "
                     f"'{actor_kind}'."
                 )
+            case.history.append(_history_item(entry, body))
             if kind == CASE_KIND["signal"]:
                 case.signal = Signal.from_dict(body["signal"])
             elif kind == CASE_KIND["awareness"]:
                 case.awareness = Awareness.from_dict(body["awareness"])
                 case.track = Track(body["track"])
+                case.awareness_hash = entry.content_hash
+                case.awareness_history.append(
+                    _awareness_item(entry, case.awareness, status="in_force")
+                )
+            elif kind == CASE_KIND["awareness_supersession"]:
+                self._apply_supersession(case, entry, body)
             elif kind in (CASE_KIND["triage"], CASE_KIND["non_report"]):
                 t = body["triage"]
                 case.triage_result = TriageResult(
@@ -780,6 +1063,59 @@ class Art14Register:
         case.incomplete_stages = frozenset(s for s in counted if s not in filings_valid)
         return case, head
 
+    @staticmethod
+    def _apply_supersession(case: Case, entry: Any, body: dict[str, Any]) -> None:
+        """Fold one supersession into the case view: new awareness in force, shifts listed."""
+        new = Awareness.from_dict(body["awareness"])
+        ref = str(body.get("supersedes", ""))
+        prior, prior_hash = case.awareness, case.awareness_hash
+        by = _who(entry)
+        reason = str(body.get("reason", ""))
+        if prior is None or ref != prior_hash:
+            case.anomalies.append(
+                f"ledger seq {entry.seq} supersedes {ref[:16] or '(nothing named)'}, which is not "
+                f"the awareness in force at that point ({prior_hash[:16] or 'none'}). It is "
+                "applied as recorded; a person must confirm it."
+            )
+        if prior is not None:
+            try:
+                recorded = parse_utc(entry.at)
+            except ValueError:
+                recorded = None
+            for stage, hours, label in (
+                (Stage.EARLY_WARNING, 24, Stage.EARLY_WARNING.label),
+                (Stage.NOTIFICATION, 72, Stage.NOTIFICATION.label),
+            ):
+                old_due = prior.established_at + timedelta(hours=hours)
+                new_due = new.established_at + timedelta(hours=hours)
+                if old_due == new_due:
+                    continue
+                case.deadline_shifts.append(
+                    {
+                        "stage": stage.value,
+                        "stage_label": label,
+                        "from_due_at": format_utc(old_due),
+                        "to_due_at": format_utc(new_due),
+                        "moved_later": new_due > old_due,
+                        "original_already_passed": recorded is None or old_due < recorded,
+                        "by": by,
+                        "reason": reason,
+                        "record": entry.content_hash,
+                        "supersedes": ref,
+                        "recorded_at": entry.at,
+                    }
+                )
+        for item in case.awareness_history:
+            if item["content_hash"] == ref:
+                item["status"] = "superseded"
+                item["superseded_by"] = entry.content_hash
+        case.awareness = new
+        case.awareness_hash = entry.content_hash
+        item = _awareness_item(entry, new, status="in_force")
+        item["supersedes"] = ref
+        item["supersession_reason"] = reason
+        case.awareness_history.append(item)
+
     def case(self, case_id: str) -> Case:
         return self._load(case_id)
 
@@ -827,10 +1163,32 @@ class Art14Register:
         reference = now or utc_now()
         cases, unreadable = self.survey(reference)
         for case in cases:
+            for shift in case.deadline_shifts:
+                if shift["moved_later"] and shift["original_already_passed"]:
+                    found.append(
+                        {
+                            "case_id": case.case_id,
+                            "stage": shift["stage"],
+                            "provision": None,
+                            "due_at": shift["to_due_at"],
+                            "original_due_at": shift["from_due_at"],
+                            "submitted_at": None,
+                            "status": "deadline_moved_later_after_original_passed",
+                            "moved_by": shift["by"],
+                            "reason": shift["reason"],
+                            "superseding_record": shift["record"],
+                            "verified_by_platform": False,
+                        }
+                    )
             deadlines = case.deadlines
             if deadlines is None:
                 continue
+            closed_not_reportable = case.state == "closed_not_reportable"
             for d in deadlines.all():
+                if closed_not_reportable and d.submitted_at is None:
+                    # A person closed this case as not reportable: no submission is owed, and the
+                    # case view already lists no deadline. An unfiled stage is not a breach.
+                    continue
                 overdue = d.submitted_at is None and d.due_at < reference
                 incomplete_late = d.status == "recorded_incomplete" and d.due_at < reference
                 if d.met is False or overdue or incomplete_late:

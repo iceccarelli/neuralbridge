@@ -383,6 +383,17 @@ def _backup_steps(cfg: OpsConfig, chain: dict[str, Any], now: datetime
     cmd_b = f"python -m assurance.evidence.restore_check backup {cfg.data_dir} {target}"
     cmd_v = f"python -m assurance.evidence.restore_check verify {target}"
     t0 = time.monotonic()
+    data, bdir = cfg.data_dir.resolve(), cfg.backup_dir.resolve()
+    if bdir == data or bdir.is_relative_to(data) or data.is_relative_to(bdir):
+        # Taken into the data it copies, every cycle's backup would contain every earlier one
+        # (the copy grows without bound, exit 0) and the live directory would fill with files
+        # no manifest lists. `ops check` says the same; the cycle must refuse, not just warn.
+        why = ("backup_dir overlaps data_dir: a backup taken into the data it copies backs up "
+               "its own backups")
+        return [_step("backup", cmd_b, "failed", 2, t0, f"no backup taken: {why}"),
+                _skipped("backup.verify", cmd_v, "no backup was taken")], [
+            _action("backup", str(cfg.backup_dir), f"no backup was taken this cycle: {why}. "
+                    "Point backup_dir at a directory outside data_dir.")]
     try:
         cfg.backup_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

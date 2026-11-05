@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Not `pip install -e '.[assurance-attest]'`: this project declares 22 core
+      # Not `pip install -e '.[assurance-attest]'`: this project declares 21 core
       # dependencies unconditionally, so that would install the whole middleware
       # beside the one package the offline kit imports and this job would stop
       # testing a bare machine. The README's minimal path is cryptography plus the

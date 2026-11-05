@@ -70,6 +70,19 @@ def store(ledger):
     return CaseStore(ledger)
 
 
+def _hide_the_write(ledger: EvidenceLedger) -> None:
+    """Make the in-place change look like one made alongside an append.
+
+    A write that is NOT an append (file changed, head did not move) now escalates the cached check
+    to a full walk, so the blind window these tests exercise only exists when a record is appended
+    in the same breath (a concurrent writer). Append an unrelated record to recreate it.
+    """
+    from assurance.core.evidence import Actor, Evidence, Origin
+
+    ledger.append(Evidence(kind="test.unrelated", body={"masking": True}, actor=Actor("t"),
+                           origin=Origin("pytest")).seal(), subject="unrelated-subject")
+
+
 def edit_old_record_in_place(ledger: EvidenceLedger) -> None:
     """Change one byte of the first (non-head) record's payload, as someone with
     write access to the database file could."""
@@ -81,6 +94,7 @@ def edit_old_record_in_place(ledger: EvidenceLedger) -> None:
         db.commit()
     finally:
         db.close()
+    _hide_the_write(ledger)
 
 
 # =====================================================================
