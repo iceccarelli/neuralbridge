@@ -202,6 +202,8 @@ class WatchRun:
     sealed: tuple[str, ...] = field(default_factory=tuple)
     #: Records an EARLIER run sealed and never reported because it died before its run record.
     interrupted_prior_run: tuple[str, ...] = field(default_factory=tuple)
+    #: Serials the previous run watched that this watch file no longer lists.
+    dropped_targets: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def findings(self) -> tuple[MachineOutcome, ...]:
@@ -235,6 +237,7 @@ class WatchRun:
         not established that anything is clear (see ``watch.advisories``).
         """
         if self.uncollectable or self.stale_observations or self.interrupted_prior_run \
+                or self.dropped_targets \
                 or self.advisories.degraded or self.unwitnessed \
                 or self.advisories.not_assessed:
             return "degraded"
@@ -258,6 +261,7 @@ class WatchRun:
             "filings": self.filings.to_dict(),
             "sealed": list(self.sealed),
             "interrupted_prior_run": list(self.interrupted_prior_run),
+            "dropped_targets": list(self.dropped_targets),
             "checks_skipped": list(self.checks_skipped),
         }
 
@@ -301,6 +305,10 @@ class WatchRun:
                          + "; ".join(self.interrupted_prior_run))
             lines.append("  Its changes are already in the baseline, so this run cannot see "
                          "them as new. Read those records.")
+        if self.dropped_targets:
+            lines.append("")
+            lines.append("  NO LONGER WATCHED: " + ", ".join(self.dropped_targets)
+                         + ". The previous run looked at them; this watch file does not.")
         if self.stale_observations:
             lines.append("")
             lines.append("  NOT LOOKED AT RECENTLY ENOUGH: "
@@ -546,6 +554,12 @@ def _run_watch(
     prior = _previous_state(previous)
     # Work an earlier run sealed and died before reporting: the baseline already contains it.
     interrupted = interrupted_work(ledger, config)
+    # A machine the previous run watched and this file no longer lists is not "quiet": nobody
+    # looked. Said once; the next run's previous run no longer lists it.
+    listed = {t.serial for t in config.targets}
+    dropped = tuple(sorted(
+        {str(o.get("serial", "")) for o in (previous or {}).get("outcomes", [])
+         if isinstance(o, dict)} - listed - {""}))
 
     store = CaseStore(ledger)
     outcomes: list[MachineOutcome] = []
@@ -793,6 +807,10 @@ def _run_watch(
         )
         caveats.extend(filings.checks_skipped)
 
+    if dropped:
+        caveats.append("no longer watched: " + ", ".join(dropped) + ". The previous run looked "
+                       "at them and this watch file does not list them, so this run says "
+                       "nothing about them.")
     caveats.extend([
         "a watch reports what its plans look for in the folders it was pointed "
         "at. A machine not listed in the configuration is not watched, and its "
@@ -820,6 +838,7 @@ def _run_watch(
         checks_skipped=tuple(dict.fromkeys(caveats)),
         sealed=tuple(sealed),
         interrupted_prior_run=interrupted,
+        dropped_targets=dropped,
     )
 
     if seal:

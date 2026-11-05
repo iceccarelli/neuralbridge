@@ -44,10 +44,13 @@ class StatusFreshness:
     stale_machines: tuple[str, ...] = field(default_factory=tuple)
     #: Records this watch sealed AFTER its last run record: a run that began and did not finish.
     interrupted: tuple[str, ...] = field(default_factory=tuple)
+    #: The last run was made under a different watch file than the one being asked about.
+    config_changed: bool = False
 
     @property
     def degraded(self) -> bool:
-        return self.state != "fresh" or bool(self.stale_machines) or bool(self.interrupted)
+        return self.state != "fresh" or bool(self.stale_machines) or bool(self.interrupted) \
+            or self.config_changed
 
     @property
     def reasons(self) -> tuple[str, ...]:
@@ -65,6 +68,10 @@ class StatusFreshness:
         if self.stale_machines:
             out.append("not looked at successfully within max_age_hours: "
                        + ", ".join(self.stale_machines))
+        if self.config_changed:
+            out.append("the last run was made under a different watch configuration than this "
+                       "file (a machine dropped, a plan swapped): its verdict does not describe "
+                       "what this file would look at. Run the watch again")
         if self.interrupted:
             out.append("a run began and did not finish: it sealed " + "; ".join(self.interrupted)
                        + " after the last run record. What it found was never reported, so the "
@@ -77,7 +84,8 @@ class StatusFreshness:
             "last_run_at": self.last_run_at, "age_hours": self.age_hours,
             "max_age_hours": self.max_age_hours, "degraded": self.degraded,
             "stale_machines": list(self.stale_machines),
-            "interrupted": list(self.interrupted), "reasons": list(self.reasons),
+            "interrupted": list(self.interrupted),
+            "config_changed": self.config_changed, "reasons": list(self.reasons),
         }
 
 
@@ -95,14 +103,18 @@ def interrupted_work(ledger: EvidenceLedger, config: WatchConfig) -> tuple[str, 
 
     kinds = {OBSERVATION_KIND, MANIFEST_KIND, DIVERGENCE_KIND, cases.OPENED_KIND,
              cases.UPDATED_KIND}
-    entries = ledger.entries()
-    last_seq = 0
-    for entry in reversed(entries):
-        if entry.kind == RUN_KIND and _run_is_ours(entry, config):
-            last_seq = entry.seq
-            break
-    return tuple(f"{e.kind} {e.subject} (seq {e.seq})" for e in entries
-                 if e.seq > last_seq and e.kind in kinds and e.actor == config.operator)
+    # read_subject tolerates a row whose payload is not JSON: a damaged record must not take
+    # this check out. A damaged record of one of these kinds after the last run is counted.
+    runs, _, _ = ledger.read_subject(None, RUN_KIND)
+    last_seq = max((e.seq for e in runs if _run_is_ours(e, config)), default=0)
+    found: list[tuple[int, str]] = []
+    for kind in sorted(kinds):
+        readable, damaged, _ = ledger.read_subject(None, kind)
+        found += [(e.seq, f"{e.kind} {e.subject} (seq {e.seq})") for e in readable
+                  if e.seq > last_seq and e.actor == config.operator]
+        found += [(d.seq, f"unreadable {d.kind} {d.subject} (seq {d.seq})") for d in damaged
+                  if d.seq > last_seq]
+    return tuple(text for _, text in sorted(found))
 
 
 def _run_is_ours(entry: Any, config: WatchConfig) -> bool:
@@ -138,4 +150,5 @@ def assess_status_freshness(
     return StatusFreshness(
         state=state, assessed_at=format_utc(now), last_run_at=raw, age_hours=age,
         max_age_hours=config.max_age_hours, stale_machines=tuple(sorted(stale)),
-        interrupted=interrupted_work(ledger, config))
+        interrupted=interrupted_work(ledger, config),
+        config_changed=str(body.get("config_hash", "")) != config.content_hash())
