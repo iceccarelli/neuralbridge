@@ -526,13 +526,22 @@ def get_register(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "invalid_account_id"},
         ) from exc
-    notice = _deletion_notice(path)       # BEFORE any ledger open: never recreate a ledger
+    refuse_if_tenant_deleted(path)        # BEFORE any ledger open: never recreate a ledger
+    return _tenant_register_for(str(path))
+
+
+def refuse_if_tenant_deleted(path: Path) -> None:
+    """410 ``account_data_deleted`` if an operator removed the account whose ledger is *path*.
+
+    The one check every per-account store consults (the register here, the attestation log in
+    ``attest_routes``), so a deleted account is gone from all of them and none re-creates
+    its files. Call it before opening anything."""
+    notice = _deletion_notice(path)
     if notice is not None:
         # Do not keep a ledger object across the marker: if an operator lifts it by hand and
         # restores the file, the next request must open the restored file afresh.
         _tenant_register_for.cache_clear()
         raise HTTPException(status_code=status.HTTP_410_GONE, detail=notice)
-    return _tenant_register_for(str(path))
 
 
 def seconds_until_reset() -> tuple[int, str]:

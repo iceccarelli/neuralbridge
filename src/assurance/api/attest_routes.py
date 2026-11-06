@@ -62,7 +62,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Anyone, Attesting, get_accounts
+from assurance.api.deps import (
+    Anyone,
+    Attesting,
+    get_accounts,
+    refuse_if_tenant_deleted,
+    tenant_ledger_path,
+)
 from assurance.attest.attestation import (
     AttestationBasis,
     AttestationBusyError,
@@ -197,6 +203,18 @@ def _service_key() -> SigningKey:
 
 
 def _log_for(principal: Principal) -> AttestationLog:
+    account = getattr(principal, "account", None)
+    if account is not None and account.id != "operator":
+        # A customer account an operator deleted has no attestation store either: 410
+        # before the log is opened (opening it would re-create it).
+        try:
+            ledger = tenant_ledger_path(account.id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "invalid_account_id"},
+            ) from exc
+        refuse_if_tenant_deleted(ledger)
     root = Path(os.environ.get(_LOGS_ENV, "attestations"))
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in principal.subject)
     return AttestationLog(root / f"{safe}.jsonl", label=_LOG_LABEL)
