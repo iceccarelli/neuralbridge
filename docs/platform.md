@@ -22,7 +22,7 @@ the same rows; `tests/test_site_honesty.py` fails if the three differ.
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
-What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends real HTTP requests, bounded by SSRF refusal, size, time and redirect limits, and is tested only against a local HTTP server that its own test starts (tests/test_rest_adapter.py); it has not been run against any third-party API.
 
 No enterprise certification or compliance attestation is held.
 
