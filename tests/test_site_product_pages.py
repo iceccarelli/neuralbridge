@@ -317,7 +317,7 @@ class TestMetadataInTheData:
     def test_titles_do_not_repeat_the_page_titles_the_site_already_has(self, pages):
         taken = set()
         for relative in ("app/layout.tsx", "app/security/page.tsx", "app/privacy/page.tsx", "app/contact/page.tsx",
-                         "app/verify/page.tsx", "app/status/page.tsx", "app/roadmap/page.tsx", "app/cli/page.tsx"):
+                         "app/verify/page.tsx", "app/roadmap/page.tsx", "app/cli/page.tsx"):
             taken |= set(re.findall(r"title:\s*'([^']+)'", (ROOT / relative).read_text(encoding="utf-8")))
         assert not taken & {p["title"] for p in pages}
 

@@ -62,7 +62,6 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'OpenAPI schema', group: 'Docs', href: '/openapi.json', blurb: 'The real OpenAPI 3 schema, generated from the FastAPI app.' },
   { title: 'Capability contract (JSON)', group: 'Docs', href: '/capabilities.json', blurb: 'Machine-readable: each capability with its CLI, API and MCP surfaces, generated from the code.' },
   ...(repoLink('#readme') ? [{ title: 'README — full source', group: 'Docs' as const, href: repoLink('#readme') as string, blurb: 'Every CLI verb, checked against --help.', external: true }] : []),
-  { title: 'Deploy guide', group: 'Docs', href: `/docs/assurance/deploy`, blurb: 'Rehearse in Stripe test mode first: nothing here has been deployed.' },
   { title: 'Roadmap', group: 'Docs', href: '/roadmap', blurb: 'What is planned and not yet built.' },
   { title: 'Security policy', group: 'Docs', href: '/security', blurb: 'How to report a vulnerability.' },
   ...(repoLink('/blob/main/CONTRIBUTING.md') ? [{ title: 'Contributing', group: 'Docs' as const, href: repoLink('/blob/main/CONTRIBUTING.md') as string, blurb: 'How to propose a change to this repository.', external: true }] : []),

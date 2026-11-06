@@ -20,7 +20,12 @@ const nextConfig = {
   // a link to it should land on the category page, not a 404. Permanent, and the target is the
   // same URL the sitemap, the breadcrumbs and the navigation already use.
   async redirects() {
-    return [{ source: '/product', destination: '/product/industrial-autonomous-assurance', permanent: true }];
+    return [
+      { source: '/product', destination: '/product/industrial-autonomous-assurance', permanent: true },
+      // /status was a static deploy checklist for the operator. It is retired; operators read the
+      // deployment documentation, visitors land on the developer reference.
+      { source: '/status', destination: '/developers', permanent: true },
+    ];
   },
   async headers() {
     return [

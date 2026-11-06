@@ -914,22 +914,25 @@ class TestGeneratedImageryIsDisclosed:
 
 
 # ---------------------------------------------------------------------------
-# 14. /status is a static checklist
+# 14. /status (the retired operator checklist) leaves no public trace
 # ---------------------------------------------------------------------------
-class TestStatusPageIsDescribedAsAStaticChecklist:
-    def test_title_and_description_do_not_pose_as_live_status(self):
-        source = read("app/status/page.tsx")
-        title = re.search(r"title: '([^']+)'", source).group(1)
-        description = re.search(r"description:\s*'([^']+)'", source).group(1)
-        assert "checklist" in title.lower()
-        assert re.search(r"\bstatic\b", description) and "does not" in description
-        assert "checked at build time" not in description
-        assert "index: false" in source
+class TestRetiredStatusRouteLeavesNoTrace:
+    def test_the_page_is_gone_and_the_route_redirects_permanently(self):
+        assert not (ROOT / "app/status/page.tsx").exists()
+        config = read("next.config.js")
+        assert re.search(r"source: '/status', destination: '/developers', permanent: true", config)
 
-    def test_the_footer_and_llms_txt_call_it_a_checklist(self):
-        assert "Deploy status" not in read("app/layout.tsx")
-        assert "Deploy status" not in read("public/llms.txt")
-        assert "Deploy checklist" in read("app/layout.tsx")
+    @pytest.mark.parametrize("relative", [
+        "app/layout.tsx", "app/Header.tsx", "app/robots.ts", "app/sitemap.ts", "app/components/Console.tsx",
+        "app/components/InvestigationWorkspace.tsx", "app/developers/page.tsx", "src/assurance/mcp/server.py",
+        "public/llms.txt", "public/.well-known/agent.json",
+        "scripts/site_static/llms.txt.tmpl", "scripts/site_static/agent.json.tmpl",
+    ])
+    def test_no_public_surface_links_to_it_or_to_the_founder_checklist(self, relative):
+        text = read(relative)
+        assert "/status" not in text, relative
+        assert "Deploy checklist" not in text and "founder checklist" not in text.lower(), relative
+        assert "DEPLOY_NOW" not in text, relative
 
 
 # ---------------------------------------------------------------------------

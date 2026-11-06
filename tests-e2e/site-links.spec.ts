@@ -28,9 +28,9 @@ function noindexRoutes(): string[] {
   return out;
 }
 
-test('the noindex set is derived from the pages, and covers the three known ones', () => {
+test('the noindex set is derived from the pages, and covers the two known ones', () => {
   const found = noindexRoutes();
-  for (const r of ['/assurance', '/checkout/success', '/status']) expect(found, `${r} declares index: false`).toContain(r);
+  for (const r of ['/assurance', '/checkout/success']) expect(found, `${r} declares index: false`).toContain(r);
 });
 
 function hrefs(html: string): string[] {

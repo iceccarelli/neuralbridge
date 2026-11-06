@@ -224,7 +224,7 @@ class TestSiteListsAreDerivedFromTheContract:
 class TestWhatTheSiteSaysAboutIntel:
     @pytest.mark.parametrize("relative", [
         "app/docs/capabilities/page.tsx", "app/developers/page.tsx", "app/connectors/mcp/page.tsx",
-        "app/cli/page.tsx", "app/status/page.tsx", "public/llms.txt", "README.md",
+        "app/cli/page.tsx", "public/llms.txt", "README.md",
         "app/lib/siteCapabilities.ts",
     ])
     def test_the_unconfigured_store_is_a_503_and_fetching_is_an_operator_act(self, relative):
@@ -265,11 +265,10 @@ class TestWhatTheSiteSaysAboutIntel:
             hit = banned.search(_text(relative))
             assert hit is None, f"{relative}: {hit.group(0)!r}"
 
-    def test_the_status_page_still_says_nothing_is_deployed_and_the_key_ceremony_is_not_done(self):
-        text = " ".join(_text("app/status/page.tsx").split())
-        assert "Prepared, not performed" in text
+    def test_the_key_ceremony_doc_still_says_no_production_key_exists(self):
+        text = " ".join(_text("deploy/assurance/KEY-CEREMONY.md").split())
+        assert "prepared, not performed" in text.lower()
         assert "No production key exists" in text
-        assert "done: true" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +284,7 @@ class TestDocsPagesAndLinks:
     def test_every_declared_source_exists_so_no_nav_link_answers_not_found(self):
         docs = _text("app/lib/docs.ts")
         sources = re.findall(r"source: '([^']+)'", docs)
-        assert len(sources) >= 15
+        assert len(sources) >= 14
         assert [s for s in sources if not (ROOT / s).exists()] == []
 
     def test_every_docs_nav_entry_is_a_rendered_page(self):
@@ -331,11 +330,11 @@ class TestDocsPagesAndLinks:
           const m = await import('./app/lib/docs.ts');
           process.stdout.write(JSON.stringify([
             m.rewriteLinks('[a](KEY-CEREMONY.md)'), m.rewriteLinks('[b](key-ceremony.md)'),
-            m.rewriteLinks('[c](assurance/pipeline.md)'), m.rewriteLinks('[d](assurance/deploy.md)'),
+            m.rewriteLinks('[c](assurance/pipeline.md)'), m.rewriteLinks('[d](assurance/trust-runbook.md)'),
           ]));
         """, stub_marked=True)
         assert out == ["[a](/docs/assurance/key-ceremony)", "[b](/docs/assurance/key-ceremony)",
-                       "[c](/docs/assurance/pipeline)", "[d](/docs/assurance/deploy)"]
+                       "[c](/docs/assurance/pipeline)", "[d](/docs/assurance/trust-runbook)"]
 
     def test_the_mkdocs_includes_point_at_files_that_exist(self):
         for page in (ROOT / "docs" / "assurance").glob("*.md"):

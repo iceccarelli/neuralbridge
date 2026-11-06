@@ -57,7 +57,7 @@ test('Offer and Product structured data is on / only, monthly, and claims no ava
   }
   expect(JSON.stringify(home)).not.toMatch(/availability/i);
 
-  for (const path of ['/privacy', '/contact', '/status', '/assurance', '/docs', '/solutions/manufacturer']) {
+  for (const path of ['/privacy', '/contact', '/assurance', '/docs', '/solutions/manufacturer']) {
     const blocks = jsonLd(await (await request.get(path)).text());
     // Organization + WebSite from the layout; the docs index adds its visible breadcrumb trail. No Offer anywhere else.
     const expected = path === '/docs' ? ['Organization', 'WebSite', 'BreadcrumbList'] : ['Organization', 'WebSite'];
@@ -115,11 +115,12 @@ test('every page that shows generated imagery says so, in visible text', async (
   expect(shown).toBeGreaterThanOrEqual(7);
 });
 
-test('the orphan llm.txt is gone, llms.txt stays, and /status is called a checklist', async ({ request }) => {
+test('the orphan llm.txt is gone, llms.txt stays, and the retired /status route redirects to /developers', async ({ request }) => {
   expect((await request.get('/llm.txt', { failOnStatusCode: false })).status()).toBe(404);
   expect((await request.get('/llms.txt')).status()).toBe(200);
-  const html = await (await request.get('/status')).text();
-  expect(/<title>([^<]*)<\/title>/.exec(html)?.[1]).toContain('Deploy checklist');
+  const res = await request.get('/status', { maxRedirects: 0, failOnStatusCode: false });
+  expect(res.status()).toBe(308);
+  expect(res.headers()['location']).toContain('/developers');
 });
 
 test('the privacy page names every storage key the app uses', async ({ request }) => {

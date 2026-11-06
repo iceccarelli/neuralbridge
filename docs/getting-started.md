@@ -63,5 +63,3 @@ network calls.
   and the finding nobody else produces.
 - [The operator pipeline](assurance/pipeline.md) — a public vulnerability record
   to a machine passport, in the order an operator runs it.
-- [Deploying](assurance/deploy.md) — Fly.io and Stripe in test mode first;
-  nothing in this repository has been deployed.

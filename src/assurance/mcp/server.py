@@ -89,7 +89,7 @@ _NOT_CONFIGURED = {
         "assurance.api.service:app, e.g. http://127.0.0.1:8000 for a local "
         "run (uvicorn assurance.api.service:app) or the Fly hostname of a "
         "real deployment. This server never fakes a response — see "
-        "https://neuralbridge.io/status for what a live deployment needs."
+        "https://neuralbridge.io/developers for the API reference."
     ),
 }
 

@@ -88,7 +88,7 @@ export default function InvestigationWorkspace() {
     setRefusal(null);
     setResult(null);
     if (!API_BASE) {
-      setRefusal({ kind: 'error', status: 0, message: 'No API URL configured for this deployment — see /status.' });
+      setRefusal({ kind: 'error', status: 0, message: 'No API URL configured for this deployment. Set NEXT_PUBLIC_ASSURANCE_API_URL to a running API.' });
       return;
     }
     if (!machineKey.trim()) {

@@ -25,7 +25,6 @@ const SURFACES: { name: string; path: string; waitFor?: string }[] = [
   { name: 'checkout-success', path: '/checkout/success' },
   { name: 'connectors-mcp', path: '/connectors/mcp' },
   { name: 'connectors-cursor', path: '/connectors/cursor' },
-  { name: 'status', path: '/status' },
   { name: 'contact', path: '/contact' },
   { name: 'developers', path: '/developers' },
   { name: 'cli', path: '/cli' },
