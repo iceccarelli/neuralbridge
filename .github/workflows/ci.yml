@@ -61,7 +61,13 @@ jobs:
       # --noconftest: tests/conftest.py imports FastAPI, which this job does not install; this test
       # needs only pytest, node and the repo (checked in a clean environment: 159 passed, 0 skipped; the Python Tests job has no
       # node_modules, so these built-page tests skip there and run here).
-      - run: python -m pytest tests/test_site_repo_links.py tests/test_site_product_pages.py tests/test_site_seo.py -q -o addopts="" -p no:cacheprovider -rs --noconftest
+      # NEURALBRIDGE_REQUIRE_NODE=1: in this job, which has node_modules, a skip for want of node or
+      # node_modules is a FAILURE, not a gate that silently did not run (the same three modules skip
+      # 126 tests in the Python test job, which has no node_modules). --noconftest drops
+      # tests/conftest.py, so the hook is loaded by name (tests/require_postgres_plugin.py).
+      - run: python -m pytest tests/test_site_repo_links.py tests/test_site_product_pages.py tests/test_site_seo.py -q -o addopts="" -p no:cacheprovider -rs --noconftest -p tests.require_postgres_plugin
+        env:
+          NEURALBRIDGE_REQUIRE_NODE: "1"
 
   # ── Unit Tests ─────────────────────────────────────────────
   test:
