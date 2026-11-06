@@ -58,12 +58,11 @@ no account, no API key, no upload, nothing to procure. (That is true of the kit
 and of the other offline commands. It is not true of the hosted service below,
 which needs an account and a key.)
 
-`pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
-this project declares 21 core dependencies unconditionally (fastapi, sqlalchemy,
-asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
-platform, and the extra adds nothing to them: `cryptography` is already one of the 21 core
-dependencies, so the extra is a label, not a smaller install. The offline kit imports
-`cryptography` and nothing else outside the standard library.
+`pip install -e .` from the checkout is the same minimal install: the project's base
+dependencies are `cryptography` and nothing else, because that is all the offline kit
+imports outside the standard library (`pip install -e '.[assurance-attest]'` is identical,
+a label kept so existing commands work). The hosted API, the MCP gateways and the NeuralBridge
+integration platform are extras, listed under [Install](#install-what-each-extra-adds).
 
 The run arms a guard over the process's socket layer, refuses every outbound
 connection — including name resolution, because resolving a name has already
@@ -150,6 +149,28 @@ evidence only a paying customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
+
+## Install: what each extra adds
+
+The base install is what the offline kit and the `assurance` command line import, measured by
+installing into an empty virtual environment and running them
+(`tests/test_packaging_contract.py` pins it): `cryptography`. Everything else is an extra.
+
+| You want | Install | Third-party packages beyond the standard library |
+|---|---|---|
+| The offline kit and the `assurance` CLI | `pip install -e .` (or `pip install cryptography` and `PYTHONPATH=src`) | `cryptography` |
+| `assurance watch push`, `assurance supplier fetch` (HTTP) | `pip install -e '.[assurance-supplier-fetch]'` | `httpx` |
+| The hosted API, and `assurance capabilities` (it reads the API's routes) | `pip install -e '.[assurance-api]'` | `fastapi`, `uvicorn[standard]`, `pydantic`, `httpx`, `cryptography` |
+| The assurance MCP gateway (`assurance-mcp`) | `pip install -e '.[assurance-mcp]'` | `mcp`, `httpx` |
+| The NeuralBridge integration platform (`neuralbridge` command, `/ai` control plane) | `pip install -e '.[platform]'` | `fastapi`, `uvicorn[standard]`, `pydantic`, `pydantic-settings`, `asyncpg`, `redis`, `pyjwt`, `httpx`, `pyyaml`, `structlog`, `tiktoken`, `passlib[bcrypt]`, `cryptography` (all imported by `src/neuralbridge`), plus `sqlalchemy`, `alembic`, `opentelemetry-*`, `prometheus-client`, `jinja2`, `python-multipart` (declared, imported by nothing under `src/` today). `.[platform]` is exactly what a plain `pip install -e .` installed before the base install was reduced |
+| `neuralbridge-ai-mcp` | `pip install -e '.[neuralbridge-ai-mcp]'` | `mcp`, `httpx`, `pydantic`, `pydantic-settings` |
+| Vendor adapters (evolving) | `.[bigquery]`, `.[mongodb]`, `.[mysql]` (on top of `.[platform]`) | the vendor SDK |
+| Working on this repository | `pip install -e '.[dev]'` | platform + assurance API + MCP + test tools |
+
+`.[assurance-attest]` still works and is the same install as the base. The `neuralbridge`
+command starts the platform, so it needs `.[platform]`; on a base install it stops with
+`ModuleNotFoundError`. The hash-locked images (`requirements/*.lock`) install with
+`--no-deps` and are not affected by these extras.
 
 ## Run the API
 
@@ -339,7 +360,7 @@ git clone https://github.com/iceccarelli/neuralbridge.git
 cd neuralbridge
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # platform + assurance API + MCP gateways + test tools
 ```
 
 ### Dashboard Setup
