@@ -11,13 +11,15 @@ capabilities --check`), `docs/claims-registry.md` (every public claim and where 
 ## Business boundaries
 - NeuralBridge and GridForge / Time-to-Power are independent businesses. Do not
   merge their products, customers, data or infrastructure.
-- Zero revenue, zero customers, zero pilots and no production deployment are
-  the standing facts until `docs/pmf/pilot-ledger.csv` holds a real, dated row (named customer or pilot, with a
-  source document). Today it holds only its header.
-  Never write a customer, price validation, market size or valuation claim that
-  is not sourced to a named file or document.
-- Prices (€390 / €3,900 / €1,290) are unvalidated assertions. Do not create
-  Stripe prices, change live pricing, or add SKUs without the founder.
+- The strategy is engineering-first. Commercialisation (sales, outreach, pilots, paid
+  trials, pricing experiments, launch announcements) starts only when the founder
+  authorises it against defined engineering and operational gates.
+- A customer, pilot, price-validation, market-size or valuation claim needs a named, dated
+  source document; `docs/pmf/pilot-ledger.csv` is the gate for customer and pilot claims.
+  Never invent one, and never publish internal commercial assessments.
+- Prices (€390 / €3,900 / €1,290) are unvalidated assertions. Do not create Stripe prices,
+  change live pricing, or add SKUs without the founder.
+- Internal engineering notes stay out of the public site, `llms.txt` and `agent.json`.
 
 ## Engineering invariants
 - If it is not enforced in code it is not on the pricing page

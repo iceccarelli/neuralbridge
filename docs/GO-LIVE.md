@@ -58,8 +58,8 @@ uvicorn neuralbridge.main:app --host 127.0.0.1 --port 8000 &
 
 Or, with a Docker daemon available: `docker compose -f docker-compose.ai.yml
 -f docker-compose.demo.yml up -d` (see `docker-compose.demo.yml`'s own
-header). **This rehearsal had no Docker daemon available**, same constraint
-`reports/NEURALBRIDGE-FIRST-EURO.md` already logged — the compose file was
+header). **This rehearsal had no Docker daemon available**, same constraint as
+an earlier rehearsal — the compose file was
 not exercised with a live `docker compose up` here either. The direct-uvicorn
 path above was used instead and is what produced every result in this doc.
 
@@ -125,9 +125,7 @@ npx playwright test
 Expect all five specs to pass (`ai.spec.ts`, `ai-entitlement.spec.ts`,
 `console-first-case.spec.ts`, `phase3-first-euro.spec.ts`,
 `phase4-visual-qa.spec.ts`) — `phase3-first-euro.spec.ts` has a
-Postgres-backed sub-case that self-skips without a local Postgres (see
-`reports/NEURALBRIDGE-PHASE4-SURFACE.md`'s note on that). Note from
-`reports/NEURALBRIDGE-PHASE4-SURFACE.md`: run against `http://localhost:3000`,
+Postgres-backed sub-case that self-skips without a local Postgres. Note: run against `http://localhost:3000`,
 not `http://127.0.0.1:3000` — the assurance API's CORS allowlist defaults to
 `localhost` only (`ASSURANCE_ALLOWED_ORIGINS`), so `127.0.0.1` fails CORS in
 a real browser even though the backend is healthy.
@@ -250,7 +248,7 @@ it is cross-referenced, not repeated.
 
 4. **That key opens a First Register case in Console, and does an `/ai` write.**
    Not currently covered by `SMOKE.md` — added here because
-   `reports/NEURALBRIDGE-PHASE4-SURFACE.md`'s Console `FirstCase` flow and
+   the Console `FirstCase` flow and
    the `/ai` write path are both real paid surfaces a buyer reaches within
    minutes of paying.
    - In a browser, go to `/console#first-case` (or follow the

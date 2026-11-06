@@ -4,9 +4,9 @@
 tool below has never been run against a hosted staging host; it has only been
 exercised against local servers in `tests/test_staging_rehearsal.py` and
 `tests/test_staging_rehearsal_hardening.py`. Every step here is yours, with your
-own credentials. Standing facts (`docs/pmf/pilot-ledger.csv` holds no row): zero revenue, zero customers,
-zero pilots, no production deployment. The prices (€390 / €3,900 / €1,290) are
-unvalidated assertions, and nothing here tells you to set a live Stripe key — live
+own credentials. No customer, pilot or production-deployment claim may be made without a dated row in
+`docs/pmf/pilot-ledger.csv`. The prices (€390 / €3,900 / €1,290) are unvalidated
+assertions, and nothing here tells you to set a live Stripe key — live
 mode is a separate, later decision that is yours.
 
 For the founder's laptop or CI with real network access. **Not for Claude Code

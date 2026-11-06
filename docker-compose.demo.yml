@@ -21,8 +21,8 @@
 # correctness against the same commands `docs/ai-local-setup.md` documents
 # running directly (uvicorn + pip install -e), but was not exercised
 # against a live `docker compose up` in the environment this phase was
-# written in (no Docker daemon available there) — see
-# reports/NEURALBRIDGE-FIRST-EURO.md for what *was* run directly.
+# written in (no Docker daemon available there); the API and site were run
+# directly (uvicorn and next start) instead.
 
 services:
   postgres:

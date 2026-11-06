@@ -108,8 +108,7 @@ upgrade of something that exists.
   the account holder to check Settings.
 - Pricing: `docs/pricing.md` and `src/assurance/billing/plans.py` agree on
   three tiers — **Validator** (free), **Register** (€390/mo), **Cell**
-  (€1,290/mo) — see `NEURALBRIDGE-AI-COMMERCIAL-MAP.md` for the full
-  breakdown and entitlement gating. `GET /v1/plans` is documented as
+  (€1,290/mo); entitlement gating is in `src/assurance/billing/plans.py`. `GET /v1/plans` is documented as
   generated live from the same `PLANS` table the API enforces, which is the
   correct pattern (no drift between advertised and enforced tiers) —
   confirmed by reading `plans.py`, not by hitting the live endpoint.
@@ -174,9 +173,8 @@ upgrade of something that exists.
   stray file to delete, but flagged per the brief's "report... founder
   leftovers" instruction.
 - No `gh-pages` branch reference found merged into product docs (only a
-  historical mention in CI/status/branch-consolidation notes — grep hits
-  were `.github/workflows/ci.yml`, `app/status/page.tsx`,
-  `BRANCH-CONSOLIDATION.md`, `DEPLOY_NOW.md`; none of these indicate an
+  historical mention in CI and deployment notes — grep hits
+  were `.github/workflows/ci.yml` and `DEPLOY_NOW.md`; none of these indicate an
   active `gh-pages` deployment target for the product site).
 - **Stale `neuralbridge.vercel.app` deployment — confirmed in-repo, not yet
   retired.** `app/status/page.tsx` carries this exact checklist item, still

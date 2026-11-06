@@ -37,8 +37,8 @@ What it does, and does not:
 * It refuses to run while a live-looking Stripe credential is in the environment (a
   ``sk_live_``/``rk_live_``/``pk_live_``/``ek_live_``/``whsec_live`` value, a ``STRIPE*LIVE*``
   variable, or ``ASSURANCE_PAYG_ALLOW_LIVE``), and says which variable by name and never its
-  value. Zero revenue and no live Stripe are the standing facts; run this from a shell that
-  does not hold the variable.
+  value. Manual provisioning is a test-mode tool; run it from a shell that does not hold the
+  variable.
 
 Exit codes: 0 done, 2 refused or could not run (the message says what to do).
 """
@@ -445,8 +445,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise _RefusedError(
                     "a live-looking Stripe credential is in this environment ("
                     + ", ".join(live) + "). This tool provisions pilots outside Stripe and "
-                    "refuses to run beside live Stripe access: zero revenue and no live "
-                    "Stripe are the standing facts until the founder says otherwise. Run it "
+                    "refuses to run beside live Stripe access: it is a test-mode tool "
+                    "until the founder authorises otherwise. Run it "
                     "from a shell that does not hold the variable (its value is not shown).")
         return handlers[args.command](args)
     except _RefusedError as exc:
