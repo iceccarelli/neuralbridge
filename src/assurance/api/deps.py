@@ -62,7 +62,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
@@ -1148,6 +1148,35 @@ async def _send_json_refusal(
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode())]})
     await send({"type": "http.response.body", "body": body})
+
+
+#: A 422 lists at most this many errors, each ``msg`` at most ``_MAX_ERR_TEXT`` characters and
+#: each ``loc`` at most ``_MAX_LOC_PARTS`` parts of ``_MAX_ERR_TEXT`` characters.
+MAX_VALIDATION_ERRORS = 20
+_MAX_ERR_TEXT = 300
+_MAX_LOC_PARTS = 8
+
+
+def validation_error_body(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The 422 answer for a request the schema rejects.
+
+    pydantic puts the offending ``input`` (and ``ctx``) in every error; echoing it back
+    amplifies a large body into a larger response (a 10 MB array came back as 40 MB).
+    Only ``loc``/``msg``/``type`` are kept -- what a client needs to fix its request --
+    the list is capped, and ``errors_omitted`` says how many were left out."""
+    def clip(value: Any) -> Any:
+        return value[:_MAX_ERR_TEXT] if isinstance(value, str) else value
+
+    kept = [
+        {"loc": [clip(part) if isinstance(part, str) else part
+                 for part in list(e.get("loc", ()))[:_MAX_LOC_PARTS]],
+         "msg": clip(str(e.get("msg", ""))), "type": clip(str(e.get("type", "")))}
+        for e in errors[:MAX_VALIDATION_ERRORS]
+    ]
+    body: dict[str, Any] = {"detail": kept}
+    if len(errors) > MAX_VALIDATION_ERRORS:
+        body["errors_omitted"] = len(errors) - MAX_VALIDATION_ERRORS
+    return body
 
 
 def too_deep_body() -> dict[str, Any]:
