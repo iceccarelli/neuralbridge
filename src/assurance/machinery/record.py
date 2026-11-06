@@ -531,7 +531,17 @@ def interventions_from_ledger(
     if include_implied:
         sealed = _sealed_manifests(ledger, machine_key)
         if len(sealed[0]) + len(sealed[1]) > 1 or sealed[1]:
-            out.extend(implied_interventions(ledger, machine_key, good, manifests=sealed))
+            implied = implied_interventions(ledger, machine_key, good, manifests=sealed)
+            # A record that EXPLAINS a change the ledger's manifests already showed is that
+            # change, not a second one: it counts from when the ledger first showed it (the
+            # implied change is dated no later than the explanation was filed), so paperwork
+            # filed after a re-run does not undo that re-run.
+            seen_at = {i.explained_by: i.occurred_at for i in implied
+                       if isinstance(i, ImpliedIntervention) and i.explained_by}
+            out = [replace(i, filed_at=seen_at[i.intervention_id])
+                   if isinstance(i, FiledIntervention) and i.intervention_id in seen_at else i
+                   for i in out]
+            out.extend(implied)
     return sorted(out, key=lambda i: i.occurred_at)
 
 

@@ -141,17 +141,31 @@ def test_a_forged_role_is_not_sealed_verbatim(client, cell, tmp_path, name, driv
         assert_no_forged_token(role, server_tokens_allowed=server_tokens)
 
 
-def test_every_art14_recording_route_seals_a_clean_role(client, cell, tmp_path):
+#: The routes that are human decisions: bound to a decider operator's credential, so the
+#: server writes its own attribution into the role (and the caller's words stay words).
+_DECISIONS = {"cases/awareness", "cases/triage", "cases/filings"}
+
+
+def test_every_art14_recording_route_seals_a_clean_role(client, cell, accounts, tmp_path):
     acct, h = cell
+    _, key = accounts.create_operator(acct.id, NAME, "decider")
+    decider = {"X-API-Key": key}
     assert client.post("/v1/cases/C1/signal", headers=h, json=_SIGNAL).status_code == 201
     for name, path, body in ART14_CHAIN:
         before = _roles(acct)
-        r = client.post(path, headers=h, json=body)
+        r = client.post(path, headers=decider if name in _DECISIONS else h, json=body)
         assert r.status_code == 201, (name, r.text[:300])
         new = {s: role for s, role in _roles(acct).items() if s not in before}
         assert new, f"{name} sealed nothing"
         for role in new.values():
-            assert_no_forged_token(role, server_tokens_allowed=False)
+            if name in _DECISIONS:
+                # the server's own attribution, once; nothing the caller typed is in its grammar
+                for forged in ("key=asr_FORGE", "operator=op_deadbeef", "via account acc_x;"):
+                    assert forged not in role, role
+                assert role.count("attribution=") == 1 and role.count("operator=") == 1, role
+                assert role.endswith("attribution=authenticated_operator"), role
+            else:
+                assert_no_forged_token(role, server_tokens_allowed=False)
 
 
 def test_an_honest_declared_role_survives_on_the_routes_that_keep_it(client, cell, tmp_path):

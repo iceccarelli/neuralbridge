@@ -780,7 +780,9 @@ def assess_coverage(
     machine_key = manifest.machine.key
     mine = sorted(
         (i for i in interventions if i.machine_key == machine_key),
-        key=lambda i: i.occurred_at,
+        # Ties go to the change the ledger itself showed over the record that explains it.
+        key=lambda i: (getattr(i, "effective_at", i.occurred_at),
+                       hasattr(i, "effective_at")),
     )
     verifs = sorted(verifications, key=lambda v: (v.effective_at, v.ledger_seq))
 
