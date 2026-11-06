@@ -46,11 +46,15 @@ class StatusFreshness:
     interrupted: tuple[str, ...] = field(default_factory=tuple)
     #: The last run was made under a different watch file than the one being asked about.
     config_changed: bool = False
+    #: Machines the last run could only partly read and had no baseline for. Judged here from
+    #: the stored outcomes and not from the stored verdict, so a run sealed before the run
+    #: itself called such a look degraded cannot keep reading ``quiet``.
+    incomplete: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def degraded(self) -> bool:
         return self.state != "fresh" or bool(self.stale_machines) or bool(self.interrupted) \
-            or self.config_changed
+            or self.config_changed or bool(self.incomplete)
 
     @property
     def reasons(self) -> tuple[str, ...]:
@@ -68,6 +72,10 @@ class StatusFreshness:
         if self.stale_machines:
             out.append("not looked at successfully within max_age_hours: "
                        + ", ".join(self.stale_machines))
+        if self.incomplete:
+            out.append("the last run only partly read " + ", ".join(self.incomplete)
+                       + " and has no complete look to compare it with: nothing can be said "
+                       "about those machines, not even that nothing moved")
         if self.config_changed:
             out.append("the last run was made under a different watch configuration than this "
                        "file (a machine dropped, a plan swapped): its verdict does not describe "
@@ -85,7 +93,8 @@ class StatusFreshness:
             "max_age_hours": self.max_age_hours, "degraded": self.degraded,
             "stale_machines": list(self.stale_machines),
             "interrupted": list(self.interrupted),
-            "config_changed": self.config_changed, "reasons": list(self.reasons),
+            "config_changed": self.config_changed, "incomplete": list(self.incomplete),
+            "reasons": list(self.reasons),
         }
 
 
@@ -122,6 +131,17 @@ def _run_is_ours(entry: Any, config: WatchConfig) -> bool:
     return bool(evidence.verify()) and evidence.body.get("watch_id") == config.watch_id
 
 
+def _partly_read(body: dict[str, Any]) -> tuple[str, ...]:
+    """Serials a run record shows as partly read with no baseline (first look, or unchanged)."""
+    outcomes = body.get("outcomes")
+    if not isinstance(outcomes, list):
+        return ()
+    return tuple(sorted(
+        str(o.get("serial", "")) for o in outcomes
+        if isinstance(o, dict) and o.get("collection_complete") is False
+        and o.get("status") in ("first_seen", "observed")))
+
+
 def assess_status_freshness(
     body: dict[str, Any], config: WatchConfig, ledger: EvidenceLedger, *, now: datetime,
 ) -> StatusFreshness:
@@ -151,4 +171,5 @@ def assess_status_freshness(
         state=state, assessed_at=format_utc(now), last_run_at=raw, age_hours=age,
         max_age_hours=config.max_age_hours, stale_machines=tuple(sorted(stale)),
         interrupted=interrupted_work(ledger, config),
+        incomplete=_partly_read(body),
         config_changed=str(body.get("config_hash", "")) != config.content_hash())

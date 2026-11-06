@@ -78,3 +78,20 @@ def test_it_clears_once_a_complete_look_exists(tmp_path):
     first_whole = run_watch(config, ledger, now=T0 + timedelta(days=1))
     assert first_whole.outcomes[0].collection_complete is True
     assert run_watch(config, ledger, now=T0 + timedelta(days=2)).verdict == "quiet"
+
+
+def test_status_does_not_trust_a_stored_quiet_over_outcomes_that_say_partly_read(
+        tmp_path, capsys, monkeypatch):
+    """A run sealed before the verdict knew this (an older build) must not keep reading quiet."""
+    from assurance.watch.runner import WatchRun
+
+    config, ledger = _setup(tmp_path, functions=False)
+    monkeypatch.setattr(WatchRun, "incomplete", property(lambda self: ()))
+    assert run_watch(config, ledger, now=T0).verdict == "quiet"       # the legacy run
+    monkeypatch.undo()
+    code = main(["status", str(tmp_path / "watch.json"), "--ledger", str(tmp_path / "r.db"),
+                 "--json", "--now", "2026-09-14T08:00:00Z"])
+    doc = json.loads(capsys.readouterr().out)
+    assert code == 2 and doc["verdict"] == "degraded" and doc["stored_verdict"] == "quiet"
+    assert doc["freshness"]["incomplete"] == ["1"]
+    assert any("only partly read" in r for r in doc["freshness"]["reasons"])
