@@ -13,6 +13,7 @@ can re-check against the ledger it came from.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -36,6 +37,7 @@ from assurance.machinery.divergence import ChangeKind, Divergence, Severity, com
 from assurance.machinery.intervention import (
     IMPLIED_PREFIX,
     UNREADABLE_PREFIX,
+    FiledIntervention,
     ImpliedIntervention,
     Intervention,
     InterventionKind,
@@ -521,7 +523,11 @@ def interventions_from_ledger(
     ``include_implied=False`` is for a caller that wants only what was recorded.
     """
     good, lost = _read_interventions(ledger, machine_key)
-    out: list[Intervention] = [r.intervention for r in good] + list(lost)
+    out: list[Intervention] = [
+        FiledIntervention(**{f.name: getattr(r.intervention, f.name)
+                             for f in dataclasses.fields(Intervention)},
+                          filed_at=r.filed, ledger_seq=r.seq)
+        for r in good] + list(lost)
     if include_implied:
         sealed = _sealed_manifests(ledger, machine_key)
         if len(sealed[0]) + len(sealed[1]) > 1 or sealed[1]:

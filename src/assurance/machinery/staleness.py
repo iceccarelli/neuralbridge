@@ -730,9 +730,13 @@ def _came_after(i: Intervention, v: VerificationRecord) -> bool:
     the verification in the same second are not read as stale for it.
     """
     cover = _cover_time(v)
-    if i.occurred_at > cover:
+    # A recorded intervention's own date is the filer's word: compared by the later of it and
+    # the time the ledger filed the record (``FiledIntervention.effective_at``), never by the
+    # claim alone. Records with no filing time (built by hand) compare by their date.
+    when = getattr(i, "effective_at", i.occurred_at)
+    if when > cover:
         return True
-    if i.occurred_at < cover:
+    if when < cover:
         return False
     seq = getattr(i, "ledger_seq", 0)
     return not (seq and v.ledger_seq > seq)
