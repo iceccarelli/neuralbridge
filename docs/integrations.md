@@ -6,7 +6,7 @@ Industrial Autonomous Assurance does not need any of these: the offline kit, the
 the MCP server work on their own. The adapters below belong to the NeuralBridge integration platform it grew
 out of, and this page says exactly how far each one goes.
 
-**22 adapters: 1 supported with limits, 3 with a real client path that has never run against a live service, 18 canned.** A canned adapter makes no call to the service it is named after.
+**22 adapters: 2 supported with limits, 3 with a real client path that has never run against a live service, 17 canned.** A canned adapter makes no call to the service it is named after.
 
 ## What the classification means
 
@@ -24,7 +24,7 @@ An adapter that is not classified is treated as canned. Promoting one is a code 
 |---|---|---|---|---|
 | `graphql` | apis | Experimental (canned: makes no call) | `query`, `mutation`, `subscription`, `introspect` | `src/neuralbridge/adapters/apis/graphql.py` |
 | `odata` | apis | Experimental (canned: makes no call) | `query`, `create`, `update`, `delete`, `get_metadata` | `src/neuralbridge/adapters/apis/odata.py` |
-| `rest` | apis | Experimental (canned: makes no call) | `get`, `post`, `put`, `patch`, `delete`, `head` | `src/neuralbridge/adapters/apis/rest.py` |
+| `rest` | apis | Supported, with limits | `get`, `post`, `put`, `patch`, `delete`, `head` | `src/neuralbridge/adapters/apis/rest.py` |
 | `soap` | apis | Experimental (canned: makes no call) | `call`, `discover_operations`, `get_wsdl` | `src/neuralbridge/adapters/apis/soap.py` |
 | `aws_s3` | cloud | Experimental (canned: makes no call) | `list_buckets`, `list_objects`, `get_object`, `put_object`, `delete_object`, `generate_presigned_url` | `src/neuralbridge/adapters/cloud/aws_s3.py` |
 | `azure_blob` | cloud | Experimental (canned: makes no call) | `list_containers`, `list_blobs`, `upload_blob`, `download_blob`, `delete_blob`, `get_blob_properties` | `src/neuralbridge/adapters/cloud/azure_blob.py` |
@@ -45,7 +45,7 @@ An adapter that is not classified is treated as canned. Promoting one is a code 
 | `gmail` | productivity | Experimental (canned: makes no call) | `send_email`, `read_inbox`, `search_emails`, `get_email`, `list_labels`, `create_draft` | `src/neuralbridge/adapters/productivity/gmail.py` |
 | `notion` | productivity | Experimental (canned: makes no call) | `query_database`, `create_page`, `update_page`, `search`, `get_page`, `list_databases` | `src/neuralbridge/adapters/productivity/notion.py` |
 
-## PostgreSQL (the one supported adapter)
+## PostgreSQL (supported, with limits)
 
 - **Prerequisites:** a reachable PostgreSQL server and the `asyncpg` package (installed with the project).
 - **Configuration:** `host`, `port`, `user`, `password`, `database`, `ssl_mode` (default `prefer`), `pool_size` (default 10).
@@ -53,9 +53,14 @@ An adapter that is not classified is treated as canned. Promoting one is a code 
 - **Failure modes:** a failed connection raises `ConnectionError`; the adapter never answers from canned data unless `allow_mock` is set.
 - **Limits:** the default `ssl_mode` is `prefer`, which does not refuse an unencrypted connection; set it explicitly for anything beyond a local test. The tests that run it against a real server (`tests/test_ai.py`) need PostgreSQL and fail rather than skip when `NEURALBRIDGE_REQUIRE_POSTGRES=1` (as in CI); they do not cover TLS modes or role permissions.
 
+## REST (supported, with limits)
+
+- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or API-key header authentication. Credentials come from the adapter config (`credentials`, or `credentials_env` naming environment variables) and are never logged, put in errors or returned.
+- **Bounds:** http(s) only; private, loopback, link-local (including the cloud metadata address) and reserved destinations are refused unless `allow_private_network` is set; optional `allowed_hosts`; response size and wall-clock time are capped; redirects to another origin are never followed; a non-2xx status, a timeout or an oversized body is a structured failure, never a success.
+- **Limits:** the address check does not defend against DNS rebinding; ambient proxies are ignored unless `trust_env` is set. Tested by `tests/test_rest_adapter.py` against a local HTTP server that the test starts; no third-party API and no TLS certificate handling is covered.
+
 ## What is not claimed
 
-- No adapter other than PostgreSQL is run against its real service by any test in this repository.
-- The REST adapter sends no HTTP request: its calls are commented out behind canned data.
+- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by any test in this repository, and REST has only been run against a local HTTP server started by its own test.
 - The MySQL, MongoDB and BigQuery SDKs are not installed in CI, so those adapters cannot even be imported there; their failure paths are tested with the SDK modules stubbed, which shows our error handling, not that they work.
 - Supported does not mean certified, and an adapter existing is not a claim that an integration with that product is available.

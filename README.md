@@ -249,7 +249,7 @@ This README therefore focuses on the smaller product that the repository can gro
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
-What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends real HTTP requests, bounded by SSRF refusal, size, time and redirect limits, and is tested only against a local HTTP server that its own test starts (tests/test_rest_adapter.py); it has not been run against any third-party API.
 
 No enterprise certification or compliance attestation is held.
 
@@ -329,6 +329,34 @@ The project should aim to support a few adapters very well before claiming broad
 
 ### Experimental or Future Areas
 Other adapters may remain in the repository, but they should be described as **experimental**, **in progress**, or **planned** until they are covered by clear setup instructions and repeatable tests.
+
+## Adapter Status
+Every adapter states exactly one of **Supported** (real, and a test exercises it against a real or locally emulated service), **Evolving** (a real client path exists but no test has run it against a live service) or **Not implemented** (canned data only; refused by default). The status comes from each adapter's `backend` attribute; `tests/test_integrations_directory.py` fails if this table and the code disagree. Details: [docs/integrations.md](docs/integrations.md).
+
+| Adapter | Status | Evidence |
+|---|---|---|
+| `graphql` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `odata` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `rest` | Supported | Real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key). Exercised against a local HTTP server started by `tests/test_rest_adapter.py`; not run against any third-party API. |
+| `soap` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `aws_s3` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `azure_blob` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `gcs` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `custom_adapter_template` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `bigquery` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `mongodb` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `mysql` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` (needs a server; fails, not skips, in CI). |
+| `snowflake` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `sap_erp` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `salesforce` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `discord` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `email` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `slack` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `teams` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `telegram` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `gmail` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `notion` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 
 ## Installation
 The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend and dashboard treated as explicit development components.

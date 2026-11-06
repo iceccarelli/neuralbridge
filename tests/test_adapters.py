@@ -106,13 +106,14 @@ class TestRESTAdapter:
         assert RestApiAdapter is not None
 
     @pytest.mark.asyncio
-    async def test_get_request(self):
+    async def test_unreachable_api_is_a_failure_not_canned_data(self):
+        # Was: allow_mock=True and assert the result is flagged canned. The adapter no longer has canned data;
+        # the on-the-wire behaviour is covered in tests/test_rest_adapter.py (local HTTP server).
         from neuralbridge.adapters.apis.rest import RestApiAdapter
-        adapter = RestApiAdapter(config={"base_url": "https://api.example.com", "allow_mock": True})  # canned: no request
-        await adapter.connect()
+        adapter = RestApiAdapter(config={"base_url": "http://127.0.0.1:1", "allow_private_network": True, "timeout": 2})
         result = await adapter.execute("get", {"endpoint": "/users"})
-        assert result is not None
-        assert _flagged_canned(result)
+        assert result.success is False
+        assert not _flagged_canned(result)
         await adapter.disconnect()
 
 
