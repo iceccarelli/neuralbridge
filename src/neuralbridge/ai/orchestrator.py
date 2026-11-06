@@ -241,14 +241,24 @@ def get_plan(store: AiStore, scope: Scope, plan_id: str) -> Plan:
     return _plan_to_schema(record)
 
 
+def _lost_race(plan_id: str, store: AiStore) -> OrchestratorError:
+    current = store.get_plan(plan_id)
+    state = current.status if current is not None else "gone"
+    return OrchestratorError(409, f"Plan '{plan_id}' is '{state}', not pending approval.")
+
+
 def deny_plan(store: AiStore, scope: Scope, actor: Actor, plan_id: str, reason: str) -> Plan:
     record = _visible_plan(store, scope, plan_id)
     if record.status != PlanStatus.PENDING_APPROVAL.value:
         raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
-    updated = store.update_plan_status(
-        plan_id, status=PlanStatus.DENIED.value, decided_by=actor.as_audit_string(),
-        decided_at=datetime.now(UTC).isoformat(), deny_reason=reason,
+    # Compare-and-set: a concurrent approve/deny that won between the read above
+    # and here makes this a 409, and can never overwrite `executed`/`failed`.
+    updated = store.transition_plan(
+        plan_id, expected=PlanStatus.PENDING_APPROVAL.value, status=PlanStatus.DENIED.value,
+        decided_by=actor.as_audit_string(), decided_at=datetime.now(UTC).isoformat(), deny_reason=reason,
     )
+    if updated is None:
+        raise _lost_race(plan_id, store)
     return _plan_to_schema(updated)
 
 
@@ -258,7 +268,18 @@ async def approve_and_execute(
     """Approve a pending plan and execute it in the same call — the only
     path to a WRITE running. Paid-gated by the caller before this is
     reached. Only the account that proposed the plan (or the operator) may
-    approve it; anyone else gets the same 404 as for a missing plan."""
+    approve it; anyone else gets the same 404 as for a missing plan.
+
+    Exactly-once: the plan is *claimed* (``pending_approval`` -> ``approved``,
+    a compare-and-set in the store) before anything is routed, so of any number
+    of concurrent approvals — threads or worker processes — only the claimant
+    executes; the rest get 409.  ``approved`` therefore means "claimed, in
+    flight". If execution then fails (upstream error, or the request is
+    cancelled mid-flight) the write may or may not have landed, so the plan
+    goes to ``failed`` — terminal, never pending, never silently re-run; the
+    operator reviews the target and proposes a new plan. Checks that fail
+    *before* the claim (missing connection, tenancy, adapter not live) change
+    nothing and leave the plan pending."""
     record = _visible_plan(store, scope, plan_id)
     if record.status != PlanStatus.PENDING_APPROVAL.value:
         raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
@@ -270,18 +291,23 @@ async def approve_and_execute(
         raise OrchestratorError(403, _DEMO_READ_ONLY if is_demo(conn) else f"Plan '{plan_id}' not found.")
     _require_live_adapter(registry, conn)
 
-    store.update_plan_status(
-        plan_id, status=PlanStatus.APPROVED.value, decided_by=actor.as_audit_string(),
-        decided_at=datetime.now(UTC).isoformat(),
+    claimed = store.transition_plan(
+        plan_id, expected=PlanStatus.PENDING_APPROVAL.value, status=PlanStatus.APPROVED.value,
+        decided_by=actor.as_audit_string(), decided_at=datetime.now(UTC).isoformat(),
     )
+    if claimed is None:
+        raise _lost_race(plan_id, store)
 
     try:
         response, provenance = await _run(router, scope, actor, conn, record.operation, record.params)
-    except OrchestratorError:
-        store.update_plan_status(plan_id, status=PlanStatus.FAILED.value)
+    except BaseException:
+        # OrchestratorError (upstream failed) and cancellation alike: outcome unknown.
+        store.transition_plan(
+            plan_id, expected=PlanStatus.APPROVED.value, status=PlanStatus.FAILED.value)
         raise
 
-    updated = store.update_plan_status(plan_id, status=PlanStatus.EXECUTED.value)
+    updated = store.transition_plan(
+        plan_id, expected=PlanStatus.APPROVED.value, status=PlanStatus.EXECUTED.value) or claimed
     return ExecutionReceipt(
         plan_id=updated.id,
         success=response.success,

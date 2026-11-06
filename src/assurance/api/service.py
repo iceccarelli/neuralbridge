@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -40,6 +41,7 @@ from .deps import (
     ledger_path,
     tenant_ledgers_dir,
     too_deep_body,
+    validation_error_body,
 )
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
@@ -301,6 +303,11 @@ def create_app(**kwargs: Any) -> FastAPI:
         return JSONResponse(
             status_code=422, content={"error": "invalid_value", "detail": str(exc)}
         )
+
+    @application.exception_handler(RequestValidationError)
+    async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default echoes each error's `input`: a large body comes back larger.
+        return JSONResponse(status_code=422, content=validation_error_body(exc.errors()))
 
     @application.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Request, exc: StarletteHTTPException) -> Any:
