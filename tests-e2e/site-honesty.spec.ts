@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type APIRequestContext } from '@playwright/test';
 import { FALLBACK_PLANS } from '../app/lib/plans';
 
 // What the built site actually serves, read over HTTP with no JavaScript: the claims the

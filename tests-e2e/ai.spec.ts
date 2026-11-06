@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
 
 // Golden path against a real backend: discover a real connection, run a
 // real read, plan a write, approve it, see a receipt. Skips itself with a

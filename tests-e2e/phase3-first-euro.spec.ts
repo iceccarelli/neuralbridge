@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
 
 // Phase 3 ("first euro" pass): browser-visible behavior added this phase.
 //

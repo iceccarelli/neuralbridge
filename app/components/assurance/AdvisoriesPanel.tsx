@@ -100,12 +100,15 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
   const contradictory = report.exposures.filter((e) => e.basis === 'hash_mismatch').length;
   const byLabel = report.exposures.filter((e) => e.basis === 'version' || e.basis === 'name_only').length;
   const needs = report.exposures.filter((e) => e.needs_a_human).length;
-  // needs_review with nothing matched is the server saying the ledger chain did not
-  // verify (fleet/impact.py): the check could not be made, which is not a match.
+  // needs_review with nothing matched has several causes (fleet/impact.py ImpactReport.summary):
+  // the ledger chain did not verify, no machine is enrolled, or some machines/functions are unknown.
+  // Each is named for what it is; the chain is blamed only when the server says chain_verified is false.
   const imported = report.advisory_import ?? null;
   const incomplete = report.incomplete === true;
   const dropped = imported?.dropped ?? [];
-  const unverifiedLedger = report.verdict === 'needs_review' && report.exposures.length === 0 && !incomplete;
+  const noMatchReview = report.verdict === 'needs_review' && report.exposures.length === 0 && !incomplete;
+  const unverifiedLedger = noMatchReview && report.chain_verified === false;
+  const emptyFleet = noMatchReview && !unverifiedLedger && report.machines_in_fleet === 0;
   const verdictText =
     report.verdict === 'exposed'
       ? 'EXPOSED — standing safety evidence is now in question'
@@ -113,6 +116,10 @@ function ImpactResult({ report, parsed, rec }: { report: ImpactReport; parsed: E
         ? 'NEEDS REVIEW — INCOMPLETE TRANSLATION: no match was found in what was imported, and that is not evidence that no machine is affected'
         : unverifiedLedger
         ? 'NEEDS REVIEW — the ledger chain does not verify, so no match check was possible. No match was found, and that is not evidence that no machine is affected'
+        : emptyFleet
+        ? 'NOT ASSESSED — no machine is enrolled, so nothing was checked and nothing is cleared'
+        : noMatchReview
+        ? 'NEEDS REVIEW — no enrolled machine matches among those that could be assessed, but some machines or safety functions are unknown (see the classification), so nothing is cleared'
         : report.verdict === 'needs_review'
           ? 'NEEDS REVIEW — matches found, none with standing evidence'
         : 'No enrolled machine matches this advisory in its latest sealed manifest. That does not show that no machine is exposed: absence here is not evidence of safety.';

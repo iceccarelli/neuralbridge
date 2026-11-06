@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { operatorKey, useDecisionCredential } from './support/operators';
 
@@ -162,7 +163,8 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     expect(JSON.stringify(cases)).not.toContain(seed.supplier.first_advisory_id);
   });
 
-  test('pinning asks how the key was obtained apart from the feed, and a mismatching fingerprint is refused', async ({ page, request }) => {
+  test('pinning asks how the key was obtained apart from the feed, and a mismatching fingerprint is refused', async ({ allowHealth, page, request }) => {
+    allowHealth({ status: 409, url: /\/v1\/supplier\/trust\/pin$/, why: 'the spec submits a mismatching fingerprint on purpose and asserts the refusal is shown' });
     await enter(page, seed.key_g);
     await expect(keys(page).getByTestId('no-pins')).toBeVisible({ timeout: 15_000 });
     const form = keys(page).getByTestId('trust-form-pin');
@@ -415,7 +417,12 @@ test.describe('Assurance workspace — supplier trust, classification, record so
     await expect(cred.getByTestId('operator-key-once')).toHaveCount(0);
   });
 
-  test('a contributor key is refused with decider_role_required and the page says what to do', async ({ page, request }) => {
+  test('a contributor key is refused with decider_role_required and the page says what to do', async ({ allowHealth, page, request }) => {
+    allowHealth({
+      status: 403,
+      url: /\/v1\/change\/cases\/[^/]+\/decision$/,
+      why: "the spec submits a decision with a contributor key on purpose and asserts decider_role_required is shown",
+    });
     await operatorKey(request, seed.key_a, 'v.grimaldi');
     const contributor = await operatorKey(request, seed.key_a, 'c.contrib', 'contributor');
     await enter(page, seed.key_a);

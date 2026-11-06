@@ -11,6 +11,7 @@
 #   SPECS (space-separated spec paths; default = the set scripts/e2e-assurance.sh runs),
 #   PROJECTS (default "desktop-chromium mobile-chromium"; each gets fresh databases and API),
 #   PLAYWRIGHT_CHROMIUM_PATH (only if the pinned @playwright/test cannot find its browser),
+#   E2E_REPORT_DIR (copy playwright-report/ and test-results/ of each FAILED project there; CI uploads it),
 #   KEEP_WORK=1 to keep the data dir after a passing run (kept automatically on failure).
 # Exit status: 0 only if every project passed; 2 = port busy; 3 = build failed; 4 = seed/servers failed.
 # Server process groups are stopped by recorded PID, never by pattern.
@@ -84,7 +85,15 @@ for proj in ${PROJECTS:-desktop-chromium mobile-chromium}; do
   echo "=== project $proj ==="
   start_api "$proj" || { KEEP=1; exit 4; }
   # shellcheck disable=SC2086
-  npx playwright test --workers=1 --project="$proj" $SPECS "$@" || rc=1
+  if ! npx playwright test --workers=1 --project="$proj" $SPECS "$@"; then
+    rc=1
+    # Playwright clears test-results/ and playwright-report/ at the start of every run, so the
+    # second project would erase the first one's traces. Keep each failed project's own copy.
+    if [ -n "${E2E_REPORT_DIR:-}" ]; then
+      mkdir -p "$E2E_REPORT_DIR/$proj"
+      cp -r playwright-report test-results "$E2E_REPORT_DIR/$proj/" 2>/dev/null || true
+    fi
+  fi
   kill -- "-$API_PID" 2>/dev/null; wait "$API_PID" 2>/dev/null
 done
 [ "$rc" = 0 ] || KEEP=1

@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
 // Regression guard: no /assurance workspace state may make the PAGE scroll sideways, and every
