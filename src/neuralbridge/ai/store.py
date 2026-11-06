@@ -323,20 +323,30 @@ class AiStore:
         finally:
             db.close()
 
-    def update_plan_status(
-        self, plan_id: str, *, status: str, decided_by: str | None = None,
+    def transition_plan(
+        self, plan_id: str, *, expected: str, status: str, decided_by: str | None = None,
         decided_at: str | None = None, deny_reason: str | None = None,
-    ) -> PlanRecord:
+    ) -> PlanRecord | None:
+        """Atomically move a plan from ``expected`` to ``status`` (compare-and-set).
+
+        The precondition is part of the ``UPDATE`` itself (``WHERE id=? AND
+        status=?``) inside a ``BEGIN IMMEDIATE`` transaction, so it holds across
+        threads *and* across the several worker processes sharing the file: of N
+        concurrent callers claiming the same transition exactly one gets the
+        record back; the rest get ``None`` and must not act. A read of
+        ``record.status`` followed by an unconditional write is not a substitute.
+        Raises ``KeyError`` if the plan does not exist."""
         with self._txn() as db:
-            db.execute(
+            cur = db.execute(
                 "UPDATE plans SET status=?, decided_by=COALESCE(?, decided_by), "
-                "decided_at=COALESCE(?, decided_at), deny_reason=COALESCE(?, deny_reason) WHERE id=?",
-                (status, decided_by, decided_at, deny_reason, plan_id),
+                "decided_at=COALESCE(?, decided_at), deny_reason=COALESCE(?, deny_reason) "
+                "WHERE id=? AND status=?",
+                (status, decided_by, decided_at, deny_reason, plan_id, expected),
             )
             row = db.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
             if row is None:
                 raise KeyError(plan_id)
-            return PlanRecord.from_row(row)
+            return PlanRecord.from_row(row) if cur.rowcount == 1 else None
 
 
 def new_id() -> str:
