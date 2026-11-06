@@ -38,6 +38,7 @@ __all__ = [
     "Revalidation",
     "DERIVED_INTERVENTIONS",
     "UnreadableIntervention",
+    "FiledIntervention",
     "ImpliedIntervention",
     "IMPLIED_PREFIX",
     "UNREADABLE_PREFIX",
@@ -334,6 +335,28 @@ class ImpliedIntervention(Intervention):
     #: than that record was FILED (a back-dated ``occurred_at`` is the filer's word and
     #: moves nothing). A verification must still begin after that.
     explained_by: str = ""
+
+
+@dataclass(frozen=True)
+class FiledIntervention(Intervention):
+    """A recorded intervention read back from the ledger, with when and where it was FILED.
+
+    Derived, never sealed (``to_dict`` is the recorded record, unchanged). ``occurred_at`` is
+    the filer's claim about when the change happened and is what is shown; it is NOT what a
+    verification is compared with, because a record filed at 09:30 that claims last month
+    would otherwise sort before a verification filed at 08:30 and leave it ``current``.
+    :attr:`effective_at` is the later of the claim and the ledger's filing time: filed time
+    cannot be back-dated.
+    """
+
+    filed_at: datetime | None = None
+    ledger_seq: int = 0
+
+    @property
+    def effective_at(self) -> datetime:
+        if self.filed_at is None:
+            return self.occurred_at
+        return max(self.occurred_at, self.filed_at)
 
 
 @dataclass(frozen=True)

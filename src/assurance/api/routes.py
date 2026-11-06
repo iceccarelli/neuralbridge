@@ -165,6 +165,28 @@ def _actor(payload: ActorIn) -> Actor:
                  role=sanitise_declared_role(payload.role, default=""), kind=payload.kind)
 
 
+def _decider(payload: ActorIn, principal: Principal) -> Actor:
+    """The actor of a HUMAN decision (awareness, its supersession, triage, a filing).
+
+    ``payload.kind`` is typed by the caller and defaults to ``person``, so it proves nothing.
+    A claim of being a person is therefore bound to a credential exactly as the change
+    workflow binds its decisions (``change_routes._actor(human=True)``): an individual
+    operator key with the ``decider`` role is attributed to that operator (the body cannot
+    name anyone else and its ``kind`` is ignored); an account-level key proves only the
+    account and is refused with 403; open mode keeps the declared name. The deployer's own
+    ``ASSURANCE_API_KEYS`` key (the operator of the shared ledger, not a customer credential)
+    keeps declared names. A body that declares itself software is passed through unchanged:
+    the register refuses it (``Art14Register``), and it gains no standing by being named.
+    """
+    if principal.key_prefix == "operator" or (
+            payload.kind != "person" and not principal.operator_id):
+        return _actor(payload)
+    from .change_routes import _actor as bound_actor
+
+    return bound_actor(require_declared_name(payload.identifier), payload.role or "reviewer",
+                       principal, human=True)
+
+
 def _recorded(register: Art14Register, case_id: str, evidence) -> RecordedOut:
     entry = register.ledger.get(evidence.content_hash)
     return RecordedOut(
@@ -246,7 +268,10 @@ def post_signal(
     summary="Establish the moment every deadline runs from",
 )
 def post_awareness(
-    case_id: str, body: AwarenessIn, register: Art14Register = Depends(get_register)
+    case_id: str,
+    body: AwarenessIn,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> RecordedOut:
     try:
         awareness = Awareness(
@@ -257,7 +282,7 @@ def post_awareness(
             reasoning=body.reasoning,
         )
         evidence = register.record_awareness(
-            case_id, awareness, Track(body.track), _actor(body.actor)
+            case_id, awareness, Track(body.track), _decider(body.actor, principal)
         )
     except ValueError as exc:
         raise HTTPException(
@@ -275,7 +300,10 @@ def post_awareness(
     summary="Correct a wrongly recorded awareness by appending a superseding record",
 )
 def post_awareness_supersession(
-    case_id: str, body: SupersedeAwarenessIn, register: Art14Register = Depends(get_register)
+    case_id: str,
+    body: SupersedeAwarenessIn,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> dict[str, Any]:
     """Append-only: the earlier awareness stays; the newest record is the one in force.
 
@@ -293,7 +321,7 @@ def post_awareness_supersession(
             reasoning=body.reasoning,
         )
         evidence = register.supersede_awareness(
-            case_id, awareness, body.reason, body.supersedes, _actor(body.actor)
+            case_id, awareness, body.reason, body.supersedes, _decider(body.actor, principal)
         )
     except ValueError as exc:
         raise HTTPException(
@@ -315,13 +343,16 @@ def post_awareness_supersession(
     summary="Work the reportability decision path",
 )
 def post_triage(
-    case_id: str, body: TriageIn, register: Art14Register = Depends(get_register)
+    case_id: str,
+    body: TriageIn,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> dict[str, Any]:
     try:
         evidence, result = register.record_triage(
             case_id,
             dict(body.answers),
-            _actor(body.actor),
+            _decider(body.actor, principal),
             body.reasoning,
             reopen_trigger=body.reopen_trigger,
         )
@@ -399,6 +430,7 @@ def post_filing(
     body: FilingIn,
     response: Response,
     register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> FilingOut:
     """Recording a filing that is not submittable is allowed and flagged.
 
@@ -412,7 +444,7 @@ def post_filing(
             Stage(body.stage),
             body.submitted_at,
             body.payload,
-            _actor(body.actor),
+            _decider(body.actor, principal),
             body.platform_reference,
         )
     except Exception as exc:  # noqa: BLE001

@@ -224,6 +224,18 @@ class WatchRun:
         return tuple(o for o in self.outcomes if o.status == "observed" and o.not_a_look)
 
     @property
+    def incomplete(self) -> tuple[MachineOutcome, ...]:
+        """Machines the watch could only partly read and has no baseline for.
+
+        An incomplete first look sets no baseline, so nothing is ever compared with it: no
+        run can call it "changed", and once its functions are no longer *newly* uncovered
+        nothing else makes it a finding either. It is a look that failed, not a quiet one.
+        (An incomplete look at a machine WITH a baseline differs from it and is ``changed``.)
+        """
+        return tuple(o for o in self.outcomes
+                     if not o.collection_complete and o.status in ("first_seen", "observed"))
+
+    @property
     def verdict(self) -> str:
         """``quiet`` | ``findings`` | ``degraded``.
 
@@ -238,7 +250,7 @@ class WatchRun:
         """
         if self.uncollectable or self.stale_observations or self.interrupted_prior_run \
                 or self.dropped_targets \
-                or self.advisories.degraded or self.unwitnessed \
+                or self.advisories.degraded or self.unwitnessed or self.incomplete \
                 or self.advisories.not_assessed:
             return "degraded"
         if self.findings or self.advisories.is_finding or self.filings.is_finding:
@@ -276,6 +288,11 @@ class WatchRun:
                  f"{len(self.outcomes)} machine(s)"]
         mark = {"changed": "DRIFT", "uncollectable": "BLIND", "first_seen": "NEW  ",
                 "observed": "ok   "}
+        if self.incomplete:
+            lines.append(
+                "  INCOMPLETE: these machines were only partly read and there is no complete "
+                "look to compare with, so nothing can be said about them (not even that "
+                "nothing moved): " + ", ".join(o.serial for o in self.incomplete))
         if self.unwitnessed:
             lines.append(
                 "  Nobody asserted that these exports came off the machines "
