@@ -962,6 +962,69 @@ def _printed_interventions_vs_ledger(
     return out
 
 
+def _superseded_by_later_records(
+    ledger: EvidenceLedger, passport_seq: int, body: dict[str, Any],
+) -> list[str]:
+    """What the ledger recorded AFTER this passport that the passport does not describe.
+
+    A passport is a position at a moment. Its seal, its named records and its printed blocks
+    stay intact for ever, so those checks alone would call a passport sealed before a
+    firmware change valid for the machine as it now is. Evidence bound to the old state of a
+    machine is not current for the new one, so the ledger's own later records are read:
+
+    * a later look at the machine (as found or as declared; a plan is not a state, and a
+      partial look is not a configuration the machine was in) whose configuration differs,
+      or whose safety-function declaration differs from the passport's manifest;
+    * a change record filed after the passport that the passport does not list;
+    * a manifest or change record filed after it that cannot be read (what it recorded is
+      unknown, so it is taken to have changed the machine).
+    """
+    try:
+        key = MachineIdentity.from_dict(body["machine"]).key
+    except (AssuranceError, KeyError, TypeError, ValueError, AttributeError):
+        return []
+    passport_config = str(body.get("configuration_hash") or "")
+    named = {str(i) for i in (body.get("intervention_ids") or [])}
+    out: list[str] = []
+
+    good_manifests, lost_manifests = _sealed_manifests(ledger, key)
+    declared_by_passport = next(
+        (m.safety_declaration_hash() for _, _, m in good_manifests
+         if m.content_hash() == body.get("manifest_hash")), "")
+    for _, seq, m in good_manifests:
+        if seq <= passport_seq or m.source is ManifestSource.AS_INTENDED \
+                or manifest_is_incomplete(m):
+            continue
+        if passport_config and m.configuration_hash() != passport_config:
+            out.append(
+                f"superseded: the ledger holds a look at {key!r} filed after this passport "
+                f"(manifest {m.manifest_id!r}, ledger position {seq}) at configuration "
+                f"{m.configuration_hash()[:12]}; the passport describes configuration "
+                f"{passport_config[:12]}. It does not describe the machine as it now is: "
+                "assess and seal a new one.")
+        elif declared_by_passport and m.safety_declaration_hash() != declared_by_passport:
+            out.append(
+                f"superseded: the ledger holds a look at {key!r} filed after this passport "
+                f"(manifest {m.manifest_id!r}, ledger position {seq}) whose safety-function "
+                "declaration differs from the one the passport assessed. Assess and seal a "
+                "new passport.")
+    good_changes, lost_changes = _read_interventions(ledger, key)
+    for filed in good_changes:
+        if filed.seq > passport_seq and filed.intervention.intervention_id not in named:
+            out.append(
+                f"superseded: change {filed.intervention.intervention_id!r} on "
+                f"{filed.intervention.item_id!r} was recorded after this passport (ledger "
+                f"position {filed.seq}) and the passport does not list it. Assess and seal "
+                "a new passport.")
+    for lost in (*lost_manifests, *lost_changes):
+        if lost.ledger_seq > passport_seq:
+            out.append(
+                f"superseded: a record filed under {key!r} after this passport (ledger "
+                f"position {lost.ledger_seq}) cannot be read ({lost.why}); what it recorded "
+                "is unknown, so the passport is not taken to describe the machine now.")
+    return out
+
+
 def verify_passport(
     passport_path: str | Path, *, ledger: EvidenceLedger | None = None,
 ) -> tuple[bool, list[str]]:
@@ -1030,6 +1093,8 @@ def verify_passport(
                     f"verification {str(h)[:12]} is named by this passport and is not "
                     "in the supplied ledger.")
         problems.extend(_printed_interventions_vs_ledger(raw, body, ledger))
+        if entry is not None:
+            problems.extend(_superseded_by_later_records(ledger, entry.seq, body))
     else:
         limitations.insert(0, (
             "NOT CHECKED: no ledger was supplied, so only the passport's internal "

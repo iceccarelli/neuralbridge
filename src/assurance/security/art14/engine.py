@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from ...core.actor_names import actor_name_problem
 from ...core.errors import (
     AssuranceError,
     EvidenceIncompleteError,
@@ -59,6 +60,16 @@ def _require_person(actor: Actor, what: str) -> None:
             f"{what} is a human decision and cannot be recorded by an actor of kind "
             f"'{actor.kind}' ({actor.identifier}). Software may draft it; a named person "
             "records it. Nothing was recorded."
+        )
+    # ``kind`` is declared by the caller (the HTTP body defaults it to ``person``), so it is
+    # not enough on its own: software that labels itself a person under the name automation
+    # goes by is still software. The same rule the change workflow applies to its decisions.
+    problem = actor_name_problem(actor.identifier)
+    if problem:
+        raise CaseError(
+            f"{what} is a human decision and needs a named person. Actor "
+            f"{actor.identifier[:60]!r} is not a name a person could have ({problem}). "
+            "Software may draft it; a named person records it. Nothing was recorded."
         )
 
 
