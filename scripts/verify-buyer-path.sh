@@ -9,7 +9,7 @@
 #   1. GET /v1/plans returns the real, enforced pricing table.
 #   2. POST /v1/checkout refuses honestly (a real 4xx, never a crash or a
 #      fabricated checkout URL) when no Stripe price is configured —
-#      which is this repo's actual state today (see app/status/page.tsx).
+#      which is this repo's actual state today (see docs/GO-LIVE.md).
 #   3. The register + /ai golden path with a real Cell-tier fixture key,
 #      minted through AccountStore (never hand-typed) — case write, then
 #      /ai plan -> approve, on the SAME key.

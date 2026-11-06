@@ -160,7 +160,7 @@ One key, minted once, unlocked:
   is the same entitlement engine a real purchase would populate via the
   Stripe webhook (`billing_routes.py`), but nothing here talks to Stripe.
 - **Not a claim that checkout is live on neuralbridge.io.** See
-  `app/status/page.tsx` for the actual, honestly-stated deploy checklist —
+  `docs/GO-LIVE.md` for what is and is not deployed —
   this doc is a local dev/demo path only.
 - **Not "certified."** Nothing here implies CRA/Machinery Regulation
   certification of any kind.

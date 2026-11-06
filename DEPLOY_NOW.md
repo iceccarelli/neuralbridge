@@ -235,9 +235,8 @@ the above): they mint a Cell key through `AccountStore` and need
 
 ## After this
 
-- `deploy/assurance/README.md` has the fuller reference (backups, what `/healthz`
-  should say, how to check the ledger verifies); `docs/assurance/deploy.md`
-  includes it.
+- `deploy/assurance/OPS.md` has the fuller operations reference (backups, what `/healthz`
+  should say, how to check the ledger verifies).
 - `deploy/assurance/ADR-0001-supplier-api.md` documents the second-payer
   (component supplier) API surface that exists in code but has no self-serve
   price yet.
