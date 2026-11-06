@@ -25,6 +25,17 @@ Art. 54 (and 20 January 2024 for Arts. 26-42, 20 October 2026 for Art. 50(1), 20
 (11), 47 and 53(3)). Regulation (EU) 2026/1744 (Digital Omnibus on AI, OJ L 24.7.2026) amends 2023/1230 only in
 Arts. 8, 20 and 47 (AI-related presumptions and delegated acts); it does NOT amend Art. 54, so it is not the source
 of the 20 January date and must not be cited as such. Annex III 1.1.9 is unchanged by it.
+
+Re-verified 2026-11-06 against the Official Journal PDFs from EUR-Lex (``/legal-content/EN/TXT/PDF/?uri=OJ:L_202402847``
+and ``...?uri=CELEX:32023R1230``) and the corrigendum OJ L 169, 4.7.2023, p. 35 (items 5 and 10: Art. 51(2) and
+Art. 54 second paragraph, 14 -> 20 January 2027; Directive 2006/42/EC is therefore repealed with effect from
+20 January 2027, Art. 51(2)). CRA: Art. 14(1)/(3)/(7) notifications go via the ENISA single reporting platform
+(Art. 16) to the CSIRT designated as coordinator and to ENISA; Art. 14(5) defines "severe"; Art. 24(3) extends
+Art. 14(1) to open-source software stewards only to the extent stated; main CRA obligations apply from 11 December
+2027 and Chapter IV from 11 June 2026 (Art. 71(2)); Art. 64(2) fine ceiling EUR 15 000 000 / 2.5 % applies to
+Arts. 13 and 14. Machinery Annex III 1.1.9: the machine identifies "the software installed on it that is necessary
+for it to operate safely" and "collect[s] evidence of a legitimate or illegitimate intervention in the software or a
+modification of the software installed on the machinery ... or its configuration".
 """
 
 from __future__ import annotations
@@ -79,3 +90,30 @@ def test_machinery_application_date_is_20_january_2027_everywhere_and_never_14()
         assert not re.search(r"14 Jan(uary)? 2027", text), rel  # the uncorrected, erroneous date
         mentions += len(re.findall(r"20 Jan(uary)? 2027", text))
     assert mentions >= 8
+
+
+def test_annex_iii_1_1_9_is_described_as_the_official_text_describes_it():
+    paths = ["README.md", "app/page.tsx", "app/lib/solutions.ts", "app/lib/productPages.ts",
+             "deploy/assurance/MACHINERY.md", "deploy/assurance/MACHINE.md",
+             "src/assurance/machinery/__init__.py", "src/assurance/machinery/manifest.py"]
+    for rel in paths:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "identify its safety-relevant software" not in text, rel
+        assert "identify the safety-relevant software on the machine" not in text, rel
+
+
+def test_article_14_is_not_described_as_reporting_to_unnamed_authorities():
+    pp = (ROOT / "app/lib/productPages.ts").read_text(encoding="utf-8")
+    assert "to the authorities on fixed deadlines" not in pp
+    assert "CSIRT designated as coordinator and to ENISA" in pp
+    sol = (ROOT / "app/lib/solutions.ts").read_text(encoding="utf-8")
+    assert "naming every Member State" not in sol
+
+
+def test_nothing_shipped_calls_a_product_compliant_or_cra_ready():
+    for rel in ("src/dashboard/src/App.tsx", "src/dashboard/src/components/ComplianceDashboard.tsx"):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        for banned in ("CRA Ready", "Fully Compliant", "% compliant", "Compliance deadline"):
+            assert banned not in text, (rel, banned)
+    legacy = (ROOT / "src/neuralbridge/compliance/cra_report.py").read_text(encoding="utf-8")
+    assert "Compliant with CRA requirements" not in legacy

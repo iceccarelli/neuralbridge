@@ -1,7 +1,8 @@
 """Evidence of intervention in safety-relevant software.
 
-Annex III 1.1.9 of Machinery Regulation (EU) 2023/1230 asks for a record that a
-safety-relevant change was made. The regulation does not say what a good record
+Annex III 1.1.9 of Machinery Regulation (EU) 2023/1230 asks the machine to collect
+evidence of a legitimate or illegitimate intervention in, or modification of, the software
+installed on it or its configuration. The regulation does not say what a good record
 contains, so this module takes a position: a record that names only *what*
 changed is a log, and a record that also names *who authorised it* and *what was
 re-run afterwards* is evidence.

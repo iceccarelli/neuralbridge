@@ -1,9 +1,12 @@
 """
-EU Cyber Resilience Act (CRA) Compliance Report Generator.
+EU Cyber Resilience Act (CRA) report drafting helper (legacy platform module).
 
-This module provides functionalities to generate vulnerability reports and
-compliance summaries in accordance with the EU Cyber Resilience Act (CRA),
-particularly Article 14. It includes a CRAReportGenerator class to handle
+This module drafts vulnerability report and summary text with reference to the
+EU Cyber Resilience Act (CRA), Regulation (EU) 2024/2847, Article 14. It does not
+file anything, does not use the ENISA single reporting platform (Art. 16), and
+nothing it produces states or implies that a product or organisation complies with
+the CRA: reporting duties and compliance decisions rest with the manufacturer. The
+Article 14 deadlines are enforced in ``assurance.security.art14``, not here. It includes a CRAReportGenerator class to handle
 the report generation, a VulnerabilityReport model for structuring
 vulnerability data, and helper functions to check for CRA readiness.
 
@@ -24,6 +27,8 @@ from neuralbridge.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
+#: Art. 71(2): Article 14 reporting applies from 11 September 2026; the main CRA
+#: obligations apply from 11 December 2027.
 CRA_DEADLINE = datetime(2026, 9, 11)
 
 
@@ -40,7 +45,8 @@ class VulnerabilityStatus(StrEnum):
 class VulnerabilityReport(BaseModel):
     """Pydantic model for a single vulnerability report.
 
-    Compliant with CRA requirements for vulnerability disclosure.
+    A draft record for CRA Article 14 vulnerability reporting; it does not by itself
+    satisfy any CRA requirement.
     """
 
     report_id: str = Field(
@@ -94,7 +100,7 @@ class VulnerabilityReport(BaseModel):
 
 
 class CRAReportGenerator:
-    """Generates EU Cyber Resilience Act (CRA) compliance reports."""
+    """Drafts EU Cyber Resilience Act (CRA) report text; it does not assess compliance."""
 
     def __init__(self) -> None:
         """Initialize the CRAReportGenerator with settings from config."""
@@ -173,7 +179,7 @@ class CRAReportGenerator:
         reports: list[VulnerabilityReport],
         output_format: str = "markdown",
     ) -> str:
-        """Generate a compliance summary report.
+        """Generate a draft summary of the supplied reports (not a compliance assessment).
 
         Args:
             reports: A list of VulnerabilityReport objects.
@@ -217,7 +223,7 @@ class CRAReportGenerator:
             )
         table_body = "\n".join(rows)
         return (
-            f"# CRA Compliance Summary\n\n"
+            f"# CRA Report Summary (draft, not a compliance assessment)\n\n"
             f"**Organization:** "
             f"{self.settings.cra_organization_name}\n\n"
             f"**Date:** {datetime.utcnow().isoformat()}\n\n"
@@ -233,7 +239,7 @@ class CRAReportGenerator:
         )
 
     def check_cra_readiness(self) -> dict[str, object]:
-        """Perform a readiness check for CRA compliance.
+        """Report the Art. 14 application date and local configuration (not a compliance check).
 
         Returns:
             A dictionary containing the readiness status and details.
