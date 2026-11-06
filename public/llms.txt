@@ -2,13 +2,14 @@
 
 > Evidence infrastructure for machines whose software can hurt someone. A
 > hash-chained record of what is on each machine, which checks were run against it, and
-> when — built for two EU regulatory clocks: CRA Article 14 (Reg. (EU)
-> 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230).
+> when — built to support evidence for two EU regimes: CRA Article 14 reporting (Reg. (EU)
+> 2024/2847) and Machinery Regulation Annex III 1.1.9 (Reg. (EU) 2023/1230). It does not
+> make anyone compliant or certified; people decide and file.
 
 ## What this is
 
 NeuralBridge/Industrial Autonomous Assurance verifies and records evidence
-for industrial machines: Declaration of Conformity validation, machine
+for industrial machines: checks that a Declaration of Conformity still matches the recorded configuration, machine
 safety verification (ISO/TS 15066 separation checks), Machinery Regulation
 Annex III manifests and passports, fleet advisory matching, and a
 hash-chained ledger for audit trails. It is not a general-purpose AI

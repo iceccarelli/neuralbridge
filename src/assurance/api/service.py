@@ -65,8 +65,9 @@ exploited vulnerabilities and severe incidents.
 
 Article 14 has applied since **11 September 2026**, and by Article 69(3) it
 applies to every in-scope product placed on the market **before 11 December
-2027**. There is no grandfathering for reporting, and the Commission's guidance
-confirms the duty outlives a product's support period.
+2027**. There is no grandfathering for reporting. Reports go from the manufacturer
+to the CSIRT designated as coordinator and to ENISA, through ENISA's single reporting
+platform (Art. 14(1), (3), (7); Art. 16); this service files nothing.
 
 **What this service does that a spreadsheet cannot**
 

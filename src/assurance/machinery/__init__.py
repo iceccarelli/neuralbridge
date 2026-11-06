@@ -1,8 +1,10 @@
 """Machinery Regulation Annex III 1.1.9: what software is on the machine, who changed it.
 
 Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
-1.1.9 requires a machine to identify its safety-relevant software and to record
-evidence of intervention in it.
+1.1.9 requires a machine to identify the software installed on it that is necessary for it to
+operate safely, and to collect evidence of an intervention in, or modification of, that software
+or its configuration. That is a design requirement on the machine; this package is evidence
+tooling for the manufacturer and does not by itself satisfy it.
 
     manifest      what is on the machine, with the provenance of every hash
     divergence    whether it still matches the configuration it was signed off with

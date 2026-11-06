@@ -96,13 +96,13 @@ export default function App() {
                 {currentView === "dashboard" && "Overview of your NeuralBridge instance"}
                 {currentView === "adapters" && "Manage and configure universal adapters"}
                 {currentView === "connections" && "Create and manage adapter connections"}
-                {currentView === "audit" && "Immutable audit trail for CRA compliance"}
-                {currentView === "compliance" && "EU CRA and GDPR compliance status"}
+                {currentView === "audit" && "Audit trail view (illustrative sample data)"}
+                {currentView === "compliance" && "EU CRA and GDPR evidence checklist (illustrative sample data, not an assessment)"}
                 {currentView === "costs" && "Token cost optimization and analytics"}
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <span className="nb-badge-success">CRA Ready</span>
+              <span className="nb-badge bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">Sample data</span>
               <span className="nb-badge bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400">
                 MCP Compatible
               </span>
@@ -138,7 +138,7 @@ function DashboardOverview() {
     { time: "2 min ago", event: "Salesforce adapter: 3 records created", type: "success" },
     { time: "5 min ago", event: "Gmail adapter: 12 emails processed", type: "success" },
     { time: "12 min ago", event: "Rate limit warning: Slack adapter (450/500)", type: "warning" },
-    { time: "1 hour ago", event: "CRA compliance report generated", type: "info" },
+    { time: "1 hour ago", event: "CRA summary draft generated", type: "info" },
     { time: "3 hours ago", event: "New connection: SAP ERP (production)", type: "success" },
   ];
 
@@ -178,15 +178,15 @@ function DashboardOverview() {
 
         {/* CRA Compliance Status */}
         <div className="nb-card">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">CRA Compliance</h3>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">CRA Evidence Checklist (sample data)</h3>
           <div className="flex items-center gap-4 mb-6">
             <div className="w-20 h-20 rounded-full border-4 border-green-500 flex items-center justify-center">
-              <span className="text-2xl font-bold text-green-600 dark:text-green-400">100%</span>
+              <span className="text-2xl font-bold text-green-600 dark:text-green-400">n/a</span>
             </div>
             <div>
-              <p className="text-sm font-medium text-green-600 dark:text-green-400">Fully Compliant</p>
+              <p className="text-sm font-medium text-green-600 dark:text-green-400">Not an assessment</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Ready for September 11, 2026 deadline
+                Placeholder figures. CRA Article 14 reporting applies from September 11, 2026; whether any obligation is met is for the manufacturer to decide.
               </p>
             </div>
           </div>
@@ -194,7 +194,7 @@ function DashboardOverview() {
             {["Audit Logging", "Vulnerability Reports", "SBOM Generation", "Incident Logging", "GDPR Article 30"].map((item) => (
               <div key={item} className="flex items-center justify-between py-1.5">
                 <span className="text-sm text-gray-600 dark:text-gray-400">{item}</span>
-                <span className="nb-badge-success">Compliant</span>
+                <span className="nb-badge-warning">Not assessed</span>
               </div>
             ))}
           </div>
