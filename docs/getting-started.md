@@ -14,11 +14,11 @@ pip install cryptography        # the one third-party package the offline kit im
 export PYTHONPATH=src           # run from this checkout; nothing else is installed
 ```
 
-`pip install -e '.[assurance-attest]'` also works, but it installs all 21 core
-dependencies of the NeuralBridge middleware project (fastapi, sqlalchemy, asyncpg,
-redis, tiktoken, ...) as well; the extra adds nothing, because `cryptography` is already
-one of the 21 core dependencies. The hosted API
-below needs its own extra, `.[assurance-api]`, and that one is a real install.
+`pip install -e .` from the checkout also works, and is just as small: the base install of
+this project is `cryptography` and nothing else (`.[assurance-attest]` is the same install, kept so
+existing commands keep working). The hosted API below needs its own extra,
+`.[assurance-api]`; the NeuralBridge integration platform needs `.[platform]`. The README's
+Install table lists every extra and what it adds.
 
 ## The free path: the offline enrolment kit
 

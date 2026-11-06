@@ -5,9 +5,11 @@ There is no distribution of that name in this project (it is ``neuralbridge-midd
 command installed an unrelated name from the index. And ``pip install -e '.[assurance-attest]'``,
 which the README gave as the way to start, installs every one of the project's *core*
 dependencies (a web framework, an ORM, asyncpg, redis, tiktoken ...) beside the one the offline kit
-imports, which is not "one runtime dependency". The offline kit needs ``cryptography`` and the
-checkout on ``PYTHONPATH``; these tests read ``pyproject.toml`` and fail when the words drift
-from it.
+imports, which is not "one runtime dependency". The base install has since been reduced to
+``cryptography`` (the platform's packages moved to the ``platform`` extra;
+``tests/test_packaging_contract.py`` measures the split). The offline kit needs ``cryptography``
+and, without installing the project, the checkout on ``PYTHONPATH``; these tests read
+``pyproject.toml`` and fail when the words drift from it.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 PROJECT = PYPROJECT["project"]
-CORE_DEPENDENCIES = len(PROJECT["dependencies"])
+BASE_DEPENDENCIES = {re.split(r"[\[<>=!~ ]", d)[0].lower() for d in PROJECT["dependencies"]}
 
 #: Everywhere a stranger is told how to install the offline kit.
 INSTALL_INSTRUCTIONS = [
@@ -78,15 +80,17 @@ class TestTheHintNamesARealThing:
 
     def test_the_hint_no_longer_calls_it_the_one_runtime_dependency_of_an_install(self):
         hint = _import_error_without_cryptography()
-        assert f"{CORE_DEPENDENCIES} core dependencies" in hint, hint
+        assert "`cryptography` and nothing else" in hint, hint
+        assert "core dependencies" not in hint, hint
 
 
 class TestTheInstructionsStateWhatInstallingDoes:
-    def test_the_project_really_does_declare_core_dependencies(self):
-        """The reason the extra is not a minimal install: they are unconditional."""
-        assert CORE_DEPENDENCIES > 10
-        names = {re.split(r"[\[<>=!~ ]", d)[0].lower() for d in PROJECT["dependencies"]}
-        assert {"fastapi", "sqlalchemy", "asyncpg", "redis", "tiktoken"} <= names
+    def test_the_base_install_is_cryptography_and_the_platform_packages_are_an_extra(self):
+        """What the README says: the base is minimal, the platform's packages are opt-in."""
+        assert BASE_DEPENDENCIES == {"cryptography"}
+        platform = {re.split(r"[\[<>=!~ ]", d)[0].lower()
+                    for d in PROJECT["optional-dependencies"]["platform"]}
+        assert {"fastapi", "sqlalchemy", "asyncpg", "redis", "tiktoken"} <= platform
 
     def test_every_install_instruction_gives_the_minimal_path(self):
         missing = []
@@ -96,12 +100,14 @@ class TestTheInstructionsStateWhatInstallingDoes:
                 missing.append(rel)
         assert not missing, f"no `pip install cryptography` + `PYTHONPATH=src` in: {missing}"
 
-    def test_the_readme_says_what_the_extra_installs_and_names_the_number(self):
+    def test_the_readme_says_what_the_base_install_is_and_where_the_rest_went(self):
         text = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
-        assert f"{CORE_DEPENDENCIES} core dependencies" in text
+        assert "`cryptography` and nothing else" in text
+        assert "core dependencies" not in text       # no stale count of twenty-one
         assert "assurance-attest" in text            # the extra is still mentioned, truthfully
+        assert "'.[platform]'" in text               # where the platform's packages went
         for name in ("fastapi", "sqlalchemy", "asyncpg", "redis"):
-            assert name in text
+            assert name in text                      # named in the Install table
 
     def test_no_instruction_still_presents_the_extra_as_the_whole_install(self):
         bare = re.compile(r"^\s*pip install -e '\.\[assurance-attest\]'\s*$", re.M)
@@ -117,12 +123,18 @@ class TestTheMinimalPathReallyWorks:
     ALIASES = {"pyyaml": "yaml", "pyjwt": "jwt", "python_multipart": "multipart",
                "python_jose": "jose", "opentelemetry_api": "opentelemetry",
                "opentelemetry_sdk": "opentelemetry",
-               "opentelemetry_instrumentation_fastapi": "opentelemetry"}
+               "opentelemetry_instrumentation_fastapi": "opentelemetry",
+               "google_cloud_bigquery": "google"}
 
     def test_a_kit_is_written_filled_checked_and_run_with_nothing_but_cryptography(
             self, tmp_path):
+        # tests/test_packaging_contract.py blocks default-deny; this one also names every
+        # package any non-test extra could install.
+        extras = {k: v for k, v in PROJECT["optional-dependencies"].items()
+                  if k not in {"dev", "docs"}}
         distributions = {re.split(r"[\[<>=!~ ]", d)[0].lower().replace("-", "_")
-                         for d in PROJECT["dependencies"]} - {"cryptography"}
+                         for deps in extras.values() for d in deps
+                         if not d.startswith("neuralbridge-middleware")} - {"cryptography"}
         blocked = sorted({self.ALIASES.get(d, d) for d in distributions})
         code = (
             "import json, sys\n"

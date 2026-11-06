@@ -40,10 +40,10 @@ except ImportError as _exc:  # pragma: no cover - environment, not logic
         "`PYTHONPATH=src`. It is the one third-party package the offline "
         "kit imports, and it is here because writing a signature scheme by hand "
         "would be the worst decision in this repository. (Installing the project "
-        "instead, `pip install -e '.[assurance-attest]'` from the checkout, also "
-        "works but installs all 21 core dependencies of the NeuralBridge "
-        "middleware, `neuralbridge-middleware`: the extra adds nothing, because "
-        "`cryptography` is already one of the 21 core dependencies.)"
+        "instead, `pip install -e .` from the checkout, also works: its base "
+        "install is `cryptography` and nothing else, and "
+        "`.[assurance-attest]` is that same install. The hosted API, the MCP "
+        "gateways and the NeuralBridge platform are separate extras.)"
     ) from _exc
 
 from assurance.core.errors import AssuranceError
