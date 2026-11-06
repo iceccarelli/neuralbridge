@@ -1000,6 +1000,13 @@ class TestUnderHostileLoad:
             else:
                 pytest.fail("server did not start")
 
+            # A busy verifier answers 503 before it reads the body (see _SLOTS in
+            # evidence_routes), so an upload of several MiB may still be in flight when the
+            # server closes the socket; the client then sees the refusal as a TCP reset
+            # instead of a status. That is the same refusal, not a failure of the server,
+            # and the liveness checks below are what prove the server survived.
+            reset = -1
+
             def rss_mb() -> float:
                 for line in Path(f"/proc/{server.pid}/status").read_text().splitlines():
                     if line.startswith("VmRSS"):
@@ -1018,6 +1025,7 @@ class TestUnderHostileLoad:
             latencies: list[float] = []
             sizes: list[int] = []
             stop = False
+            watcher = None
 
             def probe() -> None:
                 while not stop:
@@ -1038,9 +1046,17 @@ class TestUnderHostileLoad:
                 except urllib.error.HTTPError as exc:
                     sizes.append(len(exc.read()))
                     return exc.code
+                except (ConnectionResetError, BrokenPipeError):
+                    return reset
+                except urllib.error.URLError as exc:
+                    # Only a reset is the refusal arriving as a socket event; a refused
+                    # connection or a timeout still fails the test.
+                    if isinstance(exc.reason, (ConnectionResetError, BrokenPipeError)):
+                        return reset
+                    raise
 
             import threading
-            watcher = threading.Thread(target=probe)
+            watcher = threading.Thread(target=probe, daemon=True)
             watcher.start()
             peak = before
             with ThreadPoolExecutor(20) as pool:
@@ -1051,7 +1067,12 @@ class TestUnderHostileLoad:
                 codes = [f.result() for f in futures]
             stop = True
             watcher.join()
-            assert set(codes) <= {200, 429, 503}
+            assert set(codes) <= {200, 429, 503, reset}
+            # Resets are tolerated as early refusals, never as the whole story: some uploads
+            # must have been answered with a status, and the server must still be up.
+            assert any(c != reset for c in codes), f"every upload was reset: {codes}"
+            assert server.poll() is None, "the server process exited under the load"
+            assert urllib.request.urlopen(base + "/healthz", timeout=10).status == 200  # noqa: S310
             assert max(sizes) < SIZE_CEILING
             latencies.sort()
             p95 = latencies[int(len(latencies) * 0.95) - 1]
@@ -1061,6 +1082,9 @@ class TestUnderHostileLoad:
             assert p95 < 2.0, f"/healthz p95 {p95:.2f}s during the load"
             assert peak - before < 200, f"RSS grew {peak - before:.0f} MB"
         finally:
+            stop = True
+            if watcher is not None:
+                watcher.join(timeout=35)
             server.terminate()
             server.wait(timeout=20)
 

@@ -196,7 +196,6 @@ export default function Header({
           <div className="shell utility-bar-inner">
             <span>Evidence infrastructure for CRA Art. 14 and Machinery Reg. 2023/1230</span>
             <div className="utility-links">
-              <a href="/docs/assurance/deploy">Deploy docs</a>
               <a href={SALES}>Contact sales</a>
               {repoLink() && <a href={repoLink() ?? undefined} target="_blank" rel="noreferrer">GitHub</a>}
             </div>
@@ -411,10 +410,6 @@ export default function Header({
                 <strong>Security</strong>
                 <span>How to report a vulnerability.</span>
               </a>
-              <a className="finder-item" href="/status" onClick={closeAll}>
-                <strong>Status</strong>
-                <span>The deploy checklist — what's live and what isn't, honestly.</span>
-              </a>
               <a className="finder-item" href={SALES} onClick={closeAll}>
                 <strong>Contact</strong>
                 <span>Sales, supplier, and general inquiries — a real form, not a repo dump.</span>
@@ -512,7 +507,6 @@ export default function Header({
               <a className="mobile-drill-item" href="/ai" onClick={() => setMobileOpen(false)}>AI</a>
               <a className="mobile-drill-item" href="/roadmap" onClick={() => setMobileOpen(false)}>Roadmap</a>
               <a className="mobile-drill-item" href="/security" onClick={() => setMobileOpen(false)}>Security</a>
-              <a className="mobile-drill-item" href="/status" onClick={() => setMobileOpen(false)}>Status</a>
               <a className="mobile-drill-item" href={SALES} onClick={() => setMobileOpen(false)}>Contact</a>
               <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
               <RepoLink path="/blob/main/CONTRIBUTING.md" className="mobile-drill-item">Contributing</RepoLink>

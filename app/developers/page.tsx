@@ -59,7 +59,7 @@ export default function DevelopersPage() {
               <span>
                 {API_BASE
                   ? `This deployment's base URL is set. Everything below is callable now.`
-                  : 'This marketing site was built without NEXT_PUBLIC_ASSURANCE_API_URL set. The routes, auth model, and examples below are real — read straight from the code — but there is nothing to call until the founder finishes DEPLOY_NOW.md. Run it yourself: uvicorn assurance.api.service:app.'}
+                  : 'This marketing site was built without NEXT_PUBLIC_ASSURANCE_API_URL set. The routes, auth model, and examples below are real — read straight from the code — but there is no hosted endpoint to call from this build. Run the API locally: uvicorn assurance.api.service:app.'}
               </span>
             </div>
           </div>

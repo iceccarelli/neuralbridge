@@ -1,6 +1,6 @@
 # NeuralBridge AI — Capability Matrix
 
-> **Phase 3 update (see `reports/NEURALBRIDGE-FIRST-EURO.md`):** the "Authz
+> **Phase 3 update:** the "Authz
 > (actual)" cells below that say "none"/"inherits router (none)" for the
 > non-postgres adapter rows (Adapter execute (REST), MCP `tools/call`, and
 > every "Experimental/evolving" adapter row) are now **stale** for the two

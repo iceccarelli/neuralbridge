@@ -58,8 +58,8 @@ uvicorn neuralbridge.main:app --host 127.0.0.1 --port 8000 &
 
 Or, with a Docker daemon available: `docker compose -f docker-compose.ai.yml
 -f docker-compose.demo.yml up -d` (see `docker-compose.demo.yml`'s own
-header). **This rehearsal had no Docker daemon available**, same constraint
-`reports/NEURALBRIDGE-FIRST-EURO.md` already logged — the compose file was
+header). **This rehearsal had no Docker daemon available**, same constraint as
+an earlier rehearsal — the compose file was
 not exercised with a live `docker compose up` here either. The direct-uvicorn
 path above was used instead and is what produced every result in this doc.
 
@@ -125,9 +125,7 @@ npx playwright test
 Expect all five specs to pass (`ai.spec.ts`, `ai-entitlement.spec.ts`,
 `console-first-case.spec.ts`, `phase3-first-euro.spec.ts`,
 `phase4-visual-qa.spec.ts`) — `phase3-first-euro.spec.ts` has a
-Postgres-backed sub-case that self-skips without a local Postgres (see
-`reports/NEURALBRIDGE-PHASE4-SURFACE.md`'s note on that). Note from
-`reports/NEURALBRIDGE-PHASE4-SURFACE.md`: run against `http://localhost:3000`,
+Postgres-backed sub-case that self-skips without a local Postgres. Note: run against `http://localhost:3000`,
 not `http://127.0.0.1:3000` — the assurance API's CORS allowlist defaults to
 `localhost` only (`ASSURANCE_ALLOWED_ORIGINS`), so `127.0.0.1` fails CORS in
 a real browser even though the backend is healthy.
@@ -250,7 +248,7 @@ it is cross-referenced, not repeated.
 
 4. **That key opens a First Register case in Console, and does an `/ai` write.**
    Not currently covered by `SMOKE.md` — added here because
-   `reports/NEURALBRIDGE-PHASE4-SURFACE.md`'s Console `FirstCase` flow and
+   the Console `FirstCase` flow and
    the `/ai` write path are both real paid surfaces a buyer reaches within
    minutes of paying.
    - In a browser, go to `/console#first-case` (or follow the
@@ -295,6 +293,6 @@ it is cross-referenced, not repeated.
 |---|---|---|
 | `POST /v1/checkout` returns `503 price_not_configured` | `ASSURANCE_PRICE_REGISTER`/`ASSURANCE_PRICE_CELL` unset or pointing at a price ID that doesn't exist in the Stripe account/mode Fly is configured for (`plan.purchasable` is just `bool(price_id)`, read straight from the env var — see `src/assurance/billing/plans.py`) | `fly secrets set ASSURANCE_PRICE_REGISTER=price_... ASSURANCE_PRICE_CELL=price_...` with real **test-mode** price IDs from the correct Stripe account, then `fly deploy` (secrets need a redeploy to take, per `DEPLOY_NOW.md` §2). Re-check with `GET /v1/plans`. |
 | No-key request to `POST /v1/cases/{id}/signal` returns `503` instead of the expected `401` | Neither `ASSURANCE_API_KEYS` nor `ASSURANCE_ALLOW_UNAUTHENTICATED=1` is set, so `auth_mode()` is `"unconfigured"` — `require_register` in `src/assurance/api/deps.py` refuses to guess whether the deployment intends open access or key-gated access, and 503s rather than picking one silently | Set `ASSURANCE_API_KEYS` (an operator key, comma-separated for more than one) as a Fly secret for a production deployment; `ASSURANCE_ALLOW_UNAUTHENTICATED=1` only for local/demo, never on a deployment that takes real Stripe payments |
-| A paid write from the browser (Console or `/ai`) comes back `401`/`402` even though the key is valid and the plan should permit it | `CORSMiddleware` in `src/assurance/api/service.py` doesn't include the caller's origin in `allowed_origins()` (reads `ASSURANCE_ALLOWED_ORIGINS`, comma-separated; defaults to `https://neuralbridge.io`, `https://www.neuralbridge.io`, `http://localhost:3000` only — see `src/assurance/api/deps.py`) — the browser silently drops the `X-API-Key` header on the preflight-failed request, so the API sees an anonymous caller, not a rejected key. Invisible to curl/pytest; only a real browser enforces CORS preflight. `127.0.0.1:3000` also fails this even in local dev, since it's a different origin from `localhost:3000` (see `reports/NEURALBRIDGE-PHASE4-SURFACE.md`) | `fly secrets set ASSURANCE_ALLOWED_ORIGINS=https://neuralbridge.io,https://www.neuralbridge.io` (add any other real deployed origin, comma-separated, no trailing slash), redeploy. Confirm with `SMOKE.md` check #5's `OPTIONS` curl — must echo the calling origin back in `access-control-allow-origin`. |
+| A paid write from the browser (Console or `/ai`) comes back `401`/`402` even though the key is valid and the plan should permit it | `CORSMiddleware` in `src/assurance/api/service.py` doesn't include the caller's origin in `allowed_origins()` (reads `ASSURANCE_ALLOWED_ORIGINS`, comma-separated; defaults to `https://neuralbridge.io`, `https://www.neuralbridge.io`, `http://localhost:3000` only — see `src/assurance/api/deps.py`) — the browser silently drops the `X-API-Key` header on the preflight-failed request, so the API sees an anonymous caller, not a rejected key. Invisible to curl/pytest; only a real browser enforces CORS preflight. `127.0.0.1:3000` also fails this even in local dev, since it's a different origin from `localhost:3000` | `fly secrets set ASSURANCE_ALLOWED_ORIGINS=https://neuralbridge.io,https://www.neuralbridge.io` (add any other real deployed origin, comma-separated, no trailing slash), redeploy. Confirm with `SMOKE.md` check #5's `OPTIONS` curl — must echo the calling origin back in `access-control-allow-origin`. |
 | Checkout succeeds in Stripe but the customer never lands anywhere useful, or `success_url`/`cancel_url` point at the wrong host (e.g. `127.0.0.1:8000` in a real redirect) | `ASSURANCE_PUBLIC_URL`/`ASSURANCE_MARKETING_URL` unset or wrong — `marketing_url()` in `src/assurance/api/deps.py` defaults to `https://neuralbridge.io` only if `ASSURANCE_MARKETING_URL` is unset, and `post_checkout` builds `success_url`/`cancel_url` straight from it | `fly secrets set ASSURANCE_MARKETING_URL=https://neuralbridge.io ASSURANCE_PUBLIC_URL=https://<your-fly-app>.fly.dev`, redeploy, re-run a test checkout and confirm the redirect lands on the real success page |
 | `/checkout/success` shows "not ready yet" (`202 pending`) indefinitely, even minutes after a completed Stripe payment | The Stripe webhook endpoint either isn't registered, is registered at the wrong URL, or `STRIPE_WEBHOOK_SECRET` doesn't match the endpoint's actual signing secret — `post_webhook` in `src/assurance/api/billing_routes.py` verifies the signature and silently 400s an unverified payload (Stripe then retries and eventually gives up; the key is never staged) | In the Stripe dashboard, confirm an endpoint exists at `https://<your-fly-app>.fly.dev/v1/billing/webhook` subscribed to `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted` (`DEPLOY_NOW.md` §3); confirm `STRIPE_WEBHOOK_SECRET` on Fly matches that exact endpoint's signing secret (each endpoint has its own); check Stripe's webhook delivery log for the event and its response code — a `400` there confirms a secret mismatch, not a networking problem |

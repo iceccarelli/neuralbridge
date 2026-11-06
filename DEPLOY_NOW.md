@@ -4,9 +4,9 @@
 tool below has never been run against a hosted staging host; it has only been
 exercised against local servers in `tests/test_staging_rehearsal.py` and
 `tests/test_staging_rehearsal_hardening.py`. Every step here is yours, with your
-own credentials. Standing facts (`docs/pmf/pilot-ledger.csv` holds no row): zero revenue, zero customers,
-zero pilots, no production deployment. The prices (€390 / €3,900 / €1,290) are
-unvalidated assertions, and nothing here tells you to set a live Stripe key — live
+own credentials. No customer, pilot or production-deployment claim may be made without a dated row in
+`docs/pmf/pilot-ledger.csv`. The prices (€390 / €3,900 / €1,290) are unvalidated
+assertions, and nothing here tells you to set a live Stripe key — live
 mode is a separate, later decision that is yours.
 
 For the founder's laptop or CI with real network access. **Not for Claude Code
@@ -235,9 +235,8 @@ the above): they mint a Cell key through `AccountStore` and need
 
 ## After this
 
-- `deploy/assurance/README.md` has the fuller reference (backups, what `/healthz`
-  should say, how to check the ledger verifies); `docs/assurance/deploy.md`
-  includes it.
+- `deploy/assurance/OPS.md` has the fuller operations reference (backups, what `/healthz`
+  should say, how to check the ledger verifies).
 - `deploy/assurance/ADR-0001-supplier-api.md` documents the second-payer
   (component supplier) API surface that exists in code but has no self-serve
   price yet.

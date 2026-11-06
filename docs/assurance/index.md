@@ -23,5 +23,3 @@ The order an operator runs these in is [the operator pipeline](pipeline.md); the
 two trust variables a hosted deployment lacks are in the
 [trust runbook](trust-runbook.md). Which of the CLI, API and MCP offers each
 capability is generated from the code on the on-site `/docs/capabilities` page.
-See [Deploying](deploy.md) for the hosted API version, rehearsed in test mode
-first: nothing here has been deployed.

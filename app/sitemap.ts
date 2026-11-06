@@ -8,7 +8,7 @@ const SITE_URL = 'https://neuralbridge.io';
 export default function sitemap(): MetadataRoute.Sitemap {
   // No modification dates: this build cannot know when each page last changed, and stamping every URL
   // with the build time would claim a freshness nothing verified.
-  // Only indexable pages belong here: /checkout/success, /assurance and /status are noindex
+  // Only indexable pages belong here: /checkout/success and /assurance are noindex
   // (`robots: { index: false }`); tests-e2e/site-links.spec.ts derives that set from the pages.
   const routes: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, changeFrequency: 'weekly', priority: 1 },

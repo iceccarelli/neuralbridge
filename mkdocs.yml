@@ -46,7 +46,6 @@ nav:
     - Supplier feeds: assurance/supplier.md
     - Bridge: assurance/bridge.md
     - Operator pipeline: assurance/pipeline.md
-    - Deploying (rehearse in test mode first): assurance/deploy.md
   - Pricing: pricing.md
   - Claims registry: claims-registry.md
   - Platform status: platform.md

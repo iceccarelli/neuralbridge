@@ -40,8 +40,6 @@ const ENGINE_PAGES: { slug: string; title: string; source: string }[] = [
   { slug: 'supplier', title: 'Supplier feeds', source: 'deploy/assurance/SUPPLIER.md' },
   { slug: 'bridge', title: 'Bridge', source: 'deploy/assurance/BRIDGE.md' },
   { slug: 'pipeline', title: 'Operator pipeline', source: 'deploy/assurance/PIPELINE.md' },
-  // deploy/assurance/README.md was deleted; the deploy walkthrough that exists is DEPLOY_NOW.md.
-  { slug: 'deploy', title: 'Deploying (rehearse in test mode first)', source: 'DEPLOY_NOW.md' },
 ];
 
 export const DOCS_NAV: { label: string; href: string; children?: { label: string; href: string }[] }[] = [

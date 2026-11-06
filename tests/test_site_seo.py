@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE = "https://neuralbridge.io"
 TITLE_MAX = 60
 DESC_MIN, DESC_MAX = 120, 160
-KNOWN_NOINDEX = {"/assurance", "/status", "/checkout/success", "/investigate"}
+KNOWN_NOINDEX = {"/assurance", "/checkout/success", "/investigate"}
 
 #: JSON-LD @type values any page may carry (top-level or nested): the layout graph and the docs breadcrumbs.
 SITE_TYPES = {"Organization", "WebSite", "BreadcrumbList", "Person", "ContactPoint", "ListItem", "ImageObject"}
@@ -589,7 +589,7 @@ class TestCrawlerFiles:
     def test_robots_blocks_the_account_and_transaction_pages_only(self, site):
         robots = parse_robots(site["robots"])
         assert robots["allow"] == ["/"]
-        for path in ("/assurance", "/checkout/", "/status"):
+        for path in ("/assurance", "/checkout/", "/investigate"):
             assert path in robots["disallow"]
         assert not [d for d in robots["disallow"] if d.startswith(("/docs", "/solutions", "/developers", "/privacy"))]
 

@@ -1175,7 +1175,6 @@ export const PRODUCT_PAGES: ProductPage[] = [
     related: ['supplier-advisory-fleet-impact', 'machine-evidence-ledger', 'continuous-machine-assurance', 'assurance-api-and-mcp'],
     docs: [
       { label: 'Platform status', href: '/docs/platform' },
-      { label: 'Deploy guide', href: '/docs/assurance/deploy' },
       { label: 'Contact', href: '/contact' },
     ],
     faq: [

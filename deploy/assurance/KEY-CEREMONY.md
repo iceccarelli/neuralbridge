@@ -211,8 +211,8 @@ May say, once a trust list with a real recorder is configured:
 
 Must not say:
 
-- that any customer, pilot, deployment or production use exists (standing facts:
-  zero revenue, customers, pilots; `docs/pmf/pilot-ledger.csv` has no row);
+- that any customer, pilot, deployment or production use exists, unless it is sourced to a
+  named, dated document (`docs/pmf/pilot-ledger.csv` is the gate for customer and pilot claims);
 - "tamper-proof", "certified", "notarised", or that the ledger contents are *true* or
   complete. The key holder and the database holder can still lie to a customer who keeps no copy;
 - that a recording is physically true, that a recorder was attached to the right machine or

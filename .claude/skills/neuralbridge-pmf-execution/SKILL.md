@@ -24,9 +24,9 @@ deployment boundaries in `CLAUDE.md` still apply unchanged.
    anything so old failures are not mistaken for regressions. Start Postgres for
    the `/ai` tests if a server binary exists.
 2. **Find the next unresolved blocker.** Read the open limits in the
-   latest merged PR description, `docs/claims-registry.md` and `docs/GO-LIVE.md`; check what real customer
-   input (if any) has arrived in `docs/pmf/pilot-ledger.csv`. Customer input
-   outranks the roadmap.
+   latest merged PR description, `docs/claims-registry.md` and `docs/GO-LIVE.md`. Engineering
+   gates come first: the founder authorises commercialisation, never a session. Any customer
+   input that exists is recorded in `docs/pmf/pilot-ledger.csv`.
 3. **Delegate independent investigation** (`.claude/agents/`): one reality
    auditor, one adversarial reviewer. Give each a written objective, scope,
    output and acceptance criteria. Investigations are read-only. Implementation
@@ -44,5 +44,5 @@ deployment boundaries in `CLAUDE.md` still apply unchanged.
 8. **Continue** to the next blocker. Do not end with a plan when a safe,
    testable slice remains.
 
-Never: claim revenue/customers/live readiness without evidence; send outreach;
-touch production; relabel a gap as a pass.
+Never: claim revenue/customers/live readiness without evidence; initiate sales, outreach,
+pilots or pricing experiments; touch production; relabel a gap as a pass.

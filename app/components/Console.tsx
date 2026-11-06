@@ -35,7 +35,7 @@ export default function Console() {
     setError(null);
     setResponse(null);
     if (!API_BASE) {
-      setError('No API URL configured for this deployment — see /status for what to set.');
+      setError('No API URL configured for this deployment. Set NEXT_PUBLIC_ASSURANCE_API_URL to a running API.');
       return;
     }
     setLoading(true);
@@ -123,9 +123,8 @@ export default function Console() {
 
           {!API_BASE && (
             <p className="console-empty-note">
-              This panel is honestly disabled, not faking a response: this deployment has no{' '}
-              <code>NEXT_PUBLIC_ASSURANCE_API_URL</code> set. See <a href="/status">/status</a> for the founder
-              checklist, or run the API yourself — <code>uvicorn assurance.api.service:app</code> — and point{' '}
+              This panel is disabled rather than simulating a response: this deployment has no{' '}
+              <code>NEXT_PUBLIC_ASSURANCE_API_URL</code> set. Run the API yourself — <code>uvicorn assurance.api.service:app</code> — and point{' '}
               <code>NEXT_PUBLIC_ASSURANCE_API_URL</code> at it.
             </p>
           )}

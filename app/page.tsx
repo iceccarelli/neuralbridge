@@ -163,7 +163,7 @@ const products = [
 ] as const;
 
 // Offers and Products are emitted on the home page only (where the prices are shown), not on every
-// route: /checkout/success, /assurance and /status are noindex and should carry no price markup.
+// route: /checkout/success and /assurance are noindex and should carry no price markup.
 // Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
 // pins the numbers and the period to billing/plans.py.
 // The owner profile and repository URLs are added only when REPO_PUBLIC (lib/links.ts) is true.
@@ -615,8 +615,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             from wherever runs <code>fly deploy</code>, plus live Stripe keys &mdash; neither is available in the
             environment that built this page. See{' '}
             <RepoLink path="/blob/main/src/assurance/api/billing_routes.py" plain>the billing routes</RepoLink>{' '}
-            and <a href="/docs/assurance/deploy">the deploy guide</a> for the exact
-            remaining steps.
+            for the exact behaviour.
           </p>
           <p className="pricing-note">
             The prices (&euro;390 and &euro;1,290 a month) are launch hypotheses. They have not been validated

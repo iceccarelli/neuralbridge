@@ -758,17 +758,22 @@ class TestUsageEndpoint:
 
     def test_the_period_filter_selects_a_month(self, client, store, payg_on):
         account, headers = key_for(store, tier="payg", limit=5)
-        store.record_usage(account.id, "validate", 1, "old",
-                           now=datetime(2026, 9, 5, 10, tzinfo=UTC))
+        # The last day of the previous calendar month: always a different month from "now", and
+        # always inside the 35-day event retention, so the clock cannot age this fixture out.
+        today = datetime.now(UTC)
+        previous = (today.replace(day=1) - timedelta(days=1)).replace(
+            hour=10, minute=0, second=0, microsecond=0)
+        previous_label = previous.strftime("%Y-%m")
+        store.record_usage(account.id, "validate", 1, "old", now=previous)
         client.post("/v1/spec/validate", json=VALIDATE, headers=headers)
-        now_month = datetime.now(UTC).strftime("%Y-%m")
+        now_month = today.strftime("%Y-%m")
         current = client.get("/v1/usage", headers=headers).json()
         assert current["period"]["label"] == now_month
         assert "old" not in [e["idempotency_key"] for e in current["events"]]
         assert len(current["events"]) == 1
-        september = client.get("/v1/usage?period=2026-09", headers=headers).json()
-        assert [e["idempotency_key"] for e in september["events"]] == ["old"]
-        assert september["scopes"]["validate"]["period_total"] == 1
+        earlier = client.get(f"/v1/usage?period={previous_label}", headers=headers).json()
+        assert [e["idempotency_key"] for e in earlier["events"]] == ["old"]
+        assert earlier["scopes"]["validate"]["period_total"] == 1
         today = client.get("/v1/usage?period=today", headers=headers).json()
         assert today["period"]["label"] == "today"
 
