@@ -1166,6 +1166,35 @@ _MAX_ERR_TEXT = 300
 _MAX_LOC_PARTS = 8
 
 
+#: How many JSON nodes ``exceeds_json_depth`` will look at before it stops looking.
+_DEPTH_WALK_BUDGET = 200_000
+
+
+def exceeds_json_depth(value: Any, cap: int, *, budget: int = _DEPTH_WALK_BUDGET) -> bool:
+    """True when ``value`` (parsed JSON) nests arrays/objects deeper than ``cap``.
+
+    Iterative, so a hostile structure cannot hit the interpreter's recursion limit, and it
+    stops after ``budget`` nodes so a very wide body costs a bounded amount: running out of
+    budget answers False (the caller then gives the ordinary validation error, still a 422).
+    A path deeper than ``cap`` is reached within ``cap`` nodes of depth-first descent."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    seen = 0
+    while stack and seen < budget:
+        node, depth = stack.pop()
+        seen += 1
+        if isinstance(node, dict):
+            children: Any = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > cap:
+            return True
+        stack.extend((child, depth + 1) for child in children
+                     if isinstance(child, (dict, list)))
+    return False
+
+
 def validation_error_body(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """The 422 answer for a request the schema rejects.
 
