@@ -557,6 +557,20 @@ class TestGolden010NonPostgresAdapterGate:
         assert r.status_code == 400
         assert "not registered" in r.json()["detail"].lower() or "not found" in r.json()["detail"].lower()
 
+    @pytest.mark.parametrize("operation", ["get", "head", "post", "delete"])
+    def test_free_caller_cannot_trigger_a_credentialed_rest_request(
+        self, free_client: TestClient, operation: str
+    ) -> None:
+        """The REST adapter makes a real outbound request with the operator's base URL and
+        credentials, so even ``get``/``head`` need the entitlement: a free caller must never
+        be able to spend server-held credentials (no 'safe discovery' exemption for rest)."""
+        r = free_client.post(
+            "/api/v1/adapters/rest/execute",
+            json={"operation": operation, "params": {"endpoint": "/v1/anything"}},
+        )
+        assert r.status_code == 402
+        assert r.json()["detail"]["error"] == "plan_does_not_include_ai_control_plane"
+
     def test_paid_caller_clears_gate_for_non_postgres_write(self, ai_client: TestClient) -> None:
         """A Cell-tier caller clears the entitlement gate for a WRITE-shaped
         operation on a non-postgres adapter. The adapter is not registered
