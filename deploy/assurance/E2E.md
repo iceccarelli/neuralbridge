@@ -2,8 +2,13 @@
 
 `tests-e2e/` holds Playwright specs that drive the real Next.js site against the real
 Assurance API and real per-account ledgers. Nothing in the assurance API is mocked.
-CI does **not** run them (the `site` job only type-checks and builds; see `.github/workflows/ci.yml`),
-so this is a local, manual gate until someone adds a CI job.
+CI runs them: the `e2e` job ("Browser tests (Playwright)" in the CI workflow) calls `scripts/e2e-local.sh`
+(isolated API with SQLite ledgers in a temp dir, `next build` + `next start`, Chromium from `npx playwright install`).
+Any failed spec fails the job; the report, traces and server logs are uploaded only on failure. Every spec also fails
+on an uncaught page error, a console error, a failed first-party request or a 4xx/5xx first-party response
+(`tests-e2e/support/fixtures.ts`); a spec that provokes a refusal on purpose says so with
+`allowHealth({ status, url, why })`. The `/ai` specs need the platform API and a seeded Postgres and are not in the
+default set. The job has not yet run on a GitHub-hosted runner.
 
 ## Run
 
@@ -40,5 +45,5 @@ unless their own prerequisites exist (the /ai Postgres control plane, a paid tes
   through Stripe. No webhook signature path from Stripe is exercised.
 - A deployed or hosted environment; only localhost.
 - Browsers other than Chromium.
-- `phase4-visual-qa.spec.ts` rewrites committed screenshots under `reports/demo/`; it is not in
-  the default set. Restore with `git checkout -- reports/` after running it.
+- `phase4-visual-qa.spec.ts` rewrites committed screenshots under `reports/demo/`; it is excluded in
+  `playwright.config.ts` unless `E2E_VISUAL_QA=1`. Restore with `git checkout -- reports/` after running it.

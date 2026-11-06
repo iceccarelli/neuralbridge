@@ -1,4 +1,5 @@
-import { test, devices } from '@playwright/test';
+import { test, expectNoHorizontalOverflow, watchBrowserHealth } from './support/fixtures';
+import { devices } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 
@@ -45,7 +46,7 @@ const VIEWPORTS: { label: string; width: number; height: number; userAgent?: str
 
 for (const surface of SURFACES) {
   for (const vp of VIEWPORTS) {
-    test(`${surface.name} — ${vp.label}`, async ({ browser }) => {
+    test(`${surface.name} — ${vp.label}`, async ({ browser, baseURL }) => {
       const context = await browser.newContext({
         viewport: { width: vp.width, height: vp.height },
         userAgent: vp.userAgent,
@@ -53,25 +54,18 @@ for (const surface of SURFACES) {
         hasTouch: vp.hasTouch,
       });
       const page = await context.newPage();
-      const errors: string[] = [];
-      page.on('pageerror', (err) => errors.push(String(err)));
+      const assertHealthy = watchBrowserHealth(page, baseURL);
 
       await page.goto(surface.path, { waitUntil: 'networkidle' });
       if (surface.waitFor) {
-        await page.locator(surface.waitFor).first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+        await page.locator(surface.waitFor).first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {}); // best-effort settle: with no /ai API configured the shell is absent by design; health and overflow below are asserted
       }
       // Let any crossfade/entrance transitions settle.
       await page.waitForTimeout(300);
 
-      // No horizontal overflow at this viewport width.
-      const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-      const clientWidth = await page.evaluate(() => document.documentElement.clientWidth);
-      if (scrollWidth > clientWidth + 1) {
-        console.warn(`[phase4] ${surface.name} (${vp.label}): horizontal overflow — scrollWidth=${scrollWidth} clientWidth=${clientWidth}`);
-      }
-      if (errors.length) {
-        console.warn(`[phase4] ${surface.name} (${vp.label}): page errors — ${errors.join(' | ')}`);
-      }
+      // Both used to be console.warn: now they fail the test.
+      await expectNoHorizontalOverflow(page, `${surface.name} (${vp.label})`);
+      assertHealthy();
 
       await page.screenshot({
         path: path.join(OUT_DIR, `${surface.name}-${vp.label}.png`),

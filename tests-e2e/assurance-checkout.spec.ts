@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -102,9 +103,17 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   });
 
   test('Register: the plan is shown as it is, and the workspace link says what it will and will not show', async ({
+    allowHealth,
     page,
     request,
   }) => {
+    // A Register-plan account is authenticated but not entitled to these panels' data: 402 on each
+    // request (never a 401). The spec asserts the page says so.
+    allowHealth({
+      status: 402,
+      url: /\/v1\/(value|supplier\/trust|ledger\/attest\/log|ledger\/verify|fleet\/machines|fleet\/observations|change\/cases)$/,
+      why: 'Register plan is unentitled to the paid panels; the 402 is the behaviour under test',
+    });
     const sid = `cs_e2e_register_${Date.now()}`;
     stage(sid, 'register');
     await arriveAsBuyer(page, sid);
@@ -119,9 +128,15 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   });
 
   test('a session whose key was already collected says so, instead of waiting on a webhook that has come', async ({
+    allowHealth,
     page,
     request,
   }) => {
+    allowHealth({
+      status: 410,
+      url: /\/v1\/checkout\/complete$/,
+      why: "the spec re-collects an already-collected session on purpose and asserts the page says so",
+    });
     test.setTimeout(90_000);
     const sid = `cs_e2e_gone_${Date.now()}`;
     stage(sid, 'cell');
@@ -151,9 +166,15 @@ test.describe('Checkout success hands the buyer into the workspace', () => {
   });
 
   test('another tab or device has no claim token: it is told the key is held, and nothing is collected', async ({
+    allowHealth,
     page,
     request,
   }) => {
+    allowHealth({
+      status: 403,
+      url: /\/v1\/checkout\/complete$/,
+      why: "the spec collects without the claim token on purpose and asserts the key stays held",
+    });
     test.setTimeout(90_000);
     const sid = `cs_e2e_othertab_${Date.now()}`;
     stage(sid, 'cell');

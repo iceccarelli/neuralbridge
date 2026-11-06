@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './support/fixtures';
 
 // The pricing page against a REAL assurance API (GET /v1/plans), in whichever
 // mode that API was started in. Set E2E_PAYG=on when the API has

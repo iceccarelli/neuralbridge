@@ -37,7 +37,7 @@ jobs:
   # ── Marketing / workspace site (Next.js, repo root) ────────
   # Until this job existed nothing in CI installed, type-checked or built the root Next.js site
   # (the `dashboard` job below builds src/dashboard only), so a framework upgrade could break every
-  # route and still merge green. Route-level behaviour is covered by tests-e2e/ (scripts/e2e-assurance.sh).
+  # route and still merge green. Route-level behaviour is covered by tests-e2e/, run by the e2e job below (scripts/e2e-local.sh).
   site:
     name: Site (typecheck + production build)
     runs-on: ubuntu-latest
@@ -68,6 +68,65 @@ jobs:
       - run: python -m pytest tests/test_site_repo_links.py tests/test_site_product_pages.py tests/test_site_seo.py -q -o addopts="" -p no:cacheprovider -rs --noconftest -p tests.require_postgres_plugin
         env:
           NEURALBRIDGE_REQUIRE_NODE: "1"
+
+  # ── Browser tests (Playwright) ─────────────────────────────
+  # Runs the default tests-e2e/ spec set (the list in scripts/e2e-local.sh) in Chromium, desktop and
+  # mobile projects, against ISOLATED real services started on the runner: the Assurance API
+  # (uvicorn, SQLite ledgers and accounts in a fresh temp directory, random throwaway keys) and the
+  # production `next build` + `next start` site. Nothing is mocked, no secret and no Stripe key is
+  # set, and nothing but the package registries and the Playwright browser download is contacted.
+  # Any failed spec fails the job, and so does any uncaught page error, console error, failed
+  # first-party request or 4xx/5xx first-party response (tests-e2e/support/fixtures.ts).
+  # Not in this set, on purpose: phase4-visual-qa (rewrites committed screenshots; E2E_VISUAL_QA=1)
+  # and the /ai specs, which need the platform API plus a seeded Postgres and skip without them, so
+  # this job needs no Postgres service. Not yet exercised on a GitHub-hosted runner.
+  e2e:
+    name: Browser tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.pw-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # Same hash-checked install as the Python 3.11 leg of the test job (uvicorn, fastapi and the
+      # `assurance` CLI that some specs shell out to).
+      - name: Install Python dependencies (hash-checked lock)
+        run: |
+          pip install --require-hashes --no-deps -r requirements/test.lock
+          pip install --no-deps -e .
+          pip check
+      - run: npm ci
+      # The only place the browser is downloaded; locally the pre-installed Chromium is used.
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run the browser tests
+        env:
+          E2E_ROOT: ${{ runner.temp }}/e2e-data
+          E2E_REPORT_DIR: ${{ runner.temp }}/e2e-failure
+          PYTHON: python
+        run: bash scripts/e2e-local.sh
+      # Failure only: nothing is uploaded from a green run. The data dir holds throwaway databases
+      # and keys of this run, so only the server logs are taken from it.
+      - name: Upload the Playwright report, traces and server logs (failure only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure
+          path: |
+            ${{ runner.temp }}/e2e-failure/
+            ${{ runner.temp }}/e2e-data/*/build.log
+            ${{ runner.temp }}/e2e-data/*/web.log
+            ${{ runner.temp }}/e2e-data/*/*/api.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ── Unit Tests ─────────────────────────────────────────────
   test:

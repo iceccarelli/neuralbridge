@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,11 @@ type Seed = {
   machines_e: { ok: string; blind_stale: string; blind_fresh: string };
   case_e: string;
 };
+
+// Every request the workspace's panels make with the key in hand (which of them fire depends on the
+// viewport: the narrow layout loads more panels at once). A spec that expects a refusal for the whole
+// workspace allow-lists the refusal for all of them, by status, never any other status.
+const PANEL_REQUESTS = /\/v1\/(me|value|supplier\/trust|ledger\/attest\/log|ledger\/verify|fleet\/machines|fleet\/observations|change\/cases)$/;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -159,7 +165,8 @@ test.describe('Assurance workspace', () => {
     expect(JSON.stringify(a)).not.toContain('#7001');
   });
 
-  test('case detail shows source evidence, limits and history; the server refuses an early close', async ({ page, request }) => {
+  test('case detail shows source evidence, limits and history; the server refuses an early close', async ({ allowHealth, page, request }) => {
+    allowHealth({ status: 409, url: /\/v1\/change\/cases\/[^/]+\/decision$/, why: "the spec attempts an early close on purpose and asserts the server's 409 is shown" });
     await enter(page, seed.key_a);
     await page.getByRole('button', { name: seed.case_id }).click();
     const detail = page.getByTestId('case-detail');
@@ -214,7 +221,7 @@ test.describe('Assurance workspace', () => {
 
   test('another account sees an empty workspace and cannot read the case by id', async ({ page, request }) => {
     await enter(page, seed.key_b);
-    await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/No machine is enrolled in your ledger\. Enrol/)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/No cases\./)).toBeVisible();
     await expect(page.getByText(seed.case_id)).toHaveCount(0);
 
@@ -232,20 +239,30 @@ test.describe('Assurance workspace', () => {
 
   test('a brand-new account with no ledger yet loads cleanly (its first requests create the ledger)', async ({ page }) => {
     await enter(page, seed.key_new);
-    await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/No machine is enrolled in your ledger\. Enrol/)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/No cases\./)).toBeVisible();
     // No refusal or server-error banner of this page's own (Next.js injects an
     // unrelated role=alert route announcer, so match the page's banner class).
     await expect(page.locator('.aw-alert')).toHaveCount(0);
   });
 
-  test('a Register-plan key gets the plan\'s real refusal, not a view', async ({ page }) => {
+  test('a Register-plan key gets the plan\'s real refusal, not a view', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 402,
+      url: PANEL_REQUESTS,
+      why: "a Register-plan key is authenticated but unentitled: 402 on the paid panels is the behaviour under test",
+    });
     await enter(page, seed.key_register);
     await expect(page.getByRole('alert').first()).toContainText(/does not include|plan/i, { timeout: 15_000 });
     await expect(page.getByTestId('fleet-table')).toHaveCount(0);
   });
 
-  test('a wrong key is refused, not rendered as an empty fleet', async ({ page }) => {
+  test('a wrong key is refused, not rendered as an empty fleet', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 401,
+      url: PANEL_REQUESTS,
+      why: "the spec enters an invalid key on purpose and asserts every panel shows a 401 refusal, not an empty result",
+    });
     await enter(page, 'asr_not_a_real_key');
     await expect(page.getByRole('alert').first()).toContainText(/key/i, { timeout: 15_000 });
     await expect(page.getByTestId('fleet-table')).toHaveCount(0);
@@ -255,7 +272,17 @@ test.describe('Assurance workspace', () => {
   // Honest states
   // ------------------------------------------------------------------------------------
 
-  test('every refusal names which one it is and passes the server\'s remedy through', async ({ page }) => {
+  test('every refusal names which one it is and passes the server\'s remedy through', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 401,
+      url: PANEL_REQUESTS,
+      why: "invalid key on purpose: each panel must show its own 401",
+    });
+    allowHealth({
+      status: 402,
+      url: PANEL_REQUESTS,
+      why: "Register key on purpose: each panel must show its own 402 with the server's remedy",
+    });
     await enter(page, 'asr_not_a_real_key');
     const fleet = page.locator('section#aw-fleet');
     await expect(fleet.getByRole('alert')).toContainText('Not signed in (401)', { timeout: 15_000 });
@@ -273,7 +300,12 @@ test.describe('Assurance workspace', () => {
     await expect(page.locator('section#aw-cases').getByRole('alert')).toContainText('(402)');
   });
 
-  test('one panel failing does not blank the others, and a failed panel is never an empty one', async ({ page }) => {
+  test('one panel failing does not blank the others, and a failed panel is never an empty one', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 0,
+      url: /\/v1\/(fleet\/observations|change\/cases)$/,
+      why: "the spec cuts the network for these requests on purpose (page.route abort) and asserts the panel says the API is unreachable",
+    });
     // Cut the network for ONE real request. Everything else is the real API.
     await page.route('**/v1/fleet/observations', (route) => route.abort('connectionrefused'));
     await enter(page, seed.key_a);
@@ -335,7 +367,17 @@ test.describe('Assurance workspace', () => {
     await expect(fleet.getByTestId('panel-asof')).toHaveAttribute('data-stale', 'false', { timeout: 15_000 });
   });
 
-  test('a stale panel keeps its last data only after a transport failure, and labels it', async ({ page, request }) => {
+  test('a stale panel keeps its last data only after a transport failure, and labels it', async ({ allowHealth, page, request }) => {
+    allowHealth({
+      status: 0,
+      url: /\/v1\/fleet\/machines$/,
+      why: "the spec cuts the network for this request on purpose (page.route abort)",
+    });
+    allowHealth({
+      status: 401,
+      url: /\/v1\/fleet\/machines$/,
+      why: "the spec revokes the key while the page is open and asserts the next reload is a 401",
+    });
     // A second key of account G, issued and later revoked through the real key routes.
     const issued = await request.post(`${apiBase}/v1/keys`, { headers: { 'X-API-Key': seed.key_g }, data: { label: 'e2e stale' } });
     expect(issued.status()).toBe(201);
@@ -361,7 +403,12 @@ test.describe('Assurance workspace', () => {
     await expect(fleet).not.toContainText(/last data received/i);
   });
 
-  test('a case id that is not in your ledger is a 404, and offers no export', async ({ page }) => {
+  test('a case id that is not in your ledger is a 404, and offers no export', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 404,
+      url: /\/v1\/change\/cases\/[^/]+$/,
+      why: "another account's case id is a 404 by design; the spec asserts the page says so and offers no export",
+    });
     await page.goto(`/assurance?case=${encodeURIComponent(seed.case_id)}`);
     await page.getByLabel('API key').fill(seed.key_b);
     await page.getByRole('button', { name: 'Refresh' }).click();
@@ -400,13 +447,19 @@ test.describe('Assurance workspace', () => {
     const plan = page.locator('section#aw-plan');
     await expect(plan.getByTestId('plan-warning')).toContainText(me.warning.slice(0, 50), { timeout: 15_000 });
     await expect(plan.getByTestId('plan-status')).toContainText('past_due');
-    await expect(page.getByTestId('fleet-table').or(page.getByText(/No machine is enrolled/))).toBeVisible();
+    await expect(page.getByTestId('fleet-table').or(page.getByText(/No machine is enrolled in your ledger\. Enrol/))).toBeVisible();
   });
 
   test('a lapsed customer is not told "export: not included" while the server lets them export', async ({
+    allowHealth,
     page,
     request,
   }) => {
+    allowHealth({
+      status: 402,
+      url: PANEL_REQUESTS,
+      why: "a lapsed account is refused the paid panels with 402; the spec asserts the export wording regardless",
+    });
     const me = await (await request.get(`${apiBase}/v1/me`, { headers: { 'X-API-Key': seed.key_lapsed } })).json();
     // The truth is the server's: the plan no longer includes export, the account may still read out its evidence.
     expect(me.plan.limits.verifiable_export).toBe(false);
@@ -430,7 +483,12 @@ test.describe('Assurance workspace', () => {
     await expect(plan.getByTestId('plan-limit-verifiable_export')).toHaveText(/export: included$/);
   });
 
-  test('a Register plan shows its own plan and usage while the Cell views are refused', async ({ page }) => {
+  test('a Register plan shows its own plan and usage while the Cell views are refused', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 402,
+      url: PANEL_REQUESTS,
+      why: "a Register plan is refused the Cell views with 402 on purpose; the spec asserts the plan and usage still show",
+    });
     await enter(page, seed.key_register);
     const plan = page.locator('section#aw-plan');
     await expect(plan.getByTestId('plan-tier')).toContainText('register', { timeout: 15_000 });
