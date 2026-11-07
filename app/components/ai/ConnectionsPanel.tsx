@@ -7,7 +7,7 @@ import styles from '../assurance/workspace.module.css';
 import { DemoLabel } from '../assurance/WorkspaceHeader';
 import { PLATFORM_BASE } from './AdaptersPanel';
 
-export type DataSource = { id: string; name: string; adapter_type: string; status: string; source: string };
+export type DataSource = { id: string; name: string; adapter_type: string; status: string; source: string; live?: boolean };
 
 export const isDemoSource = (c: Pick<DataSource, 'source'>) => c.source === 'seeded_from_env';
 
@@ -98,6 +98,11 @@ export default function ConnectionsPanel({
                   <DemoLabel>Shared demonstration database, not yours</DemoLabel>
                 ) : (
                   <span className={styles.tag}>bound by you</span>
+                )}
+                {c.live === false && (
+                  <span className={styles.tag} data-testid="not-live">
+                    not live on this server: bind it again to use it (credentials are never stored)
+                  </span>
                 )}
               </span>
               {!isDemoSource(c) &&

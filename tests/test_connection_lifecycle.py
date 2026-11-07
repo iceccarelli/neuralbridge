@@ -108,7 +108,8 @@ class TestSecretsAreWriteOnly:
         caplog.set_level("DEBUG")
         conn = bind_scram(client, keys.a, scram_role)
         responses = [json.dumps(conn)]
-        assert set(conn) == {"id", "name", "adapter_type", "status", "source"}
+        assert set(conn) == {"id", "name", "adapter_type", "status", "source", "live"}
+        assert isinstance(conn["live"], bool)
         responses.append(client.get(f"{API}/connections", headers=h(keys.a)).text)
         r = read(client, keys.a, conn["id"], operation="query", sql="SELECT current_user")
         assert r.status_code == 200 and r.json()["data"][0]["current_user"] == "lc_app"

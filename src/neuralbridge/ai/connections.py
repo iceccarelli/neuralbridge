@@ -163,8 +163,8 @@ def create_connection(
 def list_connections(registry: AdapterRegistry, store: AiStore, scope: Scope) -> list[ConnectionSummary]:
     """Connections ``scope`` may see — its own plus the shared seeded demo
     (operator: all). Reads the durable store, seeding postgres if configured.
-    Never returns anything but id/name/type/status/source: no config, no
-    credential, no registry key, no owner."""
+    Never returns anything but id/name/type/status/source/live: no config, no
+    credential, no registry key, no owner. ``live`` says whether this process holds the adapter."""
     ensure_seeded_connection(registry, store)
     return [
         ConnectionSummary(
@@ -173,6 +173,7 @@ def list_connections(registry: AdapterRegistry, store: AiStore, scope: Scope) ->
             adapter_type=r.adapter_type,
             status=r.status,
             source=r.source,
+            live=registry.get(r.registry_key) is not None,
         )
         for r in store.list_connections()
         if can_read_connection(scope, r)

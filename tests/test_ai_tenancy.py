@@ -589,7 +589,10 @@ class TestCredentialsNeverReturnedOrLogged:
     def test_response_schema_has_no_credential_fields(self, client, keys: Keys) -> None:
         bind(client, keys.a, A_NAME)
         for entry in client.get(f"{API}/connections", headers=h(keys.a)).json():
-            assert set(entry) == {"id", "name", "adapter_type", "status", "source"}
+            # `live` is a non-secret boolean: does THIS process hold the adapter. Right after a bind
+            # in this process it is True.
+            assert set(entry) == {"id", "name", "adapter_type", "status", "source", "live"}
+            assert entry["live"] is True
 
 
 # ───────────────────────── additive migration of an existing store ─────────────────────────
@@ -954,3 +957,16 @@ class TestEachRawAdapterRouteHidesConnectionKeys:
         assert key not in client.get("/api/v1/adapters", headers=h(keys.b)).text
         assert key not in client.get("/api/v1/adapters", headers=h()).text
         assert key in client.get("/api/v1/adapters", headers=h(OPERATOR_KEY)).text
+
+
+def test_a_listed_connection_says_whether_this_process_holds_its_adapter():
+    """``live`` is True only when this process has the adapter; a record whose adapter is gone
+    (restart, another worker) stays listed and says it is not live, never pretends to be."""
+    from neuralbridge.ai.connections import list_connections
+    from neuralbridge.ai.schemas import ConnectionSummary
+
+    assert ConnectionSummary.model_fields["live"].default is False
+    import inspect
+
+    src = inspect.getsource(list_connections)
+    assert "live=registry.get(r.registry_key) is not None" in src

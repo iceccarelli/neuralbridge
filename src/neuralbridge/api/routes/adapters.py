@@ -2,7 +2,7 @@
 NeuralBridge Adapter Management Routes.
 
 CRUD endpoints for registering, configuring, and invoking adapters.
-Business users interact with these endpoints through the React dashboard;
+People use the web workspace (the /ai, /console and /assurance screens of the site);
 agents interact via the MCP gateway (which delegates here internally).
 """
 

@@ -3,8 +3,8 @@ NeuralBridge Connection Management Routes.
 
 Endpoints for managing adapter connections — the YAML-configured
 "bridges" between AI agents and external systems.  Business users
-create connections via the dashboard's Connection Wizard; developers
-can also use these endpoints directly.
+create customer connections from the web workspace (/ai, POST /ai/connections); this
+operator-only router is for developers and operators.
 
 **Operator-only.** This is one global, in-memory store of connection *settings*
 (no adapter is built from it), so it must never be reachable by a customer:
@@ -81,8 +81,7 @@ async def create_connection(request: ConnectionCreateRequest) -> dict[str, Any]:
     """
     Create a new connection from YAML or JSON configuration.
 
-    This is the primary endpoint used by the Connection Wizard in the
-    React dashboard.
+    Operator-only. Customers bind a database through POST /ai/connections.
     """
     connection_id = str(uuid.uuid4())
     connection = {
