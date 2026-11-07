@@ -72,7 +72,7 @@ _MAX_SQL_CHARS = 100_000
 _DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_\u0080-￿][A-Za-z_0-9\u0080-￿]*)?\$")
 
 
-class _Unclassifiable(Exception):
+class _UnclassifiableError(Exception):
     """The text cannot be split into statements reliably (an unterminated quote or comment)."""
 
 
@@ -80,7 +80,7 @@ def _split_statements(sql: str) -> list[str]:
     """Strip comments (each becomes one space, as in PostgreSQL) and split on top-level ``;``.
 
     Quoted strings, quoted identifiers and dollar-quoted bodies stay verbatim inside their
-    statement. Raises :class:`_Unclassifiable` if a quote or comment is never closed.
+    statement. Raises :class:`_UnclassifiableError` if a quote or comment is never closed.
     """
     out: list[str] = []
     cur: list[str] = []
@@ -102,7 +102,7 @@ def _split_statements(sql: str) -> list[str]:
                 else:
                     i += 1
             if depth:
-                raise _Unclassifiable("unterminated comment")
+                raise _UnclassifiableError("unterminated comment")
             cur.append(" ")
         elif c in "'\"":
             # Backslash is read as an escape in every single-quoted string: that can only make
@@ -110,7 +110,7 @@ def _split_statements(sql: str) -> list[str]:
             j = i + 1
             while True:
                 if j >= n:
-                    raise _Unclassifiable("unterminated quote")
+                    raise _UnclassifiableError("unterminated quote")
                 if c == "'" and sql[j] == "\\":
                     j += 2
                     continue
@@ -126,7 +126,7 @@ def _split_statements(sql: str) -> list[str]:
             tag = m.group(0)
             j = sql.find(tag, m.end())
             if j < 0:
-                raise _Unclassifiable("unterminated dollar quote")
+                raise _UnclassifiableError("unterminated dollar quote")
             cur.append(sql[i:j + len(tag)])
             i = j + len(tag)
         elif c == ";":
@@ -149,7 +149,7 @@ def _text_refusal(text: str) -> str | None:
     """The identifier-level rules, for any parameter. ``None`` when nothing is denied."""
     try:
         statements = _split_statements(text)
-    except _Unclassifiable as exc:
+    except _UnclassifiableError as exc:
         return f"it cannot be classified ({exc})"
     joined = " ; ".join(statements)
     if _UNICODE_IDENT.search(joined):

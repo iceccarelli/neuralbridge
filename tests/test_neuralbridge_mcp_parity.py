@@ -343,6 +343,11 @@ class TestGatewayMatchesTheRawAdaptersRoute:
                     via_mcp = outcome_http(resp.error["data"]["status"])
                 if (via_http, ran_http) != (via_mcp, ran_mcp):
                     mismatches.append((adapter_type, operation, caller, (via_http, ran_http), (via_mcp, ran_mcp)))
+                if adapter_type == "rest":
+                    # not just "both doors agree": REST makes a credentialed outbound call, so it is
+                    # never free for a caller without the entitlement, whichever door they use
+                    assert (via_http == "allowed") == (caller == "paid"), (caller, via_http)
+                    assert (via_mcp == "allowed") == (caller == "paid"), (caller, via_mcp)
                 # a refused call never reached the adapter, through either door
                 assert (ran_http == 1) == (via_http == "allowed")
                 assert (ran_mcp == 1) == (via_mcp == "allowed")

@@ -271,7 +271,6 @@ def test_ip_is_blocked_unit(ip):
 
 
 def test_the_private_network_opt_in_still_reaches_cgnat_space():
-    from neuralbridge.adapters.apis.rest import _ip_is_blocked  # noqa: F401  (documenting the unit under test)
 
     adapter = RestApiAdapter({"base_url": "http://100.64.0.1:9", "timeout": 1, "allow_private_network": True})
     result = asyncio.run(_run(adapter, "get", endpoint="/x"))

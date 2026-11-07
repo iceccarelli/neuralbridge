@@ -93,6 +93,19 @@ _MAX_TEXT = 4096
 _MAX_DEPTH = 8
 
 
+#: Identifying fields of one audit row (actor, resource, action, result) are short by nature; the
+#: client chooses some of them (``X-NB-Actor``, an operation name), so they are bounded at the sink.
+MAX_FIELD_CHARS = 256
+
+
+def bound_text(text: str, limit: int = MAX_FIELD_CHARS) -> str:
+    """Cap ``text`` at ``limit`` characters, visibly: a longer value ends in ``...[+N chars]``."""
+    if len(text) <= limit:
+        return text
+    marker = f"...[+{len(text) - limit} chars]"
+    return text[: max(0, limit - len(marker))] + marker
+
+
 def redact_text(text: str) -> str:
     """Mask credential-shaped substrings (URL passwords, bearer/basic tokens,
     ``password=...`` pairs, JWTs, Stripe-style keys) and cap the length."""
@@ -799,10 +812,10 @@ class AuditLogger:
         def build(previous_hash: str) -> AuditEntry:
             entry = AuditEntry(
                 event_type=redact_text(event_type),
-                actor=redact_text(actor),
-                resource=redact_text(resource),
-                action=redact_text(action),
-                result=redact_text(result),
+                actor=bound_text(redact_text(actor)),
+                resource=bound_text(redact_text(resource)),
+                action=bound_text(redact_text(action)),
+                result=bound_text(redact_text(result)),
                 ip_address=ip_address,
                 details=clean_details,
                 previous_hash=previous_hash,

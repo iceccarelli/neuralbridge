@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from neuralbridge import __version__
+from neuralbridge.ai.audit_events import refusals_suppressed_total
 from neuralbridge.api.dependencies import get_adapter_registry, get_audit_logger, get_settings
 from neuralbridge.config import Settings
 from neuralbridge.core.router import AdapterRegistry
@@ -64,6 +65,9 @@ async def readiness_check(
         "environment": settings.env.value,
         "audit_backend": audit.storage.backend if audit else "unavailable",
         "audit_durable": bool(audit and audit.storage.durable),
+        # Refusal events (402/403 at a gate) are rate limited before the write; this counts the
+        # ones not written since the process started, so the suppression is visible.
+        "audit_refusals_suppressed": refusals_suppressed_total(),
     }
     # Warning only (never flips readiness): the free /ai demo connection logs in as a role that
     # can reach server files or programs. Absent when no demo DSN is configured.
