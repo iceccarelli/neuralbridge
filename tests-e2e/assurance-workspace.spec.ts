@@ -385,6 +385,13 @@ test.describe('Assurance workspace', () => {
     await enter(page, second);
     const fleet = page.locator('section#aw-fleet');
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
+    // Let the page settle before the key is revoked. Typing a key schedules a debounced load (250 ms)
+    // for EVERY panel, and four panels (value, ledger verify, attest log, supplier trust) load only
+    // through it. On a fast runner this test's own steps finish inside that window, so the revoked
+    // key reached all eight panels as a 401 (seen on the hosted runner, reproduced by revoking right
+    // after the table appears). Waiting for the network to go quiet makes the revocation, not the
+    // typing, the thing under test.
+    await page.waitForLoadState('networkidle');
 
     await page.route('**/v1/fleet/machines', (route) => route.abort('connectionrefused'));
     await fleet.getByRole('button', { name: 'Reload' }).click();
