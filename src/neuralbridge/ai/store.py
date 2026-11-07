@@ -77,6 +77,10 @@ CREATE INDEX IF NOT EXISTS plans_by_owner ON plans (owner);
 """
 
 
+#: ``ConnectionRecord.status`` of a revoked connection — terminal, refuses every operation.
+REVOKED = "revoked"
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -255,6 +259,51 @@ class AiStore:
             cur = db.execute("DELETE FROM connections WHERE id=?", (connection_id,))
             return cur.rowcount > 0
 
+    def update_connection(
+        self, connection_id: str, *, status: str | None = None, config_updates: dict[str, Any] | None = None,
+    ) -> ConnectionRecord | None:
+        """Change a connection's status and/or merge non-secret keys into its config.
+        A revoked connection is terminal: it is returned unchanged. ``None`` if missing."""
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM connections WHERE id=?", (connection_id,)).fetchone()
+            if row is None:
+                return None
+            record = ConnectionRecord.from_row(row)
+            if record.status == REVOKED:
+                return record
+            config = {**record.config, **(config_updates or {})}
+            db.execute(
+                "UPDATE connections SET status=?, config_json=?, updated_at=? WHERE id=?",
+                (status or record.status, json.dumps(config), _now(), connection_id),
+            )
+            return ConnectionRecord.from_row(
+                db.execute("SELECT * FROM connections WHERE id=?", (connection_id,)).fetchone())
+
+    def revoke_connection(self, connection_id: str, *, by: str) -> bool | None:
+        """Revoke atomically: mark the connection ``revoked`` and deny every plan still
+        pending against it, in one transaction. ``True`` = revoked now, ``False`` = it
+        already was, ``None`` = no such connection."""
+        with self._txn() as db:
+            row = db.execute("SELECT * FROM connections WHERE id=?", (connection_id,)).fetchone()
+            if row is None:
+                return None
+            record = ConnectionRecord.from_row(row)
+            if record.status == REVOKED:
+                return False
+            now = _now()
+            db.execute(
+                "UPDATE plans SET status='denied', decided_by='system:connection-revoked', "
+                "decided_at=?, deny_reason='connection revoked' "
+                "WHERE connection_id=? AND status='pending_approval'",
+                (now, connection_id),
+            )
+            config = {**record.config, "revoked_at": now, "revoked_by": by}
+            db.execute(
+                "UPDATE connections SET status=?, config_json=?, updated_at=? WHERE id=?",
+                (REVOKED, json.dumps(config), now, connection_id),
+            )
+            return True
+
     def list_connections(self) -> list[ConnectionRecord]:
         db = self._connect()
         try:
@@ -325,7 +374,7 @@ class AiStore:
 
     def transition_plan(
         self, plan_id: str, *, expected: str, status: str, decided_by: str | None = None,
-        decided_at: str | None = None, deny_reason: str | None = None,
+        decided_at: str | None = None, deny_reason: str | None = None, reset_decision: bool = False,
     ) -> PlanRecord | None:
         """Atomically move a plan from ``expected`` to ``status`` (compare-and-set).
 
@@ -337,12 +386,20 @@ class AiStore:
         ``record.status`` followed by an unconditional write is not a substitute.
         Raises ``KeyError`` if the plan does not exist."""
         with self._txn() as db:
-            cur = db.execute(
-                "UPDATE plans SET status=?, decided_by=COALESCE(?, decided_by), "
-                "decided_at=COALESCE(?, decided_at), deny_reason=COALESCE(?, deny_reason) "
-                "WHERE id=? AND status=?",
-                (status, decided_by, decided_at, deny_reason, plan_id, expected),
-            )
+            if reset_decision:
+                # Release a claim that never reached the target: back to undecided.
+                cur = db.execute(
+                    "UPDATE plans SET status=?, decided_by=NULL, decided_at=NULL, deny_reason=NULL "
+                    "WHERE id=? AND status=?",
+                    (status, plan_id, expected),
+                )
+            else:
+                cur = db.execute(
+                    "UPDATE plans SET status=?, decided_by=COALESCE(?, decided_by), "
+                    "decided_at=COALESCE(?, decided_at), deny_reason=COALESCE(?, deny_reason) "
+                    "WHERE id=? AND status=?",
+                    (status, decided_by, decided_at, deny_reason, plan_id, expected),
+                )
             row = db.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
             if row is None:
                 raise KeyError(plan_id)
@@ -353,4 +410,4 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
-__all__ = ["AiStore", "ConnectionRecord", "PlanRecord", "new_id", "SCHEMA_VERSION"]
+__all__ = ["REVOKED", "AiStore", "ConnectionRecord", "PlanRecord", "new_id", "SCHEMA_VERSION"]

@@ -12,11 +12,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 
 from neuralbridge import __version__
-from neuralbridge.api.dependencies import get_adapter_registry, get_settings
+from neuralbridge.api.dependencies import get_adapter_registry, get_audit_logger, get_settings
 from neuralbridge.config import Settings
 from neuralbridge.core.router import AdapterRegistry
+from neuralbridge.security.audit import AuditLogger, AuditUnavailableError
 
 router = APIRouter()
 
@@ -36,24 +38,34 @@ async def health_check() -> dict[str, Any]:
 async def readiness_check(
     settings: Settings = Depends(get_settings),
     registry: AdapterRegistry = Depends(get_adapter_registry),
-) -> dict[str, Any]:
+) -> Any:
     """
     Readiness probe for Kubernetes.
 
-    Returns 200 when the application is ready to serve traffic.
-    Checks database connectivity, Redis availability, and adapter
-    registry status.
+    200 only when the configuration loaded and the **audit sink can record** (a
+    write lock is taken and released; nothing is written). If the sink is
+    unwritable the answer is **503** with ``status: "degraded"`` and
+    ``checks.audit: "unwritable"``: security-relevant operations are refused
+    with 503 in that state, so traffic should stop. Failure details are in the
+    server log, not in this response.
     """
-    checks: dict[str, str] = {
-        "config": "ok",
-        "adapters": "ok" if registry.list_all() or True else "no_adapters",
-    }
+    audit: AuditLogger | None = None
+    audit_state = "ok"
+    try:
+        audit = get_audit_logger()
+        await audit.ensure_writable()
+    except AuditUnavailableError:
+        audit_state = "unwritable"
+    checks: dict[str, str] = {"config": "ok", "adapters": "ok", "audit": audit_state}
     all_ok = all(v == "ok" for v in checks.values())
-    return {
+    body: dict[str, Any] = {
         "status": "ready" if all_ok else "degraded",
         "checks": checks,
         "environment": settings.env.value,
+        "audit_backend": audit.storage.backend if audit else "unavailable",
+        "audit_durable": bool(audit and audit.storage.durable),
     }
+    return JSONResponse(status_code=200 if all_ok else 503, content=body)
 
 
 @router.get("/health/live", summary="Liveness probe")

@@ -84,6 +84,7 @@ async def query_logs(
         event_type=event_type,
         start_time=start_time,
         end_time=end_time,
+        owner=None if scope.is_operator else scope.owner,
     ):
         if not can_see_audit_entry(scope, entry.details.get("owner")):
             continue
@@ -167,7 +168,7 @@ async def log_stats(
     actors: dict[str, int] = {}
     adapters: dict[str, int] = {}
     total = 0
-    async for entry in audit.query_events():
+    async for entry in audit.query_events(owner=None if scope.is_operator else scope.owner):
         if not can_see_audit_entry(scope, entry.details.get("owner")):
             continue
         total += 1
