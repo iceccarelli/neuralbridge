@@ -262,7 +262,7 @@ This README therefore focuses on the smaller product that the repository can gro
 | Connection management model | **Supported as a core direction** |
 | MCP tool listing / invocation layer | **Supported** |
 | Customer workspace (the Next.js site: /assurance, /console, /ai, reading the real APIs) | **Experimental / evolving** |
-| Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
+| Basic audit trail (durable, append-only, hash-chained SQLite by default) | **Experimental / evolving** |
 | Small set of working adapters | **Intended supported scope** |
 | Broad adapter ecosystem | **Experimental / evolving** |
 | Full enterprise compliance posture | **Not part of the core promise yet** |

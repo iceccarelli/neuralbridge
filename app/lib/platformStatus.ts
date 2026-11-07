@@ -28,7 +28,7 @@ export const PLATFORM_STATUS: PlatformStatusRow[] = [
     pill: 'evolving',
   },
   {
-    area: 'Basic audit trail (in memory by default; cleared on restart)',
+    area: 'Basic audit trail (durable, append-only, hash-chained SQLite by default)',
     status: 'Experimental / evolving',
     pill: 'evolving',
   },

@@ -805,7 +805,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>/ai control plane — propose-and-approve writes, bind connections, an in-memory audit log for your account</td>
+                  <td>/ai control plane — propose-and-approve writes, bind connections, a durable audit log for your account</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>
