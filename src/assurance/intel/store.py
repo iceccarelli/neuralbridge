@@ -329,7 +329,7 @@ class IntelStore:
             raise IntelStoreError(f"{what} is not an intel observation store.")
         # SQLite reads the header; no plain descriptor is opened on the file (closing one would
         # release the locks SQLite holds for another thread in this process; see
-        # ``core.sqlite.copy_files_apart``). ``immutable`` locks nothing and creates nothing.
+        # the live-connection registry in ``evidence.ledger``). ``immutable`` locks nothing and creates nothing.
         try:
             db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro&immutable=1",
                                  uri=True, timeout=5.0)

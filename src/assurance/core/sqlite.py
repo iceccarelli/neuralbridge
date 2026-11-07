@@ -14,14 +14,11 @@ from __future__ import annotations
 
 import random
 import sqlite3
-import subprocess  # noqa: S404 - fixed argv, no shell; see copy_files_apart
-import sys
 import time
-from collections.abc import Callable, Sequence
-from pathlib import Path
+from collections.abc import Callable
 from typing import TypeVar
 
-__all__ = ["copy_files_apart", "enable_wal", "is_not_a_database", "retry_locked"]
+__all__ = ["enable_wal", "is_not_a_database", "retry_locked"]
 
 T = TypeVar("T")
 
@@ -106,32 +103,3 @@ def is_not_a_database(exc: sqlite3.Error) -> bool:
     """SQLite's own verdict that a file is not a SQLite database at all."""
     return "not a database" in str(exc).lower()
 
-
-_COPY_SNIPPET = (
-    "import shutil, sys\n"
-    "a = sys.argv[1:]\n"
-    "for src, dst in zip(a[0::2], a[1::2], strict=True):\n"
-    "    shutil.copy2(src, dst)\n"
-)
-
-
-def copy_files_apart(pairs: Sequence[tuple[Path, Path]], *, timeout: float = 30.0) -> None:
-    """Copy files in a CHILD process.
-
-    POSIX advisory locks belong to the process, not to the descriptor: closing *any* descriptor
-    on a file releases every lock this process holds on it, including the ones SQLite holds for
-    another thread's open transaction. A plain ``open()`` (or ``shutil.copy``) of a database file
-    in a process that also uses it through SQLite can therefore silently drop the write lock, and
-    a commit that has already been acknowledged is then lost to a second process that believes it
-    is the last user (https://www.sqlite.org/howtocorrupt.html, "Posix advisory locks").
-    The child's descriptors affect only the child. Raises ``OSError`` if the copy fails.
-    """
-    argv: list[str] = [sys.executable, "-I", "-c", _COPY_SNIPPET]
-    for src, dst in pairs:
-        argv += [str(src), str(dst)]
-    try:
-        done = subprocess.run(argv, capture_output=True, timeout=timeout, check=False)  # noqa: S603
-    except subprocess.TimeoutExpired as exc:
-        raise OSError("copying the database files timed out") from exc
-    if done.returncode != 0:
-        raise OSError(done.stderr.decode("utf-8", "replace").strip()[-300:] or "copy failed")

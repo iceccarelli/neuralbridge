@@ -18,7 +18,6 @@ shows the platform behaviour this depends on; the remaining tests pin the produc
 from __future__ import annotations
 
 import builtins
-import contextlib
 import fcntl
 import io
 import os
@@ -104,20 +103,42 @@ def test_building_a_ledger_for_an_existing_file_opens_no_plain_descriptor(
     assert rec.opened == [], f"plain descriptors opened on the ledger: {rec.opened}"
 
 
-def test_the_crash_copy_read_copies_in_a_child_process(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A -wal without a -shm is read from a private copy; the copy must not use this process's fds."""
+def test_the_private_copy_is_refused_while_this_process_holds_a_connection(tmp_path: Path) -> None:
+    """The private copy uses ordinary descriptors, so it must prove no SQLite connection to the
+    file is open in this process; otherwise it voids the read (the caller retries)."""
+    from assurance.evidence import ledger as ledger_mod
+
     path = _existing_ledger(tmp_path)
-    ledger = EvidenceLedger(path, mint_id=False)          # read-only handles read via _connect_ro
-    wal = Path(str(path) + "-wal")
-    for sfx in ("-wal", "-shm"):
-        Path(str(path) + sfx).unlink(missing_ok=True)
-    wal.write_bytes(b"")                                  # a -wal with no -shm: the crash-copy shape
-    rec = _OpenRecorder(tmp_path)
-    rec.install(monkeypatch)
-    with contextlib.suppress(Exception):   # an empty -wal may be refused; only the descriptors matter
-        ledger.entries()
-    assert [o for o in rec.opened if "ledger-ro-" not in o] == [], rec.opened
+    ledger = EvidenceLedger(path)
+    key = str(path.resolve())
+    dst = tmp_path / "copy.db"
+    live = ledger._connect_rw()                           # a transaction in flight, in this process
+    try:
+        assert ledger_mod._LIVE.get(key, 0) >= 1
+        with pytest.raises(ledger_mod.LedgerChangedWhileReadError):
+            ledger_mod._copy_when_no_live_connection(key, [(path, dst)])
+        assert not dst.exists(), "nothing may be copied while a connection is open"
+    finally:
+        live.close()
+    ledger_mod._copy_when_no_live_connection(key, [(path, dst)])   # idle process: allowed
+    assert dst.read_bytes() == path.read_bytes()
+
+
+def test_the_registry_counts_every_connection_and_forgets_closed_and_dropped_ones(tmp_path: Path) -> None:
+    from assurance.evidence import ledger as ledger_mod
+
+    ledger = EvidenceLedger(tmp_path / "t.db")
+    key = str(Path(tmp_path / "t.db").resolve())
+    before = ledger_mod._LIVE.get(key, 0)
+    a, b = ledger._connect_rw(), ledger._connect_rw()
+    assert ledger_mod._LIVE[key] == before + 2
+    a.close()
+    a.close()                                             # closing twice must not double-release
+    assert ledger_mod._LIVE[key] == before + 1
+    del b                                                 # dropped unclosed: __del__ releases it
+    import gc
+    gc.collect()
+    assert ledger_mod._LIVE.get(key, 0) == before
 
 
 def test_the_intel_store_header_check_opens_no_plain_descriptor(
