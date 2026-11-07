@@ -159,3 +159,89 @@ def audit_events(client: TestClient, key: str, **params) -> list[dict]:
     r = client.get(f"{API}/audit", headers=h(key), params={"limit": 500, **params})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+# ───────────── a private PostgreSQL cluster with real password (scram) authentication ─────────────
+# The shared dev cluster on :5432 trusts every local connection, so a wrong password is accepted
+# there and credential rejection cannot be tested against it. This starts a throwaway cluster
+# (own data dir, random port, scram-sha-256, removed afterwards) from the installed server
+# binaries — the same thing CI's service container gives (password auth) — and nothing else.
+
+
+class ScramCluster:
+    def __init__(self, host: str, port: int, superuser: str, password: str, database: str) -> None:
+        self.host, self.port, self.superuser, self.password, self.database = host, port, superuser, password, database
+
+    def run(self, *statements: str, database: str | None = None) -> None:
+        async def _go() -> None:
+            conn = await asyncpg.connect(
+                host=self.host, port=self.port, user=self.superuser, password=self.password,
+                database=database or self.database,
+            )
+            try:
+                for stmt in statements:
+                    await conn.execute(stmt)
+            finally:
+                await conn.close()
+
+        asyncio.run(_go())
+
+
+def _pg_bindir() -> str | None:
+    import glob
+    import shutil
+
+    found = shutil.which("initdb")
+    if found:
+        return os.path.dirname(found)
+    candidates = sorted(glob.glob("/usr/lib/postgresql/*/bin/initdb"), reverse=True)
+    return os.path.dirname(candidates[0]) if candidates else None
+
+
+@pytest.fixture(scope="session")
+def scram_pg():
+    import shutil
+    import socket
+    import subprocess
+    import tempfile
+
+    bindir = _pg_bindir()
+    if bindir is None:
+        pytest.skip("PostgreSQL server binaries (initdb) not installed: cannot start a password-auth cluster")
+    base = tempfile.mkdtemp(prefix="nb-scram-pg-", dir="/tmp")
+    os.chmod(base, 0o755)
+    prefix: list[str] = []
+    if os.geteuid() == 0:  # initdb refuses to run as root
+        shutil.chown(base, "postgres", "postgres")
+        prefix = ["runuser", "-u", "postgres", "--"]
+    password = "scram-superuser-pw-48151"
+    pwfile = os.path.join(base, "pw")
+    with open(pwfile, "w") as fh:
+        fh.write(password)
+    os.chmod(pwfile, 0o644)
+    data, sock_dir = os.path.join(base, "data"), os.path.join(base, "sock")
+    os.mkdir(sock_dir)
+    if prefix:
+        shutil.chown(sock_dir, "postgres", "postgres")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    try:
+        subprocess.run(  # noqa: S603
+            [*prefix, f"{bindir}/initdb", "-D", data, "-U", "nbsuper", "--auth=scram-sha-256",
+             f"--pwfile={pwfile}", "-E", "UTF8", "--no-sync"],
+            check=True, capture_output=True, timeout=120)
+        subprocess.run(  # noqa: S603
+            [*prefix, f"{bindir}/pg_ctl", "-D", data, "-w", "-l", os.path.join(base, "log"),
+             "-o", f"-p {port} -k {sock_dir} -c listen_addresses=127.0.0.1 -c fsync=off -c max_connections=60",
+             "start"],
+            check=True, capture_output=True, timeout=120)
+        cluster = ScramCluster("127.0.0.1", port, "nbsuper", password, "postgres")
+        cluster.run("CREATE DATABASE nbtest")
+        cluster.database = "nbtest"
+        yield cluster
+    finally:
+        subprocess.run(  # noqa: S603
+            [*prefix, f"{bindir}/pg_ctl", "-D", data, "-m", "immediate", "stop"], capture_output=True, timeout=60,
+            check=False)
+        shutil.rmtree(base, ignore_errors=True)
