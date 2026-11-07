@@ -5,6 +5,7 @@ import RepoLink from './RepoLink';
 import { QUICKSTART, SALES, SALES_SUPPLIER } from '../lib/links';
 import { FALLBACK_PLANS, type Plan } from '../lib/plans';
 import { CHECKOUT_CLAIM_PREFIX } from '../lib/credentials';
+import { safeCheckoutUrl } from '../lib/checkoutUrl';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -71,7 +72,15 @@ function CheckoutForm({
           /* sessionStorage blocked: the key can still be recovered through the operator */
         }
       }
-      window.location.href = data.checkout_url;
+      const target = safeCheckoutUrl(data.checkout_url);
+      if (!target) {
+        // Never navigate to whatever the API said: a `javascript:`/`data:` URL or a plain-http
+        // remote would run script or send the buyer somewhere unprotected.
+        setError('The checkout API returned an address this page will not open.');
+        setBusy(false);
+        return;
+      }
+      window.location.href = target;
     } catch {
       setError('Could not reach the checkout API.');
       setBusy(false);

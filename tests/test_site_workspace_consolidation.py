@@ -428,3 +428,34 @@ def test_workspace_buttons_are_not_white_on_the_light_page():
     """.btn-outline is white text for dark bands; on the workspace's light surface it is invisible."""
     for path in sorted([*(COMP / "assurance").glob("*.tsx"), *(COMP / "ai").glob("*.tsx")]):
         assert "btn-outline" not in path.read_text(encoding="utf-8"), path.name
+
+
+# ---------------------------------------------------------------------------
+# 7. The checkout redirect only follows an address it can trust
+# ---------------------------------------------------------------------------
+class TestCheckoutRedirectIsChecked:
+    def _verdicts(self, values):
+        script = (
+            "import { safeCheckoutUrl } from './app/lib/checkoutUrl.ts';"
+            f"const vs = {json.dumps(values)};"
+            "process.stdout.write(JSON.stringify(vs.map((v) => safeCheckoutUrl(v))));"
+        )
+        return node(script)
+
+    def test_https_and_loopback_http_are_followed(self):
+        out = self._verdicts(["https://checkout.stripe.com/c/pay/cs_test_1",
+                              "http://localhost:3000/x", "http://127.0.0.1:8001/x"])
+        assert all(isinstance(v, str) for v in out), out
+
+    @pytest.mark.parametrize("bad", [
+        "javascript:alert(1)", "data:text/html,<script>1</script>", "file:///etc/passwd",
+        "http://evil.example/pay", "//evil.example/pay", "/relative/path", "",
+        "https://user:pw@checkout.stripe.com/x", None, 42, {"a": 1}, "x" * 3000,
+    ])
+    def test_everything_else_is_refused(self, bad):
+        assert self._verdicts([bad]) == [None]
+
+    def test_the_page_uses_the_check_and_not_the_raw_value(self):
+        src = code("app/components/PricingPlans.tsx")
+        assert "safeCheckoutUrl(data.checkout_url)" in src
+        assert "window.location.href = data.checkout_url" not in src
