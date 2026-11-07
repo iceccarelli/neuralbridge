@@ -1,10 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ROUTES, TIER_LABEL, type RouteRow } from '../lib/routes';
 import { useSharedApiKey } from '../lib/apiKey';
 import FirstCase from './FirstCase';
 import FirstCell from './FirstCell';
+import type { Me } from '../lib/assuranceApi';
+import { CREDENTIALS_CLEARED_EVENT } from '../lib/credentials';
+import JourneyNav from './assurance/JourneyNav';
+import WorkspaceHeader, { ASSURANCE_ORIGIN } from './assurance/WorkspaceHeader';
+import { usePanel } from './assurance/usePanel';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -23,6 +28,19 @@ export default function Console() {
   const [response, setResponse] = useState<{ status: number; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const me = usePanel<Me>(apiKey, '/v1/me');
+
+  // Signing out also drops what this screen is holding: a response can carry a key (for example an
+  // operator key issued by a route you called), and it must not outlive the credentials.
+  useEffect(() => {
+    const drop = () => {
+      setResponse(null);
+      setError(null);
+      setBody('{}');
+    };
+    window.addEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+    return () => window.removeEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+  }, []);
 
   const filtered = ROUTES.filter(
     (r) =>
@@ -70,6 +88,9 @@ export default function Console() {
           you close the tab. Shared with <a href="/ai">/ai</a>: paste it once, use it in either place.
         </span>
       </div>
+
+      <WorkspaceHeader surface="console" origin={ASSURANCE_ORIGIN} me={me} apiKey={apiKey} />
+      <JourneyNav />
 
       <FirstCase apiBase={API_BASE} apiKey={apiKey} />
       <FirstCell apiBase={API_BASE} apiKey={apiKey} />

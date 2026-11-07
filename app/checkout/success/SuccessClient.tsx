@@ -4,6 +4,7 @@ import RepoLink from '../../components/RepoLink';
 import { useEffect, useRef, useState } from 'react';
 import { QUICKSTART, SALES } from '../../lib/links';
 import { API_KEY_STORAGE } from '../../lib/apiKey';
+import { CHECKOUT_CLAIM_PREFIX } from '../../lib/credentials';
 import { call, describeOutcome, type ApiOutcome, type Me } from '../../lib/assuranceApi';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
@@ -41,7 +42,7 @@ const POLL_MS = 2000;
 type Captured = { sessionId: string; claim: string };
 
 // Keep in step with app/components/PricingPlans.tsx.
-const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
+const CLAIM_STORAGE_PREFIX = CHECKOUT_CLAIM_PREFIX;
 
 function storedClaim(sessionId: string): string {
   try {

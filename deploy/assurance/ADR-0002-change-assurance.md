@@ -51,6 +51,8 @@ needed.
   product" as not started, for the product as a whole, not only for this
   feature. Building a dashboard page against an API that had not yet been
   designed would have meant guessing the API's shape twice.
+  *Later note:* `src/dashboard` has since been retired; the customer workspace is the
+  root Next.js app (`/assurance`, `/ai`, `/console`), which reads the real APIs.
 - **No pricing experiment.** Section 17 of the brief this ADR responds to
   asks what a customer would pay for continuous assurance specifically. No
   evidence was gathered this cycle to answer that (no customer conversation,

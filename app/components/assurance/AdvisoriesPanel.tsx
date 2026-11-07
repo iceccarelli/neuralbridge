@@ -373,7 +373,7 @@ export default function AdvisoriesPanel({
         <textarea className="aw-textarea" rows={6} value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       <div className="aw-row">
-        <button className="btn btn-outline" onClick={() => read(text, { kind: 'pasted' })}>
+        <button className="btn btn-secondary" onClick={() => read(text, { kind: 'pasted' })}>
           Read advisory
         </button>
         <label>
@@ -386,7 +386,7 @@ export default function AdvisoriesPanel({
           Hosted feed (supplier account id)
           <input type="text" value={hostedId} onChange={(e) => setHostedId(e.target.value)} placeholder="acc_…" />
         </label>
-        <button className="btn btn-outline" onClick={() => void loadHosted()} disabled={!API_BASE}>
+        <button className="btn btn-secondary" onClick={() => void loadHosted()} disabled={!API_BASE}>
           Load hosted feed
         </button>
       </div>
@@ -446,7 +446,7 @@ export default function AdvisoriesPanel({
                     </td>
                     <td>
                       {!r.isWithdrawal && (
-                        <button className="btn btn-outline" disabled={checking} onClick={() => void check(r)}>
+                        <button className="btn btn-secondary" disabled={checking} onClick={() => void check(r)}>
                           Check fleet impact
                         </button>
                       )}
@@ -482,7 +482,7 @@ export default function AdvisoriesPanel({
                 aria-label="Candidate public key (PEM)"
               />
             </details>
-            <button className="btn btn-outline" disabled={evaluating || !API_BASE || !apiKey} onClick={() => void evaluate()}>
+            <button className="btn btn-secondary" disabled={evaluating || !API_BASE || !apiKey} onClick={() => void evaluate()}>
               Evaluate under my pinned keys
             </button>
           </div>

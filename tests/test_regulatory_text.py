@@ -111,9 +111,17 @@ def test_article_14_is_not_described_as_reporting_to_unnamed_authorities():
 
 
 def test_nothing_shipped_calls_a_product_compliant_or_cra_ready():
-    for rel in ("src/dashboard/src/App.tsx", "src/dashboard/src/components/ComplianceDashboard.tsx"):
-        text = (ROOT / rel).read_text(encoding="utf-8")
+    # The retired src/dashboard screens were checked here; the customer workspace that replaced them
+    # is checked instead, over every workspace component (a wider set than the two files before).
+    workspace = sorted(
+        [*(ROOT / "app/components/assurance").glob("*.tsx"), *(ROOT / "app/components/ai").glob("*.tsx"),
+         *(ROOT / "app/components").glob("*Workspace.tsx"), ROOT / "app/components/Console.tsx"]
+    )
+    assert len(workspace) >= 20
+    assert not (ROOT / "src/dashboard").exists()
+    for path in workspace:
+        text = path.read_text(encoding="utf-8")
         for banned in ("CRA Ready", "Fully Compliant", "% compliant", "Compliance deadline"):
-            assert banned not in text, (rel, banned)
+            assert banned not in text, (path.name, banned)
     legacy = (ROOT / "src/neuralbridge/compliance/cra_report.py").read_text(encoding="utf-8")
     assert "Compliant with CRA requirements" not in legacy

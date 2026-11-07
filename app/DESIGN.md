@@ -113,11 +113,11 @@ and hidden by the same 900px breakpoint the mega-nav already uses. Below
 900px, a hero renders its `portraitA` (4:5) as a single image — never a
 squashed 16:9 crop, and never rotating (there is no portrait B).
 
-**Where art does *not* go**: the three `dashboard-*` slots belong to
-`src/dashboard`'s own UI (a separate app), not the marketing site — and are
+**Where art does *not* go**: the three `dashboard-*` slots were made for the
+retired `src/dashboard` app (now folded into the workspace screens) and are
 never used to depict a unified "live console" on the homepage. The
 homepage's own ai-ops proof tile uses `solution-aiops-dashboard-unwired`,
-which depicts the dashboard's disconnected, honest empty state on purpose.
+which depicts a disconnected, honest empty state on purpose.
 
 **OG image**: unaffected. `app/opengraph-image.tsx` (code-generated from
 these same design tokens) stays the canonical `og:image`/`twitter:image` —

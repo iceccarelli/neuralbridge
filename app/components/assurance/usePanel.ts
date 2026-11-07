@@ -24,7 +24,8 @@ export type Panel<T> = {
 // One independent request per panel: a failure in one never touches another. A change of
 // key discards everything held for the old key, and a late answer for an old key or path
 // is ignored.
-export function usePanel<T>(apiKey: string, path: string | null): Panel<T> {
+// `base` defaults to the Assurance API; the /ai screen passes the platform API's address.
+export function usePanel<T>(apiKey: string, path: string | null, base: string = API_BASE, keyOptional = false): Panel<T> {
   const [outcome, setOutcome] = useState<ApiOutcome<T> | null>(null);
   const [good, setGood] = useState<{ data: T; at: number } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,9 +34,9 @@ export function usePanel<T>(apiKey: string, path: string | null): Panel<T> {
 
   const reload = useCallback(async () => {
     const id = ++seq.current;
-    if (!API_BASE || !path) return;
+    if (!base || !path) return;
     setLoading(true);
-    const out = await call<T>(API_BASE, apiKey, path);
+    const out = await call<T>(base, apiKey, path);
     if (id !== seq.current) return; // a newer request, or a different key, owns the panel now
     setOutcome(out);
     if (out.kind === 'ok') {
@@ -45,23 +46,23 @@ export function usePanel<T>(apiKey: string, path: string | null): Panel<T> {
     }
     setGood(goodRef.current);
     setLoading(false);
-  }, [apiKey, path]);
+  }, [apiKey, path, base]);
 
   useEffect(() => {
     seq.current++; // invalidate anything in flight for the previous key or path
     goodRef.current = null;
     setGood(null);
     setLoading(false);
-    if (!API_BASE) {
+    if (!base) {
       setOutcome({ kind: 'unconfigured' });
       return;
     }
     setOutcome(null);
-    if (!apiKey || !path) return;
+    if ((!apiKey && !keyOptional) || !path) return;
     // A short debounce so typing a key does not fire a request per keystroke.
     const t = setTimeout(() => void reload(), 250);
     return () => clearTimeout(t);
-  }, [apiKey, path, reload]);
+  }, [apiKey, path, reload, keyOptional]);
 
   return { outcome, good, loading, reload };
 }

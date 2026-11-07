@@ -80,6 +80,8 @@ export function PanelFrame<T>({
   apiKey,
   panel,
   notFoundNote,
+  base = API_BASE,
+  keyOptional = false,
   children,
 }: {
   id: string;
@@ -88,6 +90,10 @@ export function PanelFrame<T>({
   apiKey: string;
   panel: Panel<T>;
   notFoundNote?: string;
+  /** The API this panel reads; defaults to the Assurance API. */
+  base?: string;
+  /** A panel the server answers without a key (the free tier): do not insist on one. */
+  keyOptional?: boolean;
   children: (data: T) => ReactNode;
 }) {
   const { outcome, good, loading, reload } = panel;
@@ -95,9 +101,9 @@ export function PanelFrame<T>({
   const at = outcome?.kind === 'ok' ? outcome.at : (good?.at ?? null);
 
   let body: ReactNode;
-  if (!API_BASE) {
+  if (!base) {
     body = <Refusal outcome={{ kind: 'unconfigured' }} what={title} />;
-  } else if (!apiKey) {
+  } else if (!apiKey && !keyOptional) {
     body = <p className="console-empty-note">Not loaded: paste an API key above.</p>;
   } else if (outcome === null || (loading && data === null)) {
     body = <Skeleton what={what} />;
@@ -120,7 +126,7 @@ export function PanelFrame<T>({
     <section aria-labelledby={`${id}-h`} id={id}>
       <div className="aw-panel-head">
         <h2 id={`${id}-h`}>{title}</h2>
-        {API_BASE && apiKey && <AsOf at={at} loading={loading} onReload={() => void reload()} what={what} />}
+        {base && (apiKey || keyOptional) && <AsOf at={at} loading={loading} onReload={() => void reload()} what={what} />}
       </div>
       {body}
     </section>

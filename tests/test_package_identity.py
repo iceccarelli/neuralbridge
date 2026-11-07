@@ -21,7 +21,7 @@ SURFACES = {
     "pyproject keywords": " ".join(PYPROJECT["keywords"]),
     "neuralbridge/__init__": (ROOT / "src/neuralbridge/__init__.py").read_text(encoding="utf-8"),
     "helm chart": (ROOT / "deploy/helm/Chart.yaml").read_text(encoding="utf-8"),
-    "dashboard html": (ROOT / "src/dashboard/index.html").read_text(encoding="utf-8"),
+    "site layout": (ROOT / "app/layout.tsx").read_text(encoding="utf-8"),
 }
 
 

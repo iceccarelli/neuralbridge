@@ -117,7 +117,7 @@ export default function EnrolPanel({
         Your name (required: the person making this declaration)
         <input type="text" value={actor} onChange={(e) => setActor(e.target.value)} autoComplete="name" />
       </label>
-      <button className="btn btn-outline" disabled={busy} onClick={() => void run()}>
+      <button className="btn btn-secondary" disabled={busy} onClick={() => void run()}>
         {busy ? 'Enrolling…' : 'Enrol machine'}
       </button>
 

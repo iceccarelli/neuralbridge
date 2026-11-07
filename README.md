@@ -212,7 +212,7 @@ src/assurance/        the product
   bridge/             supplier advisory -> Article 14 intake
   api/                FastAPI surface, billing, entitlements
 src/neuralbridge/     the integration platform this grew out of (below)
-src/dashboard/        Vite/React admin UI (not wired to the assurance API)
+app/                  the Next.js site and customer workspace (/assurance, /console, /ai)
 ```
 
 ```bash
@@ -246,7 +246,7 @@ The project is intentionally being narrowed so that users can clone it, understa
 | **Backend API** | A FastAPI service for connections, management, and tool exposure |
 | **Integration Layer** | A small set of adapter-driven connection patterns |
 | **MCP Gateway** | A common access layer for tool listing and invocation |
-| **Dashboard** | A basic UI for managing and understanding connections |
+| **Customer workspace** | The Next.js site: `/assurance` (fleet, cases, evidence), `/ai` (data sources, adapters, audit log) and `/console` (REST console), each reading the real API |
 | **Auditability** | A practical audit trail for system actions |
 | **Security Foundations** | Authentication and authorization building blocks that are being tightened over time |
 
@@ -261,7 +261,7 @@ This README therefore focuses on the smaller product that the repository can gro
 | FastAPI backend | **Supported** |
 | Connection management model | **Supported as a core direction** |
 | MCP tool listing / invocation layer | **Supported** |
-| Dashboard foundation (separate Vite admin UI, not wired to the assurance API) | **Experimental / evolving** |
+| Customer workspace (the Next.js site: /assurance, /console, /ai, reading the real APIs) | **Experimental / evolving** |
 | Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
 | Small set of working adapters | **Intended supported scope** |
 | Broad adapter ecosystem | **Experimental / evolving** |
@@ -281,7 +281,7 @@ The way to describe NeuralBridge today is this:
 That is a narrower claim than the original vision, but it is a stronger foundation. The current priority is not maximum breadth. It is a smaller platform that can be run, tested, and understood end-to-end.
 
 ## Architecture Overview
-The architecture is intentionally straightforward. External systems are connected through adapter logic, exposed through backend services, and surfaced to users or AI workflows through a gateway and dashboard.
+The architecture is intentionally straightforward. External systems are connected through adapter logic, exposed through backend services, and surfaced to users or AI workflows through a gateway and the customer workspace.
 
 ```mermaid
 flowchart TB
@@ -289,14 +289,14 @@ flowchart TB
     B --> C[Connection Management]
     C --> D[FastAPI Backend]
     D --> E[MCP Gateway]
-    D --> F[Dashboard]
+    D --> F[Customer workspace]
     D --> G[Audit Trail]
     D --> H[Auth and Access Control]
     E --> I[AI Workflows and Tools]
     F --> J[Operators and Developers]
 ```
 
-This is the core mental model for the repository: adapters connect systems, the backend organizes them, the gateway exposes them, and the dashboard makes them easier to manage.
+This is the core mental model for the repository: adapters connect systems, the backend organizes them, the gateway exposes them, and the customer workspace makes them easier to manage.
 
 ## Request Flow
 The following flow shows the intended path for a typical system interaction.
@@ -304,7 +304,7 @@ The following flow shows the intended path for a typical system interaction.
 ```mermaid
 sequenceDiagram
     participant User as User or Operator
-    participant UI as Dashboard or Client
+    participant UI as Workspace or Client
     participant API as NeuralBridge API
     participant GW as MCP Gateway
     participant AD as Adapter
@@ -334,7 +334,7 @@ This diagram is not meant to imply that every supported path is fully mature tod
 | `src/neuralbridge/core` | Gateway and orchestration-related logic |
 | `src/neuralbridge/security` | Authentication, RBAC-related code, audit logic, and sandbox-related foundations |
 | `src/neuralbridge/compliance` | Compliance-oriented utilities that are still evolving |
-| `src/dashboard` | Frontend interface for managing and understanding connections |
+| `app/` | The Next.js site and customer workspace (`/assurance`, `/ai`, `/console`); the former `src/dashboard` Vite app was retired into it |
 
 ## Adapter Strategy
 NeuralBridge contains a broad set of adapter files, but the project is being repositioned around a **smaller supported subset**. That means the most useful short-term direction is to clearly distinguish what is **supported now** from what is **planned or experimental**.
@@ -391,15 +391,16 @@ source .venv/bin/activate
 pip install -e ".[dev]"      # platform + assurance API + MCP gateways + test tools
 ```
 
-### Dashboard Setup
-If you want to work with the frontend, install the dashboard dependencies separately from within the dashboard directory according to the project’s frontend setup.
+### Workspace Setup
+The customer workspace is the root Next.js app. From the repository root:
 
 ```bash
-cd src/dashboard
-pnpm install
+npm ci
+NEXT_PUBLIC_ASSURANCE_API_URL=http://127.0.0.1:8001 \
+NEXT_PUBLIC_NEURALBRIDGE_API_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-The exact dashboard startup command should follow the frontend package configuration currently checked into the repository.
+A screen whose API address is not set says so and stays disabled; it never simulates an answer.
 
 ## Quick Start
 The intended quick start for NeuralBridge is a small local workflow that proves the core system path.
@@ -415,8 +416,8 @@ Then open:
 http://localhost:8000/docs
 ```
 
-### 2. Start the Dashboard
-Run the dashboard locally from `src/dashboard` using the project’s configured frontend development command.
+### 2. Start the Workspace
+Run `npm run dev` at the repository root (see Workspace Setup) and open `/ai`.
 
 ### 3. Verify the Core Path
 The most valuable first-run checks are the following:
@@ -471,7 +472,7 @@ neuralbridge/
 │ ├── core/
 │ ├── security/
 │ └── utils/
-├── src/dashboard/
+├── app/
 ├── tests/
 ├── docs/
 ├── examples/

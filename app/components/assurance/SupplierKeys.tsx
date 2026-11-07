@@ -151,7 +151,7 @@ function TrustForm({
           )}
         </label>
       ))}
-      <button className="btn btn-outline" disabled={busy || !opKey.trim()} onClick={() => void send()}>
+      <button className="btn btn-secondary" disabled={busy || !opKey.trim()} onClick={() => void send()}>
         {submit}
       </button>
       {!opKey.trim() && (

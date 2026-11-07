@@ -79,7 +79,7 @@ export default function InterventionPanel({
         Your name (optional here; recorded when given)
         <input type="text" value={actor} onChange={(e) => setActor(e.target.value)} />
       </label>
-      <button className="btn btn-outline" disabled={busy} onClick={() => void run()}>
+      <button className="btn btn-secondary" disabled={busy} onClick={() => void run()}>
         {busy ? 'Assessing…' : 'Assess intervention'}
       </button>
       {notice && <Notice>{notice}</Notice>}

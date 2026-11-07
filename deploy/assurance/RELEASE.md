@@ -107,7 +107,7 @@ cyclonedx-py requirements requirements/prod.lock --of JSON -o sbom-platform.json
 Real output on the date of the change: CycloneDX spec 1.6, JSON; the service lock gives 26
 components in ~200 KB, `prod.lock` 86 components in ~520 KB. Each component carries name,
 exact version, a `pkg:pypi` purl and the SHA-256 hashes from the lock. It does not describe the
-base image's OS packages, the Python interpreter, the Node dashboard stage of the root image or
+base image's OS packages, the Python interpreter, or
 this project's own package. An image-level SBOM would need an image scanner and has not been done.
 
 ## 5. What is NOT established
@@ -127,9 +127,9 @@ this project's own package. An image-level SBOM would need an image scanner and 
   the service image and smoke-tests it (non-root, `/livez`, honest `/healthz`); its first run on
   GitHub is the first time that image is built from the lock. The root image has a CI build job
   (`docker`) that runs `import neuralbridge` only.
-- **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`, `node:22-alpine`),
-  nor are apt packages (`curl`), nor the GitHub Actions (`@v4` tags). The npm side of the root image
-  runs `npm install` in `src/dashboard`, not `npm ci`.
+- **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`),
+  nor are apt packages (`curl`), nor the GitHub Actions (`@v4` tags). The root image has no Node stage
+  (the former `src/dashboard` build was retired); the site is built by the `site` CI job with `npm ci`.
 - **Only one CI test leg runs from the lock**: Python 3.11 installs `requirements/test.lock` with
   `--require-hashes`; 3.12 and 3.13 install `requirements/test.txt` (latest allowed versions) on
   purpose, to see forward drift. The service lock (`assurance-service.lock`, Python 3.12) is not

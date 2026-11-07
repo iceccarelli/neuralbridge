@@ -3,10 +3,14 @@
 import RepoLink from './RepoLink';
 import { useEffect, useRef, useState } from 'react';
 import { useSharedApiKey } from '../lib/apiKey';
+import { AI_ACTOR_STORAGE as ACTOR_STORAGE, AI_SESSION_STORAGE as SESSION_STORAGE, CREDENTIALS_CLEARED_EVENT } from '../lib/credentials';
+import AdaptersPanel from './ai/AdaptersPanel';
+import AuditPanel from './ai/AuditPanel';
+import ConnectionsPanel, { isDemoSource } from './ai/ConnectionsPanel';
+import JourneyNav from './assurance/JourneyNav';
+import WorkspaceHeader, { DemoLabel, PLATFORM_ORIGIN } from './assurance/WorkspaceHeader';
 
 const API_BASE = process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL || '';
-const ACTOR_STORAGE = 'nb-ai-actor';
-const SESSION_STORAGE = 'nb-ai-session';
 
 type Connection = { id: string; name: string; adapter_type: string; status: string; source: string };
 type Capability = { operation: string; operation_class: 'read' | 'write' | 'destructive'; description: string };
@@ -58,6 +62,7 @@ function useSessionIdentity() {
   const [sessionId, setSessionId] = useState('');
 
   useEffect(() => {
+    const init = () => {
     try {
       let a = window.sessionStorage.getItem(ACTOR_STORAGE);
       let s = window.sessionStorage.getItem(SESSION_STORAGE);
@@ -75,6 +80,11 @@ function useSessionIdentity() {
       setActorId('operator-local');
       setSessionId('local-session');
     }
+    };
+    init();
+    // After sign-out the stored identifiers are gone: start a fresh, unlinked session.
+    window.addEventListener(CREDENTIALS_CLEARED_EVENT, init);
+    return () => window.removeEventListener(CREDENTIALS_CLEARED_EVENT, init);
   }, []);
 
   return { actorId, sessionId, setActorId };
@@ -159,39 +169,116 @@ export default function AiWorkspace() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [connError, setConnError] = useState<string | null>(null);
+  const [connLoading, setConnLoading] = useState(false);
+  const [sessionState, setSessionState] = useState<{ loaded: boolean; failed: string | null }>({ loaded: false, failed: null });
+  const [refreshTick, setRefreshTick] = useState(0);
   const [lastAudit, setLastAudit] = useState<{ event_type: string; action: string; result: string; timestamp: string }[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
 
+  // Sign-out: drop everything held for the old key, not just the key itself.
   useEffect(() => {
-    if (!actorId || !API_BASE) return;
-    apiFetch('/ai/session', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
-      if (status === 200) setSession(body as Session);
-    });
-  }, [actorId, sessionId, apiKey]);
+    const drop = () => {
+      setSession(null);
+      setSessionState({ loaded: false, failed: null });
+      setConnections([]);
+      setSelected(null);
+      setCapabilities([]);
+      setTurns([]);
+      setLastAudit([]);
+      setConnError(null);
+      setInput('');
+    };
+    window.addEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+    return () => window.removeEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+  }, []);
+
+  // What a refusal means, in words: a 401 is a key problem, a 402 a plan one, anything else is the
+  // API's own state. Never "could not reach" for an answer that did arrive.
+  const refusalText = (status: number, body: unknown, what: string): string => {
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    const text =
+      typeof detail === 'string'
+        ? detail
+        : detail && typeof detail === 'object' && typeof (detail as { remedy?: unknown }).remedy === 'string'
+          ? (detail as { remedy: string }).remedy
+          : '';
+    if (status === 401) return `${what}: the API did not accept this key (HTTP 401). ${text}`.trim();
+    if (status === 402) return `${what}: not included in your plan (HTTP 402). ${text}`.trim();
+    if (status === 403) return `${what}: refused (HTTP 403). ${text}`.trim();
+    return `${what}: the API answered HTTP ${status}. ${text}`.trim();
+  };
 
   useEffect(() => {
     if (!actorId || !API_BASE) return;
-    apiFetch('/ai/connections', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
-      if (status !== 200) {
-        setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
-        return;
-      }
-      setConnections(body as Connection[]);
-      if ((body as Connection[]).length > 0) setSelected((body as Connection[])[0]);
-      else setConnError('No connections configured — set NEURALBRIDGE_AI_PG_* on the API host.');
-    }).catch(() => {
-      setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
-    });
+    let live = true;
+    setSessionState({ loaded: false, failed: null });
+    apiFetch('/ai/session', { method: 'GET' }, actorId, sessionId, apiKey)
+      .then(({ status, body }) => {
+        if (!live) return;
+        if (status === 200) {
+          setSession(body as Session);
+          setSessionState({ loaded: true, failed: null });
+        } else {
+          setSession(null);
+          setSessionState({ loaded: false, failed: refusalText(status, body, 'Plan') });
+        }
+      })
+      .catch(() => {
+        if (!live) return;
+        setSession(null);
+        setSessionState({ loaded: false, failed: 'Plan: the API could not be reached from this browser.' });
+      });
+    return () => {
+      live = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actorId, sessionId, apiKey]);
 
   useEffect(() => {
+    if (!actorId || !API_BASE) return;
+    let live = true;
+    setConnLoading(true);
+    apiFetch('/ai/connections', { method: 'GET' }, actorId, sessionId, apiKey)
+      .then(({ status, body }) => {
+        if (!live) return;
+        setConnLoading(false);
+        if (status !== 200) {
+          setConnections([]);
+          setSelected(null);
+          setConnError(refusalText(status, body, 'Data sources') + ' See docs/ai-local-setup.md.');
+          return;
+        }
+        const list = body as Connection[];
+        setConnections(list);
+        setSelected((prev) => list.find((c) => c.id === prev?.id) || list[0] || null);
+        setConnError(list.length > 0 ? null : 'No connections configured — set NEURALBRIDGE_AI_PG_* on the API host.');
+      })
+      .catch(() => {
+        if (!live) return;
+        setConnLoading(false);
+        setConnections([]);
+        setSelected(null);
+        setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
+      });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actorId, sessionId, apiKey, refreshTick]);
+
+  useEffect(() => {
     if (!selected || !actorId) return;
-    apiFetch(`/ai/capabilities?connection_id=${selected.id}`, { method: 'GET' }, actorId, sessionId, apiKey).then(
-      ({ status, body }) => {
-        if (status === 200) setCapabilities(body as Capability[]);
-      }
-    );
+    let live = true;
+    apiFetch(`/ai/capabilities?connection_id=${encodeURIComponent(selected.id)}`, { method: 'GET' }, actorId, sessionId, apiKey)
+      .then(({ status, body }) => {
+        if (live) setCapabilities(status === 200 ? (body as Capability[]) : []);
+      })
+      .catch(() => {
+        if (live) setCapabilities([]);
+      });
+    return () => {
+      live = false;
+    };
   }, [selected, actorId, sessionId, apiKey]);
 
   useEffect(() => {
@@ -199,9 +286,11 @@ export default function AiWorkspace() {
   }, [turns]);
 
   const refreshAudit = () => {
-    apiFetch('/ai/audit?limit=8', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
-      if (status === 200) setLastAudit(body);
-    });
+    apiFetch('/ai/audit?limit=8', { method: 'GET' }, actorId, sessionId, apiKey)
+      .then(({ status, body }) => {
+        if (status === 200) setLastAudit(body);
+      })
+      .catch(() => {});
   };
 
   const push = (t: Turn) => setTurns((prev) => [...prev, t]);
@@ -326,6 +415,8 @@ export default function AiWorkspace() {
 
   if (!API_BASE) {
     return (
+      <>
+      <WorkspaceHeader surface="ai" origin={PLATFORM_ORIGIN} apiKey={apiKey} />
       <p className="ai-banner">
         This panel is honestly disabled, not faking a response: this deployment has no{' '}
         <code>NEXT_PUBLIC_NEURALBRIDGE_API_URL</code> set. Run the platform API yourself —{' '}
@@ -333,6 +424,7 @@ export default function AiWorkspace() {
         at it. See{' '}
         <RepoLink path="/blob/main/docs/ai-local-setup.md" plain>docs/ai-local-setup.md</RepoLink>.
       </p>
+      </>
     );
   }
 
@@ -351,11 +443,37 @@ export default function AiWorkspace() {
         <span className="key-row-note">Kept in this tab's sessionStorage only — never sent anywhere but the API below, never persisted after you close the tab.</span>
       </div>
 
-      {connError && <p className="ai-banner">{connError}</p>}
+      <WorkspaceHeader
+        surface="ai"
+        origin={PLATFORM_ORIGIN}
+        apiKey={apiKey}
+        platformSession={{ tier: session?.tier ?? '', loaded: sessionState.loaded, failed: sessionState.failed }}
+      />
+      <JourneyNav />
+
+      {connLoading && connections.length === 0 && (
+        <p className="console-empty-note" role="status">
+          Loading your data sources…
+        </p>
+      )}
+      {connError && (
+        <p className="ai-banner" role="alert">
+          {connError}
+        </p>
+      )}
 
       <div className="ai-grid">
         <div className="ai-pane">
           <h2>Conversation</h2>
+          {selected && isDemoSource(selected) && (
+            <p data-testid="demo-banner">
+              <DemoLabel>Demonstration data</DemoLabel>{' '}
+              <span style={{ fontSize: '0.82rem' }}>
+                This is the shared demo database (not your records, and not a machine of yours). Anything you read here
+                describes the demo only.
+              </span>
+            </p>
+          )}
           <div className="ai-log" ref={logRef}>
             {turns.length === 0 && (
               <p style={{ color: 'var(--ink-soft)', fontSize: '0.88rem' }}>
@@ -364,7 +482,15 @@ export default function AiWorkspace() {
               </p>
             )}
             {turns.map((turn, i) => (
-              <TurnView key={i} turn={turn} onDecide={decide} onRetryWrite={retryWrite} busy={busy} hasApiKey={!!apiKey} />
+              <TurnView
+                key={i}
+                turn={turn}
+                onDecide={decide}
+                onRetryWrite={retryWrite}
+                busy={busy}
+                hasApiKey={!!apiKey}
+                demoIds={connections.filter(isDemoSource).map((c) => c.id)}
+              />
             ))}
           </div>
           <div className="ai-suggestions">
@@ -487,6 +613,10 @@ export default function AiWorkspace() {
           </div>
         </div>
       </div>
+
+      <AdaptersPanel apiKey={apiKey} />
+      <ConnectionsPanel apiKey={apiKey} sources={connections} onChanged={() => setRefreshTick((n) => n + 1)} />
+      <AuditPanel apiKey={apiKey} />
     </div>
   );
 }
@@ -497,8 +627,10 @@ function TurnView({
   onRetryWrite,
   busy,
   hasApiKey,
+  demoIds,
 }: {
   turn: Turn;
+  demoIds: string[];
   onDecide: (id: string, approve: boolean) => void;
   onRetryWrite: (payload: { connection_id: string; operation: string; params: Record<string, unknown> }) => void;
   busy: boolean;
@@ -518,7 +650,8 @@ function TurnView({
     return (
       <div className="ai-card">
         <div className="ai-card-title">
-          <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>{card.success ? 'Read OK' : 'Read failed'}</span>
+          <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>{card.success ? 'Read OK' : 'Read failed'}</span>{' '}
+          {demoIds.includes(card.provenance.connection_id) && <DemoLabel>Demonstration data</DemoLabel>}
         </div>
         {card.error && <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>{card.error}</p>}
         {card.data !== null && card.data !== undefined && <pre className="code-panel">{JSON.stringify(card.data, null, 2)}</pre>}
@@ -556,7 +689,8 @@ function TurnView({
     return (
       <div className="ai-card">
         <div className="ai-card-title">
-          <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>Execution receipt</span>
+          <span className={`playground-verdict ${card.success ? 'ok' : 'blocked'}`}>Execution receipt</span>{' '}
+          {demoIds.includes(card.provenance.connection_id) && <DemoLabel>Demonstration data</DemoLabel>}
         </div>
         {card.data !== null && card.data !== undefined && <pre className="code-panel">{JSON.stringify(card.data, null, 2)}</pre>}
         <p style={{ fontSize: '0.8rem' }}>Approved by {card.approved_by}</p>
