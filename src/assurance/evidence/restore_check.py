@@ -32,8 +32,19 @@ attestation log (the manifest is not signed; keep ``manifest_sha256`` from the `
 output somewhere else), or that a log's records are genuine (the signing key is not in a
 backup: ``attest verify`` with the public key does that). It says so in its output.
 
-    python -m assurance.evidence.restore_check backup  <data dir> <backup dir>
+    python -m assurance.evidence.restore_check backup  <data dir> <backup dir> [--ai-store <file>]
     python -m assurance.evidence.restore_check verify  [--live] [--against-live <live data dir>] <dir>
+    python -m assurance.evidence.restore_check restore <backup dir> <new data dir>
+
+``backup --ai-store FILE`` also snapshots the ``/ai`` control plane's SQLite store
+(``NEURALBRIDGE_AI_STORE``: connection records and plans, never credentials) as
+``ai-store.db``. ``restore`` is the only supported way to put a backup back: it verifies the
+backup strictly first and refuses anything that does not verify; it refuses a target that
+exists and is not an empty directory (it never overwrites a live volume or a live ledger);
+it stages a copy beside the target, re-verifies the copy and only then renames it into place.
+Plans in the restored ``ai-store.db`` that were still ``pending_approval`` or ``approved`` are
+set to ``denied`` / ``failed``: the write they describe may have run after the backup was taken,
+and a restored "pending" plan must not be approvable a second time.
 
 ``verify`` is read-only, including on a volume a service has opened: it creates, changes,
 renames and deletes nothing under the directory it checks (nor under ``--against-live``).
@@ -72,13 +83,14 @@ from assurance.attest import AttestationBasis, AttestationLog, check_log_against
 from assurance.core.identity import format_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
 
-__all__ = ["MANIFEST_NAME", "backup", "verify", "main"]
+__all__ = ["MANIFEST_NAME", "RestoreRefused", "backup", "restore", "verify", "main"]
 
 MANIFEST_NAME = "backup-manifest.json"
 MANIFEST_FORMAT = "neuralbridge-backup-manifest/1"
 
 _OPERATOR_LEDGER = "art14-register.db"
 _ACCOUNTS = "accounts.db"
+_AI_STORE = "ai-store.db"
 _TENANT = re.compile(r"^acc_[0-9a-f]{16}\.db$")
 _LOG_DIRS = ("attestations", "supplier-feeds")
 
@@ -265,7 +277,7 @@ def _source_findings(root: Path) -> list[str]:
     return found
 
 
-def backup(data_dir: Path, out_dir: Path) -> list[str]:
+def backup(data_dir: Path, out_dir: Path, *, ai_store: Path | None = None) -> list[str]:
     """Snapshot every database under ``data_dir`` into ``out_dir``. Returns names.
 
     Also writes the manifest (``MANIFEST_NAME``), which is not in the returned names. Each
@@ -273,8 +285,12 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
     snapshot; any finding is kept (``degraded: true``, ``source_findings``) rather than
     refusing, because a damaged source is still worth keeping. ``verify`` then fails it. The
     result is private to its owner and carries no unclaimed plaintext API keys. ``out_dir``
-    must not exist or be empty (``FileExistsError``).
+    must not exist or be empty (``FileExistsError``). ``ai_store`` names the ``/ai`` control-plane
+    SQLite file to snapshot too (stored as ``ai-store.db``); a path that does not exist is an
+    error, not a silent omission.
     """
+    if ai_store is not None and not ai_store.is_file():
+        raise FileNotFoundError(f"{ai_store} is not a file")
     if not data_dir.is_dir():
         raise FileNotFoundError(f"{data_dir} is not a directory")
     if out_dir.is_dir() and any(out_dir.iterdir()):
@@ -301,6 +317,9 @@ def backup(data_dir: Path, out_dir: Path) -> list[str]:
                     EvidenceLedger(data_dir / name)
                 _snapshot(data_dir / name, out_dir / name)
                 taken.append(name)
+        if ai_store is not None:
+            _snapshot(ai_store, out_dir / _AI_STORE)
+            taken.append(_AI_STORE)
         if (out_dir / _ACCOUNTS).exists():
             pending = _strip_pending_keys(out_dir / _ACCOUNTS)
         for name in _LOG_DIRS:
@@ -663,6 +682,17 @@ def _verify(root: Path, allow_growth: bool, live_dir: Path | None,
                 problems.append(f"{label}: belongs to no account in {_ACCOUNTS}")
             check_ledger(path, label)
 
+    if (root / _AI_STORE).is_file():
+        try:
+            if (res := _integrity(root / _AI_STORE, views)) != "ok":
+                problems.append(f"{_AI_STORE}: SQLite integrity_check says {res}")
+            else:
+                with sqlite3.connect(_ro_uri(views.of(root / _AI_STORE)), uri=True) as ai_db:
+                    checked[_AI_STORE] = int(
+                        ai_db.execute("SELECT COUNT(*) FROM plans").fetchone()[0])
+        except Exception as exc:  # noqa: BLE001 - a damaged store is a finding
+            problems.append(f"{_AI_STORE}: unreadable ({type(exc).__name__})")
+
     for name in _LOG_DIRS:
         if (root / name).is_dir():
             checked[f"{name}/"] = sum(1 for _ in (root / name).glob("*"))
@@ -697,7 +727,7 @@ def _verify(root: Path, allow_growth: bool, live_dir: Path | None,
         _check_lineage(root, live_dir, problems, views)
 
     sidecars: dict[str, dict[str, int]] = {}
-    for db_path in [root / _ACCOUNTS, *_ledger_files(root).values()]:
+    for db_path in [root / _ACCOUNTS, root / _AI_STORE, *_ledger_files(root).values()]:
         if db_path.is_file() and (found_side := _sidecar_bytes(db_path)):
             sidecars[db_path.relative_to(root).as_posix()] = found_side
     for rel_db, side in sorted(sidecars.items()):
@@ -753,12 +783,133 @@ def _verify(root: Path, allow_growth: bool, live_dir: Path | None,
     }
 
 
+class RestoreRefused(Exception):  # noqa: N818 - a refusal, not an error
+    """A restore was not performed. Nothing was written to the target."""
+
+    def __init__(self, reason: str, problems: list[str] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.problems = list(problems or [])
+
+
+_VOID_REASON = ("voided by restore: the backup is older than this plan's last known state, so "
+                "the write it describes may already have run. Propose it again if it is still "
+                "wanted.")
+
+
+def _void_unresolved_plans(store: Path) -> dict[str, int]:
+    """``pending_approval`` -> ``denied`` and ``approved`` (in flight) -> ``failed``, in place."""
+    db = sqlite3.connect(store, isolation_level=None)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        now = format_utc(utc_now())
+        denied = db.execute(
+            "UPDATE plans SET status='denied', decided_by='restore_check', decided_at=?, "
+            "deny_reason=? WHERE status='pending_approval'", (now, _VOID_REASON)).rowcount
+        failed = db.execute(
+            "UPDATE plans SET status='failed', decided_at=? WHERE status='approved'",
+            (now,)).rowcount
+        db.execute("COMMIT")
+        res = db.execute("PRAGMA integrity_check").fetchone()[0]
+        if res != "ok":
+            raise RestoreRefused(f"{_AI_STORE} failed its integrity check after the restore: {res}")
+        return {"pending_to_denied": int(denied), "approved_to_failed": int(failed)}
+    finally:
+        db.close()
+
+
+def restore(backup_dir: Path, target: Path) -> dict[str, Any]:
+    """Put a verified backup back as a NEW data directory. Raises :class:`RestoreRefused`.
+
+    Refuses, writing nothing: a backup that does not verify strictly (``failed`` or
+    ``unchecked``); a target that exists and is not an empty directory (so a live volume, a live
+    ledger or an earlier restore is never overwritten, merged into or deleted); a target that is a
+    symlink or overlaps the backup. The copy is staged in a private directory beside the target,
+    checked against the manifest again, and renamed into place only if it verifies, so a crash
+    leaves either the empty target or the finished one.
+    """
+    backup_dir = Path(backup_dir)
+    target = Path(target)
+    if not backup_dir.is_dir():
+        raise RestoreRefused(f"{backup_dir} is not a directory")
+    if target.is_symlink():
+        raise RestoreRefused(f"{target} is a symbolic link; restore into a real, new directory")
+    src, dst = backup_dir.resolve(), target.resolve()
+    if src == dst or src in dst.parents or dst in src.parents:
+        raise RestoreRefused("the backup and the target overlap; restore into a separate directory")
+    if target.exists():
+        if not target.is_dir():
+            raise RestoreRefused(f"{target} exists and is not a directory")
+        if any(target.iterdir()):
+            raise RestoreRefused(
+                f"{target} is not empty: refusing to restore over (or into) existing data. "
+                "A restore never overwrites a live ledger; restore to a new directory, verify "
+                "it, then switch the service over.")
+    first = verify(backup_dir)
+    if first["status"] != "ok":
+        detail = first["problems"] or first["unchecked"]
+        raise RestoreRefused(
+            f"the backup does not verify (status {first['status']}); nothing was restored",
+            [str(p) for p in detail])  # type: ignore[attr-defined]
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    previous = os.umask(0o077)
+    stage = Path(tempfile.mkdtemp(prefix=".restore-", dir=target.parent))
+    try:
+        os.chmod(stage, 0o700)
+        shutil.copytree(backup_dir, stage, dirs_exist_ok=True, copy_function=shutil.copy2,
+                        symlinks=True)
+        _tighten(stage)
+        second = verify(stage)
+        if second["status"] != "ok":
+            raise RestoreRefused("the staged copy does not verify; nothing was restored",
+                                 [str(p) for p in second["problems"]])  # type: ignore[attr-defined]
+        voided: dict[str, int] = {}
+        if (stage / _AI_STORE).is_file():
+            voided = _void_unresolved_plans(stage / _AI_STORE)
+        if target.exists():
+            target.rmdir()  # empty, checked above
+        os.rename(stage, target)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    finally:
+        os.umask(previous)
+    return {
+        "restored_to": str(target),
+        "checked": second["checked"],
+        "manifest_sha256": _sha256(target / MANIFEST_NAME),
+        "ai_plans_voided": voided,
+        "note": ("Verified against the backup's manifest before the move. ai-store.db, if "
+                 "present, was changed afterwards (unresolved plans voided), so a later strict "
+                 "`verify` reports it. Unclaimed checkout keys are not in a backup: re-issue "
+                 "them. Run `verify --against-live` against any surviving volume before "
+                 "starting the service."),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
+        if argv[:1] == ["restore"] and len(argv) == 3:
+            try:
+                print(json.dumps(restore(Path(argv[1]), Path(argv[2])), indent=2))
+            except RestoreRefused as refused:
+                print(json.dumps({"restored": False, "reason": refused.reason,
+                                  "problems": refused.problems}, indent=2))
+                return 1
+            return 0
+        ai_store: Path | None = None
+        if argv[:1] == ["backup"] and "--ai-store" in argv:
+            k = argv.index("--ai-store")
+            if k + 1 >= len(argv):
+                print(__doc__, file=sys.stderr)
+                return 2
+            ai_store = Path(argv[k + 1])
+            del argv[k:k + 2]
         if len(argv) == 3 and argv[0] == "backup":
             out = Path(argv[2])
-            names = backup(Path(argv[1]), out)
+            names = backup(Path(argv[1]), out, ai_store=ai_store)
             digest = _sha256(out / MANIFEST_NAME)
             degraded = bool(json.loads((out / MANIFEST_NAME).read_text()).get("degraded"))
             print(json.dumps({"backed_up": names, "manifest": MANIFEST_NAME,
