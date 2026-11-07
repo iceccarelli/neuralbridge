@@ -297,6 +297,26 @@ jobs:
       - name: Check requirements/*.lock against requirements/*.txt
         run: scripts/lock.sh --check
 
+  # ── Workflow lint ──────────────────────────────────────────
+  # The release workflow (publish-docker.yml) cannot be exercised without publishing, so the
+  # strongest check available before it first runs is static: actionlint (with shellcheck on
+  # every `run:` block) over all workflows, and shellcheck on the script an outsider uses to
+  # verify a release. Versions are the ones the files were validated with.
+  workflow-lint:
+    name: Workflow lint (actionlint + shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install linters
+        run: pip install "actionlint-py==1.7.12.25" "shellcheck-py==0.11.0.1"
+      - name: actionlint
+        run: actionlint
+      - name: shellcheck
+        run: shellcheck scripts/verify-release.sh scripts/rehearse-local.sh
+
   # ── Dashboard Build ────────────────────────────────────────
   dashboard:
     name: Build Dashboard

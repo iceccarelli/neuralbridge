@@ -1,33 +1,104 @@
-name: Publish Docker Image to GHCR
+name: Publish signed container images to GHCR
 
-# Deliberately NOT on every push to main. A container image is a published
-# artefact: pushing one for every commit spends compute to publish software
-# nobody has decided is finished, and gives a reader of the registry a version
-# number that means nothing. Images are cut from releases and version tags.
+# THE ONLY workflow that pushes a container image. It is written and statically validated
+# (actionlint); it has NOT run on GitHub. See deploy/assurance/RELEASE.md section 5 and
+# scripts/verify-release.sh.
+#
+# When it runs: a pushed version tag (v*) or a manual dispatch. Never on a branch push, a pull
+# request, a merge or a GitHub "release published" event (a release created from a tag would fire
+# the tag push AND the release event, building twice). The old release.yml, which pushed the root
+# image unsigned and moved a `latest` tag on every tag, was removed so there is one publish path.
+#
+# What a run produces, per image (the platform image from ./Dockerfile and the assurance service
+# image from deploy/assurance/Dockerfile), all keyed on the pushed image DIGEST, never a tag:
+#   1. the image pushed to ghcr.io/<owner>/<repo> and ghcr.io/<owner>/<repo>-assurance;
+#   2. a keyless cosign signature of the digest (Sigstore, identity = this workflow at this ref);
+#   3. a GitHub build-provenance attestation (SLSA provenance v1) with subject = the digest,
+#      pushed to the registry beside the image;
+#   4. an SBOM attestation (CycloneDX, built from the hash-pinned lock the image installs; it does
+#      not list base-image OS packages) with subject = the digest;
+#   5. a self-check: scripts/verify-release.sh must verify 2-4 for the digest just pushed, or the
+#      job fails.
+# No secret, key or token other than the run's own GITHUB_TOKEN and OIDC identity is used.
+# No `latest` tag is moved: redeploy by digest.
+
 on:
-  release:
-    types: [published]
   push:
     tags: ["v*"]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
+# Nothing is writable by default; each job below asks for exactly what it needs.
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: publish-docker-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    name: Build & Push Docker Image
+  # Refuse to publish a commit that is not on main: a tag on an unreviewed branch must not
+  # become a signed artefact that looks official.
+  guard:
+    name: Commit is on main
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require the built commit to be an ancestor of origin/main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_SHA} is not on main; refusing to publish or sign it."
+            exit 1
+          fi
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+  publish:
+    name: Build, sign and attest (${{ matrix.name }})
+    needs: guard
+    runs-on: ubuntu-latest
+    # A named environment lets the repository owner add required reviewers in
+    # Settings > Environments > release, so a publish waits for a person. Without that setting
+    # it does not wait; this file cannot set it.
+    environment: release
+    permissions:
+      contents: read        # checkout
+      packages: write       # push to GHCR with GITHUB_TOKEN
+      id-token: write       # keyless Sigstore identity for cosign and for the attestations
+      attestations: write   # store the GitHub attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: platform
+            dockerfile: Dockerfile
+            suffix: ""
+            lock: requirements/prod.lock
+          - name: assurance
+            dockerfile: deploy/assurance/Dockerfile
+            suffix: "-assurance"
+            lock: requirements/assurance-service.lock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # GHCR names must be lower case; github.repository may not be.
+      - name: Compute the lower-case image name
+        id: names
+        env:
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "image=${REGISTRY}/${repo}${SUFFIX}" >> "${GITHUB_OUTPUT}"
+          echo "repo=${repo}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -36,24 +107,117 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # semver tags exist only for a version tag. A manual dispatch from a branch gets the
+      # sha tag only, so it can never take a version number. No `latest`.
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.names.outputs.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=long
 
-      - name: Build and push Docker image
+      # provenance/sbom are off here on purpose: BuildKit's own attestations would add a second,
+      # differently-scoped set of statements to the index. The attestations that matter are the
+      # GitHub provenance and SBOM below, bound to the digest. No build cache: a release is built
+      # from scratch. Single platform: linux/arm64 was never validated (no QEMU step existed).
+      - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          no-cache: true
+
+      - name: Resolve and check the pushed digest
+        id: digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::build produced no valid image digest (got '${DIGEST}')"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "${GITHUB_OUTPUT}"
+          echo "Pushed ${{ steps.names.outputs.image }}@${DIGEST}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.1"
+
+      # Keyless: the signature certificate names this workflow and ref; the signature and
+      # certificate are recorded in the public Rekor transparency log.
+      - name: Sign the image digest (keyless)
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest build provenance for the image digest
+        id: provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.names.outputs.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      # The SBOM comes from the lock file the Dockerfile installs with --require-hashes. It lists
+      # exact Python packages and their SHA-256s; it does not describe OS packages, the
+      # interpreter or the dashboard's npm tree. It is not an image scan.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate the CycloneDX SBOM from the lock
+        env:
+          LOCK: ${{ matrix.lock }}
+          NAME: ${{ matrix.name }}
+        run: |
+          pip install "cyclonedx-bom==8.0.1"
+          cyclonedx-py requirements "${LOCK}" --of JSON -o "sbom-${NAME}.cdx.json"
+
+      - name: Attest the SBOM for the image digest
+        uses: actions/attest-sbom@v2
+        with:
+          subject-name: ${{ steps.names.outputs.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          sbom-path: sbom-${{ matrix.name }}.cdx.json
+          push-to-registry: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}.cdx.json
+
+      # The workflow checks its own output the way an outsider would. If this fails, the image
+      # is already pushed but must not be treated as released: do not announce its digest.
+      - name: Self-check with scripts/verify-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.names.outputs.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          REPO: ${{ steps.names.outputs.repo }}
+        run: |
+          scripts/verify-release.sh --image "${IMAGE}" --digest "${DIGEST}" --repo "${REPO}" \
+            --ref "${GITHUB_REF}"
+
+      - name: Record the digest in the run summary
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          {
+            echo "### ${IMAGE}"
+            echo ""
+            echo '`'"${IMAGE}@${DIGEST}"'`'
+            echo ""
+            echo "Verify: \`scripts/verify-release.sh --image ${IMAGE} --digest ${DIGEST}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

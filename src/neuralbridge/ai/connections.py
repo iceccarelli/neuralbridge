@@ -48,6 +48,24 @@ def _pg_config_from_env() -> dict[str, Any] | None:
     }
 
 
+def register_seeded_adapter(registry: AdapterRegistry) -> bool:
+    """Make sure THIS process holds the live adapter for the seeded connection.
+
+    The connection record lives in the shared SQLite store, but the adapter (with its pool) is
+    per process, built from ``NEURALBRIDGE_AI_PG_*``. Under ``uvicorn --workers N`` only the worker
+    that happened to serve ``GET /ai/connections`` used to register it, so a read or an approval
+    that landed on another worker answered 409 "no live adapter" (tests/test_multiworker_real.py).
+    Idempotent; ``False`` when no DSN is configured (the honest answer, not a mock).
+    """
+    if SEEDED_REGISTRY_KEY in registry:
+        return True
+    config = _pg_config_from_env()
+    if config is None:
+        return False
+    registry.register(PostgresAdapter(config=config), key=SEEDED_REGISTRY_KEY)
+    return True
+
+
 def ensure_seeded_connection(registry: AdapterRegistry, store: AiStore) -> str | None:
     """Idempotently persist + register one postgres connection from env.
 
@@ -58,10 +76,7 @@ def ensure_seeded_connection(registry: AdapterRegistry, store: AiStore) -> str |
     """
     for record in store.list_connections():
         if record.source == "seeded_from_env":
-            if SEEDED_REGISTRY_KEY not in registry:
-                config = _pg_config_from_env()
-                if config is not None:
-                    registry.register(PostgresAdapter(config=config), key=SEEDED_REGISTRY_KEY)
+            register_seeded_adapter(registry)
             return record.id
 
     config = _pg_config_from_env()

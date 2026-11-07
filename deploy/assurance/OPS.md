@@ -417,36 +417,72 @@ each ledger's length and head link hash, the accounts). The directory is `0700`,
 `pending_keys` (API keys minted by a checkout and not yet collected) are **not copied**: a customer
 whose key was unclaimed at backup time needs a new one after a restore.
 
-A backup is only a backup once a restore has been shown to work. Do the drill **before** you rely on
-the cycle, after every upgrade, and on a schedule you set. Never on the production volume:
+`restore_check backup DATA OUT --ai-store FILE` also snapshots the `/ai` control plane's SQLite store
+(`NEURALBRIDGE_AI_STORE`: connection records and plans, never credentials) as `ai-store.db`. **`ops
+cycle` does not pass `--ai-store`**, so the scheduled backup does not contain it; take that one by
+hand if you run `/ai` (the store holds no evidence, only what is pending approval and which
+connections exist).
+
+A backup is only a backup once a restore has been shown to work. `restore_check restore BACKUP
+TARGET` is the only supported restore. It verifies the backup strictly first and **refuses**
+(exit 1, nothing written) anything that is not `ok`: a changed, truncated or missing file, a rewound
+or tampered ledger, a missing manifest (that is *unchecked*, not a pass), a backup taken from an
+already-broken source. It refuses a target that exists and is not an empty directory, a symlink, or a
+path that overlaps the backup, so it **never overwrites, merges into or deletes a live volume or a
+live ledger**. It copies into a private staging directory beside the target, re-verifies the copy
+against the manifest, and renames it into place; a crash leaves the empty target or the finished one.
+Plans in a restored `ai-store.db` that were `pending_approval` or `approved` are set to `denied` /
+`failed`, because the write they describe may have run after the backup was taken and a restored
+"pending" plan must not be approvable a second time.
+
+Do the drill **before** you rely on the cycle, after every upgrade, and on a schedule you set. Never
+on the production volume:
 
 ```bash
 SCRATCH=$(mktemp -d /var/tmp/restore-drill.XXXXXX)        # not under the data directory
 BK=/srv/assurance/backups/<timestamp>                      # a backup directory the cycle made
-# 1. restore = copy the backup tree to a scratch directory, preserving modes
-cp -a "$BK"/. "$SCRATCH"/
-# 2. the restored copy verifies from its own files and manifest
-python -m assurance.evidence.restore_check verify "$SCRATCH"             # expect exit 0
+# 1. restore into a NEW directory (it must not exist, or be empty). Exit 0, or 1 = refused.
+python -m assurance.evidence.restore_check restore "$BK" "$SCRATCH/restored"
+# 2. the restored copy verifies from its own files and manifest. With an ai-store.db in the backup
+#    the ONLY finding is that file (the restore changed it: voided plans), exit 1; without one, exit 0
+python -m assurance.evidence.restore_check verify "$SCRATCH/restored"
 # 3. and agrees with the live volume's history (fails a fork or a rewound ledger)
-python -m assurance.evidence.restore_check verify --against-live /srv/assurance/data "$SCRATCH"
+python -m assurance.evidence.restore_check verify --against-live /srv/assurance/data "$SCRATCH/restored"
 # 4. the operator ledger and every tenant ledger verify as the product reads them
-python -m assurance art14 --ledger "$SCRATCH/art14-register.db" verify
-for L in "$SCRATCH"/tenants/acc_*.db; do python -m assurance art14 --ledger "$L" verify || echo "FAIL $L"; done
+python -m assurance art14 --ledger "$SCRATCH/restored/art14-register.db" verify
+for L in "$SCRATCH"/restored/tenants/acc_*.db; do python -m assurance art14 --ledger "$L" verify || echo "FAIL $L"; done
 # 5. completeness against the signed anchor (needs the PUBLIC key from outside the backup)
-python -m assurance art14 --ledger "$SCRATCH/tenants/acc_<id>.db" verify \
-    --attestations "$SCRATCH/attestations/acc_<id>.jsonl" --public-key /path/to/anchor.pub
+python -m assurance art14 --ledger "$SCRATCH/restored/tenants/acc_<id>.db" verify \
+    --attestations "$SCRATCH/restored/attestations/acc_<id>.jsonl" --public-key /path/to/anchor.pub
 rm -rf "$SCRATCH"                                          # when done; it holds customer evidence
 ```
 
-Pass criteria: step 2 exit `0`, step 3 exit `0`, every `art14 verify` exit `0`; step 5 exit `0` for an
+To restore for real: stop every writer, move the damaged volume aside (do not delete it: it is
+evidence), `restore` into a new directory, `verify --against-live` the survivor if one exists, point
+`ASSURANCE_LEDGER` / `ASSURANCE_ACCOUNTS` / `ASSURANCE_TENANT_LEDGERS` at the restored directory,
+start, run a cycle by hand. Unclaimed checkout keys are not in a backup; re-issue them.
+
+Pass criteria: step 1 exit `0`, step 3 exit `0`, every `art14 verify` exit `0`; step 5 exit `0` for an
 account that has an anchor. Exit `3` from `restore_check verify` means *unchecked* (no manifest), and
 is not a pass. Record in your own decision log: date, backup name, the `manifest_sha256` you stored at
-backup time and the one `backup` prints now, results, who ran it.
+backup time and the one `backup` / `restore` prints now, results, who ran it.
+
+**What is verified, and by which command** (throwaway data, one filesystem; `python -m pytest
+tests/test_backup_restore_e2e.py tests/test_assurance_restore.py tests/test_assurance_restore_manifest.py
+tests/test_readonly_restore_check.py`): a backup of the accounts DB, the operator ledger, per-account
+ledgers, an attestation log and an `/ai` store restores to ledgers with the source's length and head
+that verify, and a service can keep appending to them; a tampered payload, a truncated chain, a file
+cut short, a deleted ledger, a deleted manifest, a tampered `/ai` store or attestation log, and a
+backup taken from a broken source are each refused with nothing written; restore refuses a non-empty
+target and leaves a live volume byte-identical; `scripts/rehearse-local.sh` restores a volume and
+starts a second API process on it. That work also found and fixed one gap: a change left in a `-wal`
+file beside `ai-store.db` was not read by `verify`.
 
 What the drill does **not** show: that the manifest was not rewritten together with the data (the
 manifest is checksums, not a signature; keep `manifest_sha256` elsewhere), that an attestation log's
-records are genuine without the public key, or that the backup exists off this host. An
-off-host copy is the operator's to make; nothing here does it.
+records are genuine without the public key, that the backup exists off this host, how long a restore
+takes on a large volume, or any restore on a filesystem other than the one tests ran on. An off-host
+copy is the operator's to make; nothing here does it.
 
 The cycle takes a new timestamped backup directory each time and deletes none. Retention (and the
 disk it uses) is not managed; `ops check` measures free space once.
@@ -517,7 +553,9 @@ This tooling and this runbook do **not** establish:
 - That the clock of the host is right.
 - That a notification target exists, authenticates or is read by anyone; webhook delivery is not
   acknowledgement by a person ("Telling a person").
-- That the Python dependencies at install time match any earlier install (no lock exists).
+- That an install matches any earlier install beyond what `requirements/*.lock` pins: the locks fix
+  Python packages (with hashes), not the base image, apt packages or the Node dashboard tree
+  (`RELEASE.md`, section 5).
 - Anything about legal or regulatory status. No step here says a machine, a filing or an organisation
   complies with anything.
 - Postgres, the `/ai` control plane and the website are outside this runbook.
@@ -605,8 +643,9 @@ separate ledger reads. These grow in proportion to the fleet, not faster.
 - Synthetic data only: machines with two items and no verifications, no open change cases, no
   amendments, one site-per-20 pattern. A real fleet with many verifications per machine, large
   manifests or many cases will cost more per machine; none was measured.
-- No concurrency test: one reader or writer at a time. Two writers on one ledger, many tenants at
-  once, lock contention and the hosted process model were not measured.
+- No concurrency MEASUREMENT: these timings are one reader or writer at a time. Concurrent
+  CORRECTNESS on one host is tested (section 9, `tests/test_multiworker_real.py`) but throughput under
+  contention, with many tenants at once, was not measured.
 - No network: the API cases use an in-process ASGI client. Latency over a network, TLS, a proxy or
   the hosted volume was not measured.
 - Nothing about sizes above 2,000 machines or 50,000 entries, or about Postgres-backed parts.
@@ -617,3 +656,62 @@ To repeat: `PYTHONPATH=src python scripts/bench_scale.py --out result.json` (abo
 `--sizes`, `--ledger-sizes` and `--only` narrow it). `tests/test_scale_smoke.py` and
 `tests/test_assurance_batch_chain.py` guard against a return to quadratic behaviour; they are not
 performance claims.
+
+## 9. Worker processes, the local buyer-path rehearsal, and what neither shows
+
+### Worker processes (`uvicorn --workers N`)
+
+The root (platform) image starts `--workers 4`; the assurance service image starts `--workers 1`
+and says why in its `Dockerfile`. `tests/test_multiworker_real.py` starts the **real** servers as OS
+process trees (`python -m uvicorn ... --workers 4`) over shared SQLite stores in a temporary
+directory, drives them over loopback HTTP from 32 to 48 threads on fresh connections, stops them
+and reads the files. Verified (4 consecutive green runs, about 16 s each, 6 tests):
+
+- 48 concurrent signals into one tenant ledger: sequence `1..N` with no gap or duplicate, every
+  link verifies, SQLite `integrity_check` ok;
+- 48 simultaneous first writes to 8 brand-new tenant ledgers: each file intact, one `ledger_id` each,
+  all different;
+- the free daily allowance is exact: 48 concurrent calls against a limit of 20 give exactly 20 `200`
+  and 28 `429`, and the stored counter is 20;
+- `/ai`: 12 plans each approved by 6 simultaneous requests across the workers execute exactly once
+  (rows counted in a real PostgreSQL table), every loser gets `409`, all 12 plans end `executed`.
+  This needs PostgreSQL and fails (not skips) under `NEURALBRIDGE_REQUIRE_POSTGRES=1` without one.
+
+A defect this found, now fixed: the seeded `/ai` connection's adapter was registered only by the
+worker that served `GET /ai/connections`, so reads and approvals on the other workers answered `409
+no live adapter` (34 of 60 reads in the first run). It is now registered in the process that uses it.
+
+Not covered, and true of any deployment you build from this: the test asserts that at least two worker
+processes served requests (it retries a batch until they did) but cannot make the kernel spread
+connections evenly; a **bound** `/ai` connection (`POST /ai/connections`) keeps its credentials only in
+the adapter of the worker that bound it (they are never stored), so under `--workers N` it answers
+`409 no live adapter` on the other workers: bind it per worker, run one worker, or use the seeded
+connection; the **in-memory limiters** (checkout and claim throttles, the Stripe call budget) are per
+process, so N workers admit N times the configured rate; SQLite on a network filesystem, more than 4
+workers, sustained load and a second host were not tested. The assurance image stays at 1 worker.
+
+### Local buyer-path rehearsal (`scripts/rehearse-local.sh`)
+
+**Local rehearsal, not a hosted staging proof.** It needs no credential and touches no network beyond
+127.0.0.1: `scripts/rehearse_local.py` generates a webhook signing secret and an operator key for the
+run, scrubs every `STRIPE_*`, `ASSURANCE_*` and `NEURALBRIDGE_*` variable from the child's
+environment, refuses to run if the caller's environment holds a live-mode key, starts the real API on
+loopback and feeds it Stripe-**shaped** events signed with that secret. 39 steps, each PASS or FAIL
+in a redacted record (`.rehearsal-local/local-rehearsal.json`, 0600): honest `503` from checkout while
+no price is configured; forged, missing, tampered, stale and malformed signatures rejected and nothing
+granted; a valid event accepted, its replay and a second event for the same session no-ops; an
+out-of-order event held until its checkout and a stale one ignored; the key claimable once and only
+with the claim token; `401` without or with a bad key, `402` for a Register key on a Cell route, `201`
+for an entitled write; renewal; payment failure (`past_due`, still entitled) and recovery; a late old
+failure not undoing the recovery; immediate key revocation; cancellation (writes `402`; list, read,
+verify and export of the account's own evidence still `200` with `X-Assurance-Access:
+evidence-readout-only`); then backup, verify, restore, and a second API process serving the same
+entitlements from the restored volume. `tests/test_rehearse_local.py` runs it (about 5 s).
+
+It does **not** establish: anything about Stripe itself (no request leaves the machine; the events
+are fixtures); a hosted host's TLS, DNS, proxy, volume, secrets or CORS; checkout-session creation
+(that needs a price and a key, so the claim token is registered with the account store directly, the one
+fixture); or a deployed site. `--with-site` additionally builds and serves the Next.js site and
+fetches three pages; it needs `node_modules` and a few minutes, and its result is in the record only
+when it ran. For the hosted host, `scripts/staging_rehearsal.py` (Stripe test mode, the founder's
+secrets) is the tool, and it has not been run.
