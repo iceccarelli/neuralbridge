@@ -17,6 +17,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
+
 from neuralbridge.adapters.base import AdapterResponse
 from neuralbridge.ai.approval import (
     CallerRef,
@@ -55,6 +57,8 @@ from neuralbridge.core.router import (
 )
 from neuralbridge.security.audit import AuditUnavailableError
 from neuralbridge.security.limits import ResourceLimitError
+
+logger = structlog.get_logger(__name__)
 
 _POSTGRES_CAPABILITIES: list[tuple[str, OperationClass, str]] = [
     ("health_check", OperationClass.READ, "Check the connection is reachable and report the server version."),
@@ -156,7 +160,7 @@ async def _drop_stale_adapter(registry: AdapterRegistry, store: AiStore, conn: C
         try:
             await stale.disconnect()
         except Exception:  # noqa: BLE001 - best effort: the credential has left the registry either way
-            pass
+            logger.warning("ai_connection_disconnect_failed", connection_id=conn.id)
 
 
 def _require_active(store: AiStore, conn: ConnectionRecord) -> None:

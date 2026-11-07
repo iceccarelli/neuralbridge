@@ -550,23 +550,50 @@ class AiStore:
                 (owner, int(four_eyes), _now(), by),
             )
 
-    def rate_hit(self, key: str, *, limit: int, window_s: int, now: float) -> tuple[bool, int]:
-        """Count one hit for ``key`` in the current fixed window; say whether it is within ``limit``.
+    def rate_hit(self, key: str, *, limit: int, window_s: int, now: float) -> tuple[bool, int, float]:
+        """Admit one call for ``key`` if it keeps the estimated rate within ``limit`` per ``window_s``.
 
-        One atomic upsert (``INSERT .. ON CONFLICT DO UPDATE .. RETURNING``) inside a ``BEGIN IMMEDIATE``
-        transaction on the file every worker process shares, so the count is exact across processes
-        and threads. Returns ``(allowed, hits_in_window)``. Fixed windows admit up to 2x ``limit``
-        across a window boundary: the documented price of an exact, cheap counter."""
+        A sliding-window counter over two fixed windows: the current window's hits plus the previous
+        window's hits weighted by how much of that window still lies inside the sliding interval, so a
+        burst across a window boundary is not admitted twice over. The decision and the count are ONE
+        conditional upsert (``INSERT .. SELECT .. WHERE .. ON CONFLICT DO UPDATE .. WHERE .. RETURNING``)
+        inside a ``BEGIN IMMEDIATE`` transaction on the file every worker process shares, so it is exact
+        across processes and threads; a refused call is not counted (a flood does not extend its own
+        penalty). Returns ``(allowed, hits_in_current_window, retry_after_seconds)``; ``retry_after``
+        is 0 when allowed. It is an estimate by construction (the previous window is assumed evenly
+        spread), and it needs every worker to share the store's filesystem."""
         start = int(now // window_s) * window_s
+        frac = (now - start) / window_s
         with self._txn() as db:
-            hits = int(db.execute(
-                "INSERT INTO rate_windows (key, window_start, hits) VALUES (?,?,1) "
-                "ON CONFLICT(key, window_start) DO UPDATE SET hits = hits + 1 RETURNING hits",
-                (key, start),
-            ).fetchone()[0])
-            if hits == 1:  # first hit of a window for this key: drop windows nobody can still need
-                db.execute("DELETE FROM rate_windows WHERE window_start < ?", (start - 2 * window_s,))
-            return hits <= limit, hits
+            row = db.execute("SELECT hits FROM rate_windows WHERE key=? AND window_start=?",
+                             (key, start - window_s)).fetchone()
+            prev = int(row[0]) if row else 0
+            carry = prev * (1.0 - frac)
+            ret = db.execute(
+                "INSERT INTO rate_windows (key, window_start, hits) SELECT ?, ?, 1 WHERE 1 + ? <= ? "
+                "ON CONFLICT(key, window_start) DO UPDATE SET hits = hits + 1 WHERE hits + 1 + ? <= ? "
+                "RETURNING hits",
+                (key, start, carry, limit, carry, limit),
+            ).fetchone()
+            if ret is not None:
+                if int(ret[0]) == 1:  # first hit of a window for this key: drop windows nobody can still need
+                    db.execute("DELETE FROM rate_windows WHERE window_start < ?", (start - 2 * window_s,))
+                return True, int(ret[0]), 0.0
+            cur = db.execute("SELECT hits FROM rate_windows WHERE key=? AND window_start=?",
+                             (key, start)).fetchone()
+            current = int(cur[0]) if cur else 0
+        return False, current, self._retry_after(prev, current, limit, window_s, start, now)
+
+    @staticmethod
+    def _retry_after(prev: int, current: int, limit: int, window_s: int, start: int, now: float) -> float:
+        """Seconds until one more call would be admitted, if nothing else is counted meanwhile."""
+        if prev > 0 and limit - current - 1 >= 0:  # waiting out the previous window's weight is enough
+            needed = 1.0 - (limit - current - 1) / prev
+            if start + needed * window_s < start + window_s:
+                return max(1.0, start + max(needed, 0.0) * window_s - now)
+        end = start + window_s
+        fraction = max(0.0, 1.0 - (limit - 1) / current) if current > 0 else 0.0
+        return max(1.0, end + fraction * window_s - now)
 
     # -- plans ----------------------------------------------------------
 

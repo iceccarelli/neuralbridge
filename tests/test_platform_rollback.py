@@ -148,7 +148,7 @@ class TestRestoreOfAnOlderBackup:
             assert "rotate the connection" in r.json()["detail"]
             # rotation is the way back, and it resumes ABOVE the high-water mark
             ok = rotate_to(fresh, keys.a, conn["id"], user=ROLE_A, password=SECRET_1)
-            assert ok.status_code == 200 and ok.json()["credential_version"] == 3
+            assert ok.status_code == 200 and ok.json()["cred_version"] == 3
             assert whoami(fresh, keys.a, conn["id"]).json()["data"][0]["u"] == ROLE_A
         reset_singletons()
 
@@ -220,4 +220,4 @@ class TestWhereTheGuaranteeStops:
         ready = client.get("/api/v1/health/ready").json()
         # tests run on one filesystem, so this is the honest answer there: the warning names the limit
         assert ready["credential_custody"]["journal"]["same_device"] is True
-        assert any(w.startswith("credential_journal_same_device") for w in ready["warnings"])
+        assert any(n.startswith("credential_journal_same_device") for n in ready["notices"])

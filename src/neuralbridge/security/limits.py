@@ -23,8 +23,9 @@ What is shared across worker processes and what is not
 * **Shared (exact across processes on one host):** the per-tenant adapter-call rate limit, when a
   window store is supplied (``SharedWindowLimiter`` over the ``/ai`` store's ``rate_windows`` table,
   one atomic ``INSERT .. ON CONFLICT DO UPDATE .. RETURNING`` per call; the wiring in
-  ``api/dependencies.py`` does this). It is a FIXED window, so a burst straddling a window boundary
-  can admit up to twice the limit, and it needs every worker to share the store's filesystem. If the
+  ``api/dependencies.py`` does this). It is a sliding-window counter over two fixed windows (the previous window is
+  weighted by its remaining share, so a boundary burst is not admitted twice; an estimate, not an exact
+  log), a refused call is not counted, and it needs every worker to share the store's filesystem. If the
   store errors the limiter falls back to the process-local one (stricter per process, N times looser
   in total) and says so (``fallbacks``; ``/health/ready``). The free ``/ai/read`` daily quota and the
   other metered scopes are separate, exact and account-wide (``assurance.billing``).
@@ -159,11 +160,11 @@ class SlidingWindowLimiter:
 class SharedWindowStore(Protocol):
     """What :class:`SharedWindowLimiter` needs: ``AiStore.rate_hit``."""
 
-    def rate_hit(self, key: str, *, limit: int, window_s: int, now: float) -> tuple[bool, int]: ...
+    def rate_hit(self, key: str, *, limit: int, window_s: int, now: float) -> tuple[bool, int, float]: ...
 
 
 class SharedWindowLimiter:
-    """At most ``limit`` hits per ``window`` seconds per ``scope`` + key, counted in a store that every
+    """At most about ``limit`` hits per ``window`` seconds per ``scope`` + key, counted in a store that every
     worker process shares. Same ``check`` contract as :class:`SlidingWindowLimiter`.
 
     ``fallback`` is used (and ``fallbacks`` incremented) only when the store itself raises; a
@@ -188,7 +189,8 @@ class SharedWindowLimiter:
             return
         now = self._clock()
         try:
-            allowed, _ = self.store.rate_hit(f"{self.scope}|{key}", limit=self.limit, window_s=self.window, now=now)
+            allowed, _, retry = self.store.rate_hit(
+                f"{self.scope}|{key}", limit=self.limit, window_s=self.window, now=now)
         except Exception:  # noqa: BLE001 - a broken limiter store must not take the platform down
             self.fallbacks += 1
             logger.error("shared_rate_limiter_unavailable_using_process_local", scope=self.scope)
@@ -197,7 +199,7 @@ class SharedWindowLimiter:
         if not allowed:
             raise RateLimitedError(
                 f"rate limit of {self.limit} calls per {self.window:g}s exceeded",
-                retry_after=self.window - (now % self.window),
+                retry_after=retry,
             )
 
 

@@ -266,17 +266,17 @@ def list_connections(
         if not can_read_connection(scope, r):
             continue
         vaulted = r.custody == CUSTODY_VAULT
-        held = registry.get(r.registry_key) is not None
+        held = registry.get(r.registry_key) is not None  # this process only
         out.append(ConnectionSummary(
             id=r.id,
             name=r.name,
             adapter_type=r.adapter_type,
             status=REVOKED if _tombstoned(vault, r) else r.status,
             source=r.source,
-            live=held,
+            live=registry.get(r.registry_key) is not None,
             custody="env" if r.source == "seeded_from_env" else r.custody,
             usable=bool(vault is not None and vault.usable(r)) if vaulted else held,
-            credential_version=r.cred_version if vaulted else None,
+            cred_version=r.cred_version if vaulted else None,
             four_eyes=four_eyes,
         ))
     return out

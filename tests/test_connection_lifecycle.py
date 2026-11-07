@@ -108,7 +108,8 @@ class TestSecretsAreWriteOnly:
         caplog.set_level("DEBUG")
         conn = bind_scram(client, keys.a, scram_role)
         responses = [json.dumps(conn)]
-        assert set(conn) == {"id", "name", "adapter_type", "status", "source", "live"}
+        assert set(conn) == {"id", "name", "adapter_type", "status", "source", "live", "custody", "usable",
+                             "cred_version", "four_eyes"}
         assert isinstance(conn["live"], bool)
         responses.append(client.get(f"{API}/connections", headers=h(keys.a)).text)
         r = read(client, keys.a, conn["id"], operation="query", sql="SELECT current_user")
@@ -173,11 +174,13 @@ class TestRotate:
         # a refused rotation left the working credential in place
         assert read(client, keys.a, conn["id"], operation="query", sql="SELECT current_user").status_code == 200
 
-    def test_rotation_resupplies_credentials_after_a_restart(self, client, keys: Keys, scram_role) -> None:
+    def test_rotation_works_after_a_restart_and_the_credential_survived_it(self, client, keys: Keys, scram_role) -> None:
         conn = bind_scram(client, keys.a, scram_role)
         reset_singletons()  # "restart": registry and router are gone, the store file remains
-        down = read(client, keys.a, conn["id"], operation="query", sql="SELECT 1")
-        assert down.status_code == 409 and "no live adapter" in down.json()["detail"]
+        # The credential is sealed in the store (neuralbridge.ai.credentials), so a restart no longer
+        # loses it. Rotation is still how it is replaced; the old behaviour (credentials only in the
+        # process) is the explicit single-worker mode, tested in test_credential_custody.py.
+        assert read(client, keys.a, conn["id"], operation="query", sql="SELECT 1").status_code == 200
         assert rotate(client, keys.a, conn["id"]).status_code == 200
         assert read(client, keys.a, conn["id"], operation="query", sql="SELECT 1").status_code == 200
 

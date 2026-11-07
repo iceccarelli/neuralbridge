@@ -12,6 +12,7 @@ Provides shared dependencies that are injected into route handlers:
 from __future__ import annotations
 
 import os
+import threading
 
 from fastapi import Depends
 
@@ -29,6 +30,8 @@ _audit_logger: AuditLogger | None = None
 _adapter_registry: AdapterRegistry | None = None
 _request_router: RequestRouter | None = None
 _ai_store: AiStore | None = None
+_router_lock = threading.Lock()
+_store_lock = threading.Lock()
 
 
 def get_settings() -> Settings:
@@ -69,15 +72,20 @@ def get_request_router(
     the shared record before a bound connection is used."""
     global _request_router
     if _request_router is None:
-        limits = Limits.from_env()
-        store = get_ai_store()
-        limiter: SharedWindowLimiter | None = None
-        if os.environ.get("NEURALBRIDGE_RATE_LIMIT_SHARED", "1") != "0":
-            limiter = SharedWindowLimiter(store, limits.rate_per_minute, 60.0, scope="adapter_call")
-        _request_router = RequestRouter(
-            registry=registry, audit_logger=audit, limits=limits, rate_limiter=limiter,
-            connection_guard=make_connection_guard(registry, store),
-        )
+        # This runs in a worker thread (a plain ``def`` dependency), and building the router opens
+        # the store: without the lock, requests arriving together each built their own router, and
+        # with it their own concurrency gate, so the in-flight cap was not enforced.
+        with _router_lock:
+            if _request_router is None:
+                limits = Limits.from_env()
+                store = get_ai_store()
+                limiter: SharedWindowLimiter | None = None
+                if os.environ.get("NEURALBRIDGE_RATE_LIMIT_SHARED", "1") != "0":
+                    limiter = SharedWindowLimiter(store, limits.rate_per_minute, 60.0, scope="adapter_call")
+                _request_router = RequestRouter(
+                    registry=registry, audit_logger=audit, limits=limits, rate_limiter=limiter,
+                    connection_guard=make_connection_guard(registry, store),
+                )
     return _request_router
 
 
@@ -88,7 +96,9 @@ def get_ai_store() -> AiStore:
     convention as ``ASSURANCE_LEDGER``/``ASSURANCE_ACCOUNTS``)."""
     global _ai_store
     if _ai_store is None:
-        _ai_store = AiStore(os.environ.get("NEURALBRIDGE_AI_STORE", "neuralbridge-ai.db"))
+        with _store_lock:
+            if _ai_store is None:
+                _ai_store = AiStore(os.environ.get("NEURALBRIDGE_AI_STORE", "neuralbridge-ai.db"))
     return _ai_store
 
 

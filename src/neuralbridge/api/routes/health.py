@@ -8,6 +8,7 @@ metrics endpoint at ``/metrics``.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -75,6 +76,7 @@ async def readiness_check(
 
     role = await check_seeded_role()
     warnings: list[str] = []
+    notices: list[str] = []
     if role is not None:
         body["ai_demo_role"] = role
         if role.get("privileged"):
@@ -86,7 +88,7 @@ async def readiness_check(
     # only (they never flip readiness): a deployment without custody still serves reads, it just
     # refuses to bind a connection (503), and says why here.
     from neuralbridge.ai.credentials import declared_workers, vault_for
-    from neuralbridge.api.dependencies import get_ai_store, get_request_router
+    from neuralbridge.api.dependencies import get_ai_store
 
     workers = declared_workers()
     try:
@@ -100,16 +102,26 @@ async def readiness_check(
         warnings.append("credential_custody_process_local: bound connections are live in ONE worker only")
     journal = custody.get("journal")
     if isinstance(journal, dict) and journal.get("same_device"):
-        warnings.append(
+        # A documented limit, not a fault: reported as a notice so a deployment that cannot do better
+        # is not told it is broken, and one that can sees what to change.
+        notices.append(
             "credential_journal_same_device: the anti-rollback journal shares a device with the /ai store, so "
             "a whole-volume snapshot restore would rewind both; keep it on separate storage")
     if isinstance(journal, dict) and journal.get("intact") is False:
         warnings.append(f"credential_journal_unreadable: {journal.get('error')}")
-    limiter = getattr(get_request_router(), "_rate", None)
-    shared = getattr(limiter, "mode", "process_local")
+    # Do not build the router here (it needs the audit sink, which may be the thing that is down).
+    from neuralbridge.api import dependencies as deps
+    from neuralbridge.security.limits import Limits
+
+    limiter = getattr(deps._request_router, "_rate", None)
+    if limiter is not None:
+        shared, per_minute = getattr(limiter, "mode", "process_local"), getattr(limiter, "limit", None)
+    else:  # no request has needed it yet: report how it will be built
+        shared = "shared" if os.environ.get("NEURALBRIDGE_RATE_LIMIT_SHARED", "1") != "0" else "process_local"
+        per_minute = Limits.from_env().rate_per_minute
     body["rate_limits"] = {
         "declared_workers": workers,
-        "adapter_calls": {"mode": shared, "per_minute": getattr(limiter, "limit", None)},
+        "adapter_calls": {"mode": shared, "per_minute": per_minute},
         "process_local": ["concurrency_gate", "audit_refusal_limiter", "assurance_billing_throttles"],
     }
     if shared == "shared_with_local_fallback":
@@ -120,6 +132,8 @@ async def readiness_check(
             f"limiter and the assurance throttles admit {workers}x their configured values in total")
     if warnings:
         body["warnings"] = warnings
+    if notices:
+        body["notices"] = notices
     return JSONResponse(status_code=200 if all_ok else 503, content=body)
 
 

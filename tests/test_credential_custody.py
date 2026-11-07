@@ -151,7 +151,7 @@ class TestProcessLocalIsAnExplicitSingleWorkerOptIn:
 
     def test_it_binds_and_is_labelled_process_local(self, client, keys: Keys, roles, local) -> None:
         conn = bind_as(client, keys.a)
-        assert conn["custody"] == "process_local" and conn["live"] and conn["credential_version"] is None
+        assert conn["custody"] == "process_local" and conn["live"] and conn["cred_version"] is None
         assert whoami(client, keys.a, conn["id"]).json()["data"][0]["u"] == ROLE_A
         assert sql("SELECT COUNT(*) AS n FROM credentials")[0]["n"] == 0, "process-local stores nothing"
         ready = client.get("/api/v1/health/ready").json()
@@ -185,7 +185,7 @@ class TestProcessLocalIsAnExplicitSingleWorkerOptIn:
         monkeypatch.setenv("NEURALBRIDGE_CREDENTIAL_JOURNAL", str(store_path().parent.parent / "mv-custody" / "j.jsonl"))
         monkeypatch.delenv("NEURALBRIDGE_AI_PROCESS_LOCAL_CREDENTIALS")
         r = rotate_to(client, keys.a, conn["id"])
-        assert r.status_code == 200 and r.json()["custody"] == "vault" and r.json()["credential_version"] == 1
+        assert r.status_code == 200 and r.json()["custody"] == "vault" and r.json()["cred_version"] == 1
         with as_other_worker():
             assert whoami(client, keys.a, conn["id"]).json()["data"][0]["u"] == ROLE_B
 
@@ -313,7 +313,7 @@ class TestAuthenticatedEncryptionBinding:
 class TestSharedAcrossWorkers:
     def test_a_connection_bound_on_one_worker_is_usable_on_another(self, client, keys: Keys, roles) -> None:
         conn = bind_as(client, keys.a)
-        assert conn["custody"] == "vault" and conn["credential_version"] == 1 and conn["live"] is True
+        assert conn["custody"] == "vault" and conn["cred_version"] == 1 and conn["live"] is True
         with as_other_worker() as other:
             listed = [c for c in client.get(f"{API}/connections", headers=h(keys.a)).json() if c["id"] == conn["id"]][0]
             assert listed["live"] is False and listed["usable"] is True, "not built yet here, but usable"
@@ -329,7 +329,7 @@ class TestSharedAcrossWorkers:
             assert w.registry("w2").version_of(key) == 1
             w.use("w1")
             rotated = rotate_to(client, keys.a, conn["id"])
-            assert rotated.status_code == 200 and rotated.json()["credential_version"] == 2
+            assert rotated.status_code == 200 and rotated.json()["cred_version"] == 2
             assert whoami(client, keys.a, conn["id"]).json()["data"][0]["u"] == ROLE_B
             w.use("w2")  # still holding its version-1 adapter...
             assert w.registry("w2").version_of(key) == 1
@@ -404,9 +404,9 @@ class TestSharedAcrossWorkers:
         listed = client.get(f"{API}/connections", headers=h(keys.a)).json()
         mine = [c for c in listed if c["id"] == conn["id"]][0]
         assert set(mine) == {"id", "name", "adapter_type", "status", "source", "live", "custody", "usable",
-                             "credential_version", "four_eyes"}
+                             "cred_version", "four_eyes"}
         demo = [c for c in listed if c["source"] == "seeded_from_env"][0]
-        assert demo["custody"] == "env" and demo["credential_version"] is None
+        assert demo["custody"] == "env" and demo["cred_version"] is None
 
 
 # ───────────────────────────── key rotation ─────────────────────────────

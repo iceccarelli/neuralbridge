@@ -72,7 +72,7 @@ class ConnectionSummary(BaseModel):
     # rolled back, decryptable). ``live`` stays the narrower, per-process fact.
     usable: bool = False
     # Version of the stored credential (rises with every rotation); None when none is stored.
-    credential_version: int | None = None
+    cred_version: int | None = None
     # Read-only: whether writes on this account's connections need an independently authenticated
     # approver (see neuralbridge.ai.approval). Off unless the account or deployment turned it on.
     four_eyes: bool = False

@@ -105,7 +105,7 @@ def _summary(record: ConnectionRecord, registry: AdapterRegistry, vault: Credent
         id=record.id, name=record.name, adapter_type=record.adapter_type, status=record.status,
         source=record.source, live=held, custody=record.custody,
         usable=bool(vault is not None and vault.usable(record)) if vaulted else held,
-        credential_version=record.cred_version if vaulted else None, four_eyes=four_eyes,
+        cred_version=record.cred_version if vaulted else None, four_eyes=four_eyes,
     )
 
 
@@ -279,7 +279,7 @@ async def rotate(
         audit_logger, event_type="connection_rotate", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"connection:{connection_id}", action="rotate", result=result,
         details={"connection_id": connection_id, "custody": summary.custody,
-                 "version": summary.credential_version},
+                 "version": summary.cred_version},
     )
     return summary
 
