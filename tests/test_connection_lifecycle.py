@@ -397,3 +397,33 @@ class TestSecurityRelevantEventsAreAudited:
         assert surfaces == {"ai_route", "adapters_route"}
         # another tenant never sees them
         assert audit_events(client, keys.b) == []
+
+
+class TestLegacyOperatorConnectionTestIsHonest:
+    def test_the_test_endpoint_does_not_invent_a_success(self, client) -> None:
+        """``POST /api/v1/connections/{id}/test`` used to answer ``success`` with a hard-coded 42 ms
+        without contacting anything. It must say that it checked nothing."""
+        created = client.post("/api/v1/connections", headers=h(OPERATOR_KEY), json={
+            "name": "legacy", "adapter_type": "postgres", "config": {"host": "10.255.255.1"},
+            "auth": {"password": LEAK}}).json()
+        assert LEAK not in json.dumps(created)
+        r = client.post(f"/api/v1/connections/{created['id']}/test", headers=h(OPERATOR_KEY))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["test_result"] == "unchecked" and "latency_ms" not in body
+        assert "no connection was attempted" in body["message"].lower()
+
+    def test_secrets_are_masked_on_update_and_in_config_too(self, client) -> None:
+        """PATCH used to store ``auth`` unmasked and return it; ``config`` was echoed verbatim."""
+        created = client.post("/api/v1/connections", headers=h(OPERATOR_KEY), json={
+            "name": "legacy2", "adapter_type": "postgres",
+            "config": {"host": "db", "password": LEAK, "nested": {"api_key": LEAK2}},
+            "auth": {"password": LEAK}}).json()
+        patched = client.patch(f"/api/v1/connections/{created['id']}", headers=h(OPERATOR_KEY), json={
+            "auth": {"token": LEAK2}, "config": {"host": "db2", "secret": LEAK}})
+        assert patched.status_code == 200
+        got = client.get(f"/api/v1/connections/{created['id']}", headers=h(OPERATOR_KEY))
+        listed = client.get("/api/v1/connections", headers=h(OPERATOR_KEY))
+        for response in (created and json.dumps(created), patched.text, got.text, listed.text):
+            assert LEAK not in response and LEAK2 not in response
+        assert patched.json()["config"]["host"] == "db2"

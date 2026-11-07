@@ -6,9 +6,11 @@ Endpoints for managing adapter connections — the YAML-configured
 create connections via the dashboard's Connection Wizard; developers
 can also use these endpoints directly.
 
-**Operator-only.** This is one global, in-memory store whose ``config`` is
-returned verbatim (only ``auth`` is masked), so it must never be reachable by
-a customer: anonymous callers get 401 and customer accounts 403. Customers'
+**Operator-only.** This is one global, in-memory store of connection *settings*
+(no adapter is built from it), so it must never be reachable by a customer:
+anonymous callers get 401 and customer accounts 403. Credential-shaped values
+(``auth`` and any ``password``/``token``/``secret``/``api_key``-like key inside
+``config``) are masked on the way in and never returned. Customers'
 own connections live in the tenant-scoped ``/ai/connections``; nothing in
 ``app/`` or the MCP server calls this router.
 """
@@ -23,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from neuralbridge.ai.entitlements import Principal, current_principal, require_operator
+from neuralbridge.security.audit import redact
 
 
 async def _operator_only(principal: Principal = Depends(current_principal)) -> None:
@@ -87,7 +90,7 @@ async def create_connection(request: ConnectionCreateRequest) -> dict[str, Any]:
         "name": request.name,
         "description": request.description,
         "adapter_type": request.adapter_type,
-        "config": request.config,
+        "config": redact(request.config),
         "auth": dict.fromkeys(request.auth, "***"),  # Mask secrets in response
         "permissions": request.permissions,
         "rate_limit": request.rate_limit,
@@ -124,6 +127,10 @@ async def update_connection(
         )
     conn = _connections[connection_id]
     update_data = request.model_dump(exclude_none=True)
+    if "auth" in update_data:
+        update_data["auth"] = dict.fromkeys(update_data["auth"], "***")
+    if "config" in update_data:
+        update_data["config"] = redact(update_data["config"])
     conn.update(update_data)
     conn["updated_at"] = datetime.now(UTC).isoformat()
     return conn
@@ -144,10 +151,9 @@ async def delete_connection(connection_id: str) -> dict[str, str]:
 @router.post("/{connection_id}/test", summary="Test a connection")
 async def test_connection(connection_id: str) -> dict[str, Any]:
     """
-    Test whether a connection can successfully reach its target system.
-
-    Attempts to connect and validate credentials without executing
-    any operations.
+    Report whether this connection could be tested. It cannot: this registry
+    stores settings only and no adapter is built from it, so the honest answer
+    is ``unchecked`` (never an invented success).
     """
     if connection_id not in _connections:
         raise HTTPException(
@@ -155,11 +161,12 @@ async def test_connection(connection_id: str) -> dict[str, Any]:
             detail=f"Connection '{connection_id}' not found.",
         )
     conn = _connections[connection_id]
-    # In production, this would instantiate the adapter and call validate_credentials()
+    # This legacy, in-memory registry holds configuration only: no adapter is ever built from it, so
+    # there is nothing to test. Say so; "unchecked" is a valid outcome, an invented "success" is not.
     return {
         "connection_id": connection_id,
         "adapter_type": conn["adapter_type"],
-        "test_result": "success",
-        "message": "Connection test passed.",
-        "latency_ms": 42,
+        "test_result": "unchecked",
+        "message": "No connection was attempted: this registry stores configuration only. "
+                   "Bind a connection with POST /ai/connections to use one.",
     }
