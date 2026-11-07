@@ -78,7 +78,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield  # ← application runs here
 
-    # Cleanup (database pools, Redis, etc.) would go here in production.
+    # Shutdown: close every registered adapter (database pools, HTTP clients). Each gets a bounded
+    # wait and a failure in one never stops the others; a leaked pool is a real resource leak
+    # (asyncpg connections and sockets were left to the garbage collector before this).
+    import asyncio
+
+    from neuralbridge.api.dependencies import get_adapter_registry
+
+    registry = get_adapter_registry()
+    for adapter_type in registry.list_all():
+        adapter = registry.get(adapter_type)
+        if adapter is None:
+            continue
+        try:
+            await asyncio.wait_for(adapter.disconnect(), timeout=10.0)
+        except Exception as exc:  # noqa: BLE001 - logged, shutdown continues
+            _log.warning("adapter_disconnect_failed_at_shutdown", adapter=adapter_type,
+                         error=type(exc).__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
