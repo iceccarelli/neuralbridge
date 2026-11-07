@@ -32,7 +32,8 @@ from assurance.ops import record as rec
 from assurance.ops.config import OpsConfigError, load_config
 
 from .intel_support import Clock, ContractFixtureTransport, kev_doc
-from .test_assurance_watch_intel import CVE, _fill, _plant
+from .test_assurance_watch_intel import CVE, _plant
+from .test_assurance_watch_intel_followups import _fill_at
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="flock and file modes are POSIX")
 
@@ -68,7 +69,9 @@ class Site:
         self.root = root
         root.mkdir()
         plant = _plant(root)                     # watch.json, plans, exports, intel.db, ev.db
-        _fill(plant["store"])
+        # Recorded now: a watch judges the age of its sources on the real clock (72 h default).
+        _now = datetime.now(UTC)
+        _fill_at(plant["store"], nvd=_now, kev=_now, epss=_now)
         self.data = root / "data"
         self.data.mkdir()
         store = AccountStore(self.data / "accounts.db")

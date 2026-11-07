@@ -1,6 +1,10 @@
 {
   "capabilities": [
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.billing_portal",
       "service": "account",
       "surfaces": {
@@ -22,6 +26,10 @@
       "title": "Manage your subscription"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.billing_webhook",
       "service": "account",
       "surfaces": {
@@ -43,6 +51,10 @@
       "title": "Stripe webhook (signature verified)"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.checkout",
       "service": "account",
       "surfaces": {
@@ -64,6 +76,10 @@
       "title": "Start a subscription"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.checkout_complete",
       "service": "account",
       "surfaces": {
@@ -85,6 +101,10 @@
       "title": "Collect the key after paying"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.keys",
       "service": "account",
       "surfaces": {
@@ -108,6 +128,10 @@
       "title": "List, issue and revoke API keys"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.me",
       "service": "account",
       "surfaces": {
@@ -129,6 +153,10 @@
       "title": "Your account, plan and usage"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.operators",
       "service": "account",
       "surfaces": {
@@ -152,6 +180,10 @@
       "title": "List, create and disable operators"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "account.usage",
       "service": "account",
       "surfaces": {
@@ -174,6 +206,10 @@
       "title": "What your account has used, and its spend limit"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.availability",
       "service": "art14",
       "surfaces": {
@@ -197,6 +233,10 @@
       "title": "Attach the product and Member State record the filing needs"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.awareness",
       "service": "art14",
       "surfaces": {
@@ -220,6 +260,10 @@
       "title": "Establish the moment every deadline runs from"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.awareness_supersession",
       "service": "art14",
       "surfaces": {
@@ -243,6 +287,10 @@
       "title": "Correct a wrongly recorded awareness by appending a superseding record (never an edit)"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.breaches",
       "service": "art14",
       "surfaces": {
@@ -268,6 +316,10 @@
       "title": "Deadlines missed or overdue (the CLI exits 1 on any)"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "art14.bridge",
       "service": "art14",
       "surfaces": {
@@ -289,6 +341,10 @@
       "title": "Draft an Article 14 intake from an advisory"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.case",
       "service": "art14",
       "surfaces": {
@@ -314,6 +370,10 @@
       "title": "One case, with its deadlines"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "art14.case_ids",
       "service": "art14",
       "surfaces": {
@@ -337,6 +397,10 @@
       "title": "List case ids"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.export",
       "service": "art14",
       "surfaces": {
@@ -362,6 +426,10 @@
       "title": "A verifiable evidence bundle for one case"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.fields",
       "service": "art14",
       "surfaces": {
@@ -387,6 +455,10 @@
       "title": "The platform field specification for a track and stage"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.filing",
       "service": "art14",
       "surfaces": {
@@ -410,6 +482,10 @@
       "title": "Record a submission, validated against the platform field spec"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.history",
       "service": "art14",
       "surfaces": {
@@ -426,13 +502,19 @@
           "status": "available"
         },
         "mcp": {
-          "reason": "the MCP tool art14_case returns the case; the history is not offered to agents yet",
-          "status": "planned"
+          "names": [
+            "art14_history"
+          ],
+          "status": "available"
         }
       },
       "title": "The audit history of one case: every ledger record, oldest first"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.measure",
       "service": "art14",
       "surfaces": {
@@ -456,6 +538,10 @@
       "title": "Record a corrective or mitigating measure becoming available"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.register",
       "service": "art14",
       "surfaces": {
@@ -481,6 +567,10 @@
       "title": "Readiness across every case, worst first"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.signal",
       "service": "art14",
       "surfaces": {
@@ -504,6 +594,10 @@
       "title": "Open a case with the first thing anyone heard"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.triage",
       "service": "art14",
       "surfaces": {
@@ -527,6 +621,10 @@
       "title": "Work the reportability decision path"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.user_notification",
       "service": "art14",
       "surfaces": {
@@ -550,6 +648,10 @@
       "title": "Record the Article 14(8) notification to users"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "art14.validate",
       "service": "art14",
       "surfaces": {
@@ -575,6 +677,10 @@
       "title": "Check a draft submission without recording it"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.anchor_all",
       "service": "attest",
       "surfaces": {
@@ -596,6 +702,10 @@
       "title": "Counter-sign the head of every hosted tenant ledger (timer job)"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.keygen",
       "service": "attest",
       "surfaces": {
@@ -617,6 +727,10 @@
       "title": "Make an Ed25519 key pair"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "attest.log",
       "service": "attest",
       "surfaces": {
@@ -642,6 +756,10 @@
       "title": "Print the attestations, checking nothing"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.preflight",
       "service": "attest",
       "surfaces": {
@@ -663,6 +781,10 @@
       "title": "Would counter-signing and validated verification work here?"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "attest.service_key",
       "service": "attest",
       "surfaces": {
@@ -686,6 +808,10 @@
       "title": "The public key the hosted service counter-signs with"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "attest.sign",
       "service": "attest",
       "surfaces": {
@@ -709,6 +835,10 @@
       "title": "Attest the current head of a ledger"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.trust_list_add",
       "service": "attest",
       "surfaces": {
@@ -730,6 +860,10 @@
       "title": "Trust a recorder's PUBLIC key, pinned to a fingerprint"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.trust_list_create",
       "service": "attest",
       "surfaces": {
@@ -751,6 +885,10 @@
       "title": "Start the recorder trust file the service loads"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.trust_list_list",
       "service": "attest",
       "surfaces": {
@@ -772,6 +910,10 @@
       "title": "Print the trusted recorders"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.trust_list_revoke",
       "service": "attest",
       "surfaces": {
@@ -793,6 +935,10 @@
       "title": "Revoke a recorder key, with an explicit date"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "attest.trust_list_verify",
       "service": "attest",
       "surfaces": {
@@ -814,6 +960,10 @@
       "title": "Check the trust file loads as the service loads it"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "attest.verify",
       "service": "attest",
       "surfaces": {
@@ -839,6 +989,10 @@
       "title": "Check an attestation log"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.end",
       "service": "billing",
       "surfaces": {
@@ -860,6 +1014,10 @@
       "title": "End a manual grant now: revoke every key"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.extend",
       "service": "billing",
       "surfaces": {
@@ -881,6 +1039,10 @@
       "title": "Move a manual grant's last day"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.grant",
       "service": "billing",
       "surfaces": {
@@ -902,6 +1064,10 @@
       "title": "Create a manual-pilot account and print its API key once"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.issue_key",
       "service": "billing",
       "surfaces": {
@@ -923,6 +1089,10 @@
       "title": "Print another key for an existing manual grant, once"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.list",
       "service": "billing",
       "surfaces": {
@@ -944,6 +1114,10 @@
       "title": "Every account in the store: source, expiry, no secrets"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "billing.revoke_key",
       "service": "billing",
       "surfaces": {
@@ -965,6 +1139,10 @@
       "title": "Stop one key of a manual grant at once"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "catalogue.capabilities",
       "service": "catalogue",
       "surfaces": {
@@ -990,6 +1168,10 @@
       "title": "This catalogue"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "catalogue.plans",
       "service": "catalogue",
       "surfaces": {
@@ -1013,6 +1195,10 @@
       "title": "What is on sale, generated from the enforced entitlements"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.advance",
       "service": "change",
       "surfaces": {
@@ -1038,6 +1224,10 @@
       "title": "Move to the next required stop"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.assess_advisory",
       "service": "change",
       "surfaces": {
@@ -1061,6 +1251,10 @@
       "title": "Turn a fleet impact report into a case"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "change.assess_advisory_signed",
       "service": "change",
       "surfaces": {
@@ -1082,6 +1276,10 @@
       "title": "Turn one advisory of a pinned, signed supplier feed into a case, with its trust"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.assess_drift",
       "service": "change",
       "surfaces": {
@@ -1107,6 +1305,10 @@
       "title": "Turn a manifest divergence into a case"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.assess_intervention",
       "service": "change",
       "surfaces": {
@@ -1132,6 +1334,10 @@
       "title": "Did a recorded intervention invalidate evidence?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.claim",
       "service": "change",
       "surfaces": {
@@ -1157,6 +1363,10 @@
       "title": "OPEN to IN_REVIEW"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.decide",
       "service": "change",
       "surfaces": {
@@ -1180,6 +1390,10 @@
       "title": "Close, reject or defer a case"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.export",
       "service": "change",
       "surfaces": {
@@ -1205,6 +1419,10 @@
       "title": "A verifiable evidence bundle for one case"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.list",
       "service": "change",
       "surfaces": {
@@ -1230,6 +1448,10 @@
       "title": "The Active Assurance Cases queue"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.replay",
       "service": "change",
       "surfaces": {
@@ -1255,6 +1477,10 @@
       "title": "Rebuild a case from the ledger alone and check every step"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.resolve_decision",
       "service": "change",
       "surfaces": {
@@ -1278,6 +1504,10 @@
       "title": "Answer one of a case's open human questions"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.resume",
       "service": "change",
       "surfaces": {
@@ -1301,6 +1531,10 @@
       "title": "DEFERRED to IN_REVIEW"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.reverify",
       "service": "change",
       "surfaces": {
@@ -1326,6 +1560,10 @@
       "title": "Supply fresh verification evidence"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.show",
       "service": "change",
       "surfaces": {
@@ -1351,6 +1589,10 @@
       "title": "One case in full"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "change.waive_reverification",
       "service": "change",
       "surfaces": {
@@ -1374,6 +1616,10 @@
       "title": "Close one re-verification entry WITHOUT evidence"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "check.fleet_machine",
       "service": "check",
       "surfaces": {
@@ -1399,6 +1645,10 @@
       "title": "Check an enrolled machine against its own ledger history"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "check.machine",
       "service": "check",
       "surfaces": {
@@ -1424,6 +1674,10 @@
       "title": "Ad-hoc check: one manifest, one advisory, no account"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "check.services",
       "service": "check",
       "surfaces": {
@@ -1449,6 +1703,10 @@
       "title": "The Machine Assurance Check service catalogue, machine-readable"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "collect.check_plan",
       "service": "collect",
       "surfaces": {
@@ -1470,6 +1728,10 @@
       "title": "What a collection plan would catch, and miss"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "collect.probe",
       "service": "collect",
       "surfaces": {
@@ -1491,6 +1753,10 @@
       "title": "Which rules report an export's own noise"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "collect.run",
       "service": "collect",
       "surfaces": {
@@ -1512,6 +1778,10 @@
       "title": "Collect one machine"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "evidence.ledger_verify",
       "service": "evidence",
       "surfaces": {
@@ -1537,6 +1807,10 @@
       "title": "Verify the evidence chain"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "evidence.verify",
       "service": "evidence",
       "surfaces": {
@@ -1562,6 +1836,10 @@
       "title": "Check an evidence file you were handed; stores nothing"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.advisory",
       "service": "fleet",
       "surfaces": {
@@ -1585,6 +1863,10 @@
       "title": "Which machines does this advisory touch?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.advisory_check",
       "service": "fleet",
       "surfaces": {
@@ -1608,6 +1890,10 @@
       "title": "Is this one machine affected by this advisory?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.advisory_signed",
       "service": "fleet",
       "surfaces": {
@@ -1631,6 +1917,10 @@
       "title": "Assess a signed supplier feed against the fleet, with its trust"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.declaration",
       "service": "fleet",
       "surfaces": {
@@ -1656,6 +1946,10 @@
       "title": "Does the declaration still describe the machine?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.declare",
       "service": "fleet",
       "surfaces": {
@@ -1679,6 +1973,10 @@
       "title": "Bind a Declaration of Conformity to a configuration"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "fleet.import_csaf",
       "service": "fleet",
       "surfaces": {
@@ -1700,6 +1998,10 @@
       "title": "Translate a CSAF 2.0 advisory into our advisory format (inspect-only)"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.machines",
       "service": "fleet",
       "surfaces": {
@@ -1725,6 +2027,10 @@
       "title": "Every enrolled machine, worst coverage first"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "fleet.observations",
       "service": "fleet",
       "surfaces": {
@@ -1748,6 +2054,10 @@
       "title": "When each machine was last looked at, and did it work"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.report",
       "service": "fleet",
       "surfaces": {
@@ -1773,6 +2083,10 @@
       "title": "The whole fleet on one page a plant manager can read"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "fleet.value",
       "service": "fleet",
       "surfaces": {
@@ -1798,6 +2112,10 @@
       "title": "Your assurance position, derived from your own ledger"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "intel.candidates",
       "service": "intel",
       "surfaces": {
@@ -1823,6 +2141,10 @@
       "title": "Advisory candidates the model can represent, plus CVE enrichment"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "intel.history",
       "service": "intel",
       "surfaces": {
@@ -1848,6 +2170,10 @@
       "title": "The append-only observation history of every source"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "intel.ingest",
       "service": "intel",
       "surfaces": {
@@ -1869,6 +2195,10 @@
       "title": "Record local KEV/NVD/EPSS/CSAF files as provenance-stamped observations"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "intel.refresh",
       "service": "intel",
       "surfaces": {
@@ -1890,6 +2220,10 @@
       "title": "Fetch one public source from its official host (only with --live)"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "intel.show",
       "service": "intel",
       "surfaces": {
@@ -1917,6 +2251,10 @@
       "title": "One observation, or what every source says about one CVE"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "kit.check",
       "service": "kit",
       "surfaces": {
@@ -1938,6 +2276,10 @@
       "title": "What the kit would do, touching nothing"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "kit.init",
       "service": "kit",
       "surfaces": {
@@ -1959,6 +2301,10 @@
       "title": "Write a runnable kit into a folder"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "kit.run",
       "service": "kit",
       "surfaces": {
@@ -1980,6 +2326,10 @@
       "title": "Enrol every machine, offline"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machine.check",
       "service": "machine",
       "surfaces": {
@@ -2005,6 +2355,10 @@
       "title": "Re-verify a verification bundle somebody else sealed"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "machine.recorder_sign",
       "service": "machine",
       "surfaces": {
@@ -2026,6 +2380,10 @@
       "title": "Sign a trace as a recorder attestation"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "machine.recorder_trust",
       "service": "machine",
       "surfaces": {
@@ -2047,6 +2405,10 @@
       "title": "Add a recorder's PUBLIC key to your own trust file"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machine.separation",
       "service": "machine",
       "surfaces": {
@@ -2072,6 +2434,10 @@
       "title": "The protective separation distance, term by term"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machine.verify",
       "service": "machine",
       "surfaces": {
@@ -2097,6 +2463,10 @@
       "title": "Verify a recorded run against a declared safety envelope"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.amend_enrolment",
       "service": "machinery",
       "surfaces": {
@@ -2120,6 +2490,10 @@
       "title": "Amend a machine's declared site or owner, as a new record"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.coverage",
       "service": "machinery",
       "surfaces": {
@@ -2145,6 +2519,10 @@
       "title": "Which safety functions a recorded verification still stands for"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.diff",
       "service": "machinery",
       "surfaces": {
@@ -2170,6 +2548,10 @@
       "title": "Is the machine still the configuration you signed off?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.enrol",
       "service": "machinery",
       "surfaces": {
@@ -2193,6 +2575,39 @@
       "title": "Enrol a machine: declare its identity, seal its baseline, get a receipt"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "machinery.export",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/machinery/export"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "art14 export"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machinery_export"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "A verifiable evidence bundle for one machine's records"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.import_inventory",
       "service": "machinery",
       "surfaces": {
@@ -2216,6 +2631,10 @@
       "title": "Enrol many machines from an inventory export file (a file importer, not a connector)"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.intervention",
       "service": "machinery",
       "surfaces": {
@@ -2239,6 +2658,10 @@
       "title": "Seal an intervention record"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.manifest",
       "service": "machinery",
       "surfaces": {
@@ -2262,6 +2685,10 @@
       "title": "Seal a safety software manifest"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.passport",
       "service": "machinery",
       "surfaces": {
@@ -2285,6 +2712,10 @@
       "title": "Seal the machine's whole evidence position"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "machinery.passport_check",
       "service": "machinery",
       "surfaces": {
@@ -2310,6 +2741,39 @@
       "title": "Re-verify a passport you did not produce"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "machinery.passport_check_ledger",
+      "service": "machinery",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/machinery/passport/check-ledger"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "machinery check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "machinery_passport_check_ledger"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Is this passport still true of the machine, judged against your own ledger?"
+    },
+    {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "ops.check",
       "service": "ops",
       "surfaces": {
@@ -2331,6 +2795,10 @@
       "title": "Preflight the ops config and host; lists what it does not check"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "ops.cycle",
       "service": "ops",
       "surfaces": {
@@ -2352,6 +2820,10 @@
       "title": "Run one operator cycle (intel refresh with --live, watch, anchor, backup + verify) and append its record"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "ops.notify_test",
       "service": "ops",
       "surfaces": {
@@ -2373,6 +2845,10 @@
       "title": "Show (dry) or, with --live, send one labelled TEST webhook to a configured notify target"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "ops.status",
       "service": "ops",
       "surfaces": {
@@ -2394,6 +2870,10 @@
       "title": "The last cycle, its age and the human actions it left (stale -> exit 2)"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "report.demo",
       "service": "report",
       "surfaces": {
@@ -2415,6 +2895,10 @@
       "title": "Build a worked synthetic fleet and report on it"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.fetch",
       "service": "supplier",
       "surfaces": {
@@ -2438,6 +2922,10 @@
       "title": "Download a hosted feed"
     },
     {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
       "id": "supplier.keygen",
       "service": "supplier",
       "surfaces": {
@@ -2459,6 +2947,10 @@
       "title": "An Ed25519 publishing key"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "supplier.list",
       "service": "supplier",
       "surfaces": {
@@ -2480,6 +2972,10 @@
       "title": "What stands in a feed file"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.publish",
       "service": "supplier",
       "surfaces": {
@@ -2503,6 +2999,10 @@
       "title": "Sign an advisory into a feed"
     },
     {
+      "hosting": {
+        "mode": "hosted_only",
+        "statement": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it."
+      },
       "id": "supplier.self_pin",
       "service": "supplier",
       "surfaces": {
@@ -2524,6 +3024,10 @@
       "title": "Pin your own publishing public key in your own account (as declared by you)"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_baseline",
       "service": "supplier",
       "surfaces": {
@@ -2547,6 +3051,10 @@
       "title": "Accept a re-issued, trusted feed as the new rollback baseline"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_check",
       "service": "supplier",
       "surfaces": {
@@ -2572,6 +3080,10 @@
       "title": "What is this feed, state by state, under your pinned keys?"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_list",
       "service": "supplier",
       "surfaces": {
@@ -2597,6 +3109,10 @@
       "title": "Pinned keys and the decision history"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_override",
       "service": "supplier",
       "surfaces": {
@@ -2620,6 +3136,10 @@
       "title": "Accept ONE untrusted advisory, attributed"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_pin",
       "service": "supplier",
       "surfaces": {
@@ -2643,6 +3163,10 @@
       "title": "Trust this key for this supplier"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_revoke",
       "service": "supplier",
       "surfaces": {
@@ -2666,6 +3190,10 @@
       "title": "Stop trusting a key"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.trust_rotate",
       "service": "supplier",
       "surfaces": {
@@ -2689,6 +3217,10 @@
       "title": "Pin a new key and retire the old from a date"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "supplier.verify",
       "service": "supplier",
       "surfaces": {
@@ -2710,6 +3242,10 @@
       "title": "Check a feed file before acting on it"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "supplier.withdraw",
       "service": "supplier",
       "surfaces": {
@@ -2733,6 +3269,10 @@
       "title": "Sign a withdrawal of an advisory"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "tenant.delete",
       "service": "tenant",
       "surfaces": {
@@ -2754,6 +3294,10 @@
       "title": "Plan an account's removal; with --execute, a verified export and a named person, unlink exactly the planned files and record a tombstone"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "tenant.export",
       "service": "tenant",
       "surfaces": {
@@ -2775,6 +3319,10 @@
       "title": "Export one account's ledger, evidence bundle and attestation log into a manifest-hashed directory"
     },
     {
+      "hosting": {
+        "mode": "operator_host_only",
+        "statement": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool."
+      },
       "id": "tenant.verify_export",
       "service": "tenant",
       "surfaces": {
@@ -2796,6 +3344,10 @@
       "title": "Re-hash a tenant export against its manifest and re-verify the copied chain"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "watch.open_case",
       "service": "watch",
       "surfaces": {
@@ -2819,6 +3371,10 @@
       "title": "A named person opens a case from a public-intel finding"
     },
     {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "watch.push",
       "service": "watch",
       "surfaces": {
@@ -2842,6 +3398,10 @@
       "title": "Report the latest sealed run to your own hosted ledger (opt-in)"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "watch.run",
       "service": "watch",
       "surfaces": {
@@ -2863,6 +3423,10 @@
       "title": "One pass over every target"
     },
     {
+      "hosting": {
+        "mode": "offline_only",
+        "statement": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service."
+      },
       "id": "watch.status",
       "service": "watch",
       "surfaces": {
@@ -3024,34 +3588,42 @@
     ]
   },
   "counts": {
-    "api_routes": 93,
-    "capabilities": 126,
+    "api_routes": 95,
+    "capabilities": 128,
     "cli_commands": 109,
     "cli_domains": 20,
-    "mcp_tools": 43,
+    "mcp_tools": 46,
     "surfaces": {
       "api": {
-        "available": 87,
+        "available": 89,
         "by_design": 39,
         "planned": 0
       },
       "cli": {
-        "available": 112,
+        "available": 114,
         "by_design": 13,
         "planned": 1
       },
       "mcp": {
-        "available": 42,
+        "available": 45,
         "by_design": 83,
-        "planned": 1
+        "planned": 0
       }
     }
   },
   "generated_by": "scripts/export_capabilities.py, from src/assurance/capabilities.py",
+  "hosting_modes": {
+    "hosted_and_offline": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it).",
+    "hosted_only": "Served by the HTTP API (hosted, or self-hosted by running the same service). There is no offline command for it.",
+    "offline_only": "Runs on the customer's own machine from local files and opens no socket. There is no hosted equivalent: nothing here is scheduled, collected or run for the customer by a hosted service.",
+    "operator_host_only": "Operator tooling that runs on the host that holds the service's data volume and accounts. It is not an HTTP route and not an agent tool.",
+    "operator_machine_only": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+  },
   "mcp_tools": [
     "art14_breaches",
     "art14_case",
     "art14_export",
+    "art14_history",
     "art14_register",
     "attest_log",
     "attest_service_key",
@@ -3083,7 +3655,9 @@
     "machine_verify",
     "machinery_coverage",
     "machinery_diff",
+    "machinery_export",
     "machinery_passport_check",
+    "machinery_passport_check_ledger",
     "plans",
     "register_cases",
     "services",

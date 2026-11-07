@@ -24,7 +24,16 @@ from typing import Any
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 
-__all__ = ["INTEL_SOURCES", "IntelSubscription", "WatchConfig", "WatchError", "WatchTarget"]
+__all__ = ["DEFAULT_SOURCE_MAX_AGE_HOURS", "FeedSubscription", "INTEL_SOURCES",
+           "IntelSubscription", "WatchConfig", "WatchError", "WatchTarget"]
+
+#: How old an advisory SOURCE (a signed supplier feed file, a recorded intel-store source) may be
+#: when the subscription does not say. 72 h: a daily refresh job may miss a weekend and still be
+#: believed, and a job that has stopped is found on the third day, not never. There is no way to
+#: turn age checking off; a longer tolerance is written explicitly as ``max_age_hours`` on the
+#: subscription (up to a year), which is part of the watch file's hash and is recorded in every
+#: run as ``limit_basis: explicit``. A source whose age was not checked is not a quiet source.
+DEFAULT_SOURCE_MAX_AGE_HOURS = 72.0
 
 
 MAX_AGE_HOURS_LIMIT = 24.0 * 366      # a year: beyond it "stale" is not a meaningful statement
@@ -109,8 +118,14 @@ class FeedSubscription:
     feed: str
     public_key: str
     notes: str = ""
+    #: How old the feed FILE may be (its modification time on this machine, i.e. when whatever
+    #: syncs it last wrote it) before the feed is stale. Absent = ``DEFAULT_SOURCE_MAX_AGE_HOURS``;
+    #: age is always checked.
+    max_age_hours: float | None = None
 
     def __post_init__(self) -> None:
+        if self.max_age_hours is not None:
+            _check_max_age(self.max_age_hours, "a feed subscription's max_age_hours")
         if not self.supplier_id.strip():
             raise WatchError("a feed subscription needs a supplier_id.")
         if not self.feed.strip() or not self.public_key.strip():
@@ -120,17 +135,34 @@ class FeedSubscription:
                 "unverified advisory must not drive a change to a safety system."
             )
 
+    @property
+    def effective_max_age_hours(self) -> float:
+        return self.max_age_hours if self.max_age_hours is not None \
+            else DEFAULT_SOURCE_MAX_AGE_HOURS
+
+    @property
+    def limit_basis(self) -> str:
+        return "explicit" if self.max_age_hours is not None else "default"
+
     def to_dict(self) -> dict[str, Any]:
-        return {"supplier_id": self.supplier_id, "feed": self.feed,
-                "public_key": self.public_key, "notes": self.notes}
+        d: dict[str, Any] = {"supplier_id": self.supplier_id, "feed": self.feed,
+                             "public_key": self.public_key, "notes": self.notes}
+        if self.max_age_hours is not None:      # absent when unused: existing hashes hold
+            d["max_age_hours"] = self.max_age_hours
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> FeedSubscription:
+        age = d.get("max_age_hours")
+        if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float))):
+            raise WatchError(
+                f"a feed subscription's max_age_hours must be a positive number (got {age!r}).")
         return cls(
             supplier_id=str(d.get("supplier_id", "")),
             feed=str(d.get("feed", "")),
             public_key=str(d.get("public_key", "")),
             notes=str(d.get("notes", "")),
+            max_age_hours=float(age) if age is not None else None,
         )
 
 
@@ -162,9 +194,9 @@ class IntelSubscription:
     supplier_id: str = "public-intel"
     notes: str = ""
     #: How old the newest ACCEPTED observation of each selected source may be, measured from
-    #: its recorded ``retrieved_at`` against the run's clock. Absent = staleness is NOT
-    #: checked (and the run says so). A refresh job that silently stopped otherwise looks
-    #: exactly like a quiet week.
+    #: its recorded ``retrieved_at`` against the run's clock. Absent = the conservative default
+    #: (``DEFAULT_SOURCE_MAX_AGE_HOURS``): age is ALWAYS checked, because a refresh job that
+    #: silently stopped otherwise looks exactly like a quiet week.
     max_age_hours: float | None = None
 
     def __post_init__(self) -> None:
@@ -188,6 +220,16 @@ class IntelSubscription:
     @property
     def source_ids(self) -> tuple[str, ...]:
         return tuple(INTEL_SOURCES[s] for s in self.sources)
+
+    @property
+    def effective_max_age_hours(self) -> float:
+        return self.max_age_hours if self.max_age_hours is not None \
+            else DEFAULT_SOURCE_MAX_AGE_HOURS
+
+    @property
+    def limit_basis(self) -> str:
+        """``explicit`` when the watch file states the limit, else ``default``."""
+        return "explicit" if self.max_age_hours is not None else "default"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -381,13 +423,12 @@ class WatchConfig:
                 for t in config.targets
             ),
             feeds=tuple(
-                FeedSubscription(
-                    supplier_id=f.supplier_id,
+                replace(
+                    f,
                     feed=str((base / f.feed).resolve())
                     if not Path(f.feed).is_absolute() else f.feed,
                     public_key=str((base / f.public_key).resolve())
                     if not Path(f.public_key).is_absolute() else f.public_key,
-                    notes=f.notes,
                 )
                 for f in config.feeds
             ),

@@ -23,7 +23,6 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
 from assurance.fleet.impact import assess_impact
 from assurance.fleet.registry import Fleet
-from assurance.machine.bundle import build_bundle
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -42,6 +41,8 @@ from assurance.machinery.manifest import (
     SafetyManifest,
 )
 from assurance.machinery.record import record_manifest
+
+from .support_recorder import build_bound_bundle
 
 ENG = Actor("a.integrator", "safety engineer")
 AFFECTED = "1" * 64
@@ -159,7 +160,7 @@ class TestCustomerVerdictsAreNotFlattering:
                     samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                          tcp_speed=400.0, mode=OperatingMode.SSM,
                                          separation=2200.0) for i in range(10)))
-        build_bundle(env, run, actor=ENG, ledger=ledger, subject=m.machine.key)
+        build_bound_bundle(env, run, actor=ENG, ledger=ledger, subject=m.machine.key)
         return m.machine.key
 
     def test_the_baseline_good_case_is_verified_at_community_only(self, ledger):

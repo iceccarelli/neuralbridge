@@ -27,7 +27,6 @@ from assurance.change.service import _open_or_update
 from assurance.change.store import ChainBrokenError
 from assurance.evidence import chain_cache
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -40,6 +39,7 @@ from assurance.machinery.manifest import MachineIdentity
 from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
+from .support_recorder import build_bound_bundle as build_bundle
 from .test_assurance_change import (
     BOT,
     ENG,
@@ -192,6 +192,7 @@ class TestHumanDecisionsVerifyTheWholeChain:
 def record(content_hash, *, checks, seq=10**6, when=LATER, tier="validated"):
     """A verification as the coverage check sees it, without sealing a bundle."""
     return VerificationRecord(
+        configuration_hash=manifest().configuration_hash(),
         content_hash=content_hash * 64, effective_at=when, ledger_seq=seq,
         product="AR-7", product_version="2.4.1", verdict="pass", tier=tier,
         checks_verified=tuple(checks))

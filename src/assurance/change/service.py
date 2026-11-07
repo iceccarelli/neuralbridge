@@ -49,6 +49,8 @@ from assurance.machinery.record import (
     manifests_from_ledger,
 )
 from assurance.machinery.staleness import (
+    CONFIG_MISMATCH_PREFIX,
+    UNBOUND_PREFIX,
     Coverage,
     VerificationRecord,
     assess_coverage,
@@ -652,6 +654,12 @@ def assess_drift(
                 f"for {fid} ({fc.description}); last recorded verification "
                 f"{fc.last_verified_hash[:12] or 'none'} was invalidated by "
                 f"{fc.invalidated_by or 'this change'}.")
+            if fc.invalidated_by.startswith((CONFIG_MISMATCH_PREFIX, UNBOUND_PREFIX)):
+                # The evidence went stale because it states another configuration (or none),
+                # not because a change was recorded: nobody has yet put the change on the
+                # record Annex III 1.1.9 asks for. Say so as well.
+                action += (f" Also file an Annex III 1.1.9 intervention record for the change "
+                           f"to {divergence.machine_key}: no record names it.")
         elif fc.coverage in (Coverage.CURRENT,):
             action = (
                 f"File an Annex III 1.1.9 intervention record for the change to "

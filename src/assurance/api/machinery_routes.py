@@ -22,15 +22,17 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, latest_anchor
 from assurance.api.declared_actor import require_declared_name, sanitise_declared_role
 from assurance.api.deps import Anyone, Machine, Metered, MeterTicket, get_register
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
-from assurance.core.errors import AssuranceError
+from assurance.core.errors import AssuranceError, LedgerIntegrityError
 from assurance.core.evidence import Actor
+from assurance.evidence.ledger import AnchorContradictsLedgerError
 from assurance.machinery.amend import amend_enrolment
 from assurance.machinery.divergence import compare
 from assurance.machinery.enrol import EnrolmentError, enrol_machine
@@ -496,6 +498,56 @@ def coverage(
     return report.to_dict()
 
 
+@machinery_router.get(
+    "/export",
+    summary="A verifiable evidence bundle for one machine (manifests, changes, verifications, "
+            "passports)",
+    responses=EXPORT_RESPONSES,
+)
+def export_machine(
+    machine: Annotated[str, Query(
+        min_length=1, max_length=400,
+        description="the machine key exactly as enrolled, `manufacturer/model#serial`. It is a "
+                    "query parameter because the key holds `/` and `#`, which cannot be a path "
+                    "segment")],
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+    anchor: Annotated[bool, Query(
+        description="embed the newest signed attestation the service read from this account's "
+                    "own ledger as `anchor` (see `GET /v1/change/cases/{case_id}/export`)")] = True,
+    skeleton: Annotated[bool, Query(
+        description="also carry the position, kind, subject, time and hashes of every OTHER "
+                    "entry of this account's ledger (no evidence), so a verifier can see a "
+                    "removed entry. Off by default: it names the account's other subjects")
+                        ] = False,
+) -> dict[str, Any]:
+    """The machine's own ledger subject as ``assurance evidence verify`` expects it.
+
+    ``GET /v1/cases`` lists a machine key beside the case ids, but ``/v1/cases/{id}/export``
+    cannot name one (the key holds ``/`` and ``#``), so a machine's manifests, interventions,
+    verifications and passports could not be exported over HTTP. This route does. Same rules as
+    the case exports: the chain must verify (500 ``ledger_integrity`` otherwise), an anchor that
+    contradicts the ledger is 409, completeness is *not checked* without ``skeleton`` and a
+    signed ``anchor``, and a machine with no entry at all is 404 so an export is never an empty
+    bundle that reads as clean. Gated like the other machinery routes (Cell): a lapsed
+    subscription answers 402 here, unlike the four case read-out routes.
+    """
+    signed_anchor = latest_anchor(principal) if anchor else None
+    try:
+        bundle = register.ledger.export(subject=machine, anchor=signed_anchor, skeleton=skeleton)
+    except AnchorContradictsLedgerError as exc:
+        raise anchor_contradiction(exc) from exc
+    except LedgerIntegrityError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "ledger_integrity", "detail": str(exc)}) from exc
+    if not any(e["subject"] == machine for e in bundle["entries"]):
+        raise HTTPException(status_code=404, detail={
+            "error": "machine_not_found",
+            "detail": f"the ledger holds no entry for {machine!r}. Nothing was exported."})
+    return bundle
+
+
 @machinery_router.post("/passport", summary="Seal the machine's evidence position")
 def passport(
     body: PassportIn,
@@ -537,13 +589,18 @@ def check_passport(
         p.write_text(json.dumps(body.passport), encoding="utf-8")
         ok, problems = verify_passport(p)
 
-    recorded = (body.passport.get("evidence") or {}).get("body") or {}
+    return _passport_check_answer(body.passport, ok, problems, against_ledger=False)
+
+
+def _passport_check_answer(passport: dict[str, Any], ok: bool, problems: list[str], *,
+                           against_ledger: bool) -> dict[str, Any]:
+    recorded = (passport.get("evidence") or {}).get("body") or {}
     functions = recorded.get("functions") or []
     return {
         "ok": ok,
         "problems": problems,
         "checked": {"seal": True, "internal_consistency": True,
-                    "against_ledger": False},
+                    "against_ledger": against_ledger},
         "machine": recorded.get("machine"),
         "recorded_verdict": recorded.get("verdict"),
         "configuration_hash": recorded.get("configuration_hash"),
@@ -552,3 +609,40 @@ def check_passport(
             for f in functions if f.get("coverage") != "current"
         ],
     }
+
+
+@machinery_router.post(
+    "/passport/check-ledger",
+    summary="Re-verify a passport against YOUR account's ledger (is it still the machine?)",
+    responses={409: {"description": "`ledger_chain_unverified`: the account's chain does not "
+                                    "verify, so nothing was judged against it."}},
+)
+def check_passport_against_ledger(
+    body: PassportCheckIn,
+    principal: Annotated[Principal, Machine],
+    register: Annotated[Any, Depends(get_register)] = None,
+) -> dict[str, Any]:
+    """The hosted twin of ``assurance machinery check PASSPORT --ledger LEDGER``.
+
+    ``POST /v1/machinery/passport/check`` has no ledger, so it cannot see that a passport has
+    been overtaken. This reads the CALLER'S OWN ledger (never another account's, never the
+    operator's) and applies the same rules as the command: the named records must exist and
+    match, the printed blocks must repeat the sealed body, and a passport the ledger shows has
+    been superseded (a later look at another configuration, a later declared baseline, a
+    recorded change) is not ok. Reads only; seals nothing; not metered. An ``ok`` here says
+    the passport matches THIS ledger as it stands now, not that the machine is safe.
+    """
+    del principal
+    chain_ok, chain_problems = register.ledger.verify_chain()
+    if not chain_ok:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ledger_chain_unverified",
+                    "detail": "the ledger chain does not verify, so the passport was not "
+                              "judged against it: " + "; ".join(chain_problems[:3]),
+                    "problems": chain_problems[:5]})
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "passport.json"
+        p.write_text(json.dumps(body.passport), encoding="utf-8")
+        ok, problems = verify_passport(p, ledger=register.ledger)
+    return _passport_check_answer(body.passport, ok, problems, against_ledger=True)

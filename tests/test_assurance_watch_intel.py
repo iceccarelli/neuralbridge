@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -99,7 +100,14 @@ def plant(tmp_path):
     return p
 
 
+#: The store is filled at CLOCK (2026-10-31 12:00 + a few minutes); a run is judged a couple of hours
+#: later unless a test says otherwise. Age is always checked, so a run on the real clock would
+#: (correctly) find these fixed-date observations stale.
+RUN_NOW = datetime(2026, 10, 31, 14, 0, tzinfo=UTC)
+
+
 def _run(p, **kw):
+    kw.setdefault("now", RUN_NOW)
     return run_watch(WatchConfig.from_json(p["dir"] / "watch.json"), p["ledger"], **kw)
 
 

@@ -29,11 +29,12 @@ from assurance.change import (
 )
 from assurance.change.service import blocked_reason
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle
 from assurance.machinery.record import interventions_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
 from . import interfaces_fixtures as fx
+from .support_recorder import build_bound_bundle as build_bundle
+from .support_recorder import ledger_configuration_hash
 from .test_assurance_change import (
     LATER,
     MACHINE,
@@ -261,11 +262,15 @@ class TestARevokedRecorderKeyStopsSupportingValidated:
 # F7: a legacy "validated" already in a ledger does not clear anything
 # =====================================================================
 
-def _legacy_validated(ledger, *, when, engine="4", drop_basis=True, basis=None):
+def _legacy_validated(ledger, *, when, engine="4", drop_basis=True, basis=None, cfg=""):
     """What an engine-4 ledger holds: a validated tier, no provenance basis, resealed."""
     env, run = _inputs(when)
     sealed = build_bundle(env, run, actor=REVIEWER, ledger=None, subject=MACHINE.key).evidence
     body = {**sealed.body, "tier": "validated", "engine_version": engine}
+    # the configuration a filer would state: the ledger's newest manifest for the unit
+    cfg = cfg or ledger_configuration_hash(ledger, MACHINE.key)
+    if cfg:
+        body["configuration_hash"] = cfg
     if drop_basis:
         body.pop("provenance_basis", None)
         body.pop("provenance_assessment", None)
@@ -299,7 +304,8 @@ class TestALegacyValidatedBundleIsReadAtItsRealTier:
 
         from .test_assurance_machinery import manifest
 
-        _legacy_validated(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
+        _legacy_validated(ledger, when=datetime(2026, 2, 9, tzinfo=UTC),
+                          cfg=manifest().configuration_hash())
         report = assess_coverage(
             manifest(), VerificationRecord.from_ledger(ledger, subject=MACHINE.key), [])
         assert report.evidence_tier_floor == "community"

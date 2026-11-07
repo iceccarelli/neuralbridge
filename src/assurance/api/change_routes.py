@@ -25,7 +25,7 @@ from assurance.api.attest_routes import EXPORT_RESPONSES, anchor_contradiction, 
 from assurance.api.declared_actor import require_declared_name, sanitise_declared_role
 from assurance.api.deps import Machine, get_register
 from assurance.api.fleet_routes import SignedFeedIn, evaluate_signed_feed
-from assurance.api.intel_routes import _open_store, _read_failed
+from assurance.api.intel_routes import _open_store, _read_failed, store_freshness
 from assurance.api.recorder_trust import reader_recorder_trust
 from assurance.billing.accounts import Principal
 from assurance.change.model import CaseStatus, queue_summary
@@ -507,6 +507,10 @@ def assess_advisory_intel_route(
     except _REFUSALS as exc:
         raise _refused(exc) from exc
     case = CaseStore(register.ledger).get(result.case_id)
+    try:
+        freshness = store_freshness(store)
+    except (sqlite3.Error, AssuranceError, OSError) as exc:
+        raise _read_failed(exc) from exc
     return {"opened": result.outcome == "opened", "outcome": result.outcome,
             "case": case.to_dict() if case else None,
             "verdict": report.verdict, "incomplete": report.incomplete,
@@ -516,6 +520,13 @@ def assess_advisory_intel_route(
             "intel": {"source": candidate.source, "citation": candidate.citation,
                       "notes": list(candidate.notes),
                       "not_representable": list(candidate.not_representable)},
+            "store_freshness": freshness,
+            "intel_age_warnings": [
+                f"source '{r['source']}' is {r['state'].upper().replace('_', ' ')}"
+                + (f" ({r['age_hours']:.1f} h old; limit {freshness['limit_hours']:g} h)"
+                   if r["age_hours"] is not None else "")
+                + ": the case was opened from data that may be out of date."
+                for r in freshness["sources"] if r["state"] in ("stale", "unreadable", "future")],
             "not_established": list(INTEL_CASE_NOT_ESTABLISHED)}
 
 

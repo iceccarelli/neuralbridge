@@ -28,7 +28,7 @@ from assurance.core.evidence import Actor, Evidence, Origin
 from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
-from assurance.machine.bundle import BUNDLE_KIND, build_bundle
+from assurance.machine.bundle import BUNDLE_KIND
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machinery.intervention import Intervention, InterventionKind
 from assurance.machinery.manifest import (
@@ -48,7 +48,7 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import Coverage, VerificationRecord, assess_coverage
 
-from .support_recorder import Recorder
+from .support_recorder import Recorder, build_bound_bundle, ledger_configuration_hash
 from .test_assurance_machine import client as _client
 from .test_assurance_machine import keyed
 from .test_assurance_machine import store as _store
@@ -89,9 +89,20 @@ def trace(start: datetime, speed: float = 300.0, tid: str = "RUN") -> Trace:
 
 
 def seal(ledger: EvidenceLedger, start: datetime, *, speed: float = 300.0,
-         tid: str = "RUN", expect: str | None = None):
-    bundle = build_bundle(envelope(), trace(start, speed, tid), actor=ACTOR,
-                          ledger=ledger, subject=KEY)
+         tid: str = "RUN", expect: str | None = None, fw: str | None = None,
+         bind: SafetyManifest | None = None):
+    """Seal a verification that states the configuration it ran against: the newest manifest
+    the ledger holds for the unit, or the default manifest, or ``manifest(fw=fw)`` when the
+    firmware in force is named. (An unbound verification is never current;
+    test_machine_verification_binding pins that.)"""
+    if bind is not None:
+        cfg = bind.configuration_hash()
+    elif fw is not None:
+        cfg = manifest(fw=fw).configuration_hash()
+    else:
+        cfg = ledger_configuration_hash(ledger, KEY) or manifest().configuration_hash()
+    bundle = build_bound_bundle(envelope(), trace(start, speed, tid), actor=ACTOR,
+                                ledger=ledger, subject=KEY, configuration_hash=cfg)
     if expect:
         assert bundle.verdict.value == expect
     return bundle
@@ -103,11 +114,17 @@ def seal_raw_body(ledger: EvidenceLedger, body: dict[str, Any], subject: str = K
                            origin=Origin(system="test")).seal(), subject=subject)
 
 
-def raw_body(start: str, *, verified=(), violated=(), verdict="pass") -> dict[str, Any]:
-    return {"trace_started_at": start, "product": "Cell", "product_version": "1.0.0",
+def raw_body(start: str, *, verified=(), violated=(), verdict="pass", fw: str | None = HASH_A,
+             ) -> dict[str, Any]:
+    """A verification body as an older build sealed it. It states the configuration of
+    ``manifest(fw=fw)`` (an unbound verification is never current), or none with ``fw=None``."""
+    body = {"trace_started_at": start, "product": "Cell", "product_version": "1.0.0",
             "verdict": verdict, "tier": "validated",
             "checks": ([{"name": n, "outcome": "verified"} for n in verified]
                        + [{"name": n, "outcome": "violated"} for n in violated])}
+    if fw is not None:
+        body["configuration_hash"] = manifest(fw=fw).configuration_hash()
+    return body
 
 
 def update(*, when: datetime, affects: tuple[str, ...] = ("SF-1",), iid: str = "INT-1",
@@ -303,6 +320,7 @@ class TestWhichRunACheckRestsOn:
         """Each check is judged by its newest run; the function by the OLDEST of those."""
         def rec(seq: int, day: int, check: str) -> VerificationRecord:
             return VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
                 content_hash=f"{seq:064x}", effective_at=datetime(2026, 9, day, tzinfo=UTC),
                 ledger_seq=seq, product="p", product_version="1", verdict="pass",
                 tier="validated", checks_verified=(check,), checks_not_verified=())
@@ -315,6 +333,7 @@ class TestWhichRunACheckRestsOn:
 
     def test_a_record_that_says_a_check_both_passed_and_failed_does_not_cover_it(self):
         both = VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
             content_hash="a" * 64, effective_at=datetime(2026, 9, 1, tzinfo=UTC),
             ledger_seq=1, product="p", product_version="1", verdict="pass", tier="validated",
             checks_verified=CHECKS, checks_not_verified=("speed_limit",))
@@ -327,9 +346,10 @@ class TestAnAttestedBundleIsBoundByTheSameDates:
         rec = Recorder()
         env, tr = envelope(), trace(start)
         att = rec.attest_for(env, tr, machine_serial="0412").to_dict()
-        return build_bundle(env, tr, actor=ACTOR, ledger=ledger, subject=KEY,
-                            recorder_attestations=[att], recorder_trust=rec.trust(),
-                            machine_serial="0412")
+        return build_bound_bundle(env, tr, actor=ACTOR, ledger=ledger, subject=KEY,
+                                  recorder_attestations=[att], recorder_trust=rec.trust(),
+                                  machine_serial="0412",
+                                  configuration_hash=manifest().configuration_hash())
 
     def test_an_attested_run_in_the_past_lifts_the_tier_and_a_later_change_stales_it(
             self, ledger):
@@ -397,13 +417,19 @@ class TestTheReverifyGuardOnAnUndatableRecord:
 
         from .test_assurance_change import ENG as ENGINEER
         from .test_assurance_change import LATER, drive
+        from .test_assurance_change import MACHINE as _M
+
+        machine_key = _M.key
 
         store = CaseStore(ledger)
         case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
         every_check = ("ssm_separation", "stop_characterisation", "speed_limit")
         base = {"content_hash": "9" * 64, "effective_at": LATER, "ledger_seq": 10**6,
                 "product": "AR-7", "product_version": "2.4.1", "verdict": "pass",
-                "tier": "validated", "checks_verified": every_check}
+                "tier": "validated", "checks_verified": every_check,
+                # the configuration the ledger's newest sealed manifest has (what re-verification
+                # is judged against); a verification that states none is never current
+                "configuration_hash": ledger_configuration_hash(ledger, machine_key)}
         with pytest.raises(CaseTransitionError):
             reverify(store, case.case_id, observed,
                      [VerificationRecord(**base, date_suspect=True)], [],
@@ -422,7 +448,7 @@ def _post_verify(client, headers, start: datetime, speed: float, tid: str):
     return client.post("/v1/machine/verify", headers=headers, json={
         "envelope": envelope().to_dict(),
         "trace": trace(start, speed, tid).hashable_payload(),
-        "actor": "ci", "subject": KEY})
+        "actor": "ci", "subject": KEY, "configuration_hash": manifest().configuration_hash()})
 
 
 class TestOverHttpANewerFailureIsNotMasked:
@@ -675,7 +701,8 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
         record_manifest(ledger, manifest(fw=HASH_A, mid="M-A"))
         seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
         record_intervention(ledger, update(when=utc_now() - timedelta(hours=3)))
-        seal(ledger, utc_now(), tid="REVERIFY", expect="pass")   # begins after it was filed
+        seal(ledger, utc_now(), tid="REVERIFY", expect="pass",   # begins after it was filed
+             fw=HASH_B)                                          # on the updated firmware
         record_manifest(ledger, manifest(fw=HASH_B, mid="M-B"))
         report, _ = coverage_of(ledger, m=manifest(fw=HASH_B))
         assert report.functions[0].coverage is Coverage.CURRENT
@@ -711,10 +738,12 @@ class TestAChangeVisibleInTheManifestHistoryIsAChange:
         doc = SafetyItem("doc", ItemKind.PARAMETER_SET, "readme", "1", "c" * 64,
                          HashSource.READ_FROM_MACHINE)
         record_manifest(ledger, manifest(mid="M-A", extra_items=(doc,)))
-        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
         doc2 = SafetyItem("doc", ItemKind.PARAMETER_SET, "readme", "2", "e" * 64,
                           HashSource.READ_FROM_MACHINE)
         newer = manifest(mid="M-B", extra_items=(doc2,))
+        # (the configuration hash covers every item, so a verification states the configuration it
+        # ran on; what is under test is that the doc change is not an implied SAFETY change)
+        seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass", bind=newer)
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)
         assert report.functions[0].coverage is Coverage.CURRENT
@@ -747,6 +776,7 @@ class TestATieAtTheClocksResolutionIsSettledByLedgerOrder:
 
     def _verification(self, seq: int) -> VerificationRecord:
         return VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
             content_hash=f"{seq:064x}", effective_at=self.T, ledger_seq=seq, product="p",
             product_version="1", verdict="pass", tier="validated",
             checks_verified=CHECKS, checks_not_verified=())
@@ -820,8 +850,8 @@ class TestWhichManifestDifferencesAreChanges:
             kind=InterventionKind.REMOVAL, occurred_at=utc_now() - timedelta(hours=1),
             performed_by=TECH, reason="module removed", affects_functions=("SF-1",))
         record_intervention(ledger, removal)
-        seal(ledger, utc_now(), tid="AFTER", expect="pass")
         newer = manifest(mid="M-B")
+        seal(ledger, utc_now(), tid="AFTER", expect="pass", bind=newer)   # ran after the removal
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)
         assert report.functions[0].coverage is Coverage.CURRENT
@@ -851,10 +881,10 @@ class TestWhichManifestDifferencesAreChanges:
             kind=InterventionKind.INSTALL, occurred_at=utc_now() - timedelta(hours=1),
             performed_by=TECH, reason="module installed", affects_functions=("SF-1",))
         record_intervention(ledger, install)
-        seal(ledger, utc_now(), tid="AFTER", expect="pass")
         added = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
                            HashSource.READ_FROM_MACHINE, implements=("SF-1",))
         newer = manifest(mid="M-B", extra_items=(added,))
+        seal(ledger, utc_now(), tid="AFTER", expect="pass", bind=newer)   # ran after the install
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)
         assert report.functions[0].coverage is Coverage.CURRENT
@@ -936,10 +966,13 @@ class TestWhichManifestDifferencesAreChanges:
     def test_an_item_a_partial_look_did_not_collect_is_not_read_as_removed(self, ledger):
         extra = SafetyItem("plc", ItemKind.SAFETY_PROGRAM, "plc", "1", "d" * 64,
                            HashSource.READ_FROM_MACHINE, implements=("SF-1",))
-        self._verified(ledger, manifest(mid="M-A", extra_items=(extra,)))
-        partial = self._partial(mid="M-P")
-        record_manifest(ledger, partial)
-        report, _ = coverage_of(ledger, m=partial)
+        whole = manifest(mid="M-A", extra_items=(extra,))
+        self._verified(ledger, whole)
+        record_manifest(ledger, self._partial(mid="M-P"))
+        # a partial look is not a configuration the machine was in: the machine is still the
+        # whole look the verification states, and the item the look missed is not a removal
+        assert interventions_from_ledger(ledger, KEY) == []
+        report, _ = coverage_of(ledger, m=whole)
         assert report.functions[0].coverage is Coverage.CURRENT
 
     def test_the_whole_look_after_a_partial_one_is_compared_with_the_last_whole_look(

@@ -376,7 +376,8 @@ class TestTheHostedApi:
                            headers=headers).status_code == 200
         r = client.post("/v1/machine/verify", json={
             "envelope": env.to_dict(), "trace": tr.hashable_payload(),
-            "actor": "a.integrator", "subject": KEY}, headers=headers)
+            "actor": "a.integrator", "subject": KEY,
+            "configuration_hash": manifest().configuration_hash()}, headers=headers)
         assert r.status_code == 200 and r.json()["tier"] == "community"
 
     def _validated(self, client, headers):
@@ -385,7 +386,9 @@ class TestTheHostedApi:
                            headers=headers).status_code == 200
         r = client.post("/v1/machine/verify", json=with_attestation({
             "envelope": env.to_dict(), "trace": tr.hashable_payload(),
-            "actor": "a.integrator", "subject": KEY}, env, tr, machine_serial="0001"),
+            "actor": "a.integrator", "subject": KEY,
+            "configuration_hash": manifest().configuration_hash()}, env, tr,
+            machine_serial="0001"),
             headers=headers)
         assert r.status_code == 200 and r.json()["tier"] == "validated"
 
@@ -430,6 +433,7 @@ class TestTheHostedApi:
 ])
 def test_the_verdict_follows_the_tier_floor(tier, expected):
     rec = VerificationRecord(
+        configuration_hash=manifest().configuration_hash(),
         content_hash="a" * 64, effective_at=datetime(2026, 9, 14, tzinfo=UTC), ledger_seq=1,
         product="p", product_version="1", verdict="pass", tier=tier,
         checks_verified=("workspace_containment", "speed_limit"), checks_not_verified=())

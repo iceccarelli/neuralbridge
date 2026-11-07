@@ -121,13 +121,57 @@ def verify_attested(envelope: SafetyEnvelope, trace: Trace, *, recorder: Recorde
     return verify(envelope, trace, **attested(envelope, trace, recorder=recorder), **kw)
 
 
+def ledger_configuration_hash(ledger: Any, subject: str) -> str:
+    """The configuration hash of the newest manifest sealed for ``subject`` in ``ledger``, or
+    ``""`` when there is none (or ``subject`` is not a machine key).
+
+    A careful filer binds a verification to the configuration in force when it was run. Tests
+    that are not about binding use this through :func:`build_bound_bundle` and
+    :func:`build_attested_bundle` so that the verification they seal states the configuration
+    the ledger's manifest has, as a customer's would; production never infers it.
+    """
+    if ledger is None or "#" not in (subject or ""):
+        return ""
+    from assurance.machinery.record import manifests_from_ledger
+
+    manifests = manifests_from_ledger(ledger, subject)
+    if manifests:
+        return manifests[-1].configuration_hash()
+    # No manifest sealed yet. The suite's standard machine (test_assurance_change.MACHINE) is
+    # verified against its standard manifest; any other unit stays unbound unless the test says.
+    from . import support_trust_hardening as hardening
+    from .test_assurance_change import MACHINE, manifest
+
+    if subject == MACHINE.key:
+        return manifest().configuration_hash()
+    if subject == hardening.KEY:
+        return hardening.manifest().configuration_hash()
+    return ""
+
+
+def build_bound_bundle(envelope: SafetyEnvelope, trace: Trace, **kw: Any) -> EvidenceBundle:
+    """``build_bundle`` that states the ledger manifest's configuration unless told otherwise
+    (pass ``configuration_hash=""`` to seal an UNBOUND verification on purpose)."""
+    if "configuration_hash" not in kw:
+        cfg = ledger_configuration_hash(kw.get("ledger"), str(kw.get("subject") or ""))
+        if cfg:
+            kw["configuration_hash"] = cfg
+    return build_bundle(envelope, trace, **kw)
+
+
 def build_attested_bundle(envelope: SafetyEnvelope, trace: Trace, *, actor: Actor,
                           recorder: Recorder | None = None, **kw: Any) -> EvidenceBundle:
     """``build_bundle`` with the trace attested by a recorder the verifier trusts.
 
     When the bundle is filed under a machine key (``maker/model#serial``) the recorder
-    names that serial, as a recorder attached to that unit would.
+    names that serial, as a recorder attached to that unit would. A verification sealed into
+    a ledger that already holds the machine's manifest states that manifest's configuration
+    (see :func:`ledger_configuration_hash`) unless ``configuration_hash`` is passed.
     """
+    if "configuration_hash" not in kw:
+        cfg = ledger_configuration_hash(kw.get("ledger"), str(kw.get("subject") or ""))
+        if cfg:
+            kw["configuration_hash"] = cfg
     if "recorder_attestations" in kw or "recorder_trust" in kw:
         return build_bundle(envelope, trace, actor=actor, **kw)
     subject = str(kw.get("subject") or "")

@@ -207,6 +207,14 @@ class VerifyIn(BaseModel):
     actor: str = Field(min_length=1, max_length=200,
                        description="who is signing this verification")
     role: str = Field(default="verification engineer", max_length=200)
+    configuration_hash: str = Field(
+        default="", max_length=64, pattern=r"^([0-9a-fA-F]{64})?$",
+        description="the SafetyManifest.configuration_hash of the machine configuration this "
+                    "run was made against (64 hex digits; `POST /v1/machinery/diff` and the "
+                    "manifest routes return it). It is the filer's statement, sealed into the "
+                    "bundle. WITHOUT it the verification is unbound: coverage never reads a "
+                    "safety function `current` on an unbound verification, only `stale`, "
+                    "because nothing but dates would tie it to the machine's configuration")
     seal: bool = Field(default=True,
                        description="append the sealed bundle to the evidence ledger")
     subject: str = Field(
@@ -463,6 +471,7 @@ def _verify_sync(
             machine_serial=body.machine_serial,
             ledger=register.ledger if (body.seal and register is not None) else None,
             subject=body.subject,
+            configuration_hash=body.configuration_hash,
         )
     except MachineSubjectError as exc:
         # One strict grammar for a unit key, and one serial per verification: the caller's
@@ -477,6 +486,12 @@ def _verify_sync(
             detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
+    payload["configuration_bound"] = bool(body.configuration_hash)
+    if not body.configuration_hash:
+        payload["configuration_note"] = (
+            "this verification states no machine configuration (no `configuration_hash`), so "
+            "coverage will not count it as current for any machine: it reads stale until a "
+            "verification bound to the manifest's configuration hash is sealed.")
     if not body.seal and "#" in body.subject:
         # Nothing was compared with the ledger: whether this recording already belongs to
         # another unit (one recording, one unit) is checked only when sealing, and a refusal

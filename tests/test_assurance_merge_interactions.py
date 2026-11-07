@@ -285,7 +285,8 @@ class TestTheTierCapsSurviveTheNewReader:
     def test_a_bundle_filed_under_another_unit_is_community_with_its_reason(self, tmp_path):
         led = ledger(tmp_path)
         record_manifest(led, manifest(serial="0002"))
-        bundle, rec = attested_bundle(KEY)
+        bundle, rec = attested_bundle(
+            KEY, configuration_hash=manifest(serial="0002").configuration_hash())
         led.append(bundle.evidence, subject="Acme/AR-7#0002")
         (rec_,) = VerificationRecord.from_ledger(
             led, subject="Acme/AR-7#0002", recorder_trust=rec.trust())

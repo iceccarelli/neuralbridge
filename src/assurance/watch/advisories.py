@@ -55,12 +55,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from ..attest.keys import SigningKeyError, VerifyingKey
 from ..core.errors import AssuranceError
+from ..core.identity import format_utc, utc_now
 from ..fleet.advisory import ComponentAdvisory
 from ..fleet.impact import ImpactReport, assess_impact
 from ..fleet.registry import Fleet
@@ -79,6 +80,7 @@ __all__ = [
     "AdvisoryPass",
     "FeedOutcome",
     "check_feeds",
+    "feed_file_age",
 ]
 
 ADVISORY_KIND = "watch.advisory"
@@ -89,7 +91,7 @@ class FeedOutcome:
     """What happened when this watch looked at one supplier's feed."""
 
     supplier_id: str
-    #: ``verified`` | ``unverifiable`` | ``unreadable`` | ``absent``
+    #: ``verified`` | ``unverifiable`` | ``unreadable`` | ``absent`` | ``stale`` | ...
     status: str
     records: int = 0
     new: tuple[str, ...] = ()
@@ -108,6 +110,11 @@ class FeedOutcome:
     #: The trust store's evaluation of this feed (see ``supplier.trust``), when
     #: one was consulted. Empty otherwise.
     trust: dict[str, Any] = field(default_factory=dict)
+    #: The age judgement recorded with the run: ``checked`` (always True when present), the
+    #: ``limit_hours`` applied, its ``limit_basis`` (``explicit`` | ``default``) and, for a feed
+    #: file, when it was last written and how old that made it. Empty only for an outcome that
+    #: could not read the source at all (those are degraded already).
+    age: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_degraded(self) -> bool:
@@ -127,6 +134,7 @@ class FeedOutcome:
             "problems": list(self.problems), "detail": self.detail,
             "cleared": self.cleared, "not_assessed": list(self.not_assessed),
             "trust_basis": self.trust_basis, "trust": dict(self.trust),
+            "age": dict(self.age),
         }
 
 
@@ -278,6 +286,48 @@ class AdvisoryPass:
             f"{len(self.feeds)} feed(s) checked, nothing new")
 
 
+#: A feed file dated later than the clock by more than this cannot establish an age.
+_FEED_CLOCK_SKEW = timedelta(minutes=5)
+
+
+def feed_file_age(sub: FeedSubscription, now: datetime) -> tuple[dict[str, Any], str]:
+    """How old is this feed FILE, as ``(record, problem)``; ``problem`` is empty when fresh.
+
+    A feed file carries no receipt time, and the age of its newest advisory says how long the
+    supplier has been quiet, not how long ago this machine last synced. So the age is the file's
+    modification time: when whatever syncs it last wrote it. That is the best a reader of a local
+    file can know, and it is weaker than it sounds: copying an old file refreshes it. The limit is
+    ``sub.max_age_hours`` or the 72 h default; it is always applied.
+    """
+    limit = sub.effective_max_age_hours
+    record: dict[str, Any] = {
+        "checked": True, "basis": "feed_file_modified_time", "limit_hours": limit,
+        "limit_basis": sub.limit_basis, "modified_at": "", "age_hours": None, "state": ""}
+    try:
+        modified = datetime.fromtimestamp(Path(sub.feed).stat().st_mtime, tz=UTC)
+    except (OSError, OverflowError, ValueError):
+        record["state"] = "unreadable"
+        return record, (f"STALE: the modification time of {sub.feed} cannot be read, so the "
+                        f"feed's age cannot be established against the {limit:g} h limit.")
+    record["modified_at"] = format_utc(modified)
+    age = (now - modified).total_seconds() / 3600
+    if now - modified < -_FEED_CLOCK_SKEW:
+        record["state"] = "future"
+        return record, (f"STALE: the feed file for {sub.supplier_id} is dated {record['modified_at']}, "
+                        f"after this run's clock ({format_utc(now)}); its age cannot be "
+                        "established.")
+    record["age_hours"] = round(max(0.0, age), 3)
+    if age > limit:
+        record["state"] = "stale"
+        return record, (f"STALE: the feed file for {sub.supplier_id} was last written "
+                        f"{record['modified_at']}, {age:.1f} h before this run; the limit is "
+                        f"{limit:g} h ({sub.limit_basis}). A sync may have stopped; what is read "
+                        "below is that old, and a supplier with nothing to report looks the "
+                        "same as a sync that failed.")
+    record["state"] = "fresh"
+    return record, ""
+
+
 def _read_feed(
     supplier_id: str, feed_path: str, key_path: str,
 ) -> tuple[list[SignedAdvisory], FeedOutcome | None, list[str]]:
@@ -377,6 +427,7 @@ def check_feeds(
     outcomes: list[FeedOutcome] = []
     findings: list[AdvisoryFinding] = []
     caveats: list[str] = []
+    clock = now if now is not None else utc_now()
 
     for sub in subscriptions:
         pinned = (trust_store is not None
@@ -393,6 +444,7 @@ def check_feeds(
         if failure is not None:
             outcomes.append(failure)
             continue
+        age_record, age_problem = feed_file_age(sub, clock)
 
         standing: dict[str, SignedAdvisory] = {}
         withdrawals: dict[str, str] = {}
@@ -496,7 +548,8 @@ def check_feeds(
         if trust is not None and not trust.policy_satisfied:
             outcomes.append(FeedOutcome(
                 supplier_id=sub.supplier_id, status="untrusted", records=len(records),
-                problems=tuple(trust.problems), trust_basis="none",
+                problems=tuple(trust.problems) + ((age_problem,) if age_problem else ()),
+                trust_basis="none", age=age_record,
                 trust=trust.to_dict(), new=tuple(new_ids),
                 cleared=cleared, not_assessed=tuple(unassessed_ids),
                 detail="this feed does not meet the trust policy for the pinned key(s). "
@@ -505,12 +558,15 @@ def check_feeds(
                        "advisory carrying a recorded manual override."))
             continue
         outcomes.append(FeedOutcome(
-            supplier_id=sub.supplier_id, status="verified", records=len(records),
+            supplier_id=sub.supplier_id, status="stale" if age_problem else "verified",
+            records=len(records),
             new=tuple(new_ids), newly_withdrawn=tuple(withdrawn_ids),
             cleared=cleared, not_assessed=tuple(unassessed_ids),
             trust_basis="pinned_key_policy" if trust is not None else "config_key",
-            trust=trust.to_dict() if trust is not None else {},
-            detail=f"{len(standing)} advisory(ies) stand in this feed"))
+            trust=trust.to_dict() if trust is not None else {}, age=age_record,
+            problems=(age_problem,) if age_problem else (),
+            detail=f"{len(standing)} advisory(ies) stand in this feed"
+            + (" (STALE: read from a feed file older than its limit)" if age_problem else "")))
 
     if outcomes:
         caveats.append(
@@ -523,7 +579,10 @@ def check_feeds(
             "this watch learns of an advisory when the subscribed feed file "
             "changes. Whatever puts the supplier's feed in that file is outside "
             "this system, and a sync that silently stopped looks exactly like a "
-            "supplier with nothing to report."
+            "supplier with nothing to report. The feed file's age is therefore always "
+            "checked (its modification time against max_age_hours, 72 h unless the "
+            "subscription states one); a copy of an old file has a new modification "
+            "time, which this cannot see."
         )
 
     return AdvisoryPass(

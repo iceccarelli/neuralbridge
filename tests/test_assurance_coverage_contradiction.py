@@ -35,6 +35,7 @@ def _manifest():
 
 def _record(seq, days, verified=(), not_verified=()):
     return VerificationRecord(
+        configuration_hash=_manifest().configuration_hash(),
         content_hash=f"{seq:064x}", effective_at=T0 + timedelta(days=days), ledger_seq=seq,
         product="p", product_version="1", verdict="pass", tier="validated",
         checks_verified=tuple(verified), checks_not_verified=tuple(not_verified))

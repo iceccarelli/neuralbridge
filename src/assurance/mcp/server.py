@@ -204,7 +204,7 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
 async def machine_verify(
     envelope: dict[str, Any], trace: dict[str, Any], actor: str,
     recorder_attestations: list[dict[str, Any]] | None = None, machine_serial: str = "",
-    subject: str = "",
+    subject: str = "", configuration_hash: str = "",
 ) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
 
@@ -222,8 +222,13 @@ async def machine_verify(
     the sealed bundle under that ledger subject, as ``--subject`` does on the CLI; give a
     unit key (``maker/model#serial``) for it to count as evidence of that unit. Without
     one the bundle is filed under ``product@version`` and counts for no unit.
+    ``configuration_hash`` is the machine manifest's configuration hash (64 hex digits) the run
+    was made against: a verification without it is unbound and coverage never reads a safety
+    function current on it.
     """
     body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
+    if configuration_hash:
+        body["configuration_hash"] = configuration_hash
     if recorder_attestations:
         body["recorder_attestations"] = recorder_attestations
     if machine_serial:
@@ -288,6 +293,39 @@ async def machinery_passport_check(passport: dict[str, Any]) -> dict[str, Any]:
     covers; it cannot confirm the records the passport names exist without the ledger.
     """
     return await _call("POST", "/v1/machinery/passport/check", json_body={"passport": passport})
+
+
+@mcp.tool()
+async def machinery_export(machine: str, skeleton: bool = False) -> dict[str, Any]:
+    """GET /v1/machinery/export — a verifiable evidence bundle for ONE machine (its manifests,
+    recorded changes, verifications and passports) from the authenticated account's own ledger.
+
+    Cell tier, read-only. ``machine`` is the key as enrolled, ``manufacturer/model#serial``.
+    Hand the result to ``evidence_verify``. Without ``skeleton`` the bundle is internally
+    consistent but a removed entry cannot be seen (completeness reads "not checked"); with it,
+    the bundle also names the position, kind and time of the account's other entries.
+    """
+    if not machine.strip() or len(machine) > 400:
+        return _invalid("invalid_machine", "name the machine key manufacturer/model#serial.")
+    params = {"machine": machine}
+    if skeleton:
+        params["skeleton"] = "true"
+    return await _call("GET", "/v1/machinery/export", params=params)
+
+
+@mcp.tool()
+async def machinery_passport_check_ledger(passport: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/machinery/passport/check-ledger — is this passport still true of the machine,
+    judged against the authenticated account's OWN ledger?
+
+    Cell tier, read-only, not metered. Confirms the seal and printed blocks as the free check
+    does, then that the records it names exist in your ledger and that nothing has overtaken it
+    (a later look at another configuration, a later declared baseline, a recorded change).
+    ``ok: false`` with a ``superseded`` problem means the passport describes the machine as it
+    was. ``ok: true`` means it matches this ledger now, never that the machine is safe.
+    """
+    return await _call("POST", "/v1/machinery/passport/check-ledger",
+                       json_body={"passport": passport})
 
 
 @mcp.tool()
@@ -550,6 +588,18 @@ async def art14_case(case_id: str) -> dict[str, Any]:
     decisions already on the record; this tool only reads them.
     """
     path = _id_path("/v1/cases/{}", case_id)
+    return await _call("GET", path) if path else _invalid_case_id(case_id)
+
+
+@mcp.tool()
+async def art14_history(case_id: str) -> dict[str, Any]:
+    """GET /v1/cases/{case_id}/history — the audit history of one Article 14 case: every ledger
+    record, oldest first. Read-only.
+
+    Register-tier only; a real 401/402 comes back as is. It reads what people recorded and
+    changes nothing.
+    """
+    path = _id_path("/v1/cases/{}/history", case_id)
     return await _call("GET", path) if path else _invalid_case_id(case_id)
 
 

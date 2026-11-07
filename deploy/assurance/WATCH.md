@@ -310,16 +310,23 @@ What it does not establish: that the public record is correct, complete or
 current, or that a machine is unaffected because nothing matched. Whether the
 store is current is the next check.
 
-### Staleness: `max_age_hours`
+### Staleness: `max_age_hours` (always checked, 72 h unless you say otherwise)
 
-A refresh job that silently stopped looks exactly like a quiet week, so a
-subscription can declare how old the store may be:
+A refresh job that silently stopped looks exactly like a quiet week, so the age
+of an advisory source is **always** judged. A subscription may state its own
+limit; with none, the conservative default of **72 hours**
+(`watch.config.DEFAULT_SOURCE_MAX_AGE_HOURS`) applies:
 
 ```json
 { "kind": "intel_store", "store": "intel/intel.db", "max_age_hours": 26 }
 ```
 
-`max_age_hours` is optional and must be a positive number. For each selected
+`max_age_hours` is optional and, when given, must be a positive number of hours
+(at most a year). **There is no way to switch the check off**: a longer
+tolerance is written down as a number, becomes part of the watch file's hash,
+and every run records `age: {checked, limit_hours, limit_basis}` on the feed
+outcome, where `limit_basis` is `explicit` (the file states it) or `default`.
+For each selected
 source (`nvd`, `csaf`, `kev`, `epss`) the watch takes its newest **accepted**
 observation and computes `run clock - recorded retrieved_at`. The feed's own
 stamp (a KEV catalogue date, an NVD `lastModified`, an EPSS date) is never the
@@ -333,11 +340,44 @@ succeeded. A rejected observation does not count as a refresh.
   the same way. Older data is still assessed and the findings still appear.
 * A rejected latest observation keeps its own status, `rejected_latest`; the
   staleness lines are added to its problems when they also apply.
-* Absent: age is **not checked**, and the run's `not checked` list says so.
+* Absent: the 72 h default applies and the run's `not checked` list says so
+  ("the conservative default"). A source with no observation at all keeps the
+  status word `incomplete` under the default limit (it is degraded either way);
+  any observed-but-old source is `stale`.
   A fresh retrieval means the store was refreshed, not that the source had
   nothing newer to publish.
 
 Set it a little above your refresh interval (a daily job: 26-30).
+
+**Migration / compatibility.** Before this change a subscription without
+`max_age_hours` was not age-checked, and an old store read as a quiet week with
+only a caveat. Existing watch files are unchanged byte for byte and keep their
+`content_hash` (the field is written only when stated), so a stored run is not
+flagged as made under another configuration; but a store or feed that is older
+than 72 h now makes the run `degraded` (exit 2) where it used to say `quiet`.
+To keep a longer tolerance, state it: `"max_age_hours": 168`. Hosted
+`GET /v1/intel/*` responses carry the same judgement as `store_freshness`.
+
+### Staleness of a signed supplier feed file
+
+A `feeds` subscription takes the same optional `max_age_hours` (default 72 h):
+
+```json
+{ "supplier_id": "controlco", "feed": "feeds/controlco.jsonl",
+  "public_key": "keys/controlco.pub", "max_age_hours": 48 }
+```
+
+A feed file carries no receipt time, and the age of its newest advisory says how
+long the supplier has been quiet, not when this machine last synced. The age is
+therefore the file's **modification time** on this machine, against the run's
+clock. A feed older than its limit has the status `stale` and the run is
+**DEGRADED** (exit `2`); the advisories it holds are still assessed and
+labelled. The outcome records `age: {checked, basis: feed_file_modified_time,
+modified_at, age_hours, limit_hours, limit_basis, state}`. `watch status`
+re-judges every feed file against the clock (`feed_staleness` in `--json`) and
+exits `2` if one is stale, so a sync that stopped after the last run is found at
+status time. Limit of the check: copying an old file refreshes its modification
+time, which this cannot see.
 
 #### Setting the clock: `--now`
 
@@ -368,8 +408,8 @@ assurance watch status watch.json --ledger evidence.db --now 2026-11-02T18:00:00
 When the config has an intel subscription, `status` also prints, per selected
 source, the retrieval time and age of its newest **accepted** observation, the
 limit, and `fresh` / `STALE` / `NEVER OBSERVED` (computed by the same function
-the run uses, so the two cannot disagree). With no `max_age_hours` it says `age
-not checked`. A missing, empty or unreadable store prints the run's own wording
+the run uses, so the two cannot disagree). The limit is shown with its basis
+(`explicit` or `default`); age is never reported as not checked. A missing, empty or unreadable store prints the run's own wording
 (`does not exist ... blind to this source`). `--json` adds an
 `intel_staleness` object.
 

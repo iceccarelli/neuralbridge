@@ -34,11 +34,14 @@ What the watch does with a candidate
   latest observation of a series was REJECTED, that lacks a source the watch was told to
   read, or that holds payloads which cannot be re-read, degrades the run (exit 2) with the
   reason. Data from older accepted observations is still assessed, and labelled.
-* **Staleness (optional).** With ``max_age_hours`` on the subscription, each selected source's
-  newest ACCEPTED observation must have been retrieved within that many hours of the run's
-  clock (the recorded ``retrieved_at``, never the feed's own stamp); otherwise, or with no
-  accepted observation, the feed is ``stale`` (DEGRADED). Without it, the run says that age
-  was NOT checked. A rejected latest observation keeps status ``rejected_latest``.
+* **Staleness (always checked).** Each selected source's newest ACCEPTED observation must have
+  been retrieved within ``max_age_hours`` of the run's clock (the recorded ``retrieved_at``,
+  never the feed's own stamp); otherwise, or with no accepted observation, the feed is ``stale``
+  (DEGRADED). The limit is the subscription's ``max_age_hours`` when it states one
+  (``limit_basis: explicit``) and ``DEFAULT_SOURCE_MAX_AGE_HOURS`` (72 h) when it does not
+  (``limit_basis: default``); either way the limit and its basis are recorded on the run. There
+  is no way to switch the check off, so an age that was not checked cannot read as quiet.
+  A rejected latest observation keeps status ``rejected_latest``.
 * **Empty fleet.** As for feeds: nothing assessed, nothing cleared - ``not_assessed``,
   degraded.
 """
@@ -173,16 +176,14 @@ class SourceAge:
 
 
 def source_ages(sub: IntelSubscription, mine: Sequence[Any], now: datetime) -> list[SourceAge]:
-    """One :class:`SourceAge` per selected source; empty when ``max_age_hours`` is not set.
+    """One :class:`SourceAge` per selected source, against the subscription's effective limit.
 
     Age is the clock minus the observation's recorded ``retrieved_at`` (when the store
     fetched or ingested it). The feed's own self-declared stamp is never the clock: a stale
     mirror can carry a fresh date. This is the ONE place the rule lives: the runner
     (:func:`_staleness`) and ``watch status`` / ``watch open-case`` all call it.
     """
-    limit = sub.max_age_hours
-    if limit is None:
-        return []
+    limit = sub.effective_max_age_hours
     out: list[SourceAge] = []
     for name in sub.sources:
         source = INTEL_SOURCES[name]
@@ -229,9 +230,12 @@ class StoreAges:
 
     supplier_id: str
     store: str
-    #: ``max_age_hours`` is set; when False, ``ages`` is empty and age was NOT checked.
+    #: Always True now: the age is checked against the effective limit (kept in the JSON as
+    #: ``age_checked`` so a reader of an older shape finds the same key).
     checked: bool
     limit_hours: float | None
+    #: ``explicit`` (the watch file states it) or ``default`` (``DEFAULT_SOURCE_MAX_AGE_HOURS``).
+    limit_basis: str = "default"
     #: Set when the store itself cannot be read (absent / empty / unreadable): the runner's
     #: own status word and wording for that, so no age can be shown.
     problem_status: str = ""
@@ -245,6 +249,7 @@ class StoreAges:
     def to_dict(self) -> dict[str, Any]:
         return {"supplier_id": self.supplier_id, "store": self.store,
                 "age_checked": self.checked, "limit_hours": self.limit_hours,
+                "limit_basis": self.limit_basis,
                 "store_status": self.problem_status, "store_problem": self.problem,
                 "sources": [a.to_dict() for a in self.ages], "ok": self.ok}
 
@@ -253,7 +258,8 @@ def store_ages(sub: IntelSubscription, now: datetime) -> StoreAges:
     """The age of each selected source of ``sub``'s store at ``now``. Reads only; no network."""
     base: dict[str, Any] = {
         "supplier_id": sub.supplier_id, "store": sub.store,
-        "checked": sub.max_age_hours is not None, "limit_hours": sub.max_age_hours}
+        "checked": True, "limit_hours": sub.effective_max_age_hours,
+        "limit_basis": sub.limit_basis}
     store, failure = _open(sub)
     if store is None:
         assert failure is not None
@@ -307,9 +313,17 @@ def _assess_store(
                         "watch was told to read it.")
     stale = _staleness(sub, mine, now)
     problems.extend(stale)
+    # A source with NO observation at all is already reported as ``incomplete`` (above). Under the
+    # default limit that keeps its earlier status word; it is degraded either way. Anything that
+    # was observed and is too old (or unreadable) is ``stale``, and so is an absent source when
+    # the watch file states a limit itself, as before.
+    absent_ids = {INTEL_SOURCES[s] for s in absent}
+    hard_stale = [a for a in source_ages(sub, mine, now) if not a.ok and not (
+        a.state == "never_observed" and sub.limit_basis == "default"
+        and INTEL_SOURCES[a.source] in absent_ids)]
     if rejected:
         status = "rejected_latest"
-    elif stale:
+    elif hard_stale:
         status = "stale"
     elif absent or not mine:
         status = "incomplete"
@@ -415,7 +429,10 @@ def _assess_store(
         problems=tuple(problems), detail=detail, cleared=cleared,
         not_assessed=tuple(unassessed), trust_basis=INTEL_TRUST_BASIS,
         trust={"trust_state": INTEL_TRUST_STATE, "inspect_only": True,
-               "sources": list(sub.sources)})
+               "sources": list(sub.sources)},
+        age={"checked": True, "limit_hours": sub.effective_max_age_hours,
+             "limit_basis": sub.limit_basis,
+             "sources": [a.to_dict() for a in source_ages(sub, mine, now)]})
     return outcome, findings, caveats
 
 
@@ -428,7 +445,7 @@ def check_intel(
     """Read every subscribed intel store, offline, and say what is new for this fleet.
 
     ``now`` is the run's clock (the runner passes its own, so a run is deterministic); it is
-    used only to judge staleness, and only for subscriptions that set ``max_age_hours``.
+    used only to judge staleness, against each subscription's effective ``max_age_hours``.
     """
     clock = now if now is not None else utc_now()
     seen = {k: v for k, v in (previously_seen or {}).items() if v != "not_assessed"}
@@ -437,17 +454,14 @@ def check_intel(
     findings: list[AdvisoryFinding] = []
     caveats: list[str] = []
     for sub in subscriptions:
-        if sub.max_age_hours is None:
-            caveats.append(
-                f"{sub.supplier_id}: the age of the intel store was NOT checked (no "
-                "max_age_hours is set). A refresh job that silently stopped looks the same "
-                "as a quiet week.")
-        else:
-            caveats.append(
-                f"{sub.supplier_id}: store age is the run's clock minus the recorded "
-                "retrieval time of each selected source's newest accepted observation "
-                f"(limit {sub.max_age_hours:g} h). A recent retrieval says the store was "
-                "refreshed, not that the source had nothing newer.")
+        caveats.append(
+            f"{sub.supplier_id}: store age is the run's clock minus the recorded "
+            "retrieval time of each selected source's newest accepted observation "
+            f"(limit {sub.effective_max_age_hours:g} h, {sub.limit_basis}"
+            + (": the conservative default; state max_age_hours on the subscription to "
+               "change it" if sub.limit_basis == "default" else "")
+            + "). A recent retrieval says the store was refreshed, not that the source had "
+            "nothing newer.")
         store, failure = _open(sub)
         if failure is not None or store is None:
             assert failure is not None

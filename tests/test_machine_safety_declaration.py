@@ -229,9 +229,13 @@ class TestDroppingAnAttributionKeepsTheItemInScope:
     def test_the_ledger_does_not_cry_wolf_on_an_unrelated_item(self, ledger):
         extra = item("ITM-NOTE", implements=(), content_hash="1" * 64, name="release notes")
         record_manifest(ledger, manifest(item(), extra, manifest_id="M1", taken_at=T0))
-        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC))
         m2 = manifest(item(), replace(extra, content_hash="2" * 64), manifest_id="M2",
                       taken_at=T0 + timedelta(days=60))
+        # (the configuration hash covers every item, so the verification states the configuration
+        # it ran on; what is under test is that a change to an unrelated item is not implied
+        # to have touched the safety function)
+        seal_a_real_verification(ledger, when=datetime(2026, 2, 9, tzinfo=UTC),
+                                 configuration_hash=m2.configuration_hash())
         record_manifest(ledger, m2)
         assert set(_coverage(ledger, m2).values()) == {Coverage.CURRENT}
 

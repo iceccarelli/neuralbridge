@@ -36,6 +36,7 @@ import pytest
 from assurance.attest.keys import SigningKey
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
+from assurance.machinery.manifest import SafetyManifest
 from assurance.supplier import AdvisoryFeed, SupplierIdentity, publish
 
 from . import interfaces_fixtures as fx
@@ -84,10 +85,13 @@ def signed_feed(tmp_path, advisory: ComponentAdvisory, key: SigningKey, name: st
     return feed.path.read_text(encoding="utf-8")
 
 
-def verification_body(trace_id: str, *, attested: bool = True) -> dict[str, Any]:
+def verification_body(trace_id: str, *, attested: bool = True,
+                      configuration_hash: str = "") -> dict[str, Any]:
     run = trace(run_started(), trace_id=trace_id)
     body: dict[str, Any] = {"envelope": envelope_dict(), "trace": run.hashable_payload(),
                             "actor": PERSON, "subject": KEY}
+    if configuration_hash:
+        body["configuration_hash"] = configuration_hash
     if attested:
         body["recorder_attestations"] = RECORDER.attestation_dicts(
             envelope(), run, machine_serial="0501")
@@ -127,9 +131,14 @@ class World:
         return self.ok("POST", "/v1/machinery/manifest",
                        body={"manifest": manifest or self.manifest, "actor": "m.keller"})
 
-    def verify(self, trace_id: str, *, attested: bool = True) -> dict[str, Any]:
+    def verify(self, trace_id: str, *, attested: bool = True,
+               manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+        # states the configuration the sealed manifest has (an unbound verification is never
+        # current); a customer reads it from the manifest route's response
+        cfg = SafetyManifest.from_dict(manifest or self.manifest).configuration_hash()
         return self.ok("POST", "/v1/machine/verify",
-                       body=verification_body(trace_id, attested=attested))
+                       body=verification_body(trace_id, attested=attested,
+                                              configuration_hash=cfg))
 
     def coverage(self, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.ok("POST", "/v1/machinery/coverage", body={"manifest": manifest or self.manifest})
@@ -422,7 +431,7 @@ class TestAdvisoryToPassport:
         after["manifest_id"], after["taken_at"] = "PLAN-AR7-0501-after-remedy", now_z()
         resealed = w.seal_manifest(after)
         assert resealed["configuration_hash"] != sealed["configuration_hash"]
-        fresh = w.verify("RUN-AFTER-REMEDY")
+        fresh = w.verify("RUN-AFTER-REMEDY", manifest=after)      # run on the machine as it now is
         assert fresh["tier"] == "validated" and fresh["content_hash"] != baseline["content_hash"]
         ready = w.ok("POST", f"{target}/reverification", None, {
             "manifest": after, "verification_content_hash": fresh["content_hash"],

@@ -483,6 +483,7 @@ class TestSurvivorKillers:
 
         def rec(seq, days, tier, verified):
             return VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
                 content_hash=f"{seq:064x}", effective_at=datetime(2026, 1, 1, tzinfo=UTC)
                 + timedelta(days=days), ledger_seq=seq, product="p", product_version="1",
                 verdict="pass", tier=tier, checks_verified=tuple(verified),

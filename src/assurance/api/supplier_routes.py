@@ -730,6 +730,9 @@ def post_rotate(
     register: Annotated[Any, Depends(get_register)] = None,
 ) -> dict[str, Any]:
     store = account_trust_store(principal, register)
+    # Authorise before looking at the input: an account-level key is told 403 whatever it sent,
+    # and learns nothing about how its body parses.
+    who = _actor(body.actor, principal)
     try:
         when = parse_utc(body.effective_at)
     except ValueError as exc:
@@ -737,7 +740,7 @@ def post_rotate(
     try:
         pin = store.rotate(body.supplier_id, body.new_public_key_pem,
                            retire_fingerprint=body.retire_fingerprint, effective_at=when,
-                           actor=_actor(body.actor, principal),
+                           actor=who,
                            obtained_via=body.obtained_via,
                            expected_fingerprint=body.expected_fingerprint,
                            reason=body.reason)
