@@ -84,7 +84,8 @@ def _stubs(tmp_path: Path, *, cosign: str | None = "ok", gh: str | None = "ok",
 
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([bash, str(SCRIPT), *args], env=env, capture_output=True, text=True,
+    return subprocess.run(  # noqa: S603 - fixed argv, test-owned stubs
+        [bash, str(SCRIPT), *args], env=env, capture_output=True, text=True,
                           timeout=60)
 
 

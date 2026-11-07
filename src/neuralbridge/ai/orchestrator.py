@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from neuralbridge.adapters.base import AdapterResponse
+from neuralbridge.ai.connections import SEEDED_REGISTRY_KEY, register_seeded_adapter
 from neuralbridge.ai.identity import Actor
 from neuralbridge.ai.policy import PolicyError, evaluate
 from neuralbridge.ai.schemas import (
@@ -81,7 +82,14 @@ def _require_live_adapter(registry: AdapterRegistry, conn: ConnectionRecord) -> 
     connection re-registers itself from env on first use after a restart
     (``connections.ensure_seeded_connection``); any other connection in
     that state needs the operator to bind it again with fresh credentials
-    — an honest 409, not a confusing adapter-not-found 500."""
+    — an honest 409, not a confusing adapter-not-found 500.
+
+    Every uvicorn worker has its own registry, so the seeded connection is re-registered here, in
+    the process that is about to use it, not only by the worker that listed connections. A bound
+    connection cannot be: its credentials were never stored, so under ``--workers N`` it is live
+    only in the worker that bound it (deploy/assurance/OPS.md, "Worker processes")."""
+    if conn.source == "seeded_from_env" and conn.registry_key == SEEDED_REGISTRY_KEY:
+        register_seeded_adapter(registry)
     if conn.registry_key not in registry:
         raise OrchestratorError(
             409,
