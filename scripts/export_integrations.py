@@ -22,6 +22,7 @@ OUT = ROOT / "docs" / "integrations.md"
 # What each classification means, in the words the site uses. Source of truth: neuralbridge/adapters/base.py.
 LABEL = {
     "real": "Supported, with limits",
+    "library": "Library only (real and tested; no shipped loader registers it)",
     "partial": "Experimental (real client path, never run against a live service)",
     "mock": "Experimental (canned: makes no call)",
 }
@@ -57,6 +58,7 @@ def inventory() -> list[dict[str, object]]:
                     "type": c["adapter_type"],
                     "category": c.get("category", "general"),
                     "backend": c.get("backend", "mock"),
+                    "wired": bool(c.get("shipped_loader", False)),
                     "ops": c.get("supported_operations", []),
                     "file": path.relative_to(ROOT).as_posix(),
                 }
@@ -65,9 +67,17 @@ def inventory() -> list[dict[str, object]]:
     return rows
 
 
+def classification(row: dict[str, object]) -> str:
+    """``real`` only if a shipped loader registers the adapter; a real, tested adapter nothing registers is ``library``."""
+    if row["backend"] == "real" and not row["wired"]:
+        return "library"
+    return str(row["backend"])
+
+
 def render() -> str:
     rows = inventory()
-    real = [r for r in rows if r["backend"] == "real"]
+    real = [r for r in rows if classification(r) == "real"]
+    library = [r for r in rows if classification(r) == "library"]
     partial = [r for r in rows if r["backend"] == "partial"]
     canned = [r for r in rows if r["backend"] == "mock"]
     lines = [
@@ -79,7 +89,8 @@ def render() -> str:
         "the MCP server work on their own. The adapters below belong to the NeuralBridge integration platform it grew",
         "out of, and this page says exactly how far each one goes.",
         "",
-        f"**{len(rows)} adapters: {len(real)} supported with limits, {len(partial)} with a real client path that has "
+        f"**{len(rows)} adapters: {len(real)} supported with limits, {len(library)} library only (real and tested, "
+        f"but no shipped code registers it), {len(partial)} with a real client path that has "
         f"never run against a live service, {len(canned)} canned.** A canned adapter makes no call to the service it is "
         "named after.",
         "",
@@ -88,6 +99,10 @@ def render() -> str:
         "| Classification | Meaning | Default behaviour |",
         "|---|---|---|",
         f"| {LABEL['real']} | Calls the real service and is exercised against it by a test. | Runs. |",
+        f"| {LABEL['library']} | Real code, exercised by tests against a locally emulated service, but nothing in this "
+        "repository creates and registers it in a running platform: an operator must register it in code "
+        "(`registry.register(RestApiAdapter({...}), key=\"rest\")`). Until then the platform answers 404 for it. | "
+        "Runs once registered. |",
         f"| {LABEL['partial']} | A real client path exists. | Runs only against the live service; a failed "
         "connection raises an error and never falls back to invented data. |",
         f"| {LABEL['mock']} | Returns canned results. | **Refused** with an error. Opt in for a demo or test with "
@@ -104,7 +119,7 @@ def render() -> str:
     ]
     for r in rows:
         ops = ", ".join(f"`{o}`" for o in r["ops"]) or "—"  # type: ignore[attr-defined]
-        lines.append(f"| `{r['type']}` | {r['category']} | {LABEL[str(r['backend'])]} | {ops} | `{r['file']}` |")
+        lines.append(f"| `{r['type']}` | {r['category']} | {LABEL[classification(r)]} | {ops} | `{r['file']}` |")
     lines += [
         "",
         "## PostgreSQL (supported, with limits)",
@@ -133,8 +148,14 @@ def render() -> str:
         "no managed cloud PostgreSQL, no pooler (pgbouncer), no other server version, and no TLS mode other than "
         "`disable`/`prefer` has been exercised.",
         "",
-        "## REST (supported, with limits)",
+        "## REST (library only: real and tested, not wired to a shipped loader)",
         "",
+        "- **Wiring:** no code shipped in this repository creates or registers a `RestApiAdapter` (the module "
+        "docstring's YAML `adapters:` block is documentation of the config shape; nothing reads it). In a default "
+        "deployment `POST /api/v1/adapters/rest/execute` answers 400 unknown adapter. An operator who wants it "
+        "registers it in code at startup, `registry.register(RestApiAdapter({...}), key=\"rest\")`; every REST call "
+        "is then a credentialed outbound request and needs the `ai_control_plane` entitlement (so does `/validate`). "
+        "`tests/test_adapters_wiring.py` fails if shipped code starts registering it, so this label gets re-examined.",
         "- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or "
         "API-key header authentication. Credentials come from the adapter config (`credentials`, or "
         "`credentials_env` naming environment variables) and are never logged, put in errors or returned. "
@@ -161,6 +182,9 @@ def render() -> str:
         "",
         "## What is not claimed",
         "",
+        "- REST is not reachable from a default deployment (see its section above): a Supported label would need a "
+        "shipped loader, an operator config format and an end-to-end test through the raw adapters route and the MCP "
+        "gateway, none of which exist.",
         "- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by "
         "any test in this repository, and REST has only been run against local HTTP servers (deterministic fixtures) started by its own "
         "tests (local evidence; no third-party API).",

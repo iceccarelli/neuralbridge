@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 
 from neuralbridge.adapters.apis.rest import RestApiAdapter
@@ -106,8 +108,8 @@ def env(monkeypatch, tmp_path, recorder):
     monkeypatch.setenv("NEURALBRIDGE_AI_STORE", str(tmp_path / "ai.db"))
     monkeypatch.setenv("NEURALBRIDGE_AUDIT_DB", str(tmp_path / "audit.db"))
     monkeypatch.setenv("NEURALBRIDGE_RATE_LIMIT_PER_MINUTE", "0")
-    for k in ("ASSURANCE_ALLOW_UNAUTHENTICATED", "NEURALBRIDGE_AI_PG_HOST", "NEURALBRIDGE_AI_PG_DATABASE",
-              "NEURALBRIDGE_AI_PG_USER"):
+    # no demo database for these tests: drop every NEURALBRIDGE_AI_PG_* variable the environment has
+    for k in ["ASSURANCE_ALLOW_UNAUTHENTICATED", *(n for n in os.environ if n.startswith("NEURALBRIDGE_AI_PG_"))]:
         monkeypatch.delenv(k, raising=False)
     from assurance.api import deps as adeps
     from assurance.billing.accounts import AccountStore
@@ -134,6 +136,11 @@ def env(monkeypatch, tmp_path, recorder):
                                "auth_type": "bearer", "credentials": {"token": BEARER}}), key="rest")
         yield Env(client, keys[0], keys[1], keys[2], {"a": a.id, "b": b.id}, recorder["seen"], reg)
     reset_refusal_limiter()
+    # The app's logging setup caches a module logger on first use, which would make a later test's
+    # structlog.testing.capture_logs() miss the REST adapter's records: hand the module a fresh one.
+    import neuralbridge.adapters.apis.rest as rest_module
+
+    rest_module.logger = structlog.get_logger(rest_module.__name__)
 
 
 def audit_rows(env: Env, **filters) -> list[dict]:

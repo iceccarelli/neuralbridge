@@ -30,12 +30,17 @@ def test_every_adapter_has_a_row_and_the_counts_are_stated():
     assert len(inv) == 22
     for row in inv:
         assert f"| `{row['type']}` |" in PAGE
-    assert "22 adapters: 2 supported with limits, 3 with a real client path" in PAGE and "17 canned" in PAGE
+    assert "22 adapters: 1 supported with limits, 1 library only" in PAGE and "3 with a real client path" in PAGE
+    assert "17 canned" in PAGE
 
 
-def test_only_postgres_and_rest_are_called_supported():
+def test_only_postgres_is_called_supported_and_rest_is_library_only():
+    """REST is real and tested but no shipped code registers it (red-team 2, L2): it must not read 'Supported'."""
     rows = [ln for ln in PAGE.splitlines() if ln.startswith("| `") and "Supported, with limits" in ln]
-    assert sorted(ln.split("|")[1].strip() for ln in rows) == ["`postgres`", "`rest`"]
+    assert sorted(ln.split("|")[1].strip() for ln in rows) == ["`postgres`"]
+    rest = next(ln for ln in PAGE.splitlines() if ln.startswith("| `rest` |"))
+    assert "Library only" in rest and "Supported" not in rest
+    assert "not wired to a shipped loader" in PAGE and "registry.register(RestApiAdapter" in PAGE
 
 
 def test_page_discloses_what_is_not_claimed():
@@ -55,10 +60,11 @@ def test_page_is_registered_on_the_site_and_in_mkdocs():
 
 
 def test_readme_adapter_table_matches_the_code():
-    """The README states exactly one of Supported / Evolving / Not implemented for every adapter, from `backend`."""
+    """The README states exactly one of Supported / Library only / Evolving / Not implemented for every adapter, from `backend` and `shipped_loader`."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Adapter Status", 1)[1].split("\n## ", 1)[0]
-    stated = {m.group(1): m.group(2) for m in re.finditer(r"^\| `(\w+)` \| (Supported|Evolving|Not implemented) \|", section, re.M)}
-    word = {"real": "Supported", "partial": "Evolving", "mock": "Not implemented"}
-    expected = {str(r["type"]): word[str(r["backend"])] for r in _generator().inventory()}
+    stated = {m.group(1): m.group(2) for m in re.finditer(r"^\| `(\w+)` \| (Supported|Library only|Evolving|Not implemented) \|", section, re.M)}
+    word = {"real": "Supported", "library": "Library only", "partial": "Evolving", "mock": "Not implemented"}
+    gen = _generator()
+    expected = {str(r["type"]): word[gen.classification(r)] for r in gen.inventory()}
     assert stated == expected

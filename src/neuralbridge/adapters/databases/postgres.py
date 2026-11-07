@@ -110,6 +110,8 @@ class PostgresAdapter(BaseAdapter):
     # Override class attributes
     adapter_type: str = "postgres"
     backend: str = "real"
+    #: Registered by ``neuralbridge.ai.connections`` (the env-seeded demo and ``POST /ai/connections``).
+    shipped_loader: bool = True
     category: str = "databases"
     description: str = "Connects to and interacts with PostgreSQL databases."
     version: str = "0.2.0"

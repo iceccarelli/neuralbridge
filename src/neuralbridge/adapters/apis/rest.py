@@ -19,8 +19,12 @@ Result: an :class:`AdapterResponse`.
   ``invalid_endpoint``, ...) and ``data`` carries ``error`` (the code) plus ``status_code`` and a
   truncated ``body`` where a response exists. Network and policy failures are returned, not raised.
 
-Configuration (YAML)
---------------------
+Configuration (the config shape, shown as YAML)
+-----------------------------------------------
+**Not wired:** no code shipped in this repository reads such a file or registers this adapter
+(``shipped_loader`` is ``False``; ``tests/test_adapters_wiring.py`` pins that). An operator who wants
+it calls ``registry.register(RestApiAdapter(config), key="rest")`` in their own startup code.
+
 .. code-block:: yaml
 
     adapters:
