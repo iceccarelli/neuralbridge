@@ -289,6 +289,31 @@ export default function TrustPage() {
         </div>
       </section>
 
+      <section className="section" id="data-principles">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Data principles</span>
+            <h2>How evidence data is treated, and what does not exist</h2>
+          </div>
+          <div className="note-box">
+            <ul>
+              <li>Your evidence is yours. Tenant records live in a per-account ledger; the shared ledger is operator-only.</li>
+              <li>
+                No dataset has been assembled from customer evidence and no model has been trained on it. None exists,
+                and none is offered or priced.
+              </li>
+              <li>
+                Any future use of evidence beyond serving the account that produced it, for example to calibrate
+                thresholds, would be a principle first: opt-in per account, in writing, with the account able to
+                withdraw, and stripped of machine and site identity. Until that is built and documented, nothing of
+                the kind happens.
+              </li>
+              <li>Software never decides a safety conclusion, and a statistic from many fleets would not change that.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <section className="section section-alt" id="limits">
         <div className="shell">
           <div className="section-head">
