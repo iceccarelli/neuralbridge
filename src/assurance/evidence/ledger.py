@@ -46,7 +46,7 @@ from typing import Any
 from ..core.errors import LedgerConflictError, LedgerIntegrityError
 from ..core.evidence import Evidence
 from ..core.identity import content_hash_of, format_utc, parse_utc, utc_now
-from ..core.sqlite import enable_wal, retry_locked
+from ..core.sqlite import copy_files_apart, enable_wal, is_not_a_database, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
@@ -235,14 +235,6 @@ class _GuardedConnection(sqlite3.Connection):
 _VOIDED_READ_ATTEMPTS = 8
 
 
-def _is_transient_io(exc: sqlite3.OperationalError) -> bool:
-    """SQLite's generic I/O error (primary code 10, any extended code), and nothing else."""
-    code = getattr(exc, "sqlite_errorcode", None)
-    if isinstance(code, int):
-        return (code & 0xFF) == 10
-    return str(exc).strip().lower() == "disk i/o error"
-
-
 def _retry_voided(fn: Any) -> Any:
     """Re-run a whole read whose snapshot was voided by a writer (see ``_connect_ro``).
 
@@ -260,15 +252,6 @@ def _retry_voided(fn: Any) -> Any:
                 return fn(self, *args, **kwargs)
             except LedgerChangedWhileReadError:
                 if attempt == _VOIDED_READ_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.02 * (attempt + 1))
-            except sqlite3.OperationalError as exc:
-                # A reader that opens a WAL file while another process is recreating or
-                # truncating its -shm / -wal sidecar can get SQLITE_IOERR ("disk I/O error")
-                # for a read that would succeed a moment later (seen as a 500 on a hosted
-                # runner under four workers). The read has changed nothing, so it is re-run
-                # from scratch, boundedly; a persistent fault still raises after the last try.
-                if not _is_transient_io(exc) or attempt == _VOIDED_READ_ATTEMPTS - 1:
                     raise
                 time.sleep(0.02 * (attempt + 1))
 
@@ -444,22 +427,30 @@ class EvidenceLedger:
         """
         p = self.path
         try:
-            if not p.is_file() or p.stat().st_size == 0:
+            if not p.is_file():
                 return
-            with p.open("rb") as handle:
-                header = handle.read(100)
+            size = p.stat().st_size
         except OSError:
             return          # let the normal open report it
-        if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+        if size == 0:
+            return
+        if size < 100:      # the header alone is 100 bytes; SQLite itself would call 1 byte "empty"
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it is not a SQLite database; refusing to write to it.")
+        # No plain file descriptor is opened on the database here (or anywhere in this class):
+        # closing one releases the POSIX locks SQLite holds for another thread's transaction in
+        # this process (see ``copy_files_apart``). SQLite itself decides whether this is a database.
         try:
             foreign = self._ro_probe(_holds_foreign_tables, retry_errors=True)
         except LedgerChangedWhileReadError:
             # Other processes are creating or writing this file right now. This check is only
             # an early refusal: the read-write open re-checks inside its own connection.
             return
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            if is_not_a_database(exc):
+                raise LedgerIntegrityError(
+                    f"{p} is not a ledger: it is not a SQLite database; "
+                    "refusing to write to it.") from None
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it cannot be read as one; "
                 "refusing to write to it.") from None
@@ -509,10 +500,11 @@ class EvidenceLedger:
             target = scratch / resolved.name
             cleanup = lambda: shutil.rmtree(scratch, ignore_errors=True)  # noqa: E731
             try:
-                shutil.copy2(resolved, target)
-                for sfx in ("-wal", "-journal"):
-                    if sfx in present:
-                        shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
+                # In a child process: a plain descriptor closed here would release the locks
+                # SQLite holds on this very file for another thread (see ``copy_files_apart``).
+                copy_files_apart([(resolved, target)] + [
+                    (sidecars[sfx], scratch / (resolved.name + sfx))
+                    for sfx in ("-wal", "-journal") if sfx in present])
             except OSError as exc:
                 cleanup()
                 raise LedgerChangedWhileReadError(
@@ -593,18 +585,14 @@ class EvidenceLedger:
     def _is_existing_ledger_file(self) -> bool:
         """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
 
-        Both journal modes qualify (header bytes 18-19 are 1 for a rollback journal, 2 for WAL):
-        the old open switched the first to WAL and, for the second, opened it read-write, which
+        Both journal modes qualify: the old open switched the first to WAL and, for the second,
+        opened it read-write, which
         checkpoints a ``-wal`` into the main file and deletes it on close -- bytes changed by a
         call that only meant to read. A missing, empty, foreign or partly created file keeps the
         ordinary open (the writing path has its own refusals).
         """
         try:
             if not self.path.is_file() or self.path.stat().st_size == 0:
-                return False
-            with self.path.open("rb") as handle:
-                header = handle.read(100)
-            if len(header) < 100 or header[18:20] not in (b"\x01\x01", b"\x02\x02"):
                 return False
             names = self._ro_probe(lambda db: {r[0] for r in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")})

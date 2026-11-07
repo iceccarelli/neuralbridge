@@ -247,9 +247,19 @@ def test_concurrent_appends_to_one_tenant_ledger_keep_one_valid_chain(
 
 def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
         assurance_server: tuple[Server, Path]) -> None:
+    """Every 201 must be a durable record: exactly one entry per acknowledged request.
+
+    Main CI once saw all 48 requests answer 201 while one tenant held five records instead of six
+    (a descriptor opened and closed on the ledger file released SQLite's locks; see
+    ``tests/test_ledger_foreign_fd_lock_loss.py``). So this records *each request*: the account, the
+    unique case it named, the status and the ``ledger_seq`` the server answered with, and then
+    checks every acknowledged one against the file, not only counts.
+    """
     server, data = assurance_server
     per_account = 6
     accounts: list[tuple[str, str]] = []
+    sent: list[tuple[str, str]] = []             # (account id, case id) of every request issued
+    told: dict[tuple[str, str], int] = {}        # ledger_seq the server answered for each of them
 
     # A brand-new ledger can only be raced once, so each attempt uses fresh accounts. An attempt
     # counts only if at least two worker processes served it; otherwise try again (bounded).
@@ -257,18 +267,26 @@ def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
         fresh = _mint(data / "accounts.db", 8)
         assert not any((data / "tenants" / f"{a}.db").exists() for a, _ in fresh)
         before = {pid: server.cpu_ticks(pid) for pid in server.worker_pids()}
-        calls = []
-        for _acct, key in fresh:
+        calls, issued = [], []
+        for acct, key in fresh:
             for i in range(per_account):
-                calls.append(lambda c, key=key, i=i: c.post(
-                    f"/v1/cases/first-{uuid.uuid4().hex[:8]}/signal", json=_signal_body(i),
-                    headers={"X-API-Key": key}))
+                case = f"first-{uuid.uuid4().hex[:12]}"
+                issued.append((acct, case))
+                calls.append(lambda c, key=key, i=i, case=case: c.post(
+                    f"/v1/cases/{case}/signal", json=_signal_body(i), headers={"X-API-Key": key}))
         results = _blast(server, calls, threads=48)
         # A 500 here is an unhandled exception in a worker; its traceback is in the server log,
         # so a failure carries it rather than only the status line.
         assert Counter(r.status_code for r in results) == {201: len(calls)}, (
             Counter((r.status_code, r.text[:120]) for r in results if r.status_code != 201),
             server.log.read_text(errors="replace")[-6000:])
+        # The server must say where it put each record, and say it truthfully (0 = "not found").
+        answered = {(acct, case): r.json()["ledger_seq"]
+                    for (acct, case), r in zip(issued, results, strict=True)}
+        assert all(seq >= 1 for seq in answered.values()), \
+            [k for k, v in answered.items() if v < 1]
+        told.update(answered)
+        sent += issued
         accounts += fresh
         if _workers_that_worked(server, before) >= 2:
             break
@@ -278,10 +296,13 @@ def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
 
     from assurance.evidence.ledger import EvidenceLedger
     ids = set()
+    durable: dict[tuple[str, str], list[int]] = {}
     for acct, _ in accounts:
         path = data / "tenants" / f"{acct}.db"
         ledger = EvidenceLedger.open_readonly(path)
         entries = ledger.entries()
+        for e in entries:
+            durable.setdefault((acct, e.subject), []).append(e.seq)
         assert [e.seq for e in entries] == list(range(1, per_account + 1)), acct
         ok, problems = ledger.verify_chain()
         assert ok, (acct, problems)
@@ -291,6 +312,15 @@ def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
             assert len(meta) == 1, f"{acct}: {len(meta)} ledger ids minted"
             ids.add(meta[0][0])
     assert len(ids) == len(accounts), "two tenants share a ledger id"
+    # every acknowledged request has exactly one durable record, under the case it named, at the
+    # sequence number the server told the client, and nothing else is in the files
+    missing = [k for k in sent if k not in durable]
+    assert not missing, f"acknowledged but not durable: {missing}"
+    assert all(len(v) == 1 for v in durable.values()), \
+        {k: v for k, v in durable.items() if len(v) != 1}
+    assert set(durable) == set(sent), "records exist that no request acknowledged"
+    assert {k: v[0] for k, v in durable.items()} == told, \
+        "a response named a ledger sequence the file does not hold for that case"
 
 
 def test_free_allowance_counter_is_exact_across_processes(
