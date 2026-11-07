@@ -13,6 +13,7 @@ installed here, not against a managed cloud service, a pooler (pgbouncer) or oth
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 
 import asyncpg
@@ -227,12 +228,16 @@ class TestFailureModes:
         assert after.success and after.data == [{"seven": 7}], "the pool kept a dead connection"
 
     def test_a_missing_privilege_is_reported_as_permission_denied(self, table) -> None:
-        pg_run("DROP ROLE IF EXISTS pgf_noperm", "CREATE ROLE pgf_noperm LOGIN")
+        # A role WITH a password: a server that requires password authentication (CI's Postgres
+        # service does; a local trust-auth cluster does not) cannot log in a role that has none, and
+        # the test is about the missing privilege, not about login. A random value, never reused.
+        password = secrets.token_urlsafe(18)
+        pg_run("DROP ROLE IF EXISTS pgf_noperm", f"CREATE ROLE pgf_noperm LOGIN PASSWORD '{password}'")
         try:
             async def body(adapter):
                 return await adapter.execute("query", {"sql": "SELECT * FROM pgf_t"})
 
-            r = asyncio.run(with_adapter(config(user="pgf_noperm", password=""), body))
+            r = asyncio.run(with_adapter(config(user="pgf_noperm", password=password), body))
             assert r.success is False and r.error.startswith("permission_denied")
             assert "pgf_t" in r.error  # the server's own message is kept; it carries no credential
         finally:

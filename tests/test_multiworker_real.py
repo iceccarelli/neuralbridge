@@ -391,10 +391,18 @@ def test_seeded_connection_is_usable_from_every_worker(ai_server: tuple[Server, 
     with httpx.Client(base_url=server.base, timeout=60) as c:
         conn_id = _first(c, headers)
     body = {"connection_id": conn_id, "operation": "health_check", "params": {}}
+    # This test is about registration, not load. The per-adapter concurrency cap (default 8 in
+    # flight per worker process, tested in test_resource_controls) is a deliberate 503, and a slow
+    # runner turned 40 threads into more than 8 calls at one worker (two 503s on the hosted run).
+    # Keep the TOTAL in flight below the cap, so no single worker can ever exceed it.
+    threads = 6
+    pids = server.worker_pids()
+    before = {pid: server.cpu_ticks(pid) for pid in pids}
     results = _blast(server, [lambda c: c.post("/api/v1/ai/read", json=body, headers=headers)] * 60,
-                     threads=40)
+                     threads=threads)
     codes = Counter((r.status_code, r.text[:90] if r.status_code != 200 else "") for r in results)
     assert {code for code, _ in codes} == {200}, codes
+    assert _workers_that_worked(server, before) >= 2, "only one worker process served the reads"
 
 
 def test_concurrent_approvals_across_workers_execute_each_plan_exactly_once(

@@ -31,6 +31,12 @@ bash = shutil.which("bash")
 pytestmark = pytest.mark.skipif(bash is None, reason="bash is required")
 
 
+# Everything the script and the stubs execute besides the stubs themselves and python3. Never gh or cosign.
+_SYSTEM_TOOLS = ("bash", "sh", "cat", "sed", "grep", "tr", "head", "tail", "cut", "sort", "awk", "date",
+                 "mktemp", "rm", "mkdir", "env", "dirname", "basename", "readlink", "uname", "wc", "tee",
+                 "printf", "sleep", "ls", "id", "true", "false", "test")
+
+
 def _exe(path: Path, body: str) -> None:
     path.write_text("#!/bin/sh\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -54,6 +60,13 @@ def _stubs(tmp_path: Path, *, cosign: str | None = "ok", gh: str | None = "ok",
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "python3").symlink_to(sys.executable)
+    # A hermetic PATH: only the stubs and the ordinary system utilities the script and the stubs
+    # use, each linked in by name. Putting /usr/bin on PATH wholesale let a REAL cosign or gh
+    # (GitHub's runners ship gh in /usr/bin) answer the "tool is missing" cases.
+    for tool in _SYSTEM_TOOLS:
+        found = shutil.which(tool)
+        if found and not (bindir / tool).exists():
+            (bindir / tool).symlink_to(found)
     log = tmp_path / "calls.log"
     if cosign is not None:
         fail = cosign != "ok"
@@ -79,7 +92,7 @@ def _stubs(tmp_path: Path, *, cosign: str | None = "ok", gh: str | None = "ok",
                f"  'subject': [{{'digest': {{'sha256': '{hexd}'}}}}],\n"
                "  'predicate': {'bomFormat': 'CycloneDX'}}}}]))\n"
                "PY\n")
-    env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path), "TMPDIR": str(tmp_path)}
+    env = {"PATH": str(bindir), "HOME": str(tmp_path), "TMPDIR": str(tmp_path)}
     return env
 
 
