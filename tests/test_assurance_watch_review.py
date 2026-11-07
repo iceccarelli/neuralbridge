@@ -400,7 +400,7 @@ class TestAcrossProcesses:
         assert child.poll() is None, "the child ingested while another process held the lock"
         fcntl.flock(lock, fcntl.LOCK_UN)
         lock.close()
-        assert child.wait(timeout=30) == 0
+        assert child.communicate(timeout=30)[0] is not None and child.returncode == 0
 
     def test_concurrent_processes_write_one_set_of_records(self, tmp_path):
         from .test_assurance_watch_report import _plain

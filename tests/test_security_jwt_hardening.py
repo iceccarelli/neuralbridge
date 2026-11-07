@@ -16,7 +16,9 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from neuralbridge.config import Settings, check_hmac_secret
 from neuralbridge.security import auth
 
-SECRET = "a-long-random-test-secret-0123456789"
+# >= 64 bytes: the HS512 control in test_header_alg_mismatch_... verifies with this very key, and
+# PyJWT warns (InsecureKeyLengthWarning) when an HMAC key is shorter than its digest.
+SECRET = "a-long-random-test-secret-0123456789-0123456789-0123456789-0123456789"
 
 
 @pytest.fixture

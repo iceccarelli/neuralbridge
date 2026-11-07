@@ -30,6 +30,7 @@ from assurance.cli import main as assurance_main
 from assurance.core.identity import utc_now
 from assurance.evidence.ledger import EvidenceLedger
 
+from .support_sqlite import rows as sqlite_rows
 from .test_pilot_manual_grant import (  # noqa: F401  (fixtures)
     CELL_ROUTE,
     app_env,
@@ -105,8 +106,7 @@ class TestAStoreThatIsNotAnAccountStoreIsNeverWrittenTo:
         db.close()
         before = _digest(path)
         assert _cli("list", "--store", path, "--json") == 0
-        assert "source" not in [r[1] for r in sqlite3.connect(path).execute(
-            "pragma table_info(accounts)")]
+        assert "source" not in [r[1] for r in sqlite_rows(path, "pragma table_info(accounts)")]
         assert _digest(path) == before
 
     def test_any_other_sqlite_file_is_refused_too(self, tmp_path, capsys):

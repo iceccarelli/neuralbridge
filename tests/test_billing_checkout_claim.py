@@ -14,8 +14,6 @@ What is established here, and what is not:
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from assurance.billing import issue_key as issue
@@ -30,6 +28,8 @@ from .support_billing import (  # noqa: F401
     claim,
     send,
 )
+from .support_sqlite import rows as sqlite_rows
+from .support_sqlite import scalar as sqlite_scalar
 
 
 @pytest.fixture()
@@ -62,8 +62,7 @@ def test_checkout_issues_a_claim_token_and_keeps_it_out_of_the_query_string(star
     assert token not in url and "#" not in url
     assert body["session_id"] == "cs_test_1"
     # only a hash is stored
-    rows = sqlite3.connect(billing_env / "accounts.db").execute(
-        "SELECT session_id, token_hash FROM checkout_claims").fetchall()
+    rows = sqlite_rows(billing_env / "accounts.db", "SELECT session_id, token_hash FROM checkout_claims")
     assert rows == [("cs_test_1", hash_key(token))]
     assert token not in (billing_env / "accounts.db").read_bytes().decode("latin-1")
 
@@ -168,8 +167,7 @@ def test_operator_recovery_discards_the_staged_key_and_issues_a_new_one(
     body, _ = started()
     assert send(billing_client, checkout_event("cs_test_1", "cus_1", "sub_1", "cell", T)
                 ).status_code == 200
-    staged_key = sqlite3.connect(billing_env / "accounts.db").execute(
-        "SELECT api_key FROM pending_keys").fetchone()[0]
+    staged_key = sqlite_scalar(billing_env / "accounts.db", "SELECT api_key FROM pending_keys")
     assert billing_client.get("/v1/me", headers={"X-API-Key": staged_key}).status_code == 200
     assert claim(billing_client, "cs_test_1", "lost").status_code == 403
 

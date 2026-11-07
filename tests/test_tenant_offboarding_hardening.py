@@ -91,11 +91,14 @@ def _hashes(path: Path) -> set[str]:
 def _writer_lock_is_held() -> bool:
     probe = sqlite3.connect(os.environ["TEN_PROBE_DB"], timeout=0.05, isolation_level=None)
     try:
-        probe.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError:
-        return True
-    probe.execute("ROLLBACK")
-    return False
+        try:
+            probe.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            return True
+        probe.execute("ROLLBACK")
+        return False
+    finally:
+        probe.close()
 
 
 def test_writer_lock_is_held_while_the_head_is_read_and_files_are_removed(

@@ -764,14 +764,14 @@ def _recorder_trust_from_header(value: str | None) -> RecorderTrust | None:
         return None
     if "PRIVATE" in value.upper():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={"error": "private_key_refused",
                     "detail": "That looks like a private key. It was not read or kept. "
                               "Only PUBLIC keys go in a recorder trust list; if this was a "
                               "real key, treat it as exposed and replace it."})
     if len(value) > MAX_TRUST_HEADER:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={"error": "recorder_trust_too_large",
                     "detail": f"A recorder trust header is at most {MAX_TRUST_HEADER} "
                               "characters."})
@@ -779,7 +779,7 @@ def _recorder_trust_from_header(value: str | None) -> RecorderTrust | None:
         return RecorderTrust.from_dict(loads_strict(value, "X-Recorder-Trust"))
     except RecorderAttestationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={"error": "invalid_recorder_trust", "detail": str(exc)[:300]}) from exc
 
 
@@ -846,14 +846,14 @@ async def verify_evidence(
     if x_issuer_public_key is not None and x_issuer_public_key.strip():
         if "PRIVATE" in x_issuer_public_key.upper():
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail={"error": "private_key_refused",
                         "detail": "That looks like a private key. It was not read or kept. "
                                   "Only a PUBLIC key is ever needed; if this was a real "
                                   "key, treat it as exposed and replace it."})
         if len(x_issuer_public_key) > MAX_KEY_HEADER:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail={"error": "public_key_too_large",
                         "detail": f"A public key header is at most {MAX_KEY_HEADER} characters."})
         key_pem = _pem_from_header(x_issuer_public_key)

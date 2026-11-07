@@ -13,7 +13,6 @@ the real FastAPI app on a temporary accounts database. No Stripe host is contact
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import timedelta
 
 import pytest
@@ -33,6 +32,7 @@ from .support_billing import (  # noqa: F401
     evt,
     send,
 )
+from .support_sqlite import connect as sqlite_connect
 
 BODY = {"tier": "cell", "email": "buyer@example.invalid"}
 
@@ -227,7 +227,7 @@ def test_a_well_formed_unrelated_event_is_still_acknowledged(billing_client):
 
 # -- 5. an expired, uncollected staged key is revoked, not left active ----------------------
 def _api_key_row(db_path, key):
-    with sqlite3.connect(db_path) as db:
+    with sqlite_connect(db_path) as db:
         return db.execute("SELECT revoked_at FROM api_keys WHERE key_hash = ?",
                           (hash_key(key),)).fetchone()
 
@@ -241,7 +241,7 @@ def test_an_expired_uncollected_key_is_revoked_in_the_purge(billing_env, monkeyp
         event_id="evt_old", session_id="cs_old", email="b@e.invalid", company="C", tier="cell",
         stripe_customer_id="cus_old", stripe_subscription_id="sub_old", event_created=T)
     account_id = result["account_id"]
-    with sqlite3.connect(billing_env / "accounts.db") as db:
+    with sqlite_connect(billing_env / "accounts.db") as db:
         staged = db.execute("SELECT api_key FROM pending_keys WHERE session_id='cs_old'"
                             ).fetchone()[0]
     assert _api_key_row(billing_env / "accounts.db", staged) == (None,)
@@ -256,7 +256,7 @@ def test_an_expired_uncollected_key_is_revoked_in_the_purge(billing_env, monkeyp
     row = _api_key_row(billing_env / "accounts.db", staged)
     assert row is not None and row[0] is not None            # revoked, not just unclaimable
     assert store.active_key_count(account_id) == 0            # no phantom key against the cap
-    with sqlite3.connect(billing_env / "accounts.db") as db:
+    with sqlite_connect(billing_env / "accounts.db") as db:
         assert db.execute("SELECT COUNT(*) FROM pending_keys").fetchone()[0] == 0
     outcome, key = store.claim_checkout("cs_old", "tok-old")  # a late claim is a definite 410
     assert (outcome, key) == ("gone", None)

@@ -19,7 +19,6 @@ import json
 import os
 import re
 import shlex
-import sqlite3
 import subprocess
 import sys
 from datetime import timedelta
@@ -32,6 +31,9 @@ from fastapi.testclient import TestClient
 from assurance.billing.accounts import AccountStore
 from assurance.billing.plans import METERED_SCOPES, PLANS, public_catalogue
 
+from .support_sqlite import connect as sqlite_connect
+from .support_sqlite import rows as sqlite_rows
+from .support_sqlite import scalar as sqlite_scalar
 from .test_assurance_plans_parity import _fallback_plans
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -572,24 +574,22 @@ class TestPrivacyDisclosesWhatTheCodeStores:
             json={"track": "actively_exploited_vulnerability", "stage": "early_warning", "payload": {}},
         )
         assert done.status_code == 200
-        db = sqlite3.connect(tmp_path / "accounts.db")
-        rows = db.execute("SELECT subject, scope, count FROM usage").fetchall()
-        events = db.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+        rows = sqlite_rows(tmp_path / "accounts.db", "SELECT subject, scope, count FROM usage")
+        events = sqlite_scalar(tmp_path / "accounts.db", "SELECT COUNT(*) FROM usage_events")
         assert rows == [("ip:testclient", "validate", 1)]  # the peer address, keyed "ip:<address>"
         assert events == 0, "an anonymous caller must not write a usage event"
 
     def test_a_counter_older_than_the_retention_is_dropped_on_the_next_first_spend(self, tmp_path):
         store = AccountStore(str(tmp_path / "accounts.db"))
-        db = sqlite3.connect(tmp_path / "accounts.db")
         from assurance.billing.accounts import utc_now
 
         old = (utc_now().date() - timedelta(days=8)).isoformat()
         recent = (utc_now().date() - timedelta(days=5)).isoformat()
-        db.execute("INSERT INTO usage VALUES ('ip:198.51.100.1','validate',?,3)", (old,))
-        db.execute("INSERT INTO usage VALUES ('ip:198.51.100.2','validate',?,3)", (recent,))
-        db.commit()
+        with sqlite_connect(tmp_path / "accounts.db") as db:
+            db.execute("INSERT INTO usage VALUES ('ip:198.51.100.1','validate',?,3)", (old,))
+            db.execute("INSERT INTO usage VALUES ('ip:198.51.100.2','validate',?,3)", (recent,))
         store.consume("ip:198.51.100.3", "validate", 20)
-        days = {row[0] for row in db.execute("SELECT day FROM usage")}
+        days = {row[0] for row in sqlite_rows(tmp_path / "accounts.db", "SELECT day FROM usage")}
         assert old not in days and recent in days
 
 

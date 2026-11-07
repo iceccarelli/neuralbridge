@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -290,7 +290,7 @@ def _review_summary(rec: Any) -> dict[str, Any] | None:
 
 def _bad(exc: Exception, what: str) -> HTTPException:
     return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=422,
         detail={"error": f"invalid_{what}", "detail": str(exc)},
     )
 
@@ -455,7 +455,7 @@ def _verify_sync(
         refuse_private_key(body.recorder_attestations)
     except RecorderAttestationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={"error": "private_key_refused", "detail": str(exc)}) from exc
 
     server_trust = server_recorder_trust_state()
@@ -482,7 +482,7 @@ def _verify_sync(
         # value finer than 6 decimals in a caller-supplied field). That is the caller's
         # input, not a server fault: say which value, never a 500.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail={"error": "unsealable_number", "detail": str(exc)}) from exc
     payload = bundle.to_dict()
     payload["sealed"] = bool(body.seal)
@@ -567,7 +567,7 @@ def _check_bundle_sync(body: BundleCheckIn) -> BundleCheck:
         except RecorderAttestationError as exc:
             if "private key" in str(exc).lower():
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=422,
                     detail={"error": "private_key_refused", "detail": str(exc)}) from exc
             raise _bad(exc, "recorder_trust") from exc
     return check_bundle_data(body.bundle, envelope=envelope, trace=trace, limits=limits,

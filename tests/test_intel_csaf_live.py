@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -537,7 +538,7 @@ def test_cli_direct_url_mode_and_secrets_never_appear(capsys, db, wired, monkeyp
     code, out, err = run(capsys, *base, "--url", url(f"2026/a.json?token={SECRET}"))
     assert code == 2 and SECRET not in out + err
     assert all(SECRET not in c[0] and "apiKey" not in c[1] for c in t.calls)
-    assert SECRET.encode() not in open(db, "rb").read()
+    assert SECRET.encode() not in Path(db).read_bytes()
 
 
 def test_allow_host_is_rejected_for_the_fixed_sources(capsys, db, wired):

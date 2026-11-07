@@ -37,6 +37,8 @@ from assurance.security.art14.clock import add_one_month
 from assurance.security.art14.model import CASE_KIND
 from assurance.security.art14.timestamps import legal_timestamp
 
+from .support_sqlite import scalar as sqlite_scalar
+
 PERSON = Actor("m.braun", "Entwicklungsleitung")
 BOT = Actor("monitor-1", "watcher", kind="automation")
 AWARE = parse_utc("2026-09-19T06:30:00Z")
@@ -281,8 +283,7 @@ class TestCli:
                 "--payload", str(payload)]
         assert cli([*base, "--at", iso(AWARE + timedelta(days=2))]) == 0
         capsys.readouterr()
-        import sqlite3
-        count = lambda: sqlite3.connect(led).execute("SELECT COUNT(*) FROM chain").fetchone()[0]  # noqa: E731
+        count = lambda: sqlite_scalar(led, "SELECT COUNT(*) FROM chain")  # noqa: E731
         n = count()
         assert cli([*base, "--at", iso(AWARE + timedelta(hours=1))]) == 2
         assert "EARLIER" in capsys.readouterr().err

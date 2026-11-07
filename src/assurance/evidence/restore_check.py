@@ -67,6 +67,7 @@ the files are consistent as far as they can be read and nothing says nothing is 
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -687,7 +688,9 @@ def _verify(root: Path, allow_growth: bool, live_dir: Path | None,
             if (res := _integrity(root / _AI_STORE, views)) != "ok":
                 problems.append(f"{_AI_STORE}: SQLite integrity_check says {res}")
             else:
-                with sqlite3.connect(_ro_uri(views.of(root / _AI_STORE)), uri=True) as ai_db:
+                # closing(): `with connection` only ends a transaction, it never closes.
+                ai_uri = _ro_uri(views.of(root / _AI_STORE))
+                with contextlib.closing(sqlite3.connect(ai_uri, uri=True)) as ai_db:
                     checked[_AI_STORE] = int(
                         ai_db.execute("SELECT COUNT(*) FROM plans").fetchone()[0])
         except Exception as exc:  # noqa: BLE001 - a damaged store is a finding

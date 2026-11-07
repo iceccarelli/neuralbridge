@@ -35,6 +35,9 @@ from assurance.core import Actor, Evidence, Origin
 from assurance.evidence import EvidenceLedger, restore_check
 from neuralbridge.ai.store import AiStore, ConnectionRecord, PlanRecord
 
+from .support_sqlite import connect as sqlite_connect
+from .support_sqlite import tracked_connections
+
 
 def _ev(n: int) -> Evidence:
     return Evidence(kind="t.record", body={"n": n}, actor=Actor("a.person", "engineer"),
@@ -81,7 +84,7 @@ def volume(tmp_path, monkeypatch):
             id=pid, connection_id="c1", adapter_type="postgres", operation="execute_sql",
             operation_class="write", params={"sql": "INSERT INTO t VALUES (1)"},
             proposed_by="agent", owner=ids[0]))
-        with sqlite3.connect(ai) as db:
+        with sqlite_connect(ai) as db:
             db.execute("UPDATE plans SET status=? WHERE id=?", (status, pid))
     return root, ids, ai
 
@@ -96,6 +99,18 @@ def _backup(volume, tmp_path, name="bk"):
 def _entries(path: Path):
     led = EvidenceLedger(path, mint_id=False)
     return [(e.seq, e.link_hash) for e in led.entries()], led.verify_chain()
+
+
+def test_backup_verify_and_restore_leave_no_sqlite_connection_open(volume, tmp_path):
+    """`with sqlite3.connect(...)` does not close; the /ai-store check used it, so a leaked
+    connection (a ResourceWarning on 3.13, silent before) was left for the garbage collector."""
+    with tracked_connections() as tracker:
+        bk = _backup(volume, tmp_path)
+        assert restore_check.verify(bk)["status"] == "ok"
+        restore_check.restore(bk, tmp_path / "restored")
+    assert tracker.connections, "the tracker saw no connection: it is not observing anything"
+    leaked = tracker.open_ones()
+    assert not leaked, f"{len(leaked)} of {len(tracker.connections)} SQLite connections left open"
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +236,7 @@ def test_a_deleted_ledger_and_a_deleted_manifest_are_refused(volume, tmp_path):
 def test_a_tampered_ai_store_and_a_tampered_attestation_log_are_refused(volume, tmp_path):
     _root, ids, _ai = volume
     bk = _backup(volume, tmp_path, "a")
-    with sqlite3.connect(bk / "ai-store.db") as db:
+    with sqlite_connect(bk / "ai-store.db") as db:
         db.execute("UPDATE plans SET status='pending_approval' WHERE id='p-executed'")
     _refused(bk, tmp_path)
     bk2 = _backup(volume, tmp_path, "b")
@@ -232,7 +247,7 @@ def test_a_tampered_ai_store_and_a_tampered_attestation_log_are_refused(volume, 
 
 def test_a_backup_taken_from_a_broken_source_is_refused(volume, tmp_path):
     root, ids, _ai = volume
-    with sqlite3.connect(root / "tenants" / f"{ids[0]}.db") as db:
+    with sqlite_connect(root / "tenants" / f"{ids[0]}.db") as db:
         db.execute("UPDATE chain SET link_hash = 'f' || substr(link_hash, 2) WHERE seq = 2")
     out = tmp_path / "bk"
     restore_check.backup(root, out)

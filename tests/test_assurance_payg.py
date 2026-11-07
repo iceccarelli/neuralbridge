@@ -37,6 +37,7 @@ from assurance.billing.payg import ReportError, StripeMeterGateway, report_usage
 from assurance.billing.plans import PLANS
 from assurance.billing.stripe_gateway import StripeError
 
+from .support_sqlite import rows as sqlite_rows
 from .test_assurance_billing import WEBHOOK_SECRET, _signed
 from .test_assurance_reconcile import FakeStripe, sub
 
@@ -723,8 +724,7 @@ class TestUsageReconciliation:
     def test_a_stripe_outage_leaves_the_report_incomplete_and_the_store_untouched(
             self, store, payg_on, meters):
         settled(store, account(store), 2, meters)
-        before = sqlite3.connect(store.path).execute(
-            "SELECT group_concat(billed_state) FROM usage_events").fetchone()
+        before = sqlite_rows(store.path, "SELECT group_concat(billed_state) FROM usage_events")[0]
 
         class Down:
             def list_meter_event_summaries(self, **kw):
@@ -732,8 +732,7 @@ class TestUsageReconciliation:
 
         report = payg.reconcile_usage(store, Down(), now=NOW, apply=True)
         assert not report.complete and report.exit_code == 2
-        assert sqlite3.connect(store.path).execute(
-            "SELECT group_concat(billed_state) FROM usage_events").fetchone() == before
+        assert sqlite_rows(store.path, "SELECT group_concat(billed_state) FROM usage_events")[0] == before
 
     def _ambiguous(self, store, meters, *, accepted):
         acct = account(store)

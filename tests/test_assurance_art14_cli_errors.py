@@ -12,6 +12,8 @@ import pytest
 
 from assurance.security.art14.cli import main
 
+from .support_sqlite import scalar as sqlite_scalar
+
 BY = ["--by", "t:analyst"]
 
 
@@ -36,8 +38,7 @@ def test_a_refused_command_is_exit_2_with_a_message(ledger, capsys, args):
 
 
 def test_a_refused_command_writes_nothing(ledger, capsys):
-    import sqlite3
-    count = lambda: sqlite3.connect(ledger).execute("SELECT COUNT(*) FROM chain").fetchone()[0]  # noqa: E731
+    count = lambda: sqlite_scalar(ledger, "SELECT COUNT(*) FROM chain")  # noqa: E731
     before = count()
     main(["--ledger", ledger, "signal", "C1", *BY, "--description", "again"])
     assert count() == before

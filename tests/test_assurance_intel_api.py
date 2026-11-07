@@ -27,6 +27,7 @@ from assurance.intel.store import IntelStore
 
 from . import interfaces_fixtures as fx
 from .intel_support import FIXTURES, Clock
+from .support_sqlite import connect as sqlite_connect
 
 live_api = fx.live_api
 
@@ -315,19 +316,16 @@ def _garbage(tmp_path: Path) -> Path:
 
 
 def _other_sqlite(tmp_path: Path) -> Path:
-    import sqlite3
-
     p = tmp_path / "other.db"
-    with sqlite3.connect(p) as db:
+    with sqlite_connect(p) as db:
         db.execute("CREATE TABLE t (x)")
     return p
 
 
 def _wrong_schema(tmp_path: Path) -> Path:
-    import sqlite3
 
     p = tmp_path / "wrong.db"
-    with sqlite3.connect(p) as db:
+    with sqlite_connect(p) as db:
         db.execute("PRAGMA application_id=1230196812")      # claims to be an intel store
         db.execute("CREATE TABLE t (x)")
     return p
@@ -351,9 +349,8 @@ def test_an_unreadable_store_is_a_503_and_nothing_is_created(cell, tmp_path, mon
 
 
 def test_a_store_damaged_after_the_open_check_is_still_a_503(cell, store_path):
-    import sqlite3
 
-    with sqlite3.connect(store_path) as db:
+    with sqlite_connect(store_path) as db:
         db.execute("PRAGMA journal_mode=DELETE")
     data = bytearray(store_path.read_bytes())
     for i in range(4096 * 3, len(data), 97):         # corrupt data pages, keep the header

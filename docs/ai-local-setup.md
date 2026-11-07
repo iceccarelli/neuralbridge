@@ -102,7 +102,7 @@ NEURALBRIDGE_AI_PG_DATABASE=nb_local_manual NEURALBRIDGE_AI_STORE=/tmp/nb-demo/a
 ```
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 uvicorn neuralbridge.main:app --reload --port 8000
 ```
 

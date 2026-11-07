@@ -256,7 +256,11 @@ class TestManyProcessesOpeningANewLedger:
         kids = [subprocess.Popen([sys.executable, "-c", _OPEN_AND_APPEND, str(path), str(i)],  # noqa: S603
                                  env=_child_env(), stderr=subprocess.PIPE, text=True)
                 for i in range(12)]
-        failures = [k.communicate()[1][-300:] for k in kids if k.wait(timeout=120) != 0]
+        failures = []
+        for k in kids:
+            _, stderr = k.communicate(timeout=120)   # also closes the pipe, which wait() would not
+            if k.returncode != 0:
+                failures.append(stderr[-300:])
         assert failures == []
         ledger = EvidenceLedger(path)
         assert len(ledger.entries()) == 12
@@ -314,7 +318,11 @@ while time.monotonic() < end:
                 result = restore_check.verify(out)
                 assert result["ok"] is True, result["problems"]
         finally:
-            errors = [k.communicate()[1][-300:] for k in kids if k.wait(timeout=60) != 0]
+            errors = []
+            for k in kids:
+                _, stderr = k.communicate(timeout=60)
+                if k.returncode != 0:
+                    errors.append(stderr[-300:])
         assert errors == []
 
     def test_a_backup_does_not_wait_forever_for_a_locked_source(self, tmp_path, monkeypatch):
@@ -451,7 +459,7 @@ class TestIngestLock:
             assert time.monotonic() - started < 10
         finally:
             holder.kill()
-            holder.wait()
+            holder.communicate()   # reaps it and closes its stdout pipe
 
     def test_waiting_for_another_thread_on_the_same_ledger_is_bounded(self, tmp_path, monkeypatch):
         from assurance.watch import ingest
