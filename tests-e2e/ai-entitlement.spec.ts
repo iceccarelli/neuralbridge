@@ -60,7 +60,13 @@ test('a 402d write, then a paid key pasted in the same tab, is retried with no r
 
   await enterKey(page, aiSeed().register_a);
   await expect(retry).toBeEnabled();
+  // Wait for the refusal itself. `getByText(/read-only/i)` alone is satisfied at once by the
+  // "Shared demonstration database (read-only)" label already on the page, so without this the
+  // test could finish before the 403 arrived and the health fixture then (rightly) reported the
+  // 403 allowance as unused (seen on the hosted runner; reproduced by delaying the response).
+  const refused = page.waitForResponse((r) => /\/ai\/plan$/.test(r.url()) && r.request().method() === 'POST' && r.status() === 403);
   await retry.click();
+  await refused;
   // The free caller only had the shared demo, which no paid account may write: an honest refusal, not an execution.
   await expect(page.getByText(/read-only/i).first()).toBeVisible();
   await expect(page.getByText(/approval required/i)).toHaveCount(0);
