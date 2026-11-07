@@ -7,7 +7,7 @@ import { SERVICES, SERVICES_DISCLAIMER, type Service } from '../lib/services';
 export const metadata: Metadata = buildMetadata({
   title: 'Services',
   description:
-    'Seven kinds of help that could be scoped around Industrial Autonomous Assurance: deliverables, exclusions and what exists today. No capacity or price offered.',
+    'Eight productised outcomes around Industrial Autonomous Assurance: inputs, deliverables, exclusions and evidence produced. No capacity, SLA or price offered.',
   path: '/services',
 });
 
@@ -40,9 +40,9 @@ export default function ServicesPage() {
           <span className="kicker">Services</span>
           <h1>Help around the product, described before it is promised</h1>
           <p>
-            NeuralBridge builds Industrial Autonomous Assurance. This page lists seven kinds of work that could be
-            scoped around it, what each would hand over, what it would not, and which product capability exists to
-            support it today.
+            NeuralBridge builds Industrial Autonomous Assurance. This page lists eight repeatable outcomes that could be
+            scoped around it: what each needs from the customer, what it hands over, what it does not, which evidence it
+            produces, what the software does by itself and what needs an engineer’s review.
           </p>
           <ul className="toc" aria-label="Services">
             {SERVICES.map((service) => (
@@ -86,9 +86,13 @@ export default function ServicesPage() {
                   </li>
                   <Rows label="Customer inputs" items={service.inputs} />
                   <Rows label="Deliverables" items={service.deliverables} />
+                  <Rows label="Evidence produced" items={service.evidence} />
+                  <Rows label="Automated by the software" items={service.automated} />
+                  <Rows label="Needs engineering or named-person review" items={service.review} />
                   <Rows label="Exclusions" items={service.exclusions} />
-                  <Rows label="Dependencies" items={service.dependencies} />
+                  <Rows label="Technical prerequisites" items={service.prerequisites} />
                   <Rows label="Customer responsibilities" items={service.responsibilities} />
+                  <Rows label="Ongoing-support dependency" items={service.support} />
                   <Rows label="What can be verified independently" items={service.verifiable} />
                   <Rows label="Product capability that exists today" items={service.today} />
                   <Rows label="What needs development first" items={service.gap} />

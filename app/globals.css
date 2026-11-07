@@ -3406,6 +3406,31 @@ table.status-table tbody tr:last-child td {
   margin-bottom: 0;
 }
 
+.glance {
+  display: grid;
+  grid-template-columns: minmax(9rem, 12rem) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.glance dt {
+  font-weight: 600;
+}
+
+.glance dd {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .glance {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .glance dd {
+    margin-bottom: var(--space-2);
+  }
+}
+
 .page-hero {
   background: var(--navy-900);
   color: #ffffff;

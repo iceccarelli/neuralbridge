@@ -19,9 +19,9 @@ export default function StartPage() {
       <section className="page-hero">
         <div className="shell">
           <span className="kicker">Get started</span>
-          <h1>From reading to your first enrolled machine</h1>
+          <h1>From a first visit to ongoing assurance</h1>
           <p>
-            Six steps. Each says what exists today, where it runs, and what is not available. Nothing below is a
+            Nine steps, from a first visit to ongoing assurance. Each says what exists today, where it runs, and what is not available. Nothing below is a
             roadmap item presented as a feature.
           </p>
           <ul className="toc" aria-label="Steps">
@@ -36,6 +36,61 @@ export default function StartPage() {
 
       <section className="section">
         <div className="shell">
+          <section className="note-box" aria-labelledby="glance-h" data-testid="start-glance">
+            <h2 id="glance-h" style={{ margin: '0 0 0.5rem', fontSize: 'var(--fs-lg)' }}>
+              At a glance
+            </h2>
+            <dl className="glance">
+              <dt>What it does</dt>
+              <dd>
+                Records what safety-relevant software and configuration is on each industrial machine, which
+                verification covered which configuration, and when that stopped being true.
+              </dd>
+              <dt>Who uses it</dt>
+              <dd>
+                Machine manufacturers, system integrators and plant operators, plus the product-security people who
+                handle CRA Article 14 reports.
+              </dd>
+              <dt>The problem</dt>
+              <dd>
+                A software change or a new vulnerability advisory arrives and nobody can say which machines it
+                touches or whether the last verification still applies.
+              </dd>
+              <dt>What it needs from you</dt>
+              <dd>
+                A list of machines, the safety software on each (hashes read from the machine where possible), and
+                existing verification records. Nothing is read from your machines for you.
+              </dd>
+              <dt>What it produces</dt>
+              <dd>
+                Sealed manifests, coverage reports, change-assurance cases, passports and exports that anyone can
+                re-verify offline.
+              </dd>
+              <dt>Free or offline today</dt>
+              <dd>The offline kit and the evidence checks run on your machine with no account and no network.</dd>
+              <dt>Needs a paid plan</dt>
+              <dd>
+                Register (Art. 14 workflow, evidence records) and Cell (machine verification, passports, fleet
+                advisories, change assurance). Neither can be bought on this site; both are agreed by conversation.
+              </dd>
+              <dt>Not available</dt>
+              <dd>
+                Self-serve sign-up and checkout, a public hosted API, hosted monitoring, any certification, and any
+                statement that a machine is compliant or safe.
+              </dd>
+              <dt>Stays with you</dt>
+              <dd>
+                Declaring each machine, reading hashes from it, deciding awareness, reportability and every case, and
+                holding your keys. The software drafts; named people decide.
+              </dd>
+              <dt>Dates</dt>
+              <dd>
+                CRA Article 14 reporting applies from 11 September 2026; Machinery Regulation (EU) 2023/1230 applies
+                from 20 January 2027.
+              </dd>
+            </dl>
+          </section>
+
           <div className="note-box">
             <p>
               <strong>What the labels mean.</strong>{' '}

@@ -541,7 +541,8 @@ export function describeOutcome(outcome: Exclude<ApiOutcome<unknown>, { kind: 'o
         kind: outcome.kind,
         heading: 'Not signed in (401)',
         text: `The API did not accept the key: ${outcome.message}`,
-        remedy: 'Paste a valid key. Keys start with asr_ and are shown once, at checkout.',
+        remedy:
+          'Paste a valid key. Keys start with asr_ and are shown once, when the operator issues them. A revoked or expired key is refused exactly like a wrong one: ask whoever runs this API for a new key. Self-serve checkout is not available.',
       };
     case 'upgrade':
       return {

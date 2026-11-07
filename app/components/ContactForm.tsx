@@ -13,6 +13,7 @@ const CONTACT_EMAIL = 'hello@neuralbridge.io';
 
 const INTENTS = [
   { value: 'register-cell', label: 'Register or Cell — pricing / demo' },
+  { value: 'account', label: 'An account or API key — Register or Cell' },
   { value: 'source', label: 'A copy of the source — CLI and offline kit' },
   { value: 'services', label: 'Services — a general enquiry' },
   { value: 'supplier', label: 'Supplier feed — publish advisories' },
@@ -141,6 +142,8 @@ export default function ContactForm({ defaultIntent }: { defaultIntent?: string 
           placeholder={
             intent === 'supplier'
               ? 'Which components, how many advisories a year, and any deadline you are working against.'
+              : intent === 'account'
+                ? 'Which plan you are asking about, who in your organisation would hold the key, and whether you will run the API yourself. A key is issued only after an account is agreed; nothing is created by sending this.'
               : intent === 'services'
                 ? 'Which of the services on the services page you are interested in, and what you can provide. No capacity, price or SLA is offered in advance.'
                 : intent === 'source'
