@@ -1,4 +1,6 @@
-# Industrial Autonomous Assurance (NeuralBridge)
+# NeuralBridge — Industrial Autonomous Assurance
+
+NeuralBridge is the company and platform. Industrial Autonomous Assurance is its flagship product.
 
 > Evidence infrastructure for machines whose software can hurt someone. A
 > hash-chained record of what is on each machine, which checks were run against it, and
@@ -8,7 +10,7 @@
 
 ## What this is
 
-NeuralBridge/Industrial Autonomous Assurance verifies and records evidence
+Industrial Autonomous Assurance (NeuralBridge's flagship product) verifies and records evidence
 for industrial machines: checks that a Declaration of Conformity still matches the recorded configuration, machine
 safety verification (ISO/TS 15066 separation checks), Machinery Regulation
 Annex III manifests and passports, fleet advisory matching, and a
@@ -51,11 +53,18 @@ have independently confirmed the live API responds.
 ## Key URLs
 
 - Homepage: https://neuralbridge.io/
+- Get started (the path from reading to an enrolled machine, with what runs offline, what needs a
+  hosted API and what is by request): https://neuralbridge.io/start
+- Trust and data handling (where data lives, provenance classes, what a record can prove,
+  permissions, limitations): https://neuralbridge.io/trust
+- Services (what help could be scoped; no capacity, SLA, certification or price is offered or
+  implied, and software entitlements are separate): https://neuralbridge.io/services
 - Pricing: https://neuralbridge.io/#pricing
 - Solutions (by buyer role):
   - Manufacturer: https://neuralbridge.io/solutions/manufacturer
+  - System integrator: https://neuralbridge.io/solutions/system-integrator
   - Plant operator: https://neuralbridge.io/solutions/plant-operator
-  - Compliance officer: https://neuralbridge.io/solutions/compliance-officer
+  - Safety / compliance engineer: https://neuralbridge.io/solutions/compliance-officer
   - Insurer / auditor: https://neuralbridge.io/solutions/insurer-auditor
   - AI / ops platform team: https://neuralbridge.io/solutions/ai-ops
 - How each part works (one page per search question; each states what it does not establish):
@@ -97,7 +106,7 @@ have independently confirmed the live API responds.
 - Structured agent descriptor (JSON sibling of this file):
   https://neuralbridge.io/.well-known/agent.json
 - Roadmap (shipped vs. planned, honestly): https://neuralbridge.io/roadmap
-- Security policy (how to report a vulnerability): https://neuralbridge.io/security
+- Security reporting (how to report a vulnerability): https://neuralbridge.io/security
 - security.txt (RFC 9116): https://neuralbridge.io/.well-known/security.txt
 - Organisation contact card (vCard, name, site and the published contact address only):
   https://neuralbridge.io/neuralbridge.vcf

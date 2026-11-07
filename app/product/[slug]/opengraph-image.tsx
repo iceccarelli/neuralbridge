@@ -15,6 +15,6 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const page = getProductPage(slug);
   return ogCard({
     kicker: page ? page.kicker : 'How it works',
-    title: clip(page ? page.h1 : 'Industrial Autonomous Assurance', 110),
+    title: clip(page ? page.h1 : 'NeuralBridge Industrial Autonomous Assurance', 110),
   });
 }

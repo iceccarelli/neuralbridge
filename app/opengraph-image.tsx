@@ -7,7 +7,7 @@ export const contentType = OG_CONTENT_TYPE;
 
 export default function OpengraphImage() {
   return ogCard({
-    kicker: 'Evidence infrastructure for CRA Art. 14 and Machinery Reg. 2023/1230',
-    title: 'A hash-chained record of what is on each machine, which checks were run against it, and when.',
+    kicker: 'Industrial Autonomous Assurance',
+    title: 'Does the safety evidence still describe the machine? Know on the day it stops.',
   });
 }

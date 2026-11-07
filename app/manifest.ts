@@ -7,9 +7,9 @@ import { BRAND } from './lib/seo';
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: BRAND,
-    short_name: 'IAA',
+    short_name: 'NeuralBridge',
     description:
-      'Evidence infrastructure for CRA Article 14 and Machinery Regulation Annex III 1.1.9: a hash-chained record of what is on each machine, which checks were run against it, and when.',
+      'NeuralBridge builds Industrial Autonomous Assurance: tamper-evident evidence that a machine\u2019s safety software and configuration still match what was verified.',
     start_url: '/',
     scope: '/',
     display: 'browser',

@@ -48,7 +48,7 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
   platform: {
     label: 'Platform',
     cards: [
-      { name: 'NeuralBridge FastAPI core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
+      { name: 'NeuralBridge platform core', blurb: 'Connection management the assurance product is built on.', href: '/#platform' },
       { name: 'MCP gateway', blurb: 'Tool listing and invocation for AI agents.', href: '/#platform' },
       { name: 'Assurance API', blurb: 'GET /v1/plans mirrors the entitlements the code enforces.', href: srcLink('/api') ?? '/developers', external: srcLink('/api') !== null },
       { name: 'Workspace', blurb: 'Your fleet, cases, supplier advisories and plan, read from the API with your key.', href: '/assurance' },
@@ -194,9 +194,10 @@ export default function Header({
       <div className="sticky-chrome">
         <div className="utility-bar">
           <div className="shell utility-bar-inner">
-            <span>Evidence infrastructure for CRA Art. 14 and Machinery Reg. 2023/1230</span>
+            <span>NeuralBridge &middot; Industrial Autonomous Assurance: evidence that a machine&apos;s safety software still matches what was verified</span>
             <div className="utility-links">
-              <a href={SALES}>Contact sales</a>
+              <a href="/trust">Trust &amp; data handling</a>
+              <a href={SALES}>Contact</a>
               {repoLink() && <a href={repoLink() ?? undefined} target="_blank" rel="noreferrer">GitHub</a>}
             </div>
           </div>
@@ -204,9 +205,12 @@ export default function Header({
 
         <div className="topbar">
           <div className="shell topbar-inner">
-            <a className="brand-lockup" href="#top" onClick={closeAll}>
-              <span className="brand-mark">IAA</span>
-              <span className="brand-name">Industrial Autonomous Assurance</span>
+            <a className="brand-lockup" href="/" onClick={closeAll} aria-label="NeuralBridge, Industrial Autonomous Assurance. Home">
+              <span className="brand-mark" aria-hidden="true">NB</span>
+              <span className="brand-text">
+                <span className="brand-name">NeuralBridge</span>
+                <span className="brand-product">Industrial Autonomous Assurance</span>
+              </span>
             </a>
 
             <nav className="topbar-nav" aria-label="Primary">
@@ -219,6 +223,9 @@ export default function Header({
                 <button onClick={(e) => toggle('solutions', e.currentTarget)} aria-expanded={openMenu === 'solutions'} aria-controls="mega-solutions">
                   Solutions <span className="caret">▾</span>
                 </button>
+              </div>
+              <div className="nav-item">
+                <a href="/services" onClick={closeAll}>Services</a>
               </div>
               <div className={`nav-item ${openMenu === 'pricing' ? 'open' : ''}`}>
                 <button onClick={(e) => toggle('pricing', e.currentTarget)} aria-expanded={openMenu === 'pricing'} aria-controls="mega-pricing">
@@ -243,8 +250,8 @@ export default function Header({
                 }}
               >⌕</button>
 
-              <a className="nav-cta ghost" href={SALES}>Talk to sales</a>
-              <a className="nav-cta primary" href="/#products">Get started</a>
+              <a className="nav-cta ghost" href={SALES}>Contact</a>
+              <a className="nav-cta primary" href="/start">Get started</a>
 
               <button
                 className="hamburger"
@@ -325,12 +332,8 @@ export default function Header({
               <div className="editorial-about">
                 <span className="mega-promo-kicker">About</span>
                 <h4>Why this exists</h4>
-                <p>Two regulations turned a quality problem into a legal one. Read the case in full.</p>
-                {repoLink('#readme') ? (
-                  <a href={repoLink('#readme') ?? undefined} target="_blank" rel="noreferrer" onClick={closeAll}>Read the README →</a>
-                ) : (
-                  <a href={DOCS} onClick={closeAll}>Read the docs →</a>
-                )}
+                <p>NeuralBridge builds Industrial Autonomous Assurance for machines whose software can affect safety. Two EU regulations turned a quality problem into a legal one; the product keeps the evidence.</p>
+                <a href="/product/industrial-autonomous-assurance" onClick={closeAll}>What the product is →</a>
               </div>
             </div>
           </div>
@@ -348,8 +351,8 @@ export default function Header({
                 <span>Validator, Register, Cell — full capability table.</span>
               </a>
               <a className="finder-item" href={SALES} onClick={closeAll}>
-                <strong>Talk to sales</strong>
-                <span>Register and Cell route to a real inquiry — checkout isn&apos;t live yet.</span>
+                <strong>Contact</strong>
+                <span>Register and Cell are sales-assisted — checkout isn&apos;t live yet.</span>
               </a>
             </div>
           </div>
@@ -406,9 +409,21 @@ export default function Header({
                 <strong>Roadmap</strong>
                 <span>What is planned and not yet built.</span>
               </a>
+              <a className="finder-item" href="/trust" onClick={closeAll}>
+                <strong>Trust &amp; data handling</strong>
+                <span>What is stored where, what each record can and cannot prove, and the limits.</span>
+              </a>
               <a className="finder-item" href="/security" onClick={closeAll}>
-                <strong>Security</strong>
+                <strong>Security reporting</strong>
                 <span>How to report a vulnerability.</span>
+              </a>
+              <a className="finder-item" href="/services" onClick={closeAll}>
+                <strong>Services</strong>
+                <span>What help could look like, what exists today, and what is not offered.</span>
+              </a>
+              <a className="finder-item" href="/start" onClick={closeAll}>
+                <strong>Get started</strong>
+                <span>From understanding to your first enrolled machine, step by step, with the state of each step.</span>
               </a>
               <a className="finder-item" href={SALES} onClick={closeAll}>
                 <strong>Contact</strong>
@@ -459,8 +474,10 @@ export default function Header({
             <>
               <button className="mobile-drill-item" onClick={() => setMobileView('products')}>Products <span>›</span></button>
               <button className="mobile-drill-item" onClick={() => setMobileView('solutions')}>Solutions <span>›</span></button>
+              <a className="mobile-drill-item" href="/services" onClick={() => setMobileOpen(false)}>Services</a>
               <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Pricing</a>
               <button className="mobile-drill-item" onClick={() => setMobileView('resources')}>Resources <span>›</span></button>
+              <a className="mobile-drill-item" href="/trust" onClick={() => setMobileOpen(false)}>Trust &amp; data handling</a>
               <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
             </>
           )}
@@ -506,7 +523,8 @@ export default function Header({
               <a className="mobile-drill-item" href="/investigate" onClick={() => setMobileOpen(false)}>Investigate</a>
               <a className="mobile-drill-item" href="/ai" onClick={() => setMobileOpen(false)}>AI</a>
               <a className="mobile-drill-item" href="/roadmap" onClick={() => setMobileOpen(false)}>Roadmap</a>
-              <a className="mobile-drill-item" href="/security" onClick={() => setMobileOpen(false)}>Security</a>
+              <a className="mobile-drill-item" href="/start" onClick={() => setMobileOpen(false)}>Get started</a>
+              <a className="mobile-drill-item" href="/security" onClick={() => setMobileOpen(false)}>Security reporting</a>
               <a className="mobile-drill-item" href={SALES} onClick={() => setMobileOpen(false)}>Contact</a>
               <a className="mobile-drill-item" href="/privacy" onClick={() => setMobileOpen(false)}>Privacy</a>
               <RepoLink path="/blob/main/CONTRIBUTING.md" className="mobile-drill-item">Contributing</RepoLink>
@@ -515,8 +533,8 @@ export default function Header({
         </div>
 
         <div className="mobile-drill-sticky">
-          <a className="btn btn-outline" href={SALES} onClick={() => setMobileOpen(false)}>Talk to sales</a>
-          <a className="btn btn-primary" href="/#pricing" onClick={() => setMobileOpen(false)}>Get started</a>
+          <a className="btn btn-outline" href={SALES} onClick={() => setMobileOpen(false)}>Contact</a>
+          <a className="btn btn-primary" href="/start" onClick={() => setMobileOpen(false)}>Get started</a>
         </div>
       </div>
     </header>

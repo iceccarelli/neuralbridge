@@ -128,10 +128,10 @@ export default function ApplicationsPage() {
         <div className="shell final-cta-inner">
           <div>
             <h2>Not sure which application fits?</h2>
-            <p>Tell us what you're running and how many machines — we'll point at the right plan.</p>
+            <p>Tell us what you are running and how many machines. No response time is promised.</p>
           </div>
           <div className="hero-actions">
-            <a className="btn btn-primary" href={SALES}>Talk to sales</a>
+            <a className="btn btn-primary" href={SALES}>Contact NeuralBridge</a>
             <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>
           </div>
         </div>

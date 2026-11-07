@@ -13,6 +13,8 @@ const CONTACT_EMAIL = 'hello@neuralbridge.io';
 
 const INTENTS = [
   { value: 'register-cell', label: 'Register or Cell — pricing / demo' },
+  { value: 'source', label: 'A copy of the source — CLI and offline kit' },
+  { value: 'services', label: 'Services — a general enquiry' },
   { value: 'supplier', label: 'Supplier feed — publish advisories' },
   { value: 'press', label: 'Press or partnership' },
   { value: 'other', label: 'Something else' },
@@ -139,7 +141,11 @@ export default function ContactForm({ defaultIntent }: { defaultIntent?: string 
           placeholder={
             intent === 'supplier'
               ? 'Which components, how many advisories a year, and any deadline you are working against.'
-              : 'What you are trying to do, and how many machines/products this needs to cover.'
+              : intent === 'services'
+                ? 'Which of the services on the services page you are interested in, and what you can provide. No capacity, price or SLA is offered in advance.'
+                : intent === 'source'
+                  ? 'Who you are, what you would run it on (a laptop, a plant server, an air-gapped machine) and which commands you want to try.'
+                  : 'What you are trying to do, and how many machines/products this needs to cover.'
           }
           required
           {...fieldProps('message')}

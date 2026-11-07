@@ -30,7 +30,7 @@ export default function NotFound() {
               <Link href="/contact">Contact</Link> — ask us where something went.
             </li>
             <li>
-              <Link href="/">Home</Link> — what Industrial Autonomous Assurance is and what it does.
+              <Link href="/">Home</Link> — what NeuralBridge and its product Industrial Autonomous Assurance are, and what they do.
             </li>
           </ul>
         </div>

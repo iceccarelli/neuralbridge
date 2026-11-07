@@ -1,8 +1,8 @@
 BEGIN:VCARD
 VERSION:4.0
 KIND:org
-FN:Industrial Autonomous Assurance
-ORG:Industrial Autonomous Assurance
+FN:NeuralBridge
+ORG:NeuralBridge
 URL:https://neuralbridge.io/
 EMAIL;TYPE=work:hello@neuralbridge.io
 END:VCARD
