@@ -44,7 +44,13 @@ export default function PrivacyPage() {
               <code> X-API-Key</code> header to the API host this build is configured with. It is readable by any
               script running on this origin and by browser extensions, so use a key you can rotate. On first load
               the site also reads the older keys <code>nb-console-api-key</code> and <code>nb-ai-api-key</code> to
-              carry a key you pasted earlier over to <code>nb-api-key</code>; it never writes to them.</li>
+              carry a key you pasted earlier over to <code>nb-api-key</code>, then deletes them; it never writes to them.
+              The &ldquo;Sign out of this tab&rdquo; button on <code>/assurance</code>, <code>/console</code> and
+              <code> /ai</code> removes this key and every other item listed below from the tab at once.</li>
+            <li><code>sessionStorage</code>, key <code>nb-checkout-claim:</code> followed by a Stripe checkout session id:
+              a one-time claim token created when you start a purchase in this tab, used only to collect the API key
+              you bought. It is sent in the body of a request to the API host this build is configured with, never in a
+              URL. It is gone when the tab closes.</li>
             <li><code>sessionStorage</code>, key <code>nb-assurance-decision-credential</code>: an operator key, only
               if you paste one into an operator panel on <code>/assurance</code>. It is gone when the tab closes
               and is sent only as the <code>X-API-Key</code> header to the API host this build is configured with.</li>

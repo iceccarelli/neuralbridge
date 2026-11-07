@@ -23,7 +23,7 @@ export const PLATFORM_STATUS: PlatformStatusRow[] = [
   { area: 'Connection management model', status: 'Supported as a core direction', pill: 'evolving' },
   { area: 'MCP tool listing / invocation layer', status: 'Supported', pill: 'supported' },
   {
-    area: 'Dashboard foundation (separate Vite admin UI, not wired to the assurance API)',
+    area: 'Customer workspace (the Next.js site: /assurance, /console, /ai, reading the real APIs)',
     status: 'Experimental / evolving',
     pill: 'evolving',
   },

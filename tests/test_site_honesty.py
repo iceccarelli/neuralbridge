@@ -352,14 +352,30 @@ PRIVACY = "app/privacy/page.tsx"
 
 
 def _storage_map() -> dict[str, set[str]]:
-    """key -> mechanisms, for every key passed to get/set/removeItem anywhere under ``app/``."""
+    """key -> mechanisms, for every key passed to get/set/removeItem anywhere under ``app/``.
+
+    Keys are resolved through ``const NAME = 'nb-...'`` (also through ``import { NAME as ALIAS }``),
+    through a template-literal prefix (``${PREFIX}${id}``) and through the legacy-key list. The keys
+    app/lib/credentials.ts defines are the single list sign-out clears, and its helpers take the
+    storage as an argument, so each one it names is filed under sessionStorage (its header says so,
+    and test_every_credentials_constant_is_used_with_session_storage checks that a caller does).
+    """
     files = {p: p.read_text(encoding="utf-8") for p in (ROOT / "app").rglob("*.ts*")}
     constants = {}
     for source in files.values():
-        constants.update(re.findall(r"\bconst\s+(\w+)\s*=\s*'((?:nb|iaa)-[a-z-]+)'", source))
+        constants.update(re.findall(r"\bconst\s+(\w+)\s*=\s*'((?:nb|iaa)-[a-z:-]+)'", source))
+    for source in files.values():
+        for imported in re.findall(r"import\s*\{([^}]*)\}", source):
+            for orig, alias in re.findall(r"(\w+)\s+as\s+(\w+)", imported):
+                if orig in constants:
+                    constants[alias] = constants[orig]
+    for source in files.values():
+        for alias, orig in re.findall(r"\bconst\s+(\w+)\s*=\s*(\w+);", source):
+            if orig in constants:
+                constants[alias] = constants[orig]
     legacy = set()
     for source in files.values():
-        for body in re.findall(r"LEGACY_KEYS\s*=\s*\[([^\]]*)\]", source):
+        for body in re.findall(r"LEGACY_KEY(?:S|_STORAGE)\s*=\s*\[([^\]]*)\]", source):
             legacy.update(re.findall(r"'([^']+)'", body))
     found: dict[str, set[str]] = {}
     for source in files.values():
@@ -375,8 +391,17 @@ def _storage_map() -> dict[str, set[str]]:
                     pytest.fail(f"storage key {arg!r} is not a constant this test can resolve")
                 for key in keys:
                     found.setdefault(key, set()).add(name)
+            for prefix in re.findall(rf"window\.{name}\.(?:get|set|remove)Item\(\s*`\$\{{(\w+)\}}", source):
+                if prefix not in constants:
+                    pytest.fail(f"storage key prefix {prefix!r} is not a constant this test can resolve")
+                found.setdefault(constants[prefix], set()).add(name)
         if re.search(r"document\.cookie\s*=", source):
             found.setdefault("<cookie>", set()).add("cookie")
+    credentials = (ROOT / "app/lib/credentials.ts").read_text(encoding="utf-8")
+    for key in re.findall(r"\bconst\s+\w+\s*=\s*'((?:nb|iaa)-[a-z:-]+)'", credentials):
+        found.setdefault(key, set()).add("sessionStorage")
+    for key in legacy:
+        found.setdefault(key, set()).add("sessionStorage")
     return found
 
 
@@ -391,13 +416,33 @@ class TestPrivacyDisclosesWhatTheCodeStores:
         mechanisms, keys = _browser_storage()
         assert {"localStorage", "sessionStorage"} <= mechanisms
         assert {"nb-api-key", "iaa-cookie-choice", "nb-ai-actor", "nb-ai-session",
-                "nb-assurance-decision-credential", "nb-console-api-key", "nb-ai-api-key"} <= keys
+                "nb-assurance-decision-credential", "nb-console-api-key", "nb-ai-api-key",
+                "nb-checkout-claim:"} <= keys
 
     def test_every_storage_mechanism_and_key_in_use_is_named_on_the_page(self):
         mechanisms, keys = _browser_storage()
         text = page_text(read(PRIVACY))
         missing = sorted(m for m in mechanisms | keys if m not in text)
         assert not missing, f"app/privacy/page.tsx does not mention: {missing}"
+
+    def test_every_credentials_constant_is_used_with_session_storage(self):
+        """app/lib/credentials.ts lists what sign-out clears; each key it names must really be
+        written to sessionStorage by a caller, never to localStorage (which sign-out does not touch)."""
+        credentials = read("app/lib/credentials.ts")
+        names = re.findall(r"export const (\w+)\s*=\s*'(?:nb|iaa)-[a-z:-]+'", credentials)
+        assert len(names) >= 5
+        others = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "app").rglob("*.ts*")
+                           if p.name != "credentials.ts")
+        assert "localStorage" not in credentials
+        for name in names:
+            if name == "CHECKOUT_CLAIM_PREFIX":
+                assert "sessionStorage.setItem(`${CLAIM_STORAGE_PREFIX}" in others
+            elif name.startswith("LEGACY"):
+                continue
+            else:
+                assert re.search(rf"\b{name}\b", others), f"{name} is never used outside credentials.ts"
+        for name in re.findall(r"window\.localStorage\.\w+Item\(\s*(\w+)", others):
+            assert name not in names, f"{name} is a credential and must not be in localStorage"
 
     def test_the_page_no_longer_says_a_single_flag_is_all_that_is_stored(self):
         text = page_text(read(PRIVACY))

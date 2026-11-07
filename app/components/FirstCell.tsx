@@ -3,6 +3,7 @@
 import RepoLink from './RepoLink';
 import { useState } from 'react';
 import { CELL_VERIFY_FIXTURE } from '../lib/cellVerifyFixture';
+import { DemoLabel } from './assurance/WorkspaceHeader';
 
 // A guided path to the one call that proves a Cell key is real:
 // POST /v1/machine/verify — mirrors FirstCase.tsx's honesty rules exactly.
@@ -97,7 +98,8 @@ export default function FirstCell({ apiBase, apiKey }: { apiBase: string; apiKey
   return (
     <div className="ai-card" id="cell-verify">
       <div className="ai-card-title">
-        <span className="status-pill cell">First Cell verification</span>
+        <span className="status-pill cell">First Cell verification</span>{' '}
+        <DemoLabel>Sample data: a bundled run, not your machine</DemoLabel>
       </div>
       <p style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
         The same check <code>POST /v1/machine/verify</code> runs from{' '}
@@ -109,7 +111,9 @@ export default function FirstCell({ apiBase, apiKey }: { apiBase: string; apiKey
         button: this compares that recorded run against its declared safety envelope for real, using the real
         engine, and seals the result to the hash-chained ledger. No key, a free-tier key, or a Register-tier key
         gets the real refusal below — this route has no free preview, unlike the register — never a faked pass. Real
-        integration posts a caller&apos;s own recorded trace in place of the fixture.
+        integration posts a caller&apos;s own recorded trace in place of the fixture. Note that a successful call writes
+        this sample as a record in your account&apos;s own ledger: it describes no machine of yours and counts as
+        nothing about one.
       </p>
 
       <div className="first-case-form">

@@ -36,7 +36,7 @@ jobs:
 
   # ── Marketing / workspace site (Next.js, repo root) ────────
   # Until this job existed nothing in CI installed, type-checked or built the root Next.js site
-  # (the `dashboard` job below builds src/dashboard only), so a framework upgrade could break every
+  # (the only other Node build, a separate Vite admin app, has been retired into this site), so a framework upgrade could break every
   # route and still merge green. Route-level behaviour is covered by tests-e2e/, run by the e2e job below (scripts/e2e-local.sh).
   site:
     name: Site (typecheck + production build)
@@ -341,22 +341,6 @@ jobs:
         run: actionlint
       - name: shellcheck
         run: shellcheck scripts/verify-release.sh scripts/rehearse-local.sh
-
-  # ── Dashboard Build ────────────────────────────────────────
-  dashboard:
-    name: Build Dashboard
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install dependencies
-        working-directory: src/dashboard
-        run: npm install
-      - name: Build dashboard
-        working-directory: src/dashboard
-        run: npm run build
 
   # ── Docker Build ───────────────────────────────────────────
   docker:

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import RepoLink from './RepoLink';
 import { QUICKSTART, SALES, SALES_SUPPLIER } from '../lib/links';
 import { FALLBACK_PLANS, type Plan } from '../lib/plans';
+import { CHECKOUT_CLAIM_PREFIX } from '../lib/credentials';
 
 const API_BASE = process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '';
 
@@ -22,8 +23,8 @@ function Price({ price }: { price: string }) {
   );
 }
 
-// Keep in step with app/checkout/success/SuccessClient.tsx.
-const CLAIM_STORAGE_PREFIX = 'nb-checkout-claim:';
+// Shared with app/checkout/success/SuccessClient.tsx through ../lib/credentials.
+const CLAIM_STORAGE_PREFIX = CHECKOUT_CLAIM_PREFIX;
 
 function CheckoutForm({
   tier,

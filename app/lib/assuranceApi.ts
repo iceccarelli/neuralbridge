@@ -230,7 +230,7 @@ export type Me = {
     limits: Record<string, number | boolean | null>;
   };
   usage_today: Record<string, number>;
-  account?: { id: string; company: string; email: string; status: string };
+  account?: { id: string; company: string; email: string; status: string; source?: string };
   keys?: { prefix?: string; label?: string; created_at?: string; revoked_at?: string | null; [k: string]: unknown }[];
   warning?: string;
   note?: string;
@@ -989,3 +989,44 @@ export type AttestationRecord = {
 };
 
 export type AttestLog = { count: number; attestations: AttestationRecord[]; warnings: string[] };
+
+// ---------------------------------------------------------------------------
+// CRA Article 14 register (GET /v1/register, src/assurance/security/art14/report.py)
+// ---------------------------------------------------------------------------
+// Read-only. Every date and submission here was recorded by a person: the platform has no channel
+// to the reporting platform and `verified_by_platform` is always false.
+
+export type Art14Deadline = {
+  stage: string;
+  stage_label: string;
+  due_at: string;
+  status: string;
+  submitted_at: string | null;
+  hours_remaining?: number;
+  submission_evidence: string | null;
+  verified_by_platform: boolean;
+};
+
+export type Art14Case = {
+  case_id: string;
+  state: string;
+  track: string | null;
+  signal: unknown;
+  awareness: unknown;
+  deadlines: { track: string; awareness_at: string; deadlines: Art14Deadline[]; pending_facts: string[]; breaches: string[] } | null;
+  users_informed_at: string | null;
+  outstanding: string[];
+};
+
+export type Art14Breach = { case_id: string; stage: string; status: string; due_at: string | null; verified_by_platform?: boolean };
+
+export type Art14Register = {
+  generated_at: string;
+  regulation: string;
+  applicable_since: string;
+  ledger: { records: number; chain_verified: boolean; problems: string[] };
+  cases: Art14Case[];
+  unreadable_cases: { case_id: string; error: string }[];
+  breaches: Art14Breach[];
+  checks_skipped: string[];
+};

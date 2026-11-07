@@ -110,7 +110,7 @@ cyclonedx-py requirements requirements/prod.lock --of JSON -o sbom-platform.json
 Real output on the date of the change: CycloneDX spec 1.6, JSON; the service lock gives 26
 components in ~200 KB, `prod.lock` 86 components in ~520 KB. Each component carries name,
 exact version, a `pkg:pypi` purl and the SHA-256 hashes from the lock. It does not describe the
-base image's OS packages, the Python interpreter, the Node dashboard stage of the root image or
+base image's OS packages, the Python interpreter, or
 this project's own package. An image-level SBOM would need an image scanner and has not been done.
 
 ## 5. The release path: written, statically validated, NOT RUN
@@ -202,11 +202,10 @@ published: it is outside this change, unsigned, and a second publish path to dec
   for ever and a Kubernetes pod never ready. They now probe `/api/v1/health*`, which a test client
   answers 200. The assurance service image had no `HEALTHCHECK`; it now has a standard-library probe of
   `/livez` (the command was run against a local server; Docker never executed it).
-- **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`, `node:22-alpine`),
-  nor are apt packages (`curl`), nor the GitHub Actions (major-version tags). Digests were not resolved
-  here (that needs a registry call and goes stale). The npm side of the root image runs `npm install` in
-  `src/dashboard`, not `npm ci`, because `src/dashboard` has **no lock file**: its dependency tree is not
-  reproducible, and nothing here audits it (`npm audit` was not run).
+- **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`), nor are apt
+  packages (`curl`), nor the GitHub Actions (major-version tags). Digests were not resolved here (that
+  needs a registry call and goes stale). The root image has no Node stage any more (the former
+  `src/dashboard` build was retired); the site is built by the `site` CI job with `npm ci`.
 - **Only one CI test leg runs from the lock**: Python 3.11 installs `requirements/test.lock` with
   `--require-hashes`; 3.12 and 3.13 install `requirements/test.txt` (latest allowed versions) on
   purpose, to see forward drift. The service lock (`assurance-service.lock`, Python 3.12) is not

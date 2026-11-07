@@ -145,7 +145,7 @@ export default function PassportPanel({ apiKey, actor, setActor }: { apiKey: str
         Or load a passport file{fileName ? ` (loaded: ${fileName})` : ''}
         <input type="file" accept=".json,application/json" onChange={(e) => void readFile(e.target.files?.[0])} />
       </label>
-      <button className="btn btn-outline" disabled={busy} onClick={() => void checkFile()}>
+      <button className="btn btn-secondary" disabled={busy} onClick={() => void checkFile()}>
         {busy ? 'Working…' : 'Check passport'}
       </button>
 
@@ -159,7 +159,7 @@ export default function PassportPanel({ apiKey, actor, setActor }: { apiKey: str
           Your name (required: the person named on the passport)
           <input type="text" value={actor} onChange={(e) => setActor(e.target.value)} autoComplete="name" />
         </label>
-        <button className="btn btn-outline" disabled={busy} onClick={() => void assemble()}>
+        <button className="btn btn-secondary" disabled={busy} onClick={() => void assemble()}>
           {busy ? 'Working…' : 'Assemble, do not seal'}
         </button>
       </details>

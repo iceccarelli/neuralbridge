@@ -77,7 +77,7 @@ export default function IntelPanel({ apiKey }: { apiKey: string }) {
             autoCapitalize="characters"
           />
         </label>
-        <button type="submit" className="btn btn-outline" disabled={busy}>
+        <button type="submit" className="btn btn-secondary" disabled={busy}>
           {busy ? 'Looking up…' : 'Look up'}
         </button>
       </form>

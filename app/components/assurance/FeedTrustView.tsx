@@ -272,7 +272,7 @@ function OverrideForm({
       {
         <div data-testid="override-flow">
           {!open ? (
-            <button className="btn btn-outline" onClick={() => setOpen(true)}>
+            <button className="btn btn-secondary" onClick={() => setOpen(true)}>
               Override: accept this one advisory anyway…
             </button>
           ) : (
