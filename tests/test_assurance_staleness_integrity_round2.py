@@ -136,7 +136,7 @@ class TestAFailureIsDatedByTheLedgersClockNotTheFilers:
         clock.at(10)
         seal_raw_body(ledger, fail_body("2026-10-01T08:00:00Z"))       # filed 10:00
         clock.at(11)
-        seal_raw_body(ledger, raw_body("2026-10-01T10:30:00Z", verified=CHECKS, fw=HASH_B))   # began 10:30
+        seal_raw_body(ledger, raw_body("2026-10-01T10:30:00Z", verified=CHECKS))   # began 10:30
         assert coverage_of(ledger, [])[0].functions[0].coverage is Coverage.CURRENT
 
     def test_the_record_carries_the_ledgers_filing_time(self, ledger, clock):
@@ -275,7 +275,7 @@ class TestADamagedVerificationIsAssumedToHaveFailed:
         corrupt_row(ledger, last_seq(ledger, BUNDLE_KIND))
         assert coverage_of(ledger, [])[0].functions[0].coverage is Coverage.FAILING
         clock.at(10)
-        seal_raw_body(ledger, raw_body("2026-10-01T09:30:00Z", verified=CHECKS, fw=HASH_B))
+        seal_raw_body(ledger, raw_body("2026-10-01T09:30:00Z", verified=CHECKS))
         report, recs = coverage_of(ledger, [])
         assert recs[1].filed_at == datetime(2026, 10, 1, 9, 0, tzinfo=UTC)   # the row's own `at`
         assert report.functions[0].coverage is Coverage.CURRENT
@@ -342,7 +342,7 @@ class TestADamagedManifestIsAssumedToHaveChangedEverything:
         corrupt_row(ledger, last_seq(ledger, INTERVENTION_KIND))
         assert coverage_of(ledger)[0].functions[0].coverage is Coverage.STALE
         clock.at(9, 35)
-        seal_raw_body(ledger, raw_body("2026-10-01T09:30:00Z", verified=CHECKS, fw=HASH_B))
+        seal_raw_body(ledger, raw_body("2026-10-01T09:30:00Z", verified=CHECKS))
         report, _ = coverage_of(ledger)
         assert report.functions[0].coverage is Coverage.CURRENT
         clock.at(11)

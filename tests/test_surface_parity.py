@@ -1015,6 +1015,18 @@ def test_no_read_only_three_surface_capability_is_left_unexercised():
         "catalogue.capabilities": "compared by tests/test_assurance_capabilities.py",
         "change.claim": "a write", "change.advance": "a write", "change.reverify": "a write",
         "change.assess_drift": "a write", "change.assess_intervention": "a write",
+        # Added when the HTTP/MCP lifecycle gaps were closed. Each is exercised on the surfaces
+        # named here; the CLI form is the offline command and is not byte-compared with them.
+        "art14.history": "the MCP tool and the route are exercised by "
+                         "tests/test_interfaces_mcp_reads.py (the read-only register tools, "
+                         "benign and hostile arguments); the CLI form reads the same ledger offline",
+        "machinery.export": "API and MCP are exercised, and the export is verified with the free "
+                            "checker, by tests/test_assurance_machinery_export_api.py; the CLI form "
+                            "(machinery export) is the same bundle read from a local ledger",
+        "machinery.passport_check_ledger": "API and MCP give the same answer in "
+                                           "tests/test_assurance_passport_ledger_check_api.py; the CLI "
+                                           "form (machinery check --ledger) is covered by "
+                                           "tests/test_assurance_passport_superseded.py",
     }
     triple = [c.id for c in cat.CAPABILITIES if c.cli and c.api and c.mcp]
     missing = [i for i in triple if i not in EXERCISED and i not in declared_exempt]

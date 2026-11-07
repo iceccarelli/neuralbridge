@@ -282,14 +282,15 @@ class TestCapabilityIdsAndNamedThings:
         for cap in ("kit.init", "kit.check", "kit.run", "attest.keygen", "machine.recorder_sign", "ops.cycle",
                     "tenant.export", "tenant.delete", "intel.ingest", "intel.refresh"):
             assert cell(cap, "api") == "by_design", cap
-        # the planned items anywhere: the CLI verb for the signed advisory case route, and the read-only
-        # case history (safe to offer to an agent, not yet an MCP tool)
+        # the planned items anywhere: only the CLI verb for the signed advisory case route (the read-only
+        # case history became an MCP tool, art14_history, and is checked with the other reads below)
         planned = sorted((c["id"], s) for c in CONTRACT["capabilities"] for s, v in c["surfaces"].items() if v["status"] == "planned")
-        assert planned == [("art14.history", "mcp"), ("change.assess_advisory_signed", "cli")]
+        assert planned == [("change.assess_advisory_signed", "cli")]
         assert cell("change.assess_advisory_signed", "api") == "available"
         # reads that the pages say MCP offers
         for cap in ("machinery.coverage", "machinery.diff", "machinery.passport_check", "art14.case", "art14.register",
-                    "art14.breaches", "art14.export", "evidence.ledger_verify", "attest.verify", "machine.check"):
+                    "art14.breaches", "art14.export", "art14.history", "machinery.export", "machinery.passport_check_ledger",
+                    "evidence.ledger_verify", "attest.verify", "machine.check"):
             assert cell(cap, "mcp") == "available", cap
         # the MCP tools the API page names as bounded case work
         for tool in ("change_claim", "change_advance", "change_reverify", "change_assess_drift", "change_assess_intervention"):
