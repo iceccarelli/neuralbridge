@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from neuralbridge.ai.audit_events import gate_with_audit
+from neuralbridge.ai.audit_events import gate_validate_with_audit, gate_with_audit
 from neuralbridge.ai.entitlements import Principal, current_principal, scope_for
 from neuralbridge.ai.guard import is_connection_key
 from neuralbridge.ai.identity import Actor, get_current_actor
@@ -40,7 +40,7 @@ class AdapterCreateRequest(BaseModel):
 
 class AdapterExecuteRequest(BaseModel):
     """Payload for executing an operation on a registered adapter."""
-    operation: str = Field(..., description="Operation name (e.g. 'query', 'send_message').")
+    operation: str = Field(..., max_length=128, description="Operation name (e.g. 'query', 'send_message').")
     params: dict[str, Any] = Field(default_factory=dict, description="Operation parameters.")
 
 
@@ -177,17 +177,38 @@ async def execute_adapter(
 async def validate_credentials(
     adapter_type: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    router_dep: RequestRouter = Depends(get_request_router),
+    audit: AuditLogger = Depends(get_audit_logger),
+    actor: Actor = Depends(get_current_actor),
     principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
-    """Test whether the configured credentials for an adapter are valid."""
+    """Test whether the configured credentials for an adapter are valid.
+
+    This makes the server use its credentials (the REST adapter sends its bearer token to the
+    configured base URL), so it is gated like a write — the ``ai_control_plane`` entitlement for
+    every adapter type (402 otherwise, audited), rate limited and audited as ``adapter_validate``.
+    """
     _hide_connection_key(adapter_type, principal)
-    adapter = registry.get(adapter_type)
-    if not adapter:
+    await gate_validate_with_audit(
+        audit, surface="adapters_route", actor=actor.as_audit_string(), adapter_type=adapter_type,
+        principal=principal,
+    )
+    if not registry.get(adapter_type):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Adapter '{adapter_type}' not found.",
         )
-    result = await adapter.validate_credentials()
+    try:
+        result = await router_dep.validate(adapter_type, actor=actor.as_audit_string(), owner=scope_for(principal).owner)
+    except AuditUnavailableError:
+        raise
+    except ResourceLimitError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"error": exc.code, "message": str(exc)},
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except AdapterTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
     return result.to_dict()
 
 

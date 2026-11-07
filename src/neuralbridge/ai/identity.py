@@ -25,6 +25,11 @@ from dataclasses import dataclass
 
 from fastapi import Header
 
+from neuralbridge.security.audit import bound_text
+
+#: Longest actor id / session id kept; the rest is replaced by a visible ``...[+N chars]`` marker.
+MAX_ACTOR_CHARS = 128
+
 ACTOR_HEADER = "X-NB-Actor"
 SESSION_HEADER = "X-NB-Session"
 
@@ -52,10 +57,11 @@ def resolve_actor(actor_header: str | None, session_header: str | None) -> Actor
     ``"system"`` — it gets a fresh, clearly-labelled operator id instead,
     so "who did this" is always answerable from the audit trail alone.
     """
-    session_id = session_header or str(uuid.uuid4())
+    session_id = bound_text(session_header, MAX_ACTOR_CHARS) if session_header else str(uuid.uuid4())
     if not actor_header or actor_header.strip().lower() in FORBIDDEN_ACTOR_IDS:
         return Actor(id=f"operator-{session_id[:8]}", session_id=session_id)
-    return Actor(id=actor_header.strip(), session_id=session_id)
+    # The header is client-chosen and lands in every audit row: bound it, visibly (never silently).
+    return Actor(id=bound_text(actor_header.strip(), MAX_ACTOR_CHARS), session_id=session_id)
 
 
 async def get_current_actor(

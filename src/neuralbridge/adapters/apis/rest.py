@@ -19,8 +19,12 @@ Result: an :class:`AdapterResponse`.
   ``invalid_endpoint``, ...) and ``data`` carries ``error`` (the code) plus ``status_code`` and a
   truncated ``body`` where a response exists. Network and policy failures are returned, not raised.
 
-Configuration (YAML)
---------------------
+Configuration (the config shape, shown as YAML)
+-----------------------------------------------
+**Not wired:** no code shipped in this repository reads such a file or registers this adapter
+(``shipped_loader`` is ``False``; ``tests/test_adapters_wiring.py`` pins that). An operator who wants
+it calls ``registry.register(RestApiAdapter(config), key="rest")`` in their own startup code.
+
 .. code-block:: yaml
 
     adapters:
@@ -228,13 +232,27 @@ class _RefusedError(Exception):
         self.detail = detail
 
 
+_NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return (
-        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
-        or ip.is_reserved or ip.is_unspecified
-    )
+    """Only a globally routable unicast address may be dialled.
+
+    ``is_private`` alone misses shared address space 100.64.0.0/10 (carrier-grade NAT, which holds a
+    cloud metadata address, 100.100.100.200), benchmarking 198.18.0.0/15, IETF 192.0.0.0/24 and
+    others; ``not is_global`` covers all of them. IPv4 embedded in IPv4-mapped, 6to4 and NAT64
+    addresses is judged as the IPv4 address it reaches.
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour is not None:
+            ip = ip.sixtofour
+        elif ip in _NAT64:
+            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        elif ip.teredo is not None:
+            return True  # a tunnel whose far end we cannot see
+    return ip.is_multicast or ip.is_unspecified or not ip.is_global
 
 
 async def _resolve(host: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:

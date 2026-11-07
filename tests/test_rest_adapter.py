@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import threading
 import time
@@ -240,6 +241,41 @@ def test_private_metadata_and_mapped_addresses_are_refused(host):
     adapter = RestApiAdapter({"base_url": f"http://{host}:9", "timeout": 2})
     result = asyncio.run(_run(adapter, "get", endpoint="/latest/meta-data"))
     assert result.success is False and result.error.startswith("blocked_destination")
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["100.64.0.1", "100.100.100.200", "[::ffff:100.100.100.200]", "198.18.0.1", "192.0.0.1", "240.0.0.1",
+     "[64:ff9b::6464:c8]", "[2002:6464:64c8::1]", "224.0.0.1", "255.255.255.255"],
+)
+def test_non_global_ranges_beyond_is_private_are_refused(host):
+    """Red-team 2 M1: CGNAT 100.64.0.0/10 (100.100.100.200 is a cloud metadata address) was dialled."""
+    adapter = RestApiAdapter({"base_url": f"http://{host}:9", "timeout": 2})
+    result = asyncio.run(_run(adapter, "get", endpoint="/latest/meta-data"))
+    assert result.success is False and result.error.startswith("blocked_destination")
+
+
+@pytest.mark.parametrize("ip", ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:4700:4700::1111", "::ffff:8.8.8.8"])
+def test_a_globally_routable_address_is_still_allowed(ip):
+    from neuralbridge.adapters.apis.rest import _ip_is_blocked
+
+    assert _ip_is_blocked(ipaddress.ip_address(ip)) is False
+
+
+@pytest.mark.parametrize("ip", ["100.64.0.1", "100.100.100.200", "::ffff:100.100.100.200", "198.18.0.1", "192.0.0.1",
+                                "240.0.0.1", "10.1.1.1", "64:ff9b::a00:1", "2002:a00:1::1", "224.0.0.1", "::"])
+def test_ip_is_blocked_unit(ip):
+    from neuralbridge.adapters.apis.rest import _ip_is_blocked
+
+    assert _ip_is_blocked(ipaddress.ip_address(ip)) is True
+
+
+def test_the_private_network_opt_in_still_reaches_cgnat_space():
+
+    adapter = RestApiAdapter({"base_url": "http://100.64.0.1:9", "timeout": 1, "allow_private_network": True})
+    result = asyncio.run(_run(adapter, "get", endpoint="/x"))
+    # not refused by policy: it tried to connect (and failed to reach the unroutable address)
+    assert not (result.error or "").startswith("blocked_destination")
 
 
 def test_allowed_hosts_restricts_even_with_private_opt_in(server):

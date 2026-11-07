@@ -60,6 +60,69 @@ def _pg_config_from_env() -> dict[str, Any] | None:
     }
 
 
+#: Roles whose membership lets SQL reach the server's filesystem or run OS commands.
+_PRIVILEGED_MEMBERSHIPS = ("pg_execute_server_program", "pg_read_server_files", "pg_write_server_files")
+_ROLE_CHECK_TTL_S = 60.0
+_role_state: dict[str, Any] = {"at": 0.0, "value": None}
+
+
+async def inspect_role_privileges(config: dict[str, Any]) -> dict[str, Any]:
+    """Is the role this connection logs in as a superuser or a server-file/program member?
+
+    The /ai/read policy refuses file and program SQL, but a READ ONLY transaction does not stop
+    ``COPY .. TO PROGRAM`` or ``pg_read_file`` and the demo is free and anonymous: the demo role
+    must be a plain read-only role. Never raises and never hard-fails startup (CI's own Postgres
+    service user is a superuser): the answer is ``{"checked": False}`` when it cannot ask.
+    """
+    import asyncpg  # local: only this check needs a direct (non-pooled) connection
+
+    try:
+        conn = await asyncpg.connect(
+            host=config["host"], port=config["port"], user=config["user"], password=config.get("password", ""),
+            database=config["database"], ssl=config.get("ssl_mode", "prefer"), timeout=3,
+        )
+    except Exception as exc:  # noqa: BLE001 - the class only: driver text carries host/user
+        return {"checked": False, "privileged": None, "reason": f"could not connect ({type(exc).__name__})"}
+    try:
+        row = await conn.fetchrow(
+            "SELECT r.rolsuper AS superuser, "
+            + ", ".join(f"pg_has_role(current_user, '{m}', 'member') AS {m}" for m in _PRIVILEGED_MEMBERSHIPS)
+            + " FROM pg_roles r WHERE r.rolname = current_user"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"checked": False, "privileged": None, "reason": f"could not inspect role ({type(exc).__name__})"}
+    finally:
+        await conn.close()
+    reasons = []
+    if row is not None:
+        if row["superuser"]:
+            reasons.append("superuser")
+        reasons.extend(m for m in _PRIVILEGED_MEMBERSHIPS if row[m])
+    return {"checked": True, "privileged": bool(reasons), "reasons": reasons}
+
+
+async def check_seeded_role(*, force: bool = False) -> dict[str, Any] | None:
+    """Inspect the env-seeded demo role (cached ~60 s); ``None`` when no DSN is configured.
+    Logs a warning every time a fresh check finds it privileged."""
+    import time
+
+    config = _pg_config_from_env()
+    if config is None:
+        return None
+    now = time.monotonic()
+    if not force and _role_state["value"] is not None and now - _role_state["at"] < _ROLE_CHECK_TTL_S:
+        return _role_state["value"]
+    result = await inspect_role_privileges(config)
+    if result.get("privileged"):
+        logger.warning(
+            "ai_demo_role_privileged", reasons=result["reasons"],
+            detail="the seeded /ai demo role can reach server files or programs; use a plain read-only role "
+                   "(docs/ai-local-setup.md)",
+        )
+    _role_state.update(at=now, value=result)
+    return result
+
+
 def register_seeded_adapter(registry: AdapterRegistry) -> bool:
     """Make sure THIS process holds the live adapter for the seeded connection.
 

@@ -166,3 +166,13 @@ async def enforce_write_gate(adapter_type: str, operation: str, params: dict[str
         return
 
     await require_ai_control_plane(principal)
+
+
+async def enforce_validate_gate(adapter_type: str, principal: Principal) -> None:
+    """``POST /adapters/{type}/validate`` makes a credentialed call from the server (the REST adapter
+    sends ``HEAD`` with the operator's bearer token to its configured base URL; Postgres opens a
+    connection with the stored password). It is never a discovery operation, so for **every**
+    adapter type, ``postgres`` included, it needs the same ``ai_control_plane`` entitlement a write
+    does: a free or anonymous caller must not be able to make the server use its credentials.
+    Raises 402 (authenticated, unentitled) like ``enforce_write_gate``; 401 comes from the principal."""
+    await require_ai_control_plane(principal)

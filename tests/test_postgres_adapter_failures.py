@@ -138,7 +138,16 @@ class TestReadOnlyIsEnforcedByTheAdapter:
         """The policy gate classifies operation=query as READ whatever the SQL says; before the
         adapter enforced read-only, a keyless caller could delete rows through /ai/read."""
         demo = next(c for c in client.get(f"{API}/connections", headers=h()).json() if c["source"] == "seeded_from_env")
+        # Two layers now. The policy refuses a read that does not start with SELECT/WITH/SHOW/EXPLAIN/VALUES
+        # (403) ...
         for sql in ("DELETE FROM pgf_t RETURNING *", "UPDATE pgf_t SET note = 'pwned' RETURNING *"):
+            r = client.post(f"{API}/read", headers=h(), json={
+                "connection_id": demo["id"], "operation": "query", "params": {"sql": sql}})
+            assert r.status_code == 403, r.text
+        # ... and a write that gets past the policy's first-token rule is still stopped by the
+        # adapter's READ ONLY transaction in the database.
+        for sql in ("WITH d AS (DELETE FROM pgf_t RETURNING *) SELECT * FROM d",
+                    "WITH u AS (UPDATE pgf_t SET note = 'pwned' RETURNING *) SELECT * FROM u"):
             r = client.post(f"{API}/read", headers=h(), json={
                 "connection_id": demo["id"], "operation": "query", "params": {"sql": sql}})
             assert r.status_code == 200 and r.json()["success"] is False, r.text

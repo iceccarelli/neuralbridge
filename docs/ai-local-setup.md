@@ -33,6 +33,27 @@ export NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev
 export NEURALBRIDGE_AI_PG_DATABASE=neuralbridge_ai
 ```
 
+## The demo role must be a plain read-only role
+
+`/ai/read` on the seeded demo connection is free and open to anonymous callers. Its policy
+(`src/neuralbridge/ai/policy.py`) admits a single `SELECT`/`WITH`/`SHOW`/`EXPLAIN`/`VALUES` statement and
+refuses file, large-object, program and session-control SQL, but a `READ ONLY` transaction does not stop
+`COPY ... TO PROGRAM` or `pg_read_file`, so the database role itself is the last line of defence. Use a role
+that is **not** a superuser and is **not** a member of `pg_execute_server_program`, `pg_read_server_files` or
+`pg_write_server_files`, with `SELECT` on the demo tables only:
+
+```sql
+CREATE ROLE nb_demo_ro LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '...';
+GRANT CONNECT ON DATABASE neuralbridge_ai TO nb_demo_ro;
+GRANT USAGE ON SCHEMA public TO nb_demo_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO nb_demo_ro;
+```
+
+If the configured role is privileged the backend still starts (CI's own Postgres service user is a
+superuser) but says so: a `ai_demo_role_privileged` warning in the startup log, and an `ai_demo_role` object
+plus a `warnings` entry on `GET /api/v1/health/ready` (status stays 200). The local `neuralbridge` dev role
+above is a throwaway superuser for tests; do not expose such a deployment.
+
 ## Start the backend
 
 The seeded demo connection is shared by every caller, so by default a paid

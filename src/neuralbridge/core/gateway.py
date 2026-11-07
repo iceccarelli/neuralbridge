@@ -34,7 +34,7 @@ from fastapi import HTTPException
 from neuralbridge.ai.audit_events import gate_with_audit
 from neuralbridge.ai.entitlements import get_accounts, resolve_principal, scope_for
 from neuralbridge.core.router import RequestRouter
-from neuralbridge.security.audit import AuditLogger, AuditUnavailableError, redact_text
+from neuralbridge.security.audit import AuditLogger, AuditUnavailableError, bound_text, redact_text
 from neuralbridge.security.limits import Limits, ResourceLimitError
 
 logger = structlog.get_logger(__name__)
@@ -303,12 +303,12 @@ class MCPGateway:
             raise ValueError(f"Unknown tool: {tool_name}")
 
         tool = self._tools[tool_name]
-        operation = arguments.get("operation", "execute")
+        operation = bound_text(str(arguments.get("operation", "execute")), 128)
         # "actor"/"api_key" are gateway-level control arguments, not
         # forwarded to the adapter as operation params — same treatment
         # assurance-mcp gives "actor" on its machine_verify tool.
         params = {k: v for k, v in arguments.items() if k not in ("actor", "api_key")}
-        actor = str(arguments.get("actor") or self._default_actor)
+        actor = bound_text(str(arguments.get("actor") or self._default_actor), 128)
         api_key = arguments.get("api_key") or self._default_api_key
 
         try:
