@@ -86,6 +86,49 @@ def test_it_reads_only_the_callers_own_ledger(sealed):
     assert r.status_code == 200 and body["ok"] is False and body["problems"]
 
 
+def test_a_ledger_whose_chain_does_not_verify_is_409_never_an_ok(live_api):
+    """The guard that stops a passport being judged against an edited ledger.
+
+    Without it ``check-ledger`` would read whatever the tampered file now says and could answer
+    ``ok`` (or a confident ``problems`` list) about a ledger nobody can vouch for. The answer
+    must be 409 ``ledger_chain_unverified``, and the control (same call before the edit) is 200.
+    """
+    import json
+    import sqlite3
+
+    account_id, headers = live_api.account("passport-tamper@example.de")
+    m = manifest()
+    with live_api.client() as http:
+        assert http.post("/v1/machinery/manifest", headers=headers,
+                         json={"manifest": m.to_dict(), "actor": "V. Grimaldi"}).status_code == 200
+        r = http.post("/v1/machinery/passport", headers=headers,
+                      json={"manifest": m.to_dict(), "actor": "V. Grimaldi"})
+        assert r.status_code == 200, r.text
+        passport = r.json()
+        before = _ledger(http, headers, passport)
+        assert before.status_code == 200 and before.json()["ok"] is True  # control
+
+        ledger = live_api.tenant_ledger(account_id)
+        assert ledger.verify_chain()[0] is True
+        db = sqlite3.connect(ledger.path)
+        try:
+            seq, raw = db.execute("select seq, payload from chain order by seq limit 1").fetchone()
+            payload = json.loads(raw)
+            payload["tampered"] = True  # an edit of a sealed record: the hash no longer matches
+            db.execute("update chain set payload=? where seq=?",
+                       (json.dumps(payload, sort_keys=True, separators=(",", ":")), seq))
+            db.commit()
+        finally:
+            db.close()
+        assert ledger.verify_chain()[0] is False
+
+        after = _ledger(http, headers, passport)
+    assert after.status_code == 409, after.text
+    detail = after.json()["detail"]
+    assert detail["error"] == "ledger_chain_unverified" and detail["problems"]
+    assert "ok" not in after.json()  # no verdict of any kind was produced
+
+
 @pytest.mark.parametrize("who, status", [("none", 401), ("lapsed", 402)])
 def test_it_is_gated_like_the_other_machine_routes(sealed, who, status):
     api, headers, _, passport = sealed
