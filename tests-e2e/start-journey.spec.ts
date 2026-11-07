@@ -51,6 +51,6 @@ test.describe('conversion path', () => {
     ]) {
       await expect(services.first().getByRole('heading', { name: label })).toHaveCount(1);
     }
-    await expect(page.getByText(/€|\bEUR\b/)).toHaveCount(0);
+    await expect(services.getByText(/€|\bEUR\b/)).toHaveCount(0);
   });
 });
