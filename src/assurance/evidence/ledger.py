@@ -235,6 +235,14 @@ class _GuardedConnection(sqlite3.Connection):
 _VOIDED_READ_ATTEMPTS = 8
 
 
+def _is_transient_io(exc: sqlite3.OperationalError) -> bool:
+    """SQLite's generic I/O error (primary code 10, any extended code), and nothing else."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) == 10
+    return str(exc).strip().lower() == "disk i/o error"
+
+
 def _retry_voided(fn: Any) -> Any:
     """Re-run a whole read whose snapshot was voided by a writer (see ``_connect_ro``).
 
@@ -252,6 +260,15 @@ def _retry_voided(fn: Any) -> Any:
                 return fn(self, *args, **kwargs)
             except LedgerChangedWhileReadError:
                 if attempt == _VOIDED_READ_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+            except sqlite3.OperationalError as exc:
+                # A reader that opens a WAL file while another process is recreating or
+                # truncating its -shm / -wal sidecar can get SQLITE_IOERR ("disk I/O error")
+                # for a read that would succeed a moment later (seen as a 500 on a hosted
+                # runner under four workers). The read has changed nothing, so it is re-run
+                # from scratch, boundedly; a persistent fault still raises after the last try.
+                if not _is_transient_io(exc) or attempt == _VOIDED_READ_ATTEMPTS - 1:
                     raise
                 time.sleep(0.02 * (attempt + 1))
 
