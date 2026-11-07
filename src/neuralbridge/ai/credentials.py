@@ -357,7 +357,7 @@ class RollbackJournal:
     def append(self, op: str, *, connection_id: str, owner: str, version: int = 0) -> str:
         """Durably record an event; returns the journal id. Raises ``CustodyError`` if it cannot."""
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
         except OSError as exc:
             raise CustodyError(503, "credential_journal_unavailable",

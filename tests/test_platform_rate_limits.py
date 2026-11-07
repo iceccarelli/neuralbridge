@@ -229,7 +229,11 @@ class TestServiceWiring:
         assert ready["rate_limits"]["declared_workers"] == 4
 
     def test_readiness_reports_a_fallback_to_process_local_counting(self, client, keys: Keys, monkeypatch) -> None:
-        from neuralbridge.api.dependencies import get_adapter_registry, get_audit_logger, get_request_router
+        from neuralbridge.api.dependencies import (
+            get_adapter_registry,
+            get_audit_logger,
+            get_request_router,
+        )
 
         router = get_request_router(get_adapter_registry(), get_audit_logger())
         monkeypatch.setattr(router._rate, "store", type("B", (), {"rate_hit": lambda *a, **k: (_ for _ in ()).throw(OSError())})())
