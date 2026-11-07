@@ -11,6 +11,10 @@ registered under a unique registry key
 (``f"postgres:{connection_id}"``) so multiple Postgres connections can be
 live at once without one overwriting another in the shared
 ``AdapterRegistry`` (which is otherwise one-instance-per-adapter-type).
+
+A bound connection's credential is held by ``neuralbridge.ai.credentials`` (sealed in the shared
+store and usable from every worker, or — only on explicit single-worker opt-in — process-local);
+with neither configured, binding and rotating answer 503 rather than pretend.
 """
 
 from __future__ import annotations
@@ -22,6 +26,13 @@ from typing import Any
 import structlog
 
 from neuralbridge.adapters.databases.postgres import PostgresAdapter
+from neuralbridge.ai.credentials import (
+    CUSTODY_PROCESS_LOCAL,
+    CUSTODY_VAULT,
+    SHARED,
+    CredentialVault,
+    CustodyError,
+)
 from neuralbridge.ai.schemas import ConnectionSummary
 from neuralbridge.ai.store import REVOKED, AiStore, ConnectionRecord, new_id
 from neuralbridge.ai.tenancy import Scope, can_delete_connection, can_read_connection
@@ -186,6 +197,7 @@ def ensure_seeded_connection(registry: AdapterRegistry, store: AiStore) -> str |
 def create_connection(
     registry: AdapterRegistry,
     store: AiStore,
+    vault: CredentialVault,
     *,
     owner: str,
     name: str,
@@ -200,53 +212,86 @@ def create_connection(
     account id from the validated principal (``entitlements.scope_for``),
     never a caller-supplied field. Paid-gated at the route layer
     (``require_ai_control_plane``) — this function itself does not check
-    entitlement, callers must."""
+    entitlement, callers must.
+
+    Raises :class:`CustodyError` (503) when no safe custody is configured. In shared mode the
+    credential is sealed and stored, the journal records the creation BEFORE the store does, and
+    the new connection is usable from every worker at once."""
     if not owner:
         raise ValueError("a bound connection must have an owner")
+    mode = vault.require_available()
     connection_id = new_id()
     registry_key = f"postgres:{connection_id}"
-    adapter_config = {
-        "host": host, "port": port, "user": user, "password": password,
-        "database": database, "ssl_mode": ssl_mode,
-    }
-    registry.register(PostgresAdapter(config=adapter_config), key=registry_key)
-
+    target = {"host": host, "port": port, "database": database, "ssl_mode": ssl_mode}
+    adapter_config = {**target, "user": user, "password": password}
     record = ConnectionRecord(
         id=connection_id,
         name=name,
         description="Bound via POST /ai/connections.",
         adapter_type="postgres",
         registry_key=registry_key,
-        # Never store the password — same rule Phase 1's connections.py
-        # followed: a credential that isn't persisted can't leak from a
-        # stolen store. It lives only in the live PostgresAdapter's pool.
-        config={"host": host, "port": port, "database": database, "ssl_mode": ssl_mode},
+        # The password is never in this record or in any plaintext column: only the non-secret target.
+        config=dict(target),
         source="bound_by_operator",
         status="created",
         owner=owner,
+        custody=CUSTODY_VAULT if mode == SHARED else CUSTODY_PROCESS_LOCAL,
+        cred_version=1 if mode == SHARED else 0,
     )
-    store.create_connection(record)
+    if mode == SHARED:
+        sealed = vault.seal(owner=owner, connection_id=connection_id, version=1, target=target,
+                            user=user, password=password)
+        journal_id = vault.journal.append("create", connection_id=connection_id, owner=owner, version=1)
+        vault.record_journal_id(journal_id)
+        store.create_connection(record, credential=sealed)
+        registry.register(PostgresAdapter(config=adapter_config), key=registry_key, version=1)
+    else:
+        registry.register(PostgresAdapter(config=adapter_config), key=registry_key)
+        store.create_connection(record)
     return record
 
 
-def list_connections(registry: AdapterRegistry, store: AiStore, scope: Scope) -> list[ConnectionSummary]:
+def list_connections(
+    registry: AdapterRegistry, store: AiStore, scope: Scope, vault: CredentialVault | None = None,
+    *, four_eyes: bool = False,
+) -> list[ConnectionSummary]:
     """Connections ``scope`` may see — its own plus the shared seeded demo
     (operator: all). Reads the durable store, seeding postgres if configured.
-    Never returns anything but id/name/type/status/source/live: no config, no
-    credential, no registry key, no owner. ``live`` says whether this process holds the adapter."""
+    Never returns anything but id/name/type/status/source/live/custody: no config, no
+    credential, no registry key, no owner. ``live`` says whether this process holds the adapter;
+    ``usable`` whether any worker could use it now."""
     ensure_seeded_connection(registry, store)
-    return [
-        ConnectionSummary(
+    out = []
+    for r in store.list_connections():
+        if not can_read_connection(scope, r):
+            continue
+        vaulted = r.custody == CUSTODY_VAULT
+        held = registry.get(r.registry_key) is not None
+        out.append(ConnectionSummary(
             id=r.id,
             name=r.name,
             adapter_type=r.adapter_type,
-            status=r.status,
+            status=REVOKED if _tombstoned(vault, r) else r.status,
             source=r.source,
-            live=registry.get(r.registry_key) is not None,
-        )
-        for r in store.list_connections()
-        if can_read_connection(scope, r)
-    ]
+            live=held,
+            custody="env" if r.source == "seeded_from_env" else r.custody,
+            usable=bool(vault is not None and vault.usable(r)) if vaulted else held,
+            credential_version=r.cred_version if vaulted else None,
+            four_eyes=four_eyes,
+        ))
+    return out
+
+
+def _tombstoned(vault: CredentialVault | None, record: ConnectionRecord) -> bool:
+    """Does the anti-rollback journal say this (vault) connection is revoked or deleted, whatever a
+    restored store claims?"""
+    if vault is None or record.custody != CUSTODY_VAULT or record.status == REVOKED:
+        return False
+    try:
+        vault.authorize(record)
+    except CustodyError as exc:
+        return exc.code == "revoked"
+    return False
 
 
 def get_connection(store: AiStore, scope: Scope, connection_id: str) -> ConnectionRecord | None:
@@ -258,13 +303,31 @@ def get_connection(store: AiStore, scope: Scope, connection_id: str) -> Connecti
     return record
 
 
-async def delete_connection(registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str) -> bool:
+def _journal_best_effort(vault: CredentialVault, op: str, record: ConnectionRecord) -> bool:
+    """Record a shrinking action (revoke, delete) in the journal. Revocation must work even when the
+    journal cannot be written, so a failure is logged loudly and reported, not raised."""
+    if record.custody != CUSTODY_VAULT or vault.config.journal is None:
+        return True
+    try:
+        vault.journal.append(op, connection_id=record.id, owner=record.owner, version=record.cred_version)
+        return True
+    except CustodyError:
+        logger.error("ai_credential_journal_write_failed", op=op, connection_id=record.id)
+        return False
+
+
+async def delete_connection(
+    registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str, vault: CredentialVault | None = None,
+) -> bool:
     """Unbind a connection ``scope`` owns (the seeded demo: operator only).
     ``False`` means not found *or* not yours — callers answer 404 either way.
-    Closes and unregisters the live adapter so the credential leaves memory."""
+    Closes and unregisters the live adapter so the credential leaves memory, and removes the
+    stored ciphertext in the same transaction as the record."""
     record = store.get_connection(connection_id)
     if record is None or not can_delete_connection(scope, record):
         return False
+    if vault is not None:
+        _journal_best_effort(vault, "delete", record)
     if not store.delete_connection(connection_id):
         return False
     adapter = registry.get(record.registry_key)
@@ -299,18 +362,22 @@ async def _close(adapter: Any, connection_id: str) -> None:
 
 async def rotate_connection(
     registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str, *, user: str, password: str,
+    vault: CredentialVault,
 ) -> ConnectionRecord:
     """Replace a connection's credentials. Owner (or operator) only.
 
-    The new credentials are **proven against the target first**; only then is the live
-    adapter swapped (same registry key), so a mistyped password never takes a working
-    connection down. Because a bound connection's password is never persisted, this is also
-    how a connection is re-supplied with credentials after a restart. ``user`` is required
-    every time for the same reason (only host/port/database/ssl_mode are stored).
+    The new credentials are **proven against the target first**; only then are they stored and the
+    live adapter swapped (same registry key), so a mistyped password never takes a working
+    connection down. In shared custody the new version is sealed, written to the anti-rollback
+    journal and installed with a compare-and-set on the version, so concurrent rotations on
+    different workers cannot both win; every other worker rebuilds its adapter from the new
+    ciphertext on its next use. This is also how a connection bound under process-local custody (or
+    restored from an older backup) is re-supplied with credentials. ``user`` is required every time
+    (only host/port/database/ssl_mode are stored).
 
-    Errors: 404 (missing or not yours), 409 (revoked — permanent; or the env-seeded demo,
-    whose credentials come from ``NEURALBRIDGE_AI_PG_*``), 422 (the target did not accept the
-    new credentials; the old ones are untouched). The password appears in no error text."""
+    Errors: 404 (missing or not yours), 409 (revoked — permanent; the env-seeded demo; or lost a
+    race with another rotation), 422 (the target did not accept the new credentials; the old ones
+    are untouched), 503 (no safe custody configured)."""
     record = _manageable(store, scope, connection_id)
     if record.status == REVOKED:
         raise ConnectionLifecycleError(409, f"Connection '{connection_id}' has been revoked; bind a new one.")
@@ -320,6 +387,17 @@ async def rotate_connection(
     cfg = record.config
     if not all(k in cfg for k in ("host", "port", "database")):
         raise ConnectionLifecycleError(409, f"Connection '{connection_id}' has no stored target to rotate.")
+    mode = vault.require_available()
+    if mode == SHARED and record.custody == CUSTODY_VAULT:
+        try:
+            vault.authorize(record)
+        except CustodyError as exc:
+            # A rollback is exactly what rotation repairs; a revocation (per the journal) is final.
+            if exc.code == "revoked":
+                raise ConnectionLifecycleError(
+                    409, f"Connection '{connection_id}' has been revoked; bind a new one.") from exc
+            if exc.code not in ("credential_rolled_back", "credential_missing"):
+                raise
     candidate = PostgresAdapter(config={
         "host": cfg["host"], "port": cfg["port"], "database": cfg["database"],
         "ssl_mode": cfg.get("ssl_mode", "prefer"), "user": user, "password": password,
@@ -332,15 +410,43 @@ async def rotate_connection(
             422, "The target did not accept the new credentials (or could not be reached); "
                  "the existing credentials were left unchanged.")
     previous = registry.get(record.registry_key)
-    registry.register(candidate, key=record.registry_key)
-    updated = store.update_connection(
-        connection_id, status="rotated",
-        config_updates={"credential_rotated_at": datetime.now(UTC).isoformat()},
-    )
-    if updated is None or updated.status == REVOKED:  # revoked/deleted while we were connecting
-        registry.unregister(record.registry_key)
-        await _close(candidate, connection_id)
-        raise ConnectionLifecycleError(409, f"Connection '{connection_id}' was revoked or removed meanwhile.")
+    updated: ConnectionRecord | None
+    if mode == SHARED:
+        try:
+            if record.custody == CUSTODY_VAULT:
+                version = vault.next_version(record)
+            else:  # moving a process-local (or legacy) connection into the vault: the journal must know it
+                version = 1
+                journal_id = vault.journal.append("create", connection_id=record.id, owner=record.owner, version=1)
+                vault.record_journal_id(journal_id)
+            sealed = vault.seal(owner=record.owner, connection_id=record.id, version=version, target=cfg,
+                                user=user, password=password)
+            journal_id = vault.journal.append("rotate", connection_id=record.id, owner=record.owner, version=version)
+            vault.record_journal_id(journal_id)
+            updated = store.rotate_credential(
+                record.id, expected_version=record.cred_version, credential=sealed,
+                config_updates={"credential_rotated_at": datetime.now(UTC).isoformat()})
+        except CustodyError:
+            await _close(candidate, connection_id)
+            raise
+        except ValueError as exc:
+            await _close(candidate, connection_id)
+            raise ConnectionLifecycleError(409, f"Connection '{connection_id}' changed meanwhile; retry.") from exc
+        if updated is None:
+            await _close(candidate, connection_id)
+            raise ConnectionLifecycleError(
+                409, f"Connection '{connection_id}' was rotated, revoked or removed by another request meanwhile.")
+        registry.register(candidate, key=record.registry_key, version=updated.cred_version)
+    else:
+        registry.register(candidate, key=record.registry_key)
+        updated = store.update_connection(
+            connection_id, status="rotated",
+            config_updates={"credential_rotated_at": datetime.now(UTC).isoformat()},
+        )
+        if updated is None or updated.status == REVOKED:  # revoked/deleted while we were connecting
+            registry.unregister(record.registry_key)
+            await _close(candidate, connection_id)
+            raise ConnectionLifecycleError(409, f"Connection '{connection_id}' was revoked or removed meanwhile.")
     if previous is not candidate:
         await _close(previous, connection_id)
     return updated
@@ -348,14 +454,18 @@ async def rotate_connection(
 
 async def revoke_connection(
     registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str, *, by: str,
+    vault: CredentialVault | None = None,
 ) -> bool:
     """Revoke a connection, permanently. Owner (or operator; the demo: operator only).
 
-    Effective on the **next call**: the revoked status is stored, and every read, plan and
-    approval re-reads it, so it holds in every worker process. Pending plans against the
-    connection are denied in the same transaction; this process's live adapter is closed
-    and unregistered. Idempotent: returns ``False`` if it was already revoked."""
+    Effective on the **next call** in every worker: the revoked status is stored (and written to
+    the anti-rollback journal first), the stored ciphertext is deleted in the same transaction, and
+    every read, plan and approval re-reads the record, drops a stale local adapter and refuses.
+    Pending plans against the connection are denied in the same transaction; this process's live
+    adapter is closed and unregistered. Idempotent: returns ``False`` if it was already revoked."""
     record = _manageable(store, scope, connection_id)
+    if vault is not None:
+        _journal_best_effort(vault, "revoke", record)
     changed = store.revoke_connection(connection_id, by=by)
     if changed is None:
         raise _not_found(connection_id)

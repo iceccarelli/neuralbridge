@@ -23,10 +23,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, SecretStr
 
 from neuralbridge.ai import orchestrator
+from neuralbridge.ai.approval import CallerRef, effective_policy, environment_forces
 from neuralbridge.ai.audit_events import params_digest, record
 from neuralbridge.ai.connections import (
     ConnectionLifecycleError,
@@ -36,6 +37,7 @@ from neuralbridge.ai.connections import (
     revoke_connection,
     rotate_connection,
 )
+from neuralbridge.ai.credentials import CredentialVault, CustodyError
 from neuralbridge.ai.entitlements import (
     Principal,
     current_principal,
@@ -56,12 +58,13 @@ from neuralbridge.ai.schemas import (
     QueryResultCard,
     ReadRequest,
 )
-from neuralbridge.ai.store import AiStore
+from neuralbridge.ai.store import AiStore, ConnectionRecord
 from neuralbridge.ai.tenancy import Scope, can_see_audit_entry
 from neuralbridge.api.dependencies import (
     get_adapter_registry,
     get_ai_store,
     get_audit_logger,
+    get_credential_vault,
     get_request_router,
 )
 from neuralbridge.core.router import AdapterRegistry, RequestRouter
@@ -77,6 +80,33 @@ def _raise(exc: OrchestratorError) -> None:
 
 def _raise_lifecycle(exc: ConnectionLifecycleError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _raise_custody(exc: CustodyError) -> None:
+    """503 (not configured / not safe to serve) or 409: a stable ``error`` code, a message with no
+    secret, key, path or driver text."""
+    raise HTTPException(status_code=exc.status_code, detail={"error": exc.code, "message": exc.detail}) from exc
+
+
+async def _caller(
+    principal: Principal = Depends(current_principal),
+    x_api_key: str | None = Header(default=None),
+) -> CallerRef:
+    """The authenticated caller as server-derived fingerprints (never the key) — what four-eyes
+    compares. ``X-NB-Actor`` is a client-chosen label and plays no part."""
+    return CallerRef.from_request(x_api_key, principal)
+
+
+def _summary(record: ConnectionRecord, registry: AdapterRegistry, vault: CredentialVault | None = None,
+             four_eyes: bool = False) -> ConnectionSummary:
+    vaulted = record.custody == "vault"
+    held = registry.get(record.registry_key) is not None
+    return ConnectionSummary(
+        id=record.id, name=record.name, adapter_type=record.adapter_type, status=record.status,
+        source=record.source, live=held, custody=record.custody,
+        usable=bool(vault is not None and vault.usable(record)) if vaulted else held,
+        credential_version=record.cred_version if vaulted else None, four_eyes=four_eyes,
+    )
 
 
 async def _paid_principal(
@@ -152,9 +182,13 @@ async def connections_route(
     registry: AdapterRegistry = Depends(get_adapter_registry),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_scope),
+    vault: CredentialVault = Depends(get_credential_vault),
 ) -> list[ConnectionSummary]:
-    """The caller's own connections plus the shared seeded demo (operator: all)."""
-    return list_connections(registry, store, scope)
+    """The caller's own connections plus the shared seeded demo (operator: all). ``live`` is the
+    per-process fact (this worker holds the adapter); ``usable`` says whether any worker can use the
+    connection now; ``custody`` how its credential is held; ``four_eyes`` is the read-only approval
+    policy in force for the caller's account."""
+    return list_connections(registry, store, scope, vault, four_eyes=effective_policy(store, scope.owner).four_eyes)
 
 
 @router.post("/connections", summary="Bind an additional connection — Register/Cell")
@@ -165,24 +199,37 @@ async def bind_connection(
     scope: Scope = Depends(_paid_scope),
     actor: Actor = Depends(get_current_actor),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    vault: CredentialVault = Depends(get_credential_vault),
 ) -> ConnectionSummary:
+    """Bind a connection. The credential is sealed (AES-256-GCM) and stored for every worker; with no
+    credential key + anti-rollback journal configured this answers **503**
+    ``credential_custody_unconfigured`` (or, only on explicit single-worker opt-in, binds
+    process-locally and says ``custody: "process_local"``). The password is in no response, log line
+    or audit record."""
     await audit_logger.ensure_writable()  # no credential is accepted if the act cannot be recorded
-    created = create_connection(
-        registry, store, owner=scope.owner, name=request.name, host=request.host, port=request.port,
-        user=request.user, password=request.password.get_secret_value(), database=request.database,
-        ssl_mode=request.ssl_mode,
-    )
+    try:
+        created = create_connection(
+            registry, store, vault, owner=scope.owner, name=request.name, host=request.host, port=request.port,
+            user=request.user, password=request.password.get_secret_value(), database=request.database,
+            ssl_mode=request.ssl_mode,
+        )
+    except CustodyError as exc:
+        await record(
+            audit_logger, event_type="connection_create", actor=actor.as_audit_string(), owner=scope.owner,
+            resource="connection:new", action="create", result=f"refused:{exc.status_code}",
+            details={"error": exc.code}, quiet=True,
+        )
+        _raise_custody(exc)
+        raise
     await record(
         audit_logger, event_type="connection_create", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"connection:{created.id}", action="create", result="success",
         details={"connection_id": created.id, "adapter_type": created.adapter_type, "name": created.name,
                  "host": request.host, "port": request.port, "database": request.database,
-                 "ssl_mode": request.ssl_mode},
+                 "ssl_mode": request.ssl_mode, "custody": created.custody,
+                 "version": created.cred_version},
     )
-    return ConnectionSummary(
-        id=created.id, name=created.name, adapter_type=created.adapter_type,
-        status=created.status, source=created.source,
-    )
+    return _summary(created, registry, vault, effective_policy(store, scope.owner).four_eyes)
 
 
 @router.post("/connections/{connection_id}/rotate", summary="Replace a connection's credentials")
@@ -194,23 +241,31 @@ async def rotate(
     scope: Scope = Depends(_scope),
     actor: Actor = Depends(get_current_actor),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    vault: CredentialVault = Depends(get_credential_vault),
 ) -> ConnectionSummary:
     """Owner-only and, like unbind, **not** behind the paid gate (a lapsed account can still
     take a credential out of service). The new credentials are verified against the target
-    before the live adapter is swapped; on failure the old ones keep working. Write-only: the
-    password is in no response, log line or audit record. 404 for a missing or foreign id,
-    409 if revoked, 422 if the target rejects the credentials."""
+    before they are stored and the live adapter is swapped; on failure the old ones keep working.
+    Every other worker uses the new credential on its next call. Write-only: the password is in no
+    response, log line or audit record. 404 for a missing or foreign id, 409 if revoked or if
+    another rotation won, 422 if the target rejects the credentials, 503 if no safe custody is
+    configured."""
     await audit_logger.ensure_writable()
     result, summary = "success", None
     try:
         rotated = await rotate_connection(
             registry, store, scope, connection_id, user=request.user,
-            password=request.password.get_secret_value(),
+            password=request.password.get_secret_value(), vault=vault,
         )
-        summary = ConnectionSummary(
-            id=rotated.id, name=rotated.name, adapter_type=rotated.adapter_type,
-            status=rotated.status, source=rotated.source,
+        summary = _summary(rotated, registry, vault, effective_policy(store, scope.owner).four_eyes)
+    except CustodyError as exc:
+        await record(
+            audit_logger, event_type="connection_rotate", actor=actor.as_audit_string(), owner=scope.owner,
+            resource=f"connection:{connection_id}", action="rotate", result=f"refused:{exc.status_code}",
+            details={"connection_id": connection_id, "error": exc.code}, quiet=True,
         )
+        _raise_custody(exc)
+        raise
     except ConnectionLifecycleError as exc:
         result = f"refused:{exc.status_code}"
         await record(
@@ -219,12 +274,13 @@ async def rotate(
             details={"connection_id": connection_id},
         )
         _raise_lifecycle(exc)
+    assert summary is not None
     await record(
         audit_logger, event_type="connection_rotate", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"connection:{connection_id}", action="rotate", result=result,
-        details={"connection_id": connection_id},
+        details={"connection_id": connection_id, "custody": summary.custody,
+                 "version": summary.credential_version},
     )
-    assert summary is not None
     return summary
 
 
@@ -236,14 +292,17 @@ async def revoke(
     scope: Scope = Depends(_scope),
     actor: Actor = Depends(get_current_actor),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    vault: CredentialVault = Depends(get_credential_vault),
 ) -> dict[str, Any]:
     """Owner-only, not paid-gated. Takes effect on the very next call from any worker:
     reads, plans and approvals against the connection answer 409, and plans still pending on
-    it are denied. Idempotent. 404 for a missing or foreign id."""
+    it are denied. The stored ciphertext is deleted, and the revocation is written to the
+    anti-rollback journal so restoring an older backup cannot bring the connection back.
+    Idempotent. 404 for a missing or foreign id."""
     await audit_logger.ensure_writable()
     try:
         changed = await revoke_connection(
-            registry, store, scope, connection_id, by=actor.as_audit_string())
+            registry, store, scope, connection_id, by=actor.as_audit_string(), vault=vault)
     except ConnectionLifecycleError as exc:
         await record(
             audit_logger, event_type="connection_revoke", actor=actor.as_audit_string(), owner=scope.owner,
@@ -267,13 +326,14 @@ async def unbind_connection(
     scope: Scope = Depends(_scope),
     actor: Actor = Depends(get_current_actor),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    vault: CredentialVault = Depends(get_credential_vault),
 ) -> dict[str, str]:
     """Owner-only, and deliberately **not** behind the paid gate: removing a
     connection shrinks exposure, so an account whose plan lapsed can still
     unbind what it bound. Someone else's id, a missing id, the shared seeded
     demo (for non-operators) and any anonymous caller all answer the same 404."""
     await audit_logger.ensure_writable()
-    deleted = await delete_connection(registry, store, scope, connection_id)
+    deleted = await delete_connection(registry, store, scope, connection_id, vault)
     await record(
         audit_logger, event_type="connection_delete", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"connection:{connection_id}", action="delete", result="success" if deleted else "refused:404",
@@ -324,12 +384,14 @@ async def plan(
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    caller: CallerRef = Depends(_caller),
 ) -> ApprovalCard:
     await audit_logger.ensure_writable()
     base = {"connection_id": request.connection_id, "operation": request.operation,
             "params_sha256": params_digest(request.params)}
     try:
-        card = orchestrator.create_plan(store, scope, actor, request.connection_id, request.operation, request.params)
+        card = orchestrator.create_plan(
+            store, scope, actor, request.connection_id, request.operation, request.params, caller)
     except OrchestratorError as exc:
         await record(
             audit_logger, event_type="plan_propose", actor=actor.as_audit_string(), owner=scope.owner,
@@ -341,7 +403,8 @@ async def plan(
     await record(
         audit_logger, event_type="plan_propose", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"plan:{card.plan.id}", action="propose", result="success",
-        details={**base, "plan_id": card.plan.id, "operation_class": card.plan.operation_class.value},
+        details={**base, "plan_id": card.plan.id, "operation_class": card.plan.operation_class.value,
+                 "four_eyes": card.plan.four_eyes},
     )
     return card
 
@@ -366,11 +429,13 @@ async def approve(
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
     audit_logger: AuditLogger = Depends(get_audit_logger),
+    caller: CallerRef = Depends(_caller),
 ) -> ExecutionReceipt:
     await audit_logger.ensure_writable()
     who, ref = actor.as_audit_string(), f"plan:{plan_id}"
     try:
-        receipt = await orchestrator.approve_and_execute(request_router, registry, store, scope, actor, plan_id)
+        receipt = await orchestrator.approve_and_execute(
+            request_router, registry, store, scope, actor, plan_id, caller)
     except OrchestratorError as exc:
         # Distinguish "refused before anything ran" (plan still pending, or never ours) from
         # "approved, then the execution failed" (plan is `failed`; outcome unknown).
@@ -386,7 +451,9 @@ async def approve(
         raise
     await record(
         audit_logger, event_type="plan_approve", actor=who, owner=scope.owner, resource=ref, action="approve",
-        result="success", details={"plan_id": plan_id, "connection_id": receipt.provenance.connection_id},
+        result="success",
+        details={"plan_id": plan_id, "connection_id": receipt.provenance.connection_id,
+                 "approver_key_ref": caller.key_ref, "four_eyes": effective_policy(store, scope.owner).four_eyes},
     )
     await record(
         audit_logger, event_type="plan_execute", actor=who, owner=scope.owner, resource=ref, action="execute",
@@ -423,6 +490,60 @@ async def deny(
         details={"plan_id": plan_id, "reason": reason},
     )
     return denied
+
+
+class PolicyRequest(BaseModel):
+    """Set the approval policy. ``owner`` is operator-only (set it for one tenant)."""
+
+    four_eyes: bool
+    owner: str | None = None
+
+
+@router.get("/policy", summary="The approval policy in force for your account (read-only view)")
+async def get_policy(
+    store: AiStore = Depends(get_ai_store),
+    scope: Scope = Depends(_scope),
+    vault: CredentialVault = Depends(get_credential_vault),
+) -> dict[str, Any]:
+    """``four_eyes``: whether a plan needs an independently authenticated approver (a different API
+    key than the proposer's) and lapses unapproved after ``approval_ttl_s``; ``source`` says whether
+    the deployment (``environment``), the account (``tenant``) or nothing (``default``, off) set it.
+    ``credential_custody`` is how bound connections' credentials are held in this deployment."""
+    policy = effective_policy(store, scope.owner)
+    return {**policy.as_dict(), "credential_custody": vault.mode}
+
+
+@router.put("/policy", summary="Turn four-eyes approval on (any paid account) or off (operator only)")
+async def put_policy(
+    request: PolicyRequest,
+    store: AiStore = Depends(get_ai_store),
+    scope: Scope = Depends(_paid_scope),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+    vault: CredentialVault = Depends(get_credential_vault),
+) -> dict[str, Any]:
+    """An account can switch four-eyes ON for itself. Switching it OFF, or setting it for another
+    tenant, is operator-only (the key whose holder it constrains must not be able to lift it), and
+    nothing lifts a deployment-wide ``NEURALBRIDGE_AI_FOUR_EYES=1``. Plans already waiting are
+    tightened immediately; none is ever loosened. Audited as ``policy_change``."""
+    await audit_logger.ensure_writable()
+    target = request.owner or scope.owner
+    if request.owner and request.owner != scope.owner and not scope.is_operator:
+        raise HTTPException(status_code=403, detail="Only the operator can set another account's policy.")
+    if not request.four_eyes and not scope.is_operator:
+        raise HTTPException(status_code=403, detail="Only the operator can switch four-eyes approval off.")
+    if not request.four_eyes and environment_forces():
+        raise HTTPException(status_code=409, detail="Four-eyes approval is required deployment-wide "
+                                                    "(NEURALBRIDGE_AI_FOUR_EYES=1); an account setting cannot lift it.")
+    before = effective_policy(store, target)
+    store.set_tenant_policy(target, four_eyes=request.four_eyes, by=actor.as_audit_string())
+    after = effective_policy(store, target)
+    await record(
+        audit_logger, event_type="policy_change", actor=actor.as_audit_string(), owner=target,
+        resource="policy:four_eyes", action="set", result="success",
+        details={"four_eyes_before": before.four_eyes, "four_eyes_after": after.four_eyes, "source": after.source},
+    )
+    return {**after.as_dict(), "credential_custody": vault.mode}
 
 
 #: Free callers can still see *their own* recent activity — just not the

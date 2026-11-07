@@ -18,10 +18,22 @@ What exists, where, and what it is *not*:
 * **Call timeout** — one wall-clock bound around every adapter ``execute``
   (``NEURALBRIDGE_ADAPTER_CALL_TIMEOUT`` seconds, default 60) -> 504.
 
-All of these are **per process**. With several worker processes each has its own counters, so
-the effective limits are multiplied by the worker count; a shared limiter (a gateway or Redis)
-is the next step and is not claimed here. The free ``/ai/read`` daily quota is separate and
-account-wide (``assurance.billing``).
+What is shared across worker processes and what is not
+-------------------------------------------------------
+* **Shared (exact across processes on one host):** the per-tenant adapter-call rate limit, when a
+  window store is supplied (``SharedWindowLimiter`` over the ``/ai`` store's ``rate_windows`` table,
+  one atomic ``INSERT .. ON CONFLICT DO UPDATE .. RETURNING`` per call; the wiring in
+  ``api/dependencies.py`` does this). It is a FIXED window, so a burst straddling a window boundary
+  can admit up to twice the limit, and it needs every worker to share the store's filesystem. If the
+  store errors the limiter falls back to the process-local one (stricter per process, N times looser
+  in total) and says so (``fallbacks``; ``/health/ready``). The free ``/ai/read`` daily quota and the
+  other metered scopes are separate, exact and account-wide (``assurance.billing``).
+* **Process-local, by construction:** :class:`ConcurrencyGate` (calls in flight; a count of live
+  work cannot be shared without leases and heartbeats, which are not built), the refusal-event
+  limiter in ``ai/audit_events.py`` (a log-volume guard, not a customer limit) and the
+  assurance-side throttles (``assurance.billing.rate_limit``). With ``WEB_CONCURRENCY`` = N each
+  admits N times its configured value in total; ``/health/ready`` warns when N > 1.
+* Not wired: ``security/rate_limit.py`` (a Redis token bucket and middleware nothing mounts).
 """
 
 from __future__ import annotations
@@ -32,7 +44,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 
@@ -142,6 +154,51 @@ class SlidingWindowLimiter:
             if len(self._hits) > 10_000:  # bound memory: drop idle keys
                 for k in [k for k, v in self._hits.items() if not v or now - v[-1] >= self.window]:
                     self._hits.pop(k, None)
+
+
+class SharedWindowStore(Protocol):
+    """What :class:`SharedWindowLimiter` needs: ``AiStore.rate_hit``."""
+
+    def rate_hit(self, key: str, *, limit: int, window_s: int, now: float) -> tuple[bool, int]: ...
+
+
+class SharedWindowLimiter:
+    """At most ``limit`` hits per ``window`` seconds per ``scope`` + key, counted in a store that every
+    worker process shares. Same ``check`` contract as :class:`SlidingWindowLimiter`.
+
+    ``fallback`` is used (and ``fallbacks`` incremented) only when the store itself raises; a
+    refusal from the shared counter is never overridden by the local one."""
+
+    def __init__(self, store: SharedWindowStore, limit: int, window: float = 60.0, *, scope: str,
+                 fallback: SlidingWindowLimiter | None = None, clock: Any = time.time) -> None:
+        self.store = store
+        self.limit = limit
+        self.window = max(1, int(window))
+        self.scope = scope
+        self._clock = clock
+        self._fallback = fallback or SlidingWindowLimiter(limit, window)
+        self.fallbacks = 0
+
+    @property
+    def mode(self) -> str:
+        return "shared_with_local_fallback" if self.fallbacks else "shared"
+
+    def check(self, key: str) -> None:
+        if self.limit <= 0:
+            return
+        now = self._clock()
+        try:
+            allowed, _ = self.store.rate_hit(f"{self.scope}|{key}", limit=self.limit, window_s=self.window, now=now)
+        except Exception:  # noqa: BLE001 - a broken limiter store must not take the platform down
+            self.fallbacks += 1
+            logger.error("shared_rate_limiter_unavailable_using_process_local", scope=self.scope)
+            self._fallback.check(key)
+            return
+        if not allowed:
+            raise RateLimitedError(
+                f"rate limit of {self.limit} calls per {self.window:g}s exceeded",
+                retry_after=self.window - (now % self.window),
+            )
 
 
 class ConcurrencyGate:

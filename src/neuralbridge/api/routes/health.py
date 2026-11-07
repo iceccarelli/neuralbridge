@@ -74,13 +74,52 @@ async def readiness_check(
     from neuralbridge.ai.connections import check_seeded_role
 
     role = await check_seeded_role()
+    warnings: list[str] = []
     if role is not None:
         body["ai_demo_role"] = role
         if role.get("privileged"):
-            body["warnings"] = [
+            warnings.append(
                 "ai_demo_role_privileged: the seeded /ai demo database role is a superuser or a "
                 "server-file/program role; use a plain read-only role (docs/ai-local-setup.md)"
-            ]
+            )
+    # Credential custody and rate limits: what is shared across workers and what is not. Warnings
+    # only (they never flip readiness): a deployment without custody still serves reads, it just
+    # refuses to bind a connection (503), and says why here.
+    from neuralbridge.ai.credentials import declared_workers, vault_for
+    from neuralbridge.api.dependencies import get_ai_store, get_request_router
+
+    workers = declared_workers()
+    try:
+        custody = vault_for(get_ai_store()).status()
+    except Exception as exc:  # noqa: BLE001 - readiness must answer even if the store is broken
+        custody = {"mode": "unknown", "reason": f"could not inspect ({type(exc).__name__})"}
+    body["credential_custody"] = custody
+    if custody.get("mode") == "unavailable":
+        warnings.append(f"credential_custody_unavailable: {custody.get('reason', '')}")
+    elif custody.get("mode") == "process_local":
+        warnings.append("credential_custody_process_local: bound connections are live in ONE worker only")
+    journal = custody.get("journal")
+    if isinstance(journal, dict) and journal.get("same_device"):
+        warnings.append(
+            "credential_journal_same_device: the anti-rollback journal shares a device with the /ai store, so "
+            "a whole-volume snapshot restore would rewind both; keep it on separate storage")
+    if isinstance(journal, dict) and journal.get("intact") is False:
+        warnings.append(f"credential_journal_unreadable: {journal.get('error')}")
+    limiter = getattr(get_request_router(), "_rate", None)
+    shared = getattr(limiter, "mode", "process_local")
+    body["rate_limits"] = {
+        "declared_workers": workers,
+        "adapter_calls": {"mode": shared, "per_minute": getattr(limiter, "limit", None)},
+        "process_local": ["concurrency_gate", "audit_refusal_limiter", "assurance_billing_throttles"],
+    }
+    if shared == "shared_with_local_fallback":
+        warnings.append("rate_limit_fallback: the shared rate counter failed; limits are per-process until it recovers")
+    if workers > 1:
+        warnings.append(
+            f"process_local_limiters: WEB_CONCURRENCY={workers}, so the concurrency gate, the audit refusal "
+            f"limiter and the assurance throttles admit {workers}x their configured values in total")
+    if warnings:
+        body["warnings"] = warnings
     return JSONResponse(status_code=200 if all_ok else 503, content=body)
 
 

@@ -36,8 +36,11 @@ def test_the_only_shipped_registrations_are_postgres_ones() -> None:
     for p in _python_sources():
         for m in re.finditer(r"^\s*registry\.register\(([^\n]*)", p.read_text(encoding="utf-8"), re.M):
             sites.setdefault(p.relative_to(ROOT).as_posix(), []).append(m.group(1))
-    assert set(sites) == {"src/neuralbridge/ai/connections.py"}, sites
+    assert set(sites) == {"src/neuralbridge/ai/connections.py", "src/neuralbridge/ai/credentials.py"}, sites
     assert all("PostgresAdapter" in s or s.startswith("candidate") for s in sites["src/neuralbridge/ai/connections.py"])
+    # the credential vault rebuilds a bound connection's adapter in each worker; it builds a Postgres one only
+    vault_src = (ROOT / "src/neuralbridge/ai/credentials.py").read_text(encoding="utf-8")
+    assert vault_src.count("PostgresAdapter(config=") == 1 and "registry.register(adapter, key=key" in vault_src
 
 
 def test_shipped_loader_flag_matches_reality() -> None:

@@ -18,7 +18,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from neuralbridge.adapters.base import AdapterResponse
+from neuralbridge.ai.approval import (
+    CallerRef,
+    effective_policy,
+    expiry_for,
+    independence_problem,
+    is_expired,
+)
 from neuralbridge.ai.connections import SEEDED_REGISTRY_KEY, register_seeded_adapter
+from neuralbridge.ai.credentials import CustodyError, vault_for
 from neuralbridge.ai.identity import Actor
 from neuralbridge.ai.policy import PolicyError, evaluate
 from neuralbridge.ai.schemas import (
@@ -84,31 +92,29 @@ def _plan_to_schema(record: PlanRecord) -> Plan:
         decided_by=record.decided_by,
         decided_at=datetime.fromisoformat(record.decided_at) if record.decided_at else None,
         deny_reason=record.deny_reason,
+        four_eyes=record.four_eyes,
+        expires_at=datetime.fromisoformat(record.expires_at) if record.expires_at else None,
     )
 
 
-def _require_live_adapter(registry: AdapterRegistry, conn: ConnectionRecord) -> None:
-    """A connection record can outlive its adapter instance across a
-    restart when its credentials are not persisted (see
-    ``connections.create_connection`` — additional, operator-bound
-    connections never have their password stored). The seeded demo
-    connection re-registers itself from env on first use after a restart
-    (``connections.ensure_seeded_connection``); any other connection in
-    that state needs the operator to bind it again with fresh credentials
-    — an honest 409, not a confusing adapter-not-found 500.
+async def _require_live_adapter(registry: AdapterRegistry, store: AiStore, conn: ConnectionRecord) -> None:
+    """Make sure THIS process can use the connection, from its CURRENT shared record.
 
-    Every uvicorn worker has its own registry, so the seeded connection is re-registered here, in
-    the process that is about to use it, not only by the worker that listed connections. A bound
-    connection cannot be: its credentials were never stored, so under ``--workers N`` it is live
-    only in the worker that bound it (deploy/assurance/OPS.md, "Worker processes")."""
+    The seeded demo connection re-registers itself from ``NEURALBRIDGE_AI_PG_*`` in the process
+    that is about to use it. A bound connection under vault custody is (re)built from the sealed
+    credential in the shared store whenever this worker has no adapter for it or built it from an
+    older credential version; a revoked one is dropped and refused (``neuralbridge.ai.credentials``).
+    A connection bound under single-worker process-local custody is live only in the process that
+    bound it and answers an honest 409 elsewhere; so does one whose custody is not configured (503)."""
     if conn.source == "seeded_from_env" and conn.registry_key == SEEDED_REGISTRY_KEY:
         register_seeded_adapter(registry)
-    if conn.registry_key not in registry:
-        raise OrchestratorError(
-            409,
-            f"Connection '{conn.id}' has no live adapter (likely after a restart — "
-            "credentials are never persisted). Re-bind it with POST /ai/connections.",
-        )
+        if conn.registry_key not in registry:
+            raise OrchestratorError(409, f"Connection '{conn.id}' has no live adapter (no demo DSN configured).")
+        return
+    try:
+        await vault_for(store).ensure_live(registry, conn)
+    except CustodyError as exc:
+        raise OrchestratorError(exc.status_code, exc.detail) from exc
 
 
 def _not_found_connection(connection_id: str) -> OrchestratorError:
@@ -133,12 +139,38 @@ def _connection_revoked(connection_id: str) -> OrchestratorError:
     )
 
 
-def _require_active(conn: ConnectionRecord) -> None:
-    """A revoked connection refuses every operation on its next call. The status is
-    read from the shared store on each request, so this holds across worker
-    processes, not just in the one that handled the revocation."""
+async def _drop_stale_adapter(registry: AdapterRegistry, store: AiStore, conn: ConnectionRecord) -> None:
+    """A revoked connection's adapter must not linger in this worker's registry (it holds the
+    decrypted credential and an open pool): drop and close it as soon as the revocation is seen."""
+    stale = registry.get(conn.registry_key)
+    if stale is None or conn.source == "seeded_from_env":
+        return
+    revoked = conn.status == REVOKED
+    if not revoked:
+        try:
+            vault_for(store).authorize(conn)
+        except CustodyError as exc:
+            revoked = exc.code == "revoked"
+    if revoked:
+        registry.unregister(conn.registry_key)
+        try:
+            await stale.disconnect()
+        except Exception:  # noqa: BLE001 - best effort: the credential has left the registry either way
+            pass
+
+
+def _require_active(store: AiStore, conn: ConnectionRecord) -> None:
+    """A revoked connection refuses every operation on its next call. The record is read from the
+    shared store on each request, and the anti-rollback journal is consulted for vault connections,
+    so this holds across worker processes and across a restore of an older backup."""
     if conn.status == REVOKED:
         raise _connection_revoked(conn.id)
+    try:
+        vault_for(store).authorize(conn)
+    except CustodyError as exc:
+        if exc.code == "revoked":
+            raise _connection_revoked(conn.id) from exc
+        raise OrchestratorError(exc.status_code, exc.detail) from exc
 
 
 def _not_found_plan(plan_id: str) -> OrchestratorError:
@@ -226,7 +258,8 @@ async def read(
     """Execute a READ immediately. Refuses anything that isn't a READ.
     Only on a connection ``scope`` may read (its own, or the seeded demo)."""
     conn = _visible_connection(store, scope, connection_id)
-    _require_active(conn)
+    await _drop_stale_adapter(registry, store, conn)
+    _require_active(store, conn)
 
     try:
         decision = evaluate(conn.adapter_type, operation, params)
@@ -240,17 +273,21 @@ async def read(
             "use POST /ai/plan, not /ai/read.",
         )
 
-    _require_live_adapter(registry, conn)
+    await _require_live_adapter(registry, store, conn)
     response, provenance = await _run(router, scope, actor, conn, operation, params)
     return QueryResultCard(success=response.success, data=response.data, error=response.error, provenance=provenance)
 
 
 def create_plan(
-    store: AiStore, scope: Scope, actor: Actor, connection_id: str, operation: str, params: dict[str, Any]
+    store: AiStore, scope: Scope, actor: Actor, connection_id: str, operation: str, params: dict[str, Any],
+    caller: CallerRef | None = None,
 ) -> ApprovalCard:
     """Propose a WRITE/DESTRUCTIVE operation. Never executes it. Paid-gated
     by the caller (``api/routes/ai.py``) before this is reached. The plan is
-    owned by ``scope.owner`` — only that account may approve or deny it."""
+    owned by ``scope.owner`` — only that account may approve or deny it. ``caller`` is the proposer's
+    server-derived key fingerprint (``neuralbridge.ai.approval``); with four-eyes in force it is what
+    the approver is compared against."""
+    caller = caller or CallerRef()
     conn = store.get_connection(connection_id)
     if conn is None or not can_read_connection(scope, conn):
         raise _not_found_connection(connection_id)
@@ -258,12 +295,18 @@ def create_plan(
         # Only the shared demo reaches here (anything else unplannable is
         # unreadable, so already a 404): it is visible, so a 403 is no oracle.
         raise OrchestratorError(403, _DEMO_READ_ONLY)
-    _require_active(conn)
+    _require_active(store, conn)
 
     try:
         decision = evaluate(conn.adapter_type, operation, params)
     except PolicyError as exc:
         raise OrchestratorError(403, exc.reason) from exc
+
+    policy = effective_policy(store, scope.owner)
+    if policy.four_eyes and not caller.key_ref:
+        raise OrchestratorError(
+            403, "four_eyes_required: this account requires an independently authenticated approver, so a "
+                 "plan can only be proposed by a caller identified by an API key.")
 
     if not decision.requires_approval:
         raise OrchestratorError(
@@ -280,13 +323,30 @@ def create_plan(
         params=params,
         proposed_by=actor.as_audit_string(),
         owner=scope.owner,
+        four_eyes=policy.four_eyes,
+        expires_at=expiry_for(policy),
+        proposed_key_ref=caller.key_ref,
+        proposed_operator=caller.operator,
     )
     store.create_plan(record)
     return ApprovalCard(plan=_plan_to_schema(record), risk_note=decision.risk_note)
 
 
+def _expire_if_due(store: AiStore, record: PlanRecord) -> PlanRecord:
+    """A pending four-eyes plan past its deadline becomes ``expired`` (terminal, compare-and-set), so
+    it is reported as such and can never be approved. Other plans are returned unchanged."""
+    if record.status != PlanStatus.PENDING_APPROVAL.value or not record.four_eyes \
+            or not is_expired(record.expires_at):
+        return record
+    moved = store.transition_plan(
+        record.id, expected=PlanStatus.PENDING_APPROVAL.value, status=PlanStatus.EXPIRED.value,
+        decided_by="system:expired", decided_at=datetime.now(UTC).isoformat(),
+        deny_reason="the approval window elapsed before an independent approver decided")
+    return moved or store.get_plan(record.id) or record
+
+
 def get_plan(store: AiStore, scope: Scope, plan_id: str) -> Plan:
-    record = _visible_plan(store, scope, plan_id)
+    record = _expire_if_due(store, _visible_plan(store, scope, plan_id))
     return _plan_to_schema(record)
 
 
@@ -297,7 +357,7 @@ def _lost_race(plan_id: str, store: AiStore) -> OrchestratorError:
 
 
 def deny_plan(store: AiStore, scope: Scope, actor: Actor, plan_id: str, reason: str) -> Plan:
-    record = _visible_plan(store, scope, plan_id)
+    record = _expire_if_due(store, _visible_plan(store, scope, plan_id))
     if record.status != PlanStatus.PENDING_APPROVAL.value:
         raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
     # Compare-and-set: a concurrent approve/deny that won between the read above
@@ -312,7 +372,8 @@ def deny_plan(store: AiStore, scope: Scope, actor: Actor, plan_id: str, reason: 
 
 
 async def approve_and_execute(
-    router: RequestRouter, registry: AdapterRegistry, store: AiStore, scope: Scope, actor: Actor, plan_id: str
+    router: RequestRouter, registry: AdapterRegistry, store: AiStore, scope: Scope, actor: Actor, plan_id: str,
+    caller: CallerRef | None = None,
 ) -> ExecutionReceipt:
     """Approve a pending plan and execute it in the same call — the only
     path to a WRITE running. Paid-gated by the caller before this is
@@ -329,21 +390,33 @@ async def approve_and_execute(
     operator reviews the target and proposes a new plan. Checks that fail
     *before* the claim (missing connection, tenancy, adapter not live) change
     nothing and leave the plan pending."""
-    record = _visible_plan(store, scope, plan_id)
+    caller = caller or CallerRef()
+    record = _expire_if_due(store, _visible_plan(store, scope, plan_id))
     if record.status != PlanStatus.PENDING_APPROVAL.value:
         raise OrchestratorError(409, f"Plan '{plan_id}' is '{record.status}', not pending approval.")
+
+    # Four-eyes: in force if it was when the plan was proposed OR is now (it can be tightened, never
+    # loosened, for a plan already waiting). Checked before anything is claimed or routed.
+    if record.four_eyes or effective_policy(store, record.owner).four_eyes:
+        problem = independence_problem(record.proposed_key_ref, record.proposed_operator, caller)
+        if problem is not None:
+            raise OrchestratorError(
+                403, f"four_eyes_required: a different, independently authenticated principal must approve "
+                     f"this plan ({problem}).")
 
     conn = store.get_connection(record.connection_id)
     if conn is None:
         raise OrchestratorError(404, f"Connection '{record.connection_id}' backing this plan no longer exists.")
     if not can_plan_on_connection(scope, conn):
         raise OrchestratorError(403, _DEMO_READ_ONLY if is_demo(conn) else f"Plan '{plan_id}' not found.")
-    _require_active(conn)
-    _require_live_adapter(registry, conn)
+    await _drop_stale_adapter(registry, store, conn)
+    _require_active(store, conn)
+    await _require_live_adapter(registry, store, conn)
 
     claimed = store.transition_plan(
         plan_id, expected=PlanStatus.PENDING_APPROVAL.value, status=PlanStatus.APPROVED.value,
         decided_by=actor.as_audit_string(), decided_at=datetime.now(UTC).isoformat(),
+        decided_key_ref=caller.key_ref or None, decided_operator=caller.operator or None,
     )
     if claimed is None:
         raise _lost_race(plan_id, store)
@@ -383,4 +456,4 @@ async def approve_and_execute(
 
 def list_plans(store: AiStore, scope: Scope, *, limit: int = 50) -> list[Plan]:
     owner = None if scope.is_operator else scope.owner
-    return [_plan_to_schema(r) for r in store.list_plans(limit=limit, owner=owner)]
+    return [_plan_to_schema(_expire_if_due(store, r)) for r in store.list_plans(limit=limit, owner=owner)]

@@ -29,6 +29,8 @@ class PlanStatus(StrEnum):
     DENIED = "denied"
     EXECUTED = "executed"
     FAILED = "failed"
+    #: A four-eyes proposal that was not approved in time. Terminal: it never runs.
+    EXPIRED = "expired"
 
 
 class Provenance(BaseModel):
@@ -63,6 +65,17 @@ class ConnectionSummary(BaseModel):
     # connection's record is durable but its credential is never stored, so after a restart (or
     # on another worker) the record is still listed and ``live`` is False until it is bound again.
     live: bool = False
+    # How the credential is held: "vault" (sealed in the shared store, usable from every worker),
+    # "process_local" (single worker only, never stored), "env" (the seeded demo), "" (unknown/legacy).
+    custody: str = ""
+    # True when the connection can be used from any worker right now (vault custody, not revoked, not
+    # rolled back, decryptable). ``live`` stays the narrower, per-process fact.
+    usable: bool = False
+    # Version of the stored credential (rises with every rotation); None when none is stored.
+    credential_version: int | None = None
+    # Read-only: whether writes on this account's connections need an independently authenticated
+    # approver (see neuralbridge.ai.approval). Off unless the account or deployment turned it on.
+    four_eyes: bool = False
 
 
 class Capability(BaseModel):
@@ -111,6 +124,10 @@ class Plan(BaseModel):
     decided_by: str | None = None
     decided_at: datetime | None = None
     deny_reason: str | None = None
+    # Read-only: a different, independently authenticated principal must approve this plan.
+    four_eyes: bool = False
+    # After this instant a four-eyes plan can no longer be approved.
+    expires_at: datetime | None = None
 
 
 class ApprovalCard(BaseModel):
