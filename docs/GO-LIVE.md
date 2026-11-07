@@ -107,28 +107,47 @@ the `/ai` slice's entitlement store — there is no SQLite fallback for this
 test file, so a founder without Postgres locally cannot run it and should
 rely on CI or a throwaway `postgres:16` container instead.
 
-### 5. Playwright smoke (`tests-e2e/*.spec.ts`)
+### 5. Browser tests against isolated real services (`scripts/e2e-local.sh`)
 
-**Not run in this rehearsal.** `playwright.config.ts` needs a live Next dev
-server on `:3000` plus both APIs above, and this rehearsal's sandbox was a
-shared, multi-tenant container already running other work on the same
-ports/filesystem — driving a browser against it here would have produced
-results contaminated by unrelated sessions, not a clean read on this branch.
-Run it yourself, on a single-tenant machine, with the stack from step 1 up
-and `npm run dev` also running on `:3000`:
+`scripts/e2e-local.sh` starts everything itself on loopback with throwaway data and random
+keys: the Assurance API, the NeuralBridge platform API (PostgreSQL-backed, seeded with a free
+and a paid principal through the real entitlement mechanism, no bypass flag), and a production
+`next build` / `next start` of the site. It then runs the default Playwright set for the
+`desktop-chromium` and `mobile-chromium` projects, each with fresh databases. A throwaway
+PostgreSQL is required (`NEURALBRIDGE_AI_PG_*`; without one the script exits 5 rather than
+skipping, and `E2E_AI=0` runs the assurance-only subset on purpose).
 
 ```bash
-npx playwright install --with-deps chromium   # once, if not already installed
-npx playwright test
+NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 NEURALBRIDGE_AI_PG_USER=... \
+NEURALBRIDGE_AI_PG_PASSWORD=... NEURALBRIDGE_AI_PG_TEST_DATABASE=... scripts/e2e-local.sh
 ```
 
-Expect all five specs to pass (`ai.spec.ts`, `ai-entitlement.spec.ts`,
-`console-first-case.spec.ts`, `phase3-first-euro.spec.ts`,
-`phase4-visual-qa.spec.ts`) — `phase3-first-euro.spec.ts` has a
-Postgres-backed sub-case that self-skips without a local Postgres. Note: run against `http://localhost:3000`,
-not `http://127.0.0.1:3000` — the assurance API's CORS allowlist defaults to
-`localhost` only (`ASSURANCE_ALLOWED_ORIGINS`), so `127.0.0.1` fails CORS in
-a real browser even though the backend is healthy.
+Every spec fails on an uncaught page error, a console error or a failed first-party request;
+allow-listing is per test with a reason in code. The `/ai` journey covers connection, plan,
+human approval, exactly-one execution (counted in PostgreSQL, not read off the UI), receipt,
+denial, a double-approve race from two tabs, the 401/402 states, and a scan that the
+credential never appears in the DOM or network responses. CI runs the same script in the
+`Browser tests (Playwright)` job with a `postgres:16` service. `deploy/assurance/E2E.md` has
+the per-spec detail. `phase4-visual-qa` rewrites committed screenshots and is run explicitly
+with `E2E_VISUAL_QA=1`.
+
+### 6. `scripts/rehearse-local.sh` (the whole buyer path, no credentials, no network)
+
+Starts the real API and, with `--with-site`, the built site on loopback with a locally generated
+webhook signing secret and Stripe-shaped fixture events, and walks: checkout refusing honestly
+(503 `price_not_configured`) when prices are unconfigured, webhook signature accept / reject /
+replay / out-of-order handling, key issuance and one-time claim, 401 vs 402 entitlement
+semantics, renewal, revocation, billing recovery from `past_due`, lapsed read-only access, and a
+backup, restore and verify afterwards. **It is a local rehearsal, not a hosted staging proof:** it
+calls no Stripe, no Fly and no GHCR. `scripts/staging_rehearsal.py` against a hosted staging host
+with Stripe test-mode credentials is still the founder step in the post-secrets half below.
+
+Two facts it surfaced that matter for a deployment with `--workers N`: a **bound** `/ai`
+connection (`POST /ai/connections`) is live only on the worker that bound it, because
+credentials are never stored (its record is durable and `GET /ai/connections` reports
+`live: false` on other workers until it is bound again), and the in-memory rate limiters
+multiply by the number of workers. The seeded demo connection is registered in whichever worker
+serves a request. `deploy/assurance/OPS.md` section 9 has the measurements and the limits.
 
 ### What was actually run and its output (this rehearsal)
 
