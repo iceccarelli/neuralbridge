@@ -166,16 +166,26 @@ export default function AiWorkspace() {
     if (!actorId || !API_BASE) return;
     apiFetch('/ai/session', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
       if (status === 200) setSession(body as Session);
+      else if (status === 401) setSession(null);
+    }).catch(() => {
+      // Unreachable platform API: the connections request below reports it; an unhandled rejection here would not.
     });
   }, [actorId, sessionId, apiKey]);
 
   useEffect(() => {
     if (!actorId || !API_BASE) return;
     apiFetch('/ai/connections', { method: 'GET' }, actorId, sessionId, apiKey).then(({ status, body }) => {
+      if (status === 401) {
+        setConnections([]);
+        setSelected(null);
+        setConnError('HTTP 401 — that API key is invalid or has been revoked. Check the key above, or clear it to read the shared demo.');
+        return;
+      }
       if (status !== 200) {
         setConnError('Could not reach the NeuralBridge API — see docs/ai-local-setup.md.');
         return;
       }
+      setConnError(null);
       setConnections(body as Connection[]);
       if ((body as Connection[]).length > 0) setSelected((body as Connection[])[0]);
       else setConnError('No connections configured — set NEURALBRIDGE_AI_PG_* on the API host.');

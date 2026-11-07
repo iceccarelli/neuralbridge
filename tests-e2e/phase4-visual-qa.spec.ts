@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 // Phase 4: Tesla-grade UI/UX consistency pass — visual QA screenshots.
-// Not an assertion suite (see ai.spec.ts / ai-entitlement.spec.ts / phase3
+// Not an assertion suite (see ai-journey.spec.ts / ai-entitlement.spec.ts / phase3
 // for those); this walks every surface named in the phase-4 design pass at
 // desktop (1440x900) and mobile (Pixel 7, ~412x915) and saves a full-page
 // screenshot to reports/demo/phase4/ for human review. Run explicitly:
