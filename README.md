@@ -380,7 +380,7 @@ Every adapter states exactly one of **Supported** (real, and a test exercises it
 | `notion` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 
 ## Installation
-The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend and dashboard treated as explicit development components.
+The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend (and, for the web workspace, the Next.js site in `app/`) treated as explicit development components.
 
 ### Backend Setup
 ```bash
@@ -499,17 +499,15 @@ The most valuable tests for the reduced-scope version of the project are:
 | Audit trail behavior | Proves system actions are traceable |
 | Auth and access control | Protects the minimum secure boundary |
 
-## Dashboard Role
-The dashboard is a meaningful part of the developer and operator experience, but its role should stay grounded in the supported product scope.
+## Web Workspace Role
+There is one customer interface: the Next.js site in `app/`. Its workspace screens (`/assurance`, `/console`, `/ai`) call the real APIs and show which account, plan, API origin and environment they are talking to. The separate Vite dashboard that used to live in `src/dashboard` showed illustrative numbers and was retired; what had real value moved into the workspace on real endpoints.
 
-Today, the dashboard is best understood as a way to:
-
-| Dashboard Role | Meaning |
+| Workspace role | Meaning |
 |---|---|
-| Visualize available system functions | Help users understand the platform |
-| Create and inspect connections | Support the core connection model |
-| Manage supported integration paths | Focus attention on what actually works |
-| Complement the API, not replace reality | Keep the UI aligned with the backend |
+| Show what the API actually returns | No figure is shown that a backend measure does not back; demonstration data is labelled |
+| Create and inspect connections | Bind a PostgreSQL database (`POST /ai/connections`), see whether this server holds its adapter |
+| Read the audit trail and the Article 14 register | On request, from the authorised endpoints, with loading, empty, refused, unreachable and stale states |
+| Follow the machine lifecycle | Enrol, collect, verify, advisory, human decision, re-verify, passport; each step says whether it is hosted on this deployment or runs on your machine |
 
 ## Roadmap Direction
 The long-term direction remains broader than the current public promise, but the order matters. NeuralBridge should first become a dependable small platform before it becomes a broad one.
@@ -518,7 +516,7 @@ The long-term direction remains broader than the current public promise, but the
 flowchart LR
     A[Stable Backend Runtime] --> B[Small Adapter Set]
     B --> C[Gateway and Audit Reliability]
-    C --> D[Cleaner Dashboard Experience]
+    C --> D[Clearer Workspace Experience]
     D --> E[Stronger Security Boundaries]
     E --> F[Broader Adapter Expansion]
     F --> G[Advanced Compliance Features]

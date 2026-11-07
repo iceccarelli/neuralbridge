@@ -75,7 +75,10 @@ export default function TrustPage() {
                 <p>
                   Where an operator deploys the Assurance API, each customer account has its own ledger; the shared
                   ledger is operator-only. One writer per ledger file keeps each hash chain linear. API keys are shown
-                  once when issued and only a hash is kept. Secrets are never logged or printed.
+                  once when issued and only a hash is kept, with one exception: a key issued at checkout waits in
+                  the account store in plaintext until the browser collects it, or for up to 24 hours, and is then
+                  deleted and revoked if uncollected, so the account store must be protected accordingly. Secrets
+                  are never logged or printed.
                 </p>
                 <p>
                   The public-source intelligence store (KEV, NVD, EPSS, CSAF) is the operator&apos;s shared public
@@ -299,7 +302,7 @@ export default function TrustPage() {
               <li>A recorded verification covers the configuration it named. It says nothing about how the machine behaves outside the declared envelope.</li>
               <li>Machine verification is a recorded run checked against a declared envelope. It is not a hazard analysis and not a substitute for one.</li>
               <li>Inventory, CSAF and public-source importers are file-based and evolving, not supported connectors. The adapters of the wider platform are marked evolving unless the README says Supported.</li>
-              <li>The dashboard in the repository is a separate admin UI and is not wired to the assurance API.</li>
+              <li>The workspace screens show what the API returns and nothing else. A deployment with no API address shows that, rather than a placeholder.</li>
             </ul>
           </div>
         </div>
