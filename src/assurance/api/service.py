@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -32,14 +33,18 @@ from .capabilities_routes import capabilities_router
 from .change_routes import change_router
 from .check_routes import check_router
 from .deps import (
+    MAX_VALIDATION_ERRORS,
     BodySizeLimitMiddleware,
     accounts_path,
     allowed_origins,
     auth_mode,
+    exceeds_json_depth,
     get_accounts,
     ledger_path,
+    max_json_depth,
     tenant_ledgers_dir,
     too_deep_body,
+    validation_error_body,
 )
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
@@ -63,8 +68,9 @@ exploited vulnerabilities and severe incidents.
 
 Article 14 has applied since **11 September 2026**, and by Article 69(3) it
 applies to every in-scope product placed on the market **before 11 December
-2027**. There is no grandfathering for reporting, and the Commission's guidance
-confirms the duty outlives a product's support period.
+2027**. There is no grandfathering for reporting. Reports go from the manufacturer
+to the CSIRT designated as coordinator and to ENISA, through ENISA's single reporting
+platform (Art. 14(1), (3), (7); Art. 16); this service files nothing.
 
 **What this service does that a spreadsheet cannot**
 
@@ -301,6 +307,18 @@ def create_app(**kwargs: Any) -> FastAPI:
         return JSONResponse(
             status_code=422, content={"error": "invalid_value", "detail": str(exc)}
         )
+
+    @application.exception_handler(RequestValidationError)
+    async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default echoes each error's `input`: a large body comes back larger.
+        # A body nested past the cap keeps its specific answer (it used to arrive here as a
+        # RecursionError while the default handler encoded the echoed input); the input is
+        # inspected iteratively and never echoed.
+        cap = max_json_depth()
+        errors = exc.errors()
+        if any(exceeds_json_depth(e.get("input"), cap) for e in errors[:MAX_VALIDATION_ERRORS]):
+            return JSONResponse(status_code=422, content=too_deep_body())
+        return JSONResponse(status_code=422, content=validation_error_body(errors))
 
     @application.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Request, exc: StarletteHTTPException) -> Any:

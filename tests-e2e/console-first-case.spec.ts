@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
 
 // Console's guided "First Register case" flow (app/components/FirstCase.tsx),
 // against the REAL local assurance API — no mocking of the assurance API

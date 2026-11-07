@@ -107,7 +107,7 @@ def render() -> str:
         lines.append(f"| `{r['type']}` | {r['category']} | {LABEL[str(r['backend'])]} | {ops} | `{r['file']}` |")
     lines += [
         "",
-        "## PostgreSQL (the one supported adapter)",
+        "## PostgreSQL (supported, with limits)",
         "",
         "- **Prerequisites:** a reachable PostgreSQL server and the `asyncpg` package (installed with the project).",
         "- **Configuration:** `host`, `port`, `user`, `password`, `database`, `ssl_mode` (default `prefer`), "
@@ -123,10 +123,24 @@ def render() -> str:
         "(`tests/test_ai.py`) need PostgreSQL and fail rather than skip when `NEURALBRIDGE_REQUIRE_POSTGRES=1` "
         "(as in CI); they do not cover TLS modes or role permissions.",
         "",
+        "## REST (supported, with limits)",
+        "",
+        "- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or "
+        "API-key header authentication. Credentials come from the adapter config (`credentials`, or "
+        "`credentials_env` naming environment variables) and are never logged, put in errors or returned.",
+        "- **Bounds:** http(s) only; private, loopback, link-local (including the cloud metadata address) and "
+        "reserved destinations are refused unless `allow_private_network` is set; optional `allowed_hosts`; "
+        "response size and wall-clock time are capped; redirects to another origin are never followed; a non-2xx "
+        "status, a timeout or an oversized body is a structured failure, never a success.",
+        "- **Limits:** the address check does not defend against DNS rebinding; ambient proxies are ignored unless "
+        "`trust_env` is set. Tested by `tests/test_rest_adapter.py` against a local HTTP server that the test "
+        "starts; no third-party API and no TLS certificate handling is covered.",
+        "",
         "## What is not claimed",
         "",
-        "- No adapter other than PostgreSQL is run against its real service by any test in this repository.",
-        "- The REST adapter sends no HTTP request: its calls are commented out behind canned data.",
+        "- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by "
+        "any test in this repository, and REST has only been run against a local HTTP server started by its own "
+        "test.",
         "- The MySQL, MongoDB and BigQuery SDKs are not installed in CI, so those adapters cannot even be imported "
         "there; their failure paths are tested with the SDK modules stubbed, which shows our error handling, not "
         "that they work.",

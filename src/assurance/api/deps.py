@@ -62,7 +62,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
@@ -526,13 +526,22 @@ def get_register(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "invalid_account_id"},
         ) from exc
-    notice = _deletion_notice(path)       # BEFORE any ledger open: never recreate a ledger
+    refuse_if_tenant_deleted(path)        # BEFORE any ledger open: never recreate a ledger
+    return _tenant_register_for(str(path))
+
+
+def refuse_if_tenant_deleted(path: Path) -> None:
+    """410 ``account_data_deleted`` if an operator removed the account whose ledger is *path*.
+
+    The one check every per-account store consults (the register here, the attestation log in
+    ``attest_routes``), so a deleted account is gone from all of them and none re-creates
+    its files. Call it before opening anything."""
+    notice = _deletion_notice(path)
     if notice is not None:
         # Do not keep a ledger object across the marker: if an operator lifts it by hand and
         # restores the file, the next request must open the restored file afresh.
         _tenant_register_for.cache_clear()
         raise HTTPException(status_code=status.HTTP_410_GONE, detail=notice)
-    return _tenant_register_for(str(path))
 
 
 def seconds_until_reset() -> tuple[int, str]:
@@ -1148,6 +1157,64 @@ async def _send_json_refusal(
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode())]})
     await send({"type": "http.response.body", "body": body})
+
+
+#: A 422 lists at most this many errors, each ``msg`` at most ``_MAX_ERR_TEXT`` characters and
+#: each ``loc`` at most ``_MAX_LOC_PARTS`` parts of ``_MAX_ERR_TEXT`` characters.
+MAX_VALIDATION_ERRORS = 20
+_MAX_ERR_TEXT = 300
+_MAX_LOC_PARTS = 8
+
+
+#: How many JSON nodes ``exceeds_json_depth`` will look at before it stops looking.
+_DEPTH_WALK_BUDGET = 200_000
+
+
+def exceeds_json_depth(value: Any, cap: int, *, budget: int = _DEPTH_WALK_BUDGET) -> bool:
+    """True when ``value`` (parsed JSON) nests arrays/objects deeper than ``cap``.
+
+    Iterative, so a hostile structure cannot hit the interpreter's recursion limit, and it
+    stops after ``budget`` nodes so a very wide body costs a bounded amount: running out of
+    budget answers False (the caller then gives the ordinary validation error, still a 422).
+    A path deeper than ``cap`` is reached within ``cap`` nodes of depth-first descent."""
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    seen = 0
+    while stack and seen < budget:
+        node, depth = stack.pop()
+        seen += 1
+        if isinstance(node, dict):
+            children: Any = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > cap:
+            return True
+        stack.extend((child, depth + 1) for child in children
+                     if isinstance(child, (dict, list)))
+    return False
+
+
+def validation_error_body(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The 422 answer for a request the schema rejects.
+
+    pydantic puts the offending ``input`` (and ``ctx``) in every error; echoing it back
+    amplifies a large body into a larger response (a 10 MB array came back as 40 MB).
+    Only ``loc``/``msg``/``type`` are kept -- what a client needs to fix its request --
+    the list is capped, and ``errors_omitted`` says how many were left out."""
+    def clip(value: Any) -> Any:
+        return value[:_MAX_ERR_TEXT] if isinstance(value, str) else value
+
+    kept = [
+        {"loc": [clip(part) if isinstance(part, str) else part
+                 for part in list(e.get("loc", ()))[:_MAX_LOC_PARTS]],
+         "msg": clip(str(e.get("msg", ""))), "type": clip(str(e.get("type", "")))}
+        for e in errors[:MAX_VALIDATION_ERRORS]
+    ]
+    body: dict[str, Any] = {"detail": kept}
+    if len(errors) > MAX_VALIDATION_ERRORS:
+        body["errors_omitted"] = len(errors) - MAX_VALIDATION_ERRORS
+    return body
 
 
 def too_deep_body() -> dict[str, Any]:

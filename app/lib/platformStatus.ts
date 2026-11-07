@@ -37,7 +37,7 @@ export const PLATFORM_STATUS: PlatformStatusRow[] = [
     status: 'Intended supported scope',
     pill: 'evolving',
     note:
-      'PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.',
+      'PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends real HTTP requests, bounded by SSRF refusal, size, time and redirect limits, and is tested only against a local HTTP server that its own test starts (tests/test_rest_adapter.py); it has not been run against any third-party API.',
   },
   { area: 'Broad adapter ecosystem', status: 'Experimental / evolving', pill: 'evolving' },
   {

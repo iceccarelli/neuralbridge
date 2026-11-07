@@ -314,19 +314,20 @@ class TestPlatformStatusIsTheReadmeTable:
         rows = {r["area"]: r for r in _site_status_rows()}
         note = rows["Small set of working adapters"]["note"]
         assert "PostgreSQL" in note and "real server" in note and "/ai" in note
-        assert "REST" in note and "canned" in note and "no HTTP request" in note
+        assert "REST" in note and "real HTTP requests" in note and "local HTTP server" in note
+        assert "not been run against any third-party API" in note
         # PostgreSQL is exercised against a real server only by the /ai and MCP integration tests ...
         owners = sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
                         if "NEURALBRIDGE_AI_PG_HOST" in p.read_text(encoding="utf-8"))
         assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty")) for n in owners), owners
-        # ... and the REST adapter sends no request: its calls are commented out behind canned data.
+        # ... and the REST adapter really sends requests: no canned data left, and a test serves it locally.
         rest = read("src/neuralbridge/adapters/apis/rest.py")
-        assert not re.search(r"^\s*(?:response = )?await self\._client\.(get|post|put|patch|delete|head)\(", rest, re.M)
-        assert rest.count("MOCK:") >= 2 and '"mock_data"' in rest
+        assert re.search(r"await client\.send\(", rest) and "MOCK" not in rest and "mock_data" not in rest
+        assert 'backend: str = "real"' in rest and "ThreadingHTTPServer" in read("tests/test_rest_adapter.py")
 
     def test_docs_platform_carries_the_same_adapter_note(self):
         text = page_text(read("docs/platform.md"))
-        assert "real server" in text and "canned" in text and "no HTTP request" in text
+        assert "real server" in text and "real HTTP requests" in text and "local HTTP server" in text
 
     def test_no_copy_claims_to_be_generated_from_the_readme(self):
         for relative in ("app/lib/solutions.ts", INTENT_TSX, "app/page.tsx", "docs/platform.md"):

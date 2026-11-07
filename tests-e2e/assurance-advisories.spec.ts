@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -308,7 +309,8 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     expect(JSON.stringify(cases)).not.toContain(s.withdrawn_advisory_id);
   });
 
-  test('a hosted feed is loaded by account id, and hosting is not described as verification', async ({ page }) => {
+  test('a hosted feed is loaded by account id, and hosting is not described as verification', async ({ allowHealth, page }) => {
+    allowHealth({ status: 404, url: /\/v1\/supplier\/feed\/acc_does_not_exist$/, why: "the spec loads an unpublished feed id on purpose and asserts the page shows the server's 404, not an empty feed" });
     const s = seed.supplier;
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
@@ -330,7 +332,12 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(panel(page).getByRole('alert')).toContainText(/not .*empty|nothing was learned|not the same as/i);
   });
 
-  test('unreadable input is refused on the page; unusable content is the server\'s 422', async ({ page }) => {
+  test('unreadable input is refused on the page; unusable content is the server\'s 422', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 422,
+      url: /\/v1\/fleet\/advisory$/,
+      why: "the spec posts unusable content on purpose and asserts the page shows the server's 422",
+    });
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
     await paste(page, 'this is not json');
@@ -343,7 +350,12 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(panel(page).getByTestId('impact-result')).toHaveCount(0);
   });
 
-  test('an advisory over the server size limit is a 413 that names the limit, not "unreachable"', async ({ page }) => {
+  test('an advisory over the server size limit is a 413 that names the limit, not "unreachable"', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 413,
+      url: /\/v1\/fleet\/advisory$/,
+      why: "the spec posts an oversize advisory on purpose and asserts the page names the 413 limit",
+    });
     await enter(page, seed.key_g);
     await expect(page.getByTestId('fleet-table')).toBeVisible({ timeout: 15_000 });
     const huge = { ...seed.advisories.hash, summary: 'x'.repeat(1_200_000) };
@@ -355,7 +367,12 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
     await expect(alert).not.toContainText(/unreachable|could not be reached/i);
   });
 
-  test('a Register key gets the plan\'s refusal and remedy for the fleet check', async ({ page }) => {
+  test('a Register key gets the plan\'s refusal and remedy for the fleet check', async ({ allowHealth, page }) => {
+    allowHealth({
+      status: 402,
+      url: /\/v1\/(value|supplier\/trust|ledger\/attest\/log|ledger\/verify|fleet\/machines|fleet\/observations|change\/cases|fleet\/advisory)$/,
+      why: "a Register key is authenticated but unentitled: every paid panel answers 402, which is the behaviour under test",
+    });
     await enter(page, seed.key_register);
     await paste(page, JSON.stringify(seed.advisories.hash));
     await panel(page).getByRole('button', { name: /Check fleet impact/ }).click();
@@ -367,10 +384,14 @@ test.describe('Assurance workspace — advisories and fleet impact', () => {
 
   test('another account\'s fleet is not in the result: an empty fleet reports no match, with its limits', async ({ page }) => {
     await enter(page, seed.key_b);
-    await expect(page.getByText(/No machine is enrolled in your ledger/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/No machine is enrolled in your ledger\. Enrol/)).toBeVisible({ timeout: 15_000 });
     await paste(page, JSON.stringify(seed.advisories.hash));
     await panel(page).getByRole('button', { name: /Check fleet impact/ }).click();
-    await expect(panel(page).getByTestId('impact-verdict')).toContainText(/no enrolled machine matches/i, { timeout: 10_000 });
+    // An empty fleet is NOT ASSESSED, never "no enrolled machine matches" (that reads as a clean check;
+    // src/assurance/fleet/impact.py, tests/test_fleet_empty_and_scale.py) and never blamed on the ledger chain.
+    const verdict = panel(page).getByTestId('impact-verdict');
+    await expect(verdict).toContainText(/not assessed.*no machine is enrolled.*nothing is cleared/i, { timeout: 10_000 });
+    await expect(verdict).not.toContainText(/no enrolled machine matches|chain does not verify/i);
     await expect(panel(page).getByTestId('impact-summary')).toContainText('0 of 0');
     await expect(panel(page).getByTestId('impact-result')).not.toContainText(seed.machines_g[0]);
   });

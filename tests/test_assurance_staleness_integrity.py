@@ -866,7 +866,8 @@ class TestWhichManifestDifferencesAreChanges:
         seal(ledger, datetime(2026, 9, 14, tzinfo=UTC), expect="pass")
         # the update to B was recorded, but BEFORE the look that still found A
         record_intervention(ledger, update(when=datetime(2026, 9, 1, tzinfo=UTC)))
-        seal(ledger, utc_now() - timedelta(minutes=30), tid="AFTER", expect="pass")
+        # begins after the intervention was FILED: a recorded change is compared by filing time
+        seal(ledger, utc_now(), tid="AFTER", expect="pass")
         newer = manifest(fw=HASH_B, mid="M-B")
         record_manifest(ledger, newer)
         report, _ = coverage_of(ledger, m=newer)

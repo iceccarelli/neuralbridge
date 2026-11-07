@@ -58,11 +58,14 @@ def _inventory() -> dict[str, tuple[str, str]]:
 
 
 # Promoting an adapter is an edit to this table, in review, with the evidence that justifies it.
-EXPECTED_REAL = {"postgres"}  # exercised against a real server by tests/test_ai.py (fails, not skips, in CI)
+EXPECTED_REAL = {
+    "postgres",  # exercised against a real server by tests/test_ai.py (fails, not skips, in CI)
+    "rest",  # exercised on the wire against a local HTTP server by tests/test_rest_adapter.py
+}
 EXPECTED_PARTIAL = {"mysql", "mongodb", "bigquery"}  # real client path; never run against a live service
 
 
-def test_every_adapter_is_classified_and_only_postgres_is_real():
+def test_every_adapter_is_classified_and_only_postgres_and_rest_are_real():
     inv = _inventory()
     assert len(inv) == 22, sorted(inv)  # a new adapter must be added deliberately, and classified
     assert {b for b, _ in inv.values()} <= set(BACKENDS)

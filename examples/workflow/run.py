@@ -22,6 +22,8 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -98,7 +100,19 @@ def main() -> int:
              cli(work, "machinery", "coverage", "--ledger", ledger, "manifest.json"), 1,
              "the earlier evidence no longer stands for SF-01 and SF-02",
              "that the machine is unsafe, only that nothing re-verified it")
-        step("verify (after the change)", verify("after", "2026-03-15"), 0,
+        # The ledger stamps each record with the real time it was filed, and evidence only
+        # covers a change if the run it records began after the change was filed (a change
+        # filed today cannot be covered by a run dated last March). So the post-update run is
+        # re-stamped to the moment of this re-verification, as a real one would be, AFTER the
+        # update was filed; the pre-update run keeps its fixed synthetic date because it must
+        # predate the change. Nothing else about the synthetic data changes.
+        time.sleep(1.1)  # the ledger clock has one-second resolution: no tie with the filing
+        reverified_at = datetime.now(UTC).replace(microsecond=0)
+        after = json.loads((work / "trace-after.json").read_text("utf-8"))
+        after["started_at"] = reverified_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        (work / "trace-after.json").write_text(json.dumps(after, indent=2) + "\n", "utf-8")
+
+        step("verify (after the change)", verify("after", reverified_at.strftime("%Y-%m-%d")), 0,
              "a new run, attested, inside the limits", "the same limits of the first run")
         step("coverage after re-verification: covered again",
              cli(work, "machinery", "coverage", "--ledger", ledger, "manifest.json"), 0,
@@ -114,7 +128,7 @@ def main() -> int:
         step("outsider check of the verification bundle, own trust list",
              cli(work, "machine", "check", "bundle-after.json", "--envelope", "envelope.json",
                  "--trace", "trace-after.json", "--recorder-trust", "trust.json", "--as-of",
-                 "2026-03-16T00:00:00Z"),
+                 (reverified_at + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")),
              0, "the verification reproduces from the envelope and trace",
              "that the trace came from a real machine")
 

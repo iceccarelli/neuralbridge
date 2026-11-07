@@ -457,8 +457,9 @@ and not something a fleet can imply**:
 }
 ```
 
-Only a manufacturer placing the product on the Union market carries the Art. 14
-duty. While `article_14` is absent, **no intake is drafted at all** — the safe
+Art. 14 is addressed to manufacturers of products with digital elements (open-source
+software stewards only to the extent Art. 24(3) provides). The watch cannot decide whether
+that is you; a person declares it. While `article_14` is absent, **no intake is drafted at all** — the safe
 direction to be wrong in.
 
 ## What a run produces

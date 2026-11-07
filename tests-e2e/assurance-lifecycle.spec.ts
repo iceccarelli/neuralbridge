@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { operatorKey, useDecisionCredential } from './support/operators';
 
@@ -60,7 +61,8 @@ test.describe('Assurance workspace — case lifecycle', () => {
     await expect(detail.getByRole('button', { name: /^verify$/i })).toHaveCount(0);
   });
 
-  test('an automated name cannot answer a question: the server\'s 409 is shown in its words, beside the action', async ({ page, request }) => {
+  test('an automated name cannot answer a question: the server\'s 409 is shown in its words, beside the action', async ({ allowHealth, page, request }) => {
+    allowHealth({ status: 409, url: /\/v1\/change\/cases\/[^/]+\/resolve-decision$/, why: "the spec submits an automated name on purpose and asserts the server's 409 is shown" });
     // Two deciders: the person, and an operator credential that carries an automated name.
     await operatorKey(request, seed.key_k, 'v.grimaldi');
     const automation = await operatorKey(request, seed.key_k, 'automation');
@@ -262,7 +264,12 @@ test.describe('Assurance workspace — case lifecycle', () => {
     await expect(note).toContainText('not established');
   });
 
-  test('an intervention is assessed only when it was sealed first; unknown ids are the server\'s 422', async ({ page, request }) => {
+  test('an intervention is assessed only when it was sealed first; unknown ids are the server\'s 422', async ({ allowHealth, page, request }) => {
+    allowHealth({
+      status: 422,
+      url: /\/v1\/change\/assess\/intervention$/,
+      why: "the spec assesses an unsealed or unknown intervention id on purpose and asserts the server's 422",
+    });
     await page.goto('/assurance');
     await page.getByLabel('API key').fill(seed.key_k);
     await page.getByRole('button', { name: 'Refresh' }).click();

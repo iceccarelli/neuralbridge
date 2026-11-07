@@ -32,11 +32,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Not `pip install -e '.[assurance-attest]'`: this project declares 21 core
-      # dependencies unconditionally, so that would install the whole middleware
-      # beside the one package the offline kit imports and this job would stop
-      # testing a bare machine. The README's minimal path is cryptography plus the
-      # checkout on PYTHONPATH.
+      # The README's minimal path is cryptography plus the checkout on PYTHONPATH. (The
+      # project's base install is also just cryptography now, pinned by
+      # tests/test_packaging_contract.py; this job keeps the PYTHONPATH form because it
+      # tests a bare machine with nothing of this project installed.)
       - name: Install exactly as the README says
         run: |
           pip install cryptography

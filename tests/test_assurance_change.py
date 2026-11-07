@@ -166,6 +166,18 @@ def _pinned_clock(monkeypatch):
     install(monkeypatch, today_at_noon())
 
 
+def _after_the_recorded_change():
+    """When the re-verification ran: after the intervention was FILED.
+
+    A recorded change is compared with a verification by when the ledger filed it, not by
+    the date its author typed (a back-dated record must not keep older evidence current), so
+    a re-run has to begin after the filing to count as having seen the changed machine.
+    The suite's pinned clock ticks a second a call, so "now" is later than that filing."""
+    from assurance.evidence import ledger as ledger_module
+
+    return ledger_module.utc_now()
+
+
 @pytest.fixture
 def ledger(tmp_path):
     return EvidenceLedger(tmp_path / "change.db")
@@ -255,7 +267,7 @@ class TestDriftLifecycle:
             decide(store, case.case_id, disposition="closed",
                   reason="looks fine", actor=REVIEWER)
 
-        fresh_bundle = seal_a_real_verification(ledger, when=datetime(2026, 4, 1, tzinfo=UTC))
+        fresh_bundle = seal_a_real_verification(ledger, when=_after_the_recorded_change())
         new_verifications = VerificationRecord.from_ledger(ledger, subject=MACHINE.key)
         case = reverify(store, case.case_id, observed, new_verifications, interventions,
                         verification_content_hash=fresh_bundle.content_hash, actor=REVIEWER)
@@ -444,7 +456,7 @@ class TestCli:
         assert self._change("advance", "--ledger", str(ledger_path), case_id,
                             "--actor", "v.grimaldi") == 0
 
-        fresh = seal_a_real_verification(ledger, when=datetime(2026, 4, 1, tzinfo=UTC))
+        fresh = seal_a_real_verification(ledger, when=_after_the_recorded_change())
         assert self._change("reverify", "--ledger", str(ledger_path), case_id,
                             "--manifest", str(after_path),
                             "--verification-hash", fresh.content_hash,

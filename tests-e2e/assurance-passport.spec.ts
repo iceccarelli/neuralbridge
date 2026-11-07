@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect } from './support/fixtures';
+import { type APIRequestContext, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
 // The "Machine passport" panel of /assurance against the REAL local Assurance API (seeded by

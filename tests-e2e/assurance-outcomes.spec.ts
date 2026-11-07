@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
 import { readFileSync } from 'node:fs';
 import { operatorKey } from './support/operators';
 import { call, callText, describeOutcome, explainForbidden, keepsLastGood, parseAttribution, type ApiOutcome } from '../app/lib/assuranceApi';

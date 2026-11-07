@@ -104,12 +104,15 @@ def tenants(api):
     """A: C1 (seq 1, 3), C2 (seq 2, 4 after the signature). B: its own, secret case."""
     a, ha = _account("a@example.de")
     b, hb = _account("b@example.de")
+    # awareness is a human decision: it needs a key issued to an individual `decider` operator
+    _, decider_key = deps.get_accounts().create_operator(a.id, ACTOR["identifier"], "decider")
+    hd = {"X-API-Key": decider_key}
     _signal(api, hb, "B-SECRET-CASE", text="B-ONLY-TEXT-77c1")
     _signal(api, ha, "C1")
     _signal(api, ha, "C2")
-    _awareness(api, ha, "C1")
+    _awareness(api, hd, "C1")
     anchor = _read_sign(a)
-    _awareness(api, ha, "C2")
+    _awareness(api, hd, "C2")
     return api, (a, ha), (b, hb), anchor
 
 

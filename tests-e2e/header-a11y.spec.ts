@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './support/fixtures';
 
 // Header / navigation accessibility (WCAG 2.2 AA): modal semantics, focus return, inert background,
 // disclosure (not trap) behaviour, lazy search, contact-form errors and 320px reflow. Runs against a

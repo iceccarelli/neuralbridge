@@ -535,7 +535,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     kicker: 'Regulation (EU) 2024/2847',
     h1: 'CRA Article 14: keeping the clocks, the reasoning and the human decisions on record',
     definition:
-      'Article 14 of the Cyber Resilience Act obliges a manufacturer to report actively exploited vulnerabilities and severe incidents to the authorities on fixed deadlines, and a register is the record that shows when each clock started and why.',
+      'Article 14 of the Cyber Resilience Act obliges a manufacturer to report actively exploited vulnerabilities and severe incidents through the ENISA single reporting platform to the CSIRT designated as coordinator and to ENISA, on fixed deadlines, and a register is the record that shows when each clock started and why.',
     problem: [
       'Article 14 has applied since 11 September 2026, and Article 69(3) extends the duty to products placed on the market before 11 December 2027. For an actively exploited vulnerability the first deadline is 24 hours from awareness, and the early warning must indicate, where applicable, the Member States where the manufacturer knows the product has been made available (Art. 14(2)(a)).',
       'The clocks are easy to get wrong. The code documents six deadlines across two tracks, started by three different facts. The vulnerability final report runs 14 days from the date a corrective or mitigating measure became available, so a documented workaround starts it. The incident final report runs one calendar month from submission of the 72-hour notification. The code also records that the reporting platform currently displays the 72-hour counter as 48 hours after the early warning.',
@@ -633,11 +633,11 @@ export const PRODUCT_PAGES: ProductPage[] = [
     intent: 'Annex III 1.1.9: software identity and intervention evidence for a machine',
     title: 'Machinery Regulation Annex III 1.1.9 software evidence',
     description:
-      'Annex III 1.1.9 asks a machine to identify its safety software and record intervention. How manifests, interventions and the staleness join keep that evidence.',
+      'Annex III 1.1.9 asks a machine to identify its safety software and collect evidence of intervention in it. How manifests and interventions keep that evidence.',
     kicker: 'Regulation (EU) 2023/1230',
     h1: 'Machinery Regulation evidence: identifying safety software and recording intervention',
     definition:
-      'Annex III 1.1.9 of Regulation (EU) 2023/1230 requires a machine to identify its safety-relevant software and to record evidence of intervention in it, and this page describes how a manifest and an intervention record serve that evidence.',
+      'Annex III 1.1.9 of Regulation (EU) 2023/1230 requires a machine to identify the software installed on it that is necessary for it to operate safely and to collect evidence of intervention in, or modification of, that software or its configuration, and this page describes how a manifest and an intervention record serve that evidence.',
     problem: [
       'The regulation applies from 20 January 2027. The repository’s Annex III guide describes why doing this by hand is hard: the safety PLC program may be on a laptop, the scanner zones in a vendor tool, the robot’s safety parameters in the controller, and the only record that a technician changed any of them may be the technician’s memory.',
       'The Declaration of Conformity has the same drift problem. It describes the machine as it stood the day it was signed, and every later patch, scanner re-zone or PLC change is a day it may have stopped describing the machine.',
@@ -708,7 +708,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     faq: [
       {
         q: 'When does Annex III 1.1.9 apply?',
-        a: 'The Machinery Regulation applies from 20 January 2027. The annex requires a machine to identify its safety-relevant software and to record evidence of intervention.',
+        a: 'The Machinery Regulation applies from 20 January 2027. The annex requires a machine to identify the software it needs to operate safely and to collect evidence of intervention in, or modification of, that software or its configuration.',
       },
       {
         q: 'What counts as an intervention record?',

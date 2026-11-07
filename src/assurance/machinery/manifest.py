@@ -1,8 +1,10 @@
 """What safety-relevant software is on this machine, and how we know.
 
 Machinery Regulation (EU) 2023/1230 applies from 20 January 2027. Annex III
-1.1.9 requires a machine to identify its safety-relevant software and to record
-evidence of intervention in it. Doing either by hand is hard: the safety
+1.1.9 requires a machine to identify the software installed on it that is necessary for it to
+operate safely, and to collect evidence of an intervention in, or modification of, that software
+or its configuration. That is a design requirement on the machine; this package is evidence
+tooling for the manufacturer and does not by itself satisfy it. Doing either by hand is hard: the safety
 PLC program may live on a laptop, the scanner zones in a vendor tool, the
 robot's safety parameters in the controller, and the only record that a
 technician changed any of them may be that technician's memory.

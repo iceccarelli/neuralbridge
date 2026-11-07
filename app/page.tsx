@@ -34,7 +34,7 @@ const trustStrip = [
   {
     label: 'Annex III 1.1.9',
     title: 'Machinery Reg. 2023/1230',
-    body: 'Applies 20 Jan 2027. The machine must identify its safety-relevant software and record evidence of intervention.',
+    body: 'Applies 20 Jan 2027. The machine must identify the software it needs to operate safely and collect evidence of intervention in, or modification of, that software or its configuration.',
     imageKey: 'strip-machinery-annex',
   },
   {
@@ -198,9 +198,9 @@ export default function IndustrialAutonomousAssuranceSite() {
             <span className="kicker">Evidence infrastructure for machines whose software can hurt someone</span>
             <h1>A hash-chained record of what is on each machine, which checks were run against it, and when.</h1>
             <p className="hero-lead">
-              CRA Article 14 gives you 24 hours to file after an actively exploited vulnerability. Machinery
-              Regulation Annex III 1.1.9 requires the machine to identify safety-relevant software and record
-              evidence of intervention. Software does not satisfy either for you. What a hash-chained record can do
+              CRA Article 14 gives a manufacturer 24 hours from becoming aware of an actively exploited vulnerability to
+              file an early warning. Machinery Regulation Annex III 1.1.9 requires the machine to identify the software
+              it needs to operate safely and to collect evidence of intervention in, or modification of, it. Software does not satisfy either for you. What a hash-chained record can do
               is let you evidence your own process, and show a reviewer which records stopped describing the machine.
             </p>
             <div className="hero-actions">

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './support/fixtures';
 
 // Phase 2: the free (Validator, no API key) path — reads work, a write
 // attempt shows a real upgrade card (402 payload), never a fake success

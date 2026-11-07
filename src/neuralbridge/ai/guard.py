@@ -80,7 +80,9 @@ _SAFE_DISCOVERY_OPS: dict[str, frozenset[str]] = {
     # generic API adapters
     "soap": frozenset({"discover_operations", "get_wsdl"}),
     "odata": frozenset({"query", "get_metadata"}),
-    "rest": frozenset({"get", "head"}),
+    # "rest" is deliberately NOT here: the REST adapter makes a real outbound request from the
+    # server with the operator's base URL and credentials, so even a GET is a credentialed call
+    # a free caller must not be able to trigger. It needs the ai_control_plane entitlement.
     "graphql": frozenset({"query", "introspect"}),
     "custom_adapter_template": frozenset({"example_read", "example_list"}),
 }

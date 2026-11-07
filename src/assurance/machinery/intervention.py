@@ -1,7 +1,8 @@
 """Evidence of intervention in safety-relevant software.
 
-Annex III 1.1.9 of Machinery Regulation (EU) 2023/1230 asks for a record that a
-safety-relevant change was made. The regulation does not say what a good record
+Annex III 1.1.9 of Machinery Regulation (EU) 2023/1230 asks the machine to collect
+evidence of a legitimate or illegitimate intervention in, or modification of, the software
+installed on it or its configuration. The regulation does not say what a good record
 contains, so this module takes a position: a record that names only *what*
 changed is a log, and a record that also names *who authorised it* and *what was
 re-run afterwards* is evidence.
@@ -37,6 +38,7 @@ __all__ = [
     "Revalidation",
     "DERIVED_INTERVENTIONS",
     "UnreadableIntervention",
+    "FiledIntervention",
     "ImpliedIntervention",
     "IMPLIED_PREFIX",
     "UNREADABLE_PREFIX",
@@ -333,6 +335,28 @@ class ImpliedIntervention(Intervention):
     #: than that record was FILED (a back-dated ``occurred_at`` is the filer's word and
     #: moves nothing). A verification must still begin after that.
     explained_by: str = ""
+
+
+@dataclass(frozen=True)
+class FiledIntervention(Intervention):
+    """A recorded intervention read back from the ledger, with when and where it was FILED.
+
+    Derived, never sealed (``to_dict`` is the recorded record, unchanged). ``occurred_at`` is
+    the filer's claim about when the change happened and is what is shown; it is NOT what a
+    verification is compared with, because a record filed at 09:30 that claims last month
+    would otherwise sort before a verification filed at 08:30 and leave it ``current``.
+    :attr:`effective_at` is the later of the claim and the ledger's filing time: filed time
+    cannot be back-dated.
+    """
+
+    filed_at: datetime | None = None
+    ledger_seq: int = 0
+
+    @property
+    def effective_at(self) -> datetime:
+        if self.filed_at is None:
+            return self.occurred_at
+        return max(self.occurred_at, self.filed_at)
 
 
 @dataclass(frozen=True)

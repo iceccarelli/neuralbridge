@@ -1,7 +1,9 @@
 /**
- * ComplianceDashboard — EU CRA and GDPR compliance monitoring.
+ * ComplianceDashboard — EU CRA and GDPR evidence checklist.
  *
- * Shows compliance readiness, countdown to CRA deadline, SBOM status,
+ * ILLUSTRATIVE SAMPLE DATA ONLY: the statuses below are hard-coded placeholders, not
+ * the result of any assessment, and nothing here says a product complies with the CRA
+ * or the GDPR. Shows a countdown to the CRA Article 14 reporting date (Art. 71(2)), SBOM status,
  * vulnerability reports, and GDPR Article 30 register.
  */
 
@@ -45,11 +47,11 @@ export default function ComplianceDashboard() {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-xl font-bold">EU Cyber Resilience Act</h3>
-            <p className="text-indigo-200 mt-1">Compliance deadline: September 11, 2026</p>
+            <p className="text-indigo-200 mt-1">Article 14 reporting applies from September 11, 2026 (main CRA obligations: December 11, 2027). Sample data.</p>
           </div>
           <div className="text-right">
-            <p className="text-4xl font-bold">{daysRemaining}</p>
-            <p className="text-indigo-200 text-sm">days remaining</p>
+            <p className="text-4xl font-bold">{daysRemaining > 0 ? daysRemaining : "In force"}</p>
+            <p className="text-indigo-200 text-sm">{daysRemaining > 0 ? "days until Art. 14 applies" : "Art. 14 has applied since 11 Sep 2026"}</p>
           </div>
         </div>
         <div className="mt-4 bg-white/20 rounded-full h-3">
@@ -59,13 +61,13 @@ export default function ComplianceDashboard() {
           />
         </div>
         <p className="mt-2 text-sm text-indigo-200">
-          {compliantCount}/{CRA_CHECKS.length} checks passed — {Math.round((compliantCount / CRA_CHECKS.length) * 100)}% compliant
+          {compliantCount}/{CRA_CHECKS.length} sample checklist items marked — placeholder data, not an assessment of compliance
         </p>
       </div>
 
       {/* CRA Checks */}
       <div className="nb-card">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">CRA Compliance Checks</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">CRA Evidence Checklist (sample data)</h3>
         <div className="space-y-3">
           {CRA_CHECKS.map((check) => (
             <div key={check.name} className="flex items-center justify-between py-3 border-b border-gray-100 dark:border-gray-800 last:border-0">
@@ -84,7 +86,7 @@ export default function ComplianceDashboard() {
                   check.status === "compliant" ? "nb-badge-success" :
                   check.status === "in_progress" ? "nb-badge-warning" : "nb-badge-danger"
                 }>
-                  {check.status.replace("_", " ")}
+                  {check.status === "compliant" ? "sample: recorded" : check.status.replace("_", " ")}
                 </span>
                 <p className="text-xs text-gray-400 mt-1">{check.lastChecked}</p>
               </div>

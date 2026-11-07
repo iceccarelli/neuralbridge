@@ -27,7 +27,7 @@ export const SOLUTIONS: SolutionPage[] = [
     lead:
       'You shipped a machine with a Declaration of Conformity, a risk assessment, and a CE mark. Every firmware patch, scanner re-zone, or PLC change since then is a day that Declaration may have stopped describing the machine — and nothing in your process says so.',
     clockAngle:
-      'CRA Art. 14 puts a 24-hour clock on you the moment a vulnerability in a product you placed on the market is actively exploited — even for products sold before 11 Dec 2027 (Art. 69(3)). Machinery Reg. Annex III 1.1.9 requires you to identify the safety-relevant software on the machine and record evidence of intervention, applying 20 Jan 2027.',
+      'CRA Art. 14 puts a 24-hour early-warning clock on a manufacturer from the moment it becomes aware that a vulnerability in its product is actively exploited — even for products placed on the market before 11 Dec 2027 (Art. 69(3)). Machinery Reg. Annex III 1.1.9 requires the machine to identify the software it needs to operate safely and to collect evidence of intervention in, or modification of, that software or its configuration, applying 20 Jan 2027.',
     painPoints: [
       { title: 'The paperwork drifts silently', body: 'A configuration change nobody logged against the Declaration is the normal case, not the exception — and it is invisible until an auditor, insurer, or regulator asks.' },
       { title: 'A supplier advisory names your components, not your machines', body: 'Matching a CVE or safety advisory to which serial numbers actually run the affected firmware is manual, error-prone, and usually skipped.' },
@@ -52,7 +52,7 @@ export const SOLUTIONS: SolutionPage[] = [
     lead:
       'A safety controller update, a re-zoned scanner, a PLC project patch — often pushed by an integrator or a remote service call you were not in the room for. When something goes wrong, the plant is where the questions land first.',
     clockAngle:
-      'Machinery Reg. Annex III 1.1.9 requires the machine to identify its safety-relevant software and record evidence of intervention — applying 20 Jan 2027. If your integrator or OEM can’t produce that evidence, you may be the one asked to explain it.',
+      'Machinery Reg. Annex III 1.1.9 requires the machine to identify the software it needs to operate safely and to collect evidence of intervention in, or modification of, it or its configuration — applying 20 Jan 2027. If your integrator or OEM can’t produce that evidence, you may be the one asked to explain it.',
     painPoints: [
       { title: 'You inherit somebody else’s change', body: 'Interventions on safety-bearing items happen without your sign-off, and nothing re-runs the verification that used to cover them.' },
       { title: '"It still works" is not evidence', body: 'A machine running fine today says nothing about whether a recorded verification still stands behind each of its safety functions.' },
@@ -75,7 +75,7 @@ export const SOLUTIONS: SolutionPage[] = [
     kicker: 'For the person who signs the filing',
     headline: 'The 24-hour clock does not pause for a spreadsheet.',
     lead:
-      'CRA Article 14 gives you 24 hours from awareness of an actively exploited vulnerability to file an early warning naming every Member State where the product is available. Getting the clock right, the reasoning right, and the field-5 territory list right, under that pressure, is not a spreadsheet problem.',
+      'CRA Article 14 gives you 24 hours from awareness of an actively exploited vulnerability to file an early warning that indicates, where applicable, the Member States where you know the product has been made available (Art. 14(2)(a)). Getting the clock right, the reasoning right, and the field-5 territory list right, under that pressure, is not a spreadsheet problem.',
     clockAngle:
       'Two clocks, both load-bearing: the 24-hour early warning under Art. 14, and the final-report clock — 14 days from a corrective or mitigating measure for a vulnerability, one calendar month from submission of the 72-hour notification for an incident. Getting either wrong is not a rounding error.',
     painPoints: [

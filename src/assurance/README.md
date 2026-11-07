@@ -22,8 +22,12 @@ uvicorn, and that is the only place either is imported.
 
 Article 14 of Regulation (EU) 2024/2847 has applied since **11 September 2026**,
 and Article 69(3) extends it to every in-scope product placed on the market
-**before 11 December 2027**. There is no grandfathering for reporting, and the
-Commission's guidance confirms the duty outlives a product's support period. A
+**before 11 December 2027** (verified against the Official Journal text, 2026-11-06).
+There is no grandfathering for reporting, and the Commission's non-binding guidance
+is read here as confirming the duty outlives a product's support period (the
+guidance text itself was not re-read in that check). Reports go from the manufacturer
+to the CSIRT designated as coordinator and to ENISA via ENISA's single reporting
+platform (Art. 14(1), (3), (7); Art. 16). A
 machine shipped in 2019 is in scope today, with a 24-hour clock and a fine
 ceiling of €15,000,000 or 2.5% of worldwide turnover.
 

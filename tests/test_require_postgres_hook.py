@@ -35,6 +35,12 @@ def test_unrelated_skip():
 
 def test_passes():
     assert True
+
+def test_node_modules_skip():
+    pytest.skip("node_modules is not installed (npm ci); the CI Site job runs this module after npm ci")
+
+def test_node_missing_skip():
+    pytest.skip("node is not installed")
 '''
 
 
@@ -42,7 +48,7 @@ def run_pytest(tmp_path: Path, **env: str) -> dict[str, dict[str, str]]:
     """Run the throwaway file with the hook plugin loaded; outcome per test."""
     (tmp_path / "test_throwaway.py").write_text(THROWAWAY, encoding="utf-8")
     junit = tmp_path / "junit.xml"
-    clean = {k: v for k, v in os.environ.items() if k != "NEURALBRIDGE_REQUIRE_POSTGRES"}
+    clean = {k: v for k, v in os.environ.items() if k not in ("NEURALBRIDGE_REQUIRE_POSTGRES", "NEURALBRIDGE_REQUIRE_NODE")}
     proc = subprocess.run(  # noqa: S603
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p",
          "tests.require_postgres_plugin", f"--junitxml={junit}", "test_throwaway.py"],
@@ -75,7 +81,20 @@ def test_unset_or_any_other_value_leaves_skips_as_skips(tmp_path, value):
     got = run_pytest(tmp_path, **({} if value is None else {"NEURALBRIDGE_REQUIRE_POSTGRES": value}))
     assert {n: r["outcome"] for n, r in got.items()} == {
         "test_marked_postgres_skip": "skipped", "test_call_time_postgres_skip": "skipped",
-        "test_unrelated_skip": "skipped", "test_passes": "passed"}
+        "test_unrelated_skip": "skipped", "test_passes": "passed",
+        "test_node_modules_skip": "skipped", "test_node_missing_skip": "skipped"}
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes"])
+def test_when_node_is_required_a_missing_node_modules_skip_is_a_failure(tmp_path, value):
+    got = run_pytest(tmp_path, NEURALBRIDGE_REQUIRE_NODE=value)
+    for name in ("test_node_modules_skip", "test_node_missing_skip"):
+        assert got[name]["outcome"] in ("failure", "error"), name
+    assert "node_modules is not installed" in got["test_node_modules_skip"]["message"]
+    # Postgres skips are untouched by the node flag, other skips and passes too.
+    assert got["test_marked_postgres_skip"]["outcome"] == "skipped"
+    assert got["test_unrelated_skip"]["outcome"] == "skipped"
+    assert got["test_passes"]["outcome"] == "passed"
 
 
 def test_the_suite_conftest_loads_the_hook():

@@ -20,10 +20,10 @@ Two regulations turned that from a quality problem into a legal one:
 | | |
 |---|---|
 | **Reg. (EU) 2024/2847** — Cyber Resilience Act, Art. 14 | Applies since **11 Sep 2026**. An actively exploited vulnerability means **24 hours** to file an early warning that indicates, where applicable, the Member States where you know the product has been made available (Art. 14(2)(a)). Art. 69(3) extends the duty to products placed on the market before 11 Dec 2027. |
-| **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify its safety-relevant software and record evidence of intervention. |
+| **Reg. (EU) 2023/1230** — Machinery Regulation, Annex III 1.1.9 | Applies **20 Jan 2027**. The machine must identify the software installed on it that is necessary for it to operate safely, and collect evidence of a legitimate or illegitimate intervention in, or modification of, that software or its configuration. |
 
 Annex III 1.1.9 is a design requirement on the machine; Art. 14 is a reporting
-process. Software of ours satisfies neither for you. What a hash-chained record
+process; the Machinery Regulation obligation falls on the manufacturer's design of the machine. Software of ours satisfies neither for you. What a hash-chained record
 of what is on each machine, which checks were run against it, and when can do is let
 a manufacturer evidence its own process, and show a reviewer which records
 stopped describing the machine.
@@ -58,12 +58,11 @@ no account, no API key, no upload, nothing to procure. (That is true of the kit
 and of the other offline commands. It is not true of the hosted service below,
 which needs an account and a key.)
 
-`pip install -e '.[assurance-attest]'` also works, but it is not a minimal install:
-this project declares 21 core dependencies unconditionally (fastapi, sqlalchemy,
-asyncpg, redis, tiktoken, ...), because it is also the NeuralBridge integration
-platform, and the extra adds nothing to them: `cryptography` is already one of the 21 core
-dependencies, so the extra is a label, not a smaller install. The offline kit imports
-`cryptography` and nothing else outside the standard library.
+`pip install -e .` from the checkout is the same minimal install: the project's base
+dependencies are `cryptography` and nothing else, because that is all the offline kit
+imports outside the standard library (`pip install -e '.[assurance-attest]'` is identical,
+a label kept so existing commands work). The hosted API, the MCP gateways and the NeuralBridge
+integration platform are extras, listed under [Install](#install-what-each-extra-adds).
 
 The run arms a guard over the process's socket layer, refuses every outbound
 connection — including name resolution, because resolving a name has already
@@ -150,6 +149,28 @@ evidence only a paying customer can check is worth nothing.
 
 `GET /v1/plans` returns the same table, generated from the entitlements the
 software enforces.
+
+## Install: what each extra adds
+
+The base install is what the offline kit and the `assurance` command line import, measured by
+installing into an empty virtual environment and running them
+(`tests/test_packaging_contract.py` pins it): `cryptography`. Everything else is an extra.
+
+| You want | Install | Third-party packages beyond the standard library |
+|---|---|---|
+| The offline kit and the `assurance` CLI | `pip install -e .` (or `pip install cryptography` and `PYTHONPATH=src`) | `cryptography` |
+| `assurance watch push`, `assurance supplier fetch` (HTTP) | `pip install -e '.[assurance-supplier-fetch]'` | `httpx` |
+| The hosted API, and `assurance capabilities` (it reads the API's routes) | `pip install -e '.[assurance-api]'` | `fastapi`, `uvicorn[standard]`, `pydantic`, `httpx`, `cryptography` |
+| The assurance MCP gateway (`assurance-mcp`) | `pip install -e '.[assurance-mcp]'` | `mcp`, `httpx` |
+| The NeuralBridge integration platform (`neuralbridge` command, `/ai` control plane) | `pip install -e '.[platform]'` | `fastapi`, `uvicorn[standard]`, `pydantic`, `pydantic-settings`, `asyncpg`, `redis`, `pyjwt`, `httpx`, `pyyaml`, `structlog`, `tiktoken`, `passlib[bcrypt]`, `cryptography` (all imported by `src/neuralbridge`), plus `sqlalchemy`, `alembic`, `opentelemetry-*`, `prometheus-client`, `jinja2`, `python-multipart` (declared, imported by nothing under `src/` today). `.[platform]` is exactly what a plain `pip install -e .` installed before the base install was reduced |
+| `neuralbridge-ai-mcp` | `pip install -e '.[neuralbridge-ai-mcp]'` | `mcp`, `httpx`, `pydantic`, `pydantic-settings` |
+| Vendor adapters (evolving) | `.[bigquery]`, `.[mongodb]`, `.[mysql]` (on top of `.[platform]`) | the vendor SDK |
+| Working on this repository | `pip install -e '.[dev]'` | platform + assurance API + MCP + test tools |
+
+`.[assurance-attest]` still works and is the same install as the base. The `neuralbridge`
+command starts the platform, so it needs `.[platform]`; on a base install it stops with
+`ModuleNotFoundError`. The hash-locked images (`requirements/*.lock`) install with
+`--no-deps` and are not affected by these extras.
 
 ## Run the API
 
@@ -249,7 +270,7 @@ This README therefore focuses on the smaller product that the repository can gro
 | Immutable enterprise-grade audit guarantees | **Not part of the core promise yet** |
 | No-code enterprise deployment for any system | **Too broad for the current promise** |
 
-What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends no HTTP request: its calls are commented out behind canned mock data, and its tests construct it and read that data.
+What "small set of working adapters" means today: PostgreSQL and REST are the candidates. PostgreSQL has been exercised against a real server only by the /ai control-plane and MCP tests (they skip without one). The REST adapter sends real HTTP requests, bounded by SSRF refusal, size, time and redirect limits, and is tested only against a local HTTP server that its own test starts (tests/test_rest_adapter.py); it has not been run against any third-party API.
 
 No enterprise certification or compliance attestation is held.
 
@@ -330,6 +351,34 @@ The project should aim to support a few adapters very well before claiming broad
 ### Experimental or Future Areas
 Other adapters may remain in the repository, but they should be described as **experimental**, **in progress**, or **planned** until they are covered by clear setup instructions and repeatable tests.
 
+## Adapter Status
+Every adapter states exactly one of **Supported** (real, and a test exercises it against a real or locally emulated service), **Evolving** (a real client path exists but no test has run it against a live service) or **Not implemented** (canned data only; refused by default). The status comes from each adapter's `backend` attribute; `tests/test_integrations_directory.py` fails if this table and the code disagree. Details: [docs/integrations.md](docs/integrations.md).
+
+| Adapter | Status | Evidence |
+|---|---|---|
+| `graphql` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `odata` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `rest` | Supported | Real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key). Exercised against a local HTTP server started by `tests/test_rest_adapter.py`; not run against any third-party API. |
+| `soap` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `aws_s3` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `azure_blob` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `gcs` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `custom_adapter_template` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `bigquery` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `mongodb` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `mysql` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
+| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` (needs a server; fails, not skips, in CI). |
+| `snowflake` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `sap_erp` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `salesforce` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `discord` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `email` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `slack` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `teams` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `telegram` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `gmail` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+| `notion` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
+
 ## Installation
 The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend and dashboard treated as explicit development components.
 
@@ -339,7 +388,7 @@ git clone https://github.com/iceccarelli/neuralbridge.git
 cd neuralbridge
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # platform + assurance API + MCP gateways + test tools
 ```
 
 ### Dashboard Setup
