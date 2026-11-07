@@ -49,6 +49,6 @@
 > 
 > 1.  Fork the repository.
 > 2.  Clone your fork: `git clone https://github.com/your-username/neuralbridge.git`
-> 3.  Install dependencies: `pip install -r requirements/dev.txt`
-> 4.  Install the package in editable mode: `pip install -e .`
-> 5.  Run tests: `pytest`
+> 3.  Create a virtualenv and install the development environment: `python -m pip install -e '.[dev]'`
+> 4.  Check it is complete: `python -m pytest tests/test_dev_install_parity.py -q --no-cov`
+> 5.  Run tests: `python -m pytest tests/ -q --no-cov`

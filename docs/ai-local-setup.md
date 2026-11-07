@@ -70,7 +70,7 @@ Without it a paid account's plan on the demo connection gets a real `403`
 ("demo connection is read-only").
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 uvicorn neuralbridge.main:app --reload --port 8000
 ```
 
