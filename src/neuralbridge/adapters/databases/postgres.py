@@ -80,7 +80,7 @@ def _connection_gone(conn: asyncpg.Connection | None) -> bool:
     if conn is None:
         return True
     try:
-        return conn.is_closed()
+        return bool(conn.is_closed())
     except asyncpg.InterfaceError:
         return True
 

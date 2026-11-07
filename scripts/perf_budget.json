@@ -1,8 +1,8 @@
 {
-  "/": { "html": "index.html", "jsGzipKB": 217, "cssKB": 51 },
-  "/developers": { "html": "developers.html", "jsGzipKB": 203, "cssKB": 51 },
-  "/verify": { "html": "verify.html", "jsGzipKB": 202, "cssKB": 51 },
-  "/contact": { "html": "contact.html", "jsGzipKB": 198, "cssKB": 51 },
-  "/docs": { "html": "docs.html", "jsGzipKB": 196, "cssKB": 51 },
-  "/product/industrial-autonomous-assurance": { "html": "product/industrial-autonomous-assurance.html", "jsGzipKB": 196, "cssKB": 54 }
+  "/": { "html": "index.html", "jsGzipKB": 217, "cssKB": 56 },
+  "/developers": { "html": "developers.html", "jsGzipKB": 203, "cssKB": 56 },
+  "/verify": { "html": "verify.html", "jsGzipKB": 202, "cssKB": 56 },
+  "/contact": { "html": "contact.html", "jsGzipKB": 198, "cssKB": 56 },
+  "/docs": { "html": "docs.html", "jsGzipKB": 196, "cssKB": 56 },
+  "/product/industrial-autonomous-assurance": { "html": "product/industrial-autonomous-assurance.html", "jsGzipKB": 196, "cssKB": 59 }
 }

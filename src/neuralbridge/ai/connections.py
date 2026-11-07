@@ -62,6 +62,15 @@ def _pg_config_from_env() -> dict[str, Any] | None:
 
 #: Roles whose membership lets SQL reach the server's filesystem or run OS commands.
 _PRIVILEGED_MEMBERSHIPS = ("pg_execute_server_program", "pg_read_server_files", "pg_write_server_files")
+# A fixed statement (nothing is interpolated). tests/test_ai_demo_role.py pins that it names every
+# role in _PRIVILEGED_MEMBERSHIPS, so the two cannot drift apart.
+_ROLE_PRIVILEGE_SQL = (
+    "SELECT r.rolsuper AS superuser, "
+    "pg_has_role(current_user, 'pg_execute_server_program', 'member') AS pg_execute_server_program, "
+    "pg_has_role(current_user, 'pg_read_server_files', 'member') AS pg_read_server_files, "
+    "pg_has_role(current_user, 'pg_write_server_files', 'member') AS pg_write_server_files "
+    "FROM pg_roles r WHERE r.rolname = current_user"
+)
 _ROLE_CHECK_TTL_S = 60.0
 _role_state: dict[str, Any] = {"at": 0.0, "value": None}
 
@@ -84,11 +93,7 @@ async def inspect_role_privileges(config: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the class only: driver text carries host/user
         return {"checked": False, "privileged": None, "reason": f"could not connect ({type(exc).__name__})"}
     try:
-        row = await conn.fetchrow(
-            "SELECT r.rolsuper AS superuser, "
-            + ", ".join(f"pg_has_role(current_user, '{m}', 'member') AS {m}" for m in _PRIVILEGED_MEMBERSHIPS)
-            + " FROM pg_roles r WHERE r.rolname = current_user"
-        )
+        row = await conn.fetchrow(_ROLE_PRIVILEGE_SQL)
     except Exception as exc:  # noqa: BLE001
         return {"checked": False, "privileged": None, "reason": f"could not inspect role ({type(exc).__name__})"}
     finally:
@@ -110,8 +115,9 @@ async def check_seeded_role(*, force: bool = False) -> dict[str, Any] | None:
     if config is None:
         return None
     now = time.monotonic()
-    if not force and _role_state["value"] is not None and now - _role_state["at"] < _ROLE_CHECK_TTL_S:
-        return _role_state["value"]
+    cached: dict[str, Any] | None = _role_state["value"]
+    if not force and cached is not None and now - _role_state["at"] < _ROLE_CHECK_TTL_S:
+        return cached
     result = await inspect_role_privileges(config)
     if result.get("privileged"):
         logger.warning(

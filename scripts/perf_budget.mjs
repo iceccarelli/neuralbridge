@@ -12,6 +12,13 @@
  *
  * Budgets are the measured size on 2026-11-03 (Next 16.4.4) plus ~8% headroom for ordinary churn.
  * Raising one needs a reason in the commit message; the point is that growth is a decision.
+ *
+ * Re-baseline, 2026-11-07 (CSS only; no JS budget changed, none was exceeded): after deleting 3.5 KB
+ * of rules for classes nothing references (the retired /status checklist, the removed feedback widget
+ * and language stub, unused calculator/mega-menu classes) the shared stylesheet measures 51.8 KB
+ * (product page 55.0 KB). The remaining growth is deliberate new interface: the document-layer styles
+ * for /start, /trust and /services and the workspace identity bar and panels. New budgets are that
+ * measured size plus ~8%: 56 KB, and 59 KB for the product page.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';

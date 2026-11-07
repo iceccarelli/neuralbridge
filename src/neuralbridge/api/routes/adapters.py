@@ -209,7 +209,8 @@ async def validate_credentials(
         ) from exc
     except AdapterTimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
-    return result.to_dict()
+    payload: dict[str, Any] = result.to_dict()
+    return payload
 
 
 @router.get("/{adapter_type}/schema", summary="Get adapter config schema")

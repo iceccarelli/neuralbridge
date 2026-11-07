@@ -470,7 +470,7 @@ class RestApiAdapter(BaseAdapter):
     def _retry_delay(self, attempt: int, result: AdapterResponse) -> float | None:
         """Seconds to wait before the next attempt, or ``None`` if the server asked for longer than we allow."""
         policy = self._policy
-        backoff = min(policy.backoff_max, policy.backoff_base * (2 ** (attempt - 1)))
+        backoff: float = min(policy.backoff_max, policy.backoff_base * (2 ** (attempt - 1)))
         backoff += random.uniform(0, policy.jitter * backoff)  # noqa: S311 - jitter, not security
         asked = _retry_after_seconds(((result.data or {}).get("headers") or {}).get("retry-after"))
         if asked is None:

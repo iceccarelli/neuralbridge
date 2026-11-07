@@ -200,9 +200,9 @@ def store_freshness(store: IntelStore, now: datetime | None = None) -> dict[str,
     clock = now if now is not None else utc_now()
     limit, basis = _age_limit()
     newest: dict[str, Observation] = {}
-    for o in store.latest_accepted():
-        if o.source not in newest or o.seq > newest[o.source].seq:
-            newest[o.source] = o
+    for seen in store.latest_accepted():
+        if seen.source not in newest or seen.seq > newest[seen.source].seq:
+            newest[seen.source] = seen
     rows: list[dict[str, Any]] = []
     for source in sorted(SOURCES):
         o = newest.get(source)

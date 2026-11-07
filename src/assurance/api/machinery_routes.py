@@ -534,7 +534,8 @@ def export_machine(
     """
     signed_anchor = latest_anchor(principal) if anchor else None
     try:
-        bundle = register.ledger.export(subject=machine, anchor=signed_anchor, skeleton=skeleton)
+        bundle: dict[str, Any] = register.ledger.export(
+            subject=machine, anchor=signed_anchor, skeleton=skeleton)
     except AnchorContradictsLedgerError as exc:
         raise anchor_contradiction(exc) from exc
     except LedgerIntegrityError as exc:

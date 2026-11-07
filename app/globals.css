@@ -256,19 +256,6 @@ img {
   display: grid;
 }
 
-.lang-panel {
-  right: 0;
-  left: auto;
-}
-
-.lang-stub {
-  display: block;
-  padding: 0.4rem 0;
-  color: var(--ink-soft);
-  font-size: var(--fs-sm);
-  font-style: italic;
-}
-
 /* Full-width click-to-open megas (Products, Solutions, Pricing, Resources):
    rendered as siblings of the nav, not nested in .nav-item, so they can span
    the full viewport width the way aws.amazon.com's do. */
@@ -556,42 +543,6 @@ img {
 
 .icon-button:hover {
   background: rgba(255, 255, 255, 0.08);
-}
-
-.lang-button {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.mega-col h4 {
-  margin: 0 0 0.6rem;
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ink-soft);
-}
-
-.mega-col a {
-  display: block;
-  padding: 0.4rem 0;
-  color: var(--link);
-  font-size: var(--fs-base);
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.mega-col a:last-child {
-  border-bottom: none;
-}
-
-.mega-col a:hover {
-  text-decoration: underline;
-}
-
-.mega-col p {
-  margin: 0.1rem 0 0.7rem;
-  font-size: var(--fs-sm);
-  color: var(--ink-soft);
-  line-height: 1.5;
 }
 
 .topbar-actions {
@@ -1348,30 +1299,6 @@ table.compare-table td.check {
   margin-bottom: 1.1rem;
 }
 
-.calc-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.1rem;
-}
-
-.calc-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.calc-field input[type='number'] {
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-base);
-  background: var(--surface);
-}
-
 .calc-needs {
   display: flex;
   flex-direction: column;
@@ -1996,61 +1923,8 @@ table.status-table tbody tr:last-child td {
   flex-wrap: wrap;
 }
 
-/* ====================== FEEDBACK / CSAT ====================== */
-.feedback-widget {
-  position: fixed;
-  right: 1.25rem;
-  bottom: 1.25rem;
-  z-index: 60;
-}
-
-.feedback-trigger {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 0.55rem 1rem;
-  font-size: var(--fs-sm);
-  font-weight: 650;
-  color: var(--ink);
-  box-shadow: 0 10px 24px rgba(15, 27, 45, 0.18);
-  cursor: pointer;
-}
-
-.feedback-panel {
-  position: relative;
-  width: 240px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  box-shadow: 0 18px 40px rgba(15, 27, 45, 0.22);
-}
-
-.feedback-panel p {
-  margin: 0 0 0.75rem;
-  font-size: var(--fs-sm);
-  color: var(--ink);
-  line-height: 1.5;
-}
-
-.feedback-buttons {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.feedback-close {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  background: none;
-  border: none;
-  color: var(--ink-soft);
-  cursor: pointer;
-  font-size: var(--fs-sm);
-}
-
 /* Motion is decorative here, never load-bearing for comprehension. */
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce)  {
   .mega-panel-full,
   .mega-backdrop,
   .tile-link-label,
@@ -2113,22 +1987,12 @@ table.status-table tbody tr:last-child td {
 }
 
 /* Grid/flex items default to min-width: auto (their max-content size), which
-   can force a track wider than its column and overflow the viewport. */
-.hero-grid > *,
-.tile-grid > *,
-.solutions-grid > *,
-.pricing-grid > *,
-.footer-columns > *,
-.trust-grid > *,
-.final-cta-inner > *,
-.calc-grid > *,
-.playground-grid > *,
-.intent-proof > * {
+   can force a track wider than its column and overflow the viewport. */.hero-grid > *,.tile-grid > *,.solutions-grid > *,.pricing-grid > *,.footer-columns > *,.trust-grid > *,.final-cta-inner > *,.playground-grid > *,.intent-proof > * {
   min-width: 0;
 }
 
 /* ====================== MEDIA QUERIES ====================== */
-@media (max-width: 1100px) {
+@media (max-width: 1100px)  {
   .hero-grid {
     grid-template-columns: 1fr;
   }
@@ -2169,9 +2033,6 @@ table.status-table tbody tr:last-child td {
   .nav-cta {
     display: none;
   }
-  .lang-item {
-    display: none;
-  }
   .hamburger {
     display: flex;
   }
@@ -2189,14 +2050,7 @@ table.status-table tbody tr:last-child td {
 @media (max-width: 640px) {
   .shell {
     width: min(calc(100% - 1.5rem), var(--max-width));
-  }
-  .tile-grid,
-  .solutions-grid,
-  .pricing-grid,
-  .trust-grid,
-  .calc-grid,
-  .playground-grid,
-  .intent-proof {
+  }.tile-grid,.solutions-grid,.pricing-grid,.trust-grid,.playground-grid,.intent-proof {
     grid-template-columns: 1fr;
   }
   .footer-columns {
@@ -2225,13 +2079,6 @@ table.status-table tbody tr:last-child td {
   }
   .cookie-actions .btn {
     flex: 1 1 auto;
-  }
-  .feedback-widget {
-    right: 0.75rem;
-    bottom: 0.75rem;
-  }
-  .feedback-panel {
-    width: min(78vw, 260px);
   }
 }
 
@@ -2538,70 +2385,6 @@ table.status-table tbody tr:last-child td {
   .contact-field-row {
     grid-template-columns: 1fr;
   }
-}
-
-/* ====================== STATUS CHECKLIST ====================== */
-.status-checklist {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-top: 1.75rem;
-}
-
-.status-checklist-item {
-  display: flex;
-  gap: 0.9rem;
-  align-items: flex-start;
-  padding: 1rem 1.15rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-}
-
-.status-checklist-item.done {
-  background: #f0f9f6;
-  border-color: #bfe4d8;
-}
-
-.status-checklist-mark {
-  flex: 0 0 auto;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--fs-base);
-  font-weight: 700;
-  border: 1px solid var(--border);
-  color: var(--ink-soft);
-}
-
-.status-checklist-item.done .status-checklist-mark {
-  background: var(--success);
-  border-color: var(--success);
-  color: #fff;
-}
-
-.status-checklist-item strong {
-  display: block;
-  font-size: var(--fs-base);
-  margin-bottom: 0.3rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.status-checklist-item p {
-  margin: 0 0 0.35rem;
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-  color: var(--ink-soft);
-}
-
-.status-checklist-action {
-  color: var(--ink) !important;
-  font-size: 0.82rem !important;
-  padding-top: 0.3rem;
-  border-top: 1px dashed var(--border-soft);
 }
 
 /* ====================== CLI STEPS ====================== */
@@ -3005,35 +2788,6 @@ table.status-table tbody tr:last-child td {
   }
 }
 
-/* ====================== STATUS PROGRESS ====================== */
-.status-progress {
-  margin-top: 1.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  max-width: 42rem;
-}
-
-.status-progress-bar {
-  height: 8px;
-  border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-}
-
-.status-progress-fill {
-  height: 100%;
-  background: var(--orange);
-  border-radius: var(--radius-pill);
-  transition: width 400ms var(--ease);
-}
-
-.status-progress span {
-  font-size: var(--fs-sm);
-  color: var(--on-dark-soft);
-  line-height: 1.5;
-}
-
 /* ====================== STANDALONE DOC PAGES (roadmap, security) ====================== */
 .docs-standalone {
   max-width: 74ch;
@@ -3336,26 +3090,6 @@ table.status-table tbody tr:last-child td {
   margin: 0 0 var(--space-4);
 }
 
-.prose-block {
-  max-width: 68ch;
-  line-height: 1.7;
-  color: var(--ink-soft);
-}
-
-.prose-block h2,
-.prose-block h3 {
-  color: var(--ink);
-  letter-spacing: -0.005em;
-}
-
-.prose-block ul {
-  padding-left: 1.2rem;
-}
-
-.prose-block li {
-  margin-bottom: var(--space-1);
-}
-
 .tag {
   display: inline-block;
   font-family: var(--mono);
@@ -3646,13 +3380,7 @@ table.status-table tbody tr:last-child td {
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-3);
   font-size: var(--fs-sm);
-}
-
-.journey .j-links a,
-.prose-block a,
-.ruled a,
-.cmp a,
-.note-box a {
+}.journey .j-links a,.ruled a,.cmp a,.note-box a {
   color: var(--link);
   text-decoration: underline;
   text-underline-offset: 2px;

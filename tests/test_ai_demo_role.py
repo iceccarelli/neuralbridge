@@ -151,3 +151,14 @@ def test_startup_logs_the_privileged_role(roles, monkeypatch, tmp_path, capsys) 
     line = next(ln for ln in out.splitlines() if "ai_demo_role_privileged" in ln)
     assert "superuser" in line and "warning" in line
     assert _PASSWORD not in out
+
+
+def test_the_role_privilege_statement_is_static_and_names_every_privileged_membership():
+    """The query is a fixed literal (no string building, so no injection surface and no bandit B608);
+    it must name exactly the roles the inspector reads back."""
+    from neuralbridge.ai.connections import _PRIVILEGED_MEMBERSHIPS, _ROLE_PRIVILEGE_SQL
+
+    for role in _PRIVILEGED_MEMBERSHIPS:
+        assert f"pg_has_role(current_user, '{role}', 'member') AS {role}" in _ROLE_PRIVILEGE_SQL, role
+    assert _ROLE_PRIVILEGE_SQL.count("pg_has_role(") == len(_PRIVILEGED_MEMBERSHIPS)
+    assert "rolsuper AS superuser" in _ROLE_PRIVILEGE_SQL
