@@ -16,8 +16,13 @@ class TestAuthentication:
         from neuralbridge.security.auth import AuthHandler
         assert AuthHandler is not None
 
-    def test_create_and_verify_token(self):
+    def test_create_and_verify_token(self, monkeypatch):
+        from neuralbridge.security import auth
         from neuralbridge.security.auth import AuthHandler
+        # The shipped default secret is a 20-byte placeholder, below the 32 bytes PyJWT recommends
+        # for HS256, and PyJWT warns when it signs with it. This test is about token creation, so
+        # it signs with a key of a proper length instead of the placeholder.
+        monkeypatch.setattr(auth, "JWT_SECRET_KEY", "test-only-secret-" + "0123456789abcdef" * 2)
         handler = AuthHandler.__new__(AuthHandler)
         # Manually set the JWT attributes from settings
         from neuralbridge.config import get_settings

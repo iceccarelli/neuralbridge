@@ -39,6 +39,7 @@ from .platform_support import (
     reset_singletons,
     scram_pg,
 )
+from .support_sqlite import connect as sqlite_connect
 
 pytestmark = requires_postgres
 
@@ -263,13 +264,11 @@ class TestRevoke:
 
     def test_a_lapsed_free_account_can_still_revoke_what_it_bound(self, client, keys: Keys, env) -> None:
         """Revoke/rotate/delete shrink exposure, so they are not behind the paid gate."""
-        import sqlite3
-
         from assurance.billing.accounts import AccountStore
 
         conn = bind(client, keys.a, "lapsed")
         account = AccountStore(str(env)).resolve_key(keys.a).account
-        with sqlite3.connect(env) as db:  # the subscription lapses
+        with sqlite_connect(env) as db:  # the subscription lapses
             db.execute("UPDATE accounts SET status='cancelled' WHERE id=?", (account.id,))
         assert plan(client, keys.a, conn["id"], "SELECT 1").status_code == 402  # paid path is closed ...
         assert revoke(client, keys.a, conn["id"]).status_code == 200            # ... revoking is not

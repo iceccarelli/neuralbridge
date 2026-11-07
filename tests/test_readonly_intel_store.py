@@ -19,6 +19,7 @@ from assurance.cli import main as top
 from assurance.intel.store import IntelStore, IntelStoreError
 
 from .intel_support import FIXTURES
+from .support_sqlite import connect as sqlite_connect
 
 
 def tree(root: Path) -> dict[str, tuple]:
@@ -118,7 +119,7 @@ def test_an_empty_file_becomes_a_store(tmp_path):
     path = tmp_path / "s.db"
     path.write_bytes(b"")
     IntelStore(path)
-    with sqlite3.connect(path) as db:
+    with sqlite_connect(path) as db:
         assert db.execute("PRAGMA application_id").fetchone()[0] == 0x494E544C
 
 

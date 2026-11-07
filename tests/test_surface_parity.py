@@ -22,6 +22,7 @@ import json
 import re
 import shutil
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -66,19 +67,20 @@ def _host(live: fx.LiveApi, ledger: Path, email: str) -> tuple[Any, str, str]:
 
 
 @pytest.fixture
-def plant_world(live_api, tmp_path) -> World:
+def plant_world(live_api, tmp_path) -> Iterator[World]:
     """Two enrolled machines, one drifted (a case is open), one real validated verification."""
     plant = Plant(tmp_path / "plant")
     plant.enrol_and_change("cli")
     verification = CliDriver(plant).verify(PERSON)
     client, key, _ = _host(live_api, plant.ledger_path, "parity-plant@example.de")
-    return World(plant.ledger_path, client, live_api.url, key, plant.root,
-                 manifest=plant.manifest_dict(), case_id=plant.expected_drift_case_id(),
-                 verification=verification)
+    with client:    # an httpx.Client keeps a pooled socket until it is closed
+        yield World(plant.ledger_path, client, live_api.url, key, plant.root,
+                    manifest=plant.manifest_dict(), case_id=plant.expected_drift_case_id(),
+                    verification=verification)
 
 
 @pytest.fixture
-def demo_world(live_api, tmp_path) -> World:
+def demo_world(live_api, tmp_path) -> Iterator[World]:
     """The fleet ``report demo`` builds: many machines, mixed verdicts."""
     out = tmp_path / "demo"
     done = run_cli("report", "demo", "--out", out)
@@ -91,7 +93,8 @@ def demo_world(live_api, tmp_path) -> World:
 
     machine = Fleet.from_ledger(EvidenceLedger(ledger)).to_dict()["machines"][0]["machine"]
     manifest = manifests_from_ledger(EvidenceLedger(ledger), machine)[-1].to_dict()
-    return World(ledger, client, live_api.url, key, out, manifest=manifest)
+    with client:
+        yield World(ledger, client, live_api.url, key, out, manifest=manifest)
 
 
 @pytest.fixture(params=["plant_world", "demo_world"])

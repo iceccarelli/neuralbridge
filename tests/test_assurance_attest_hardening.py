@@ -263,7 +263,7 @@ class TestTheLockHasADeadline:
             assert time.monotonic() - t0 < 2.0
         finally:
             holder.kill()
-            holder.wait()
+            holder.communicate()   # reaps it and closes its stdout pipe
 
     def test_a_busy_lock_is_not_an_attestation_finding(self):
         assert not issubclass(att.AttestationBusyError, AttestationError)
@@ -302,7 +302,7 @@ class TestTheLockHasADeadline:
             slept, health, response = asyncio.run(main())
         finally:
             holder.kill()
-            holder.wait()
+            holder.communicate()   # reaps it and closes its stdout pipe
         assert slept < 0.9, f"asyncio.sleep(0.3) took {slept:.2f}s: the loop was blocked"
         assert health == 200
         assert response.status_code == 503, response.text
@@ -326,7 +326,7 @@ class TestTheLockHasADeadline:
                 assert r.status_code == 200 and time.monotonic() - t < 2.0
         finally:
             holder.kill()
-            holder.wait()
+            holder.communicate()   # reaps it and closes its stdout pipe
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +501,7 @@ class TestTheLockIsKeyedByRealPath:
                     pass
         finally:
             holder.kill()
-            holder.wait()
+            holder.communicate()   # reaps it and closes its stdout pipe
 
     def test_two_spellings_serialise_in_one_process(self, tmp_path):
         real = tmp_path / "real"

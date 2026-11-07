@@ -12,6 +12,7 @@ import logging
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -145,7 +146,7 @@ def test_refresh_live_nvd_needs_named_cves_and_never_prints_the_key(capsys, db, 
     assert code == 0 and SECRET not in out + err
     assert t.calls[0][1]["apiKey"] == SECRET                   # sent as a header ...
     assert "apiKey" not in t.calls[0][0]                       # ... never in the URL
-    assert SECRET.encode() not in open(db, "rb").read()        # ... never stored
+    assert SECRET.encode() not in Path(db).read_bytes()        # ... never stored
     assert run(capsys, "refresh", "--source", "nvd", "--store", db, "--live", "--cve",
                "CVE-2021-44228", "--api-key-env", "bad name;")[0] == 2
 

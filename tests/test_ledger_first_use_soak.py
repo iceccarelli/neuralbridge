@@ -53,7 +53,9 @@ def _worker(directory: str, start: float, queue: mp.Queue) -> None:
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX advisory-lock semantics are what this guards")
 def test_first_use_of_new_ledgers_by_several_processes_loses_and_fails_nothing(tmp_path: Path) -> None:
-    ctx = mp.get_context("fork")
+    # "spawn", not "fork": the pytest process is multi-threaded (Python 3.12+ warns that forking
+    # it can deadlock the child), and a spawned worker is also a truly *first* use of the ledger.
+    ctx = mp.get_context("spawn")
     queue: mp.Queue = ctx.Queue()
     start = time.time() + 1.0
     procs = [ctx.Process(target=_worker, args=(str(tmp_path), start, queue)) for _ in range(PROCESSES)]

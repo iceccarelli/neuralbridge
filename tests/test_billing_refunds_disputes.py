@@ -15,8 +15,6 @@ refund is treated as the end of access until an operator or a newer purchase say
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from assurance.billing import stripe_gateway as stripe_gw
@@ -33,6 +31,7 @@ from .support_billing import (  # noqa: F401
     stored_state,
     subscription_event,
 )
+from .support_sqlite import scalar as sqlite_scalar
 
 
 def refund(amount_refunded=39000, *, charge="ch_1", customer="cus_1", invoice="in_1",
@@ -61,7 +60,7 @@ def paid(billing_client, monkeypatch):
 
 
 def _count(billing_env, sql):
-    return sqlite3.connect(billing_env / "accounts.db").execute(sql).fetchone()[0]
+    return sqlite_scalar(billing_env / "accounts.db", sql)
 
 
 def test_a_full_refund_lapses_the_entitlement_and_keeps_read_access(paid, billing_env):

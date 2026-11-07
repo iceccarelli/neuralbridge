@@ -30,7 +30,6 @@ import os
 import re
 import signal
 import socket
-import sqlite3
 import subprocess
 import sys
 import time
@@ -43,6 +42,8 @@ from typing import Any
 
 import httpx
 import pytest
+
+from .support_sqlite import connect as sqlite_connect
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -239,7 +240,7 @@ def test_concurrent_appends_to_one_tenant_ledger_keep_one_valid_chain(
     ok, problems = ledger.verify_chain()
     assert ok, problems
     # the file itself agrees (independent of the library's own reader)
-    with sqlite3.connect(f"file:{data / 'tenants' / (acct + '.db')}?mode=ro", uri=True) as db:
+    with sqlite_connect(f"file:{data / 'tenants' / (acct + '.db')}?mode=ro", uri=True) as db:
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert db.execute("SELECT COUNT(*), COUNT(DISTINCT seq), COUNT(DISTINCT prev_hash) "
                           "FROM chain").fetchone() == (posted,) * 3
@@ -306,7 +307,7 @@ def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
         assert [e.seq for e in entries] == list(range(1, per_account + 1)), acct
         ok, problems = ledger.verify_chain()
         assert ok, (acct, problems)
-        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        with sqlite_connect(f"file:{path}?mode=ro", uri=True) as db:
             assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             meta = db.execute("SELECT value FROM meta WHERE key='ledger_id'").fetchall()
             assert len(meta) == 1, f"{acct}: {len(meta)} ledger ids minted"
@@ -341,7 +342,7 @@ def test_free_allowance_counter_is_exact_across_processes(
                                                        if r.status_code not in (200, 429)][:2])
     assert _workers_that_worked(server, before) >= 2, "only one worker process served the burst"
     server.stop()
-    with sqlite3.connect(f"file:{data / 'accounts.db'}?mode=ro", uri=True) as db:
+    with sqlite_connect(f"file:{data / 'accounts.db'}?mode=ro", uri=True) as db:
         rows = db.execute("SELECT scope, SUM(count) FROM usage GROUP BY scope").fetchall()
     assert dict(rows).get("validate") == limit, rows
 
@@ -475,7 +476,7 @@ def test_concurrent_approvals_across_workers_execute_each_plan_exactly_once(
     rows = asyncio.run(_pg(f"SELECT plan, count(*) AS n FROM {table} GROUP BY plan"))
     assert {r["plan"]: r["n"] for r in rows} == {f"plan-{i}": 1 for i in range(plans)}
     server.stop()
-    with sqlite3.connect(f"file:{data / 'ai.db'}?mode=ro", uri=True) as db:
+    with sqlite_connect(f"file:{data / 'ai.db'}?mode=ro", uri=True) as db:
         statuses = Counter(s for (s,) in db.execute("SELECT status FROM plans"))
     assert statuses == {"executed": plans}, statuses
 

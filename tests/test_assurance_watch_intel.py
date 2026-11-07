@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import ast
 import json
-import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,6 +37,7 @@ from assurance.watch.runner import run_watch
 
 from .intel_support import Clock, dump, epss_doc, fixture_json, kev_doc
 from .support import plan_dict, write_export
+from .support_sqlite import connect as sqlite_connect
 
 CVE = "CVE-2026-0001"
 SRC = Path(__file__).resolve().parents[1] / "src" / "assurance" / "watch"
@@ -343,7 +343,7 @@ class TestAnUnusableStoreIsNeverQuiet:
         (tmp_path / "intel.db").write_text("not a database at all")
         assert self._only(_run(p)).status == "unreadable"
         other = tmp_path / "other.db"
-        with sqlite3.connect(other) as db:
+        with sqlite_connect(other) as db:
             db.execute("create table t (x)")
         body = json.loads((tmp_path / "watch.json").read_text())
         body["intel"][0]["store"] = "other.db"
@@ -361,7 +361,7 @@ class TestAnUnusableStoreIsNeverQuiet:
         assert "DEGRADED" in run.summary()
 
     def test_a_payload_that_can_no_longer_be_read_degrades(self, plant):
-        with sqlite3.connect(plant["dir"] / "intel.db") as db:     # simulate bit-rot
+        with sqlite_connect(plant["dir"] / "intel.db") as db:     # simulate bit-rot
             db.execute("DROP TRIGGER blobs_no_update")
             db.execute("UPDATE blobs SET body = ? WHERE sha256 = ?",
                        (b"{ rotted", plant["store"].observations(source="nvd_cve_api")[0].sha256))
