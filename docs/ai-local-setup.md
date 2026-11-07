@@ -69,6 +69,38 @@ export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1   # LOCAL DEVELOPMENT ONLY — ne
 Without it a paid account's plan on the demo connection gets a real `403`
 ("demo connection is read-only").
 
+### The whole local buyer-path stack in one command
+
+`scripts/local-stack.sh` does the steps below for you and cleans up after itself. It needs only a
+PostgreSQL server whose role may create databases (by default the dev role documented above:
+`neuralbridge` / `neuralbridge_dev` on `127.0.0.1:5432`; override with `NEURALBRIDGE_AI_PG_*`):
+
+```bash
+scripts/local-stack.sh verify   # up, run scripts/verify-buyer-path.sh against it, then ALWAYS down; exits with the check's status
+scripts/local-stack.sh up       # leave it running (prints the verify command); ports 8001 (Assurance) and 8000 (platform)
+scripts/local-stack.sh down     # stop both, drop ITS database (nb_local_<random>) and delete ITS data directory (/tmp/nb-demo)
+```
+
+It creates its own database and seeds it from `deploy/ai/seed.sql`, generates a throwaway operator key
+(at least 32 characters, written `0600`, never printed), sets `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1`
+(local only) and points both APIs at one `ASSURANCE_ACCOUNTS` file. It refuses to start if port 8000 or 8001 is
+already serving something, and `down` only drops the database named in its own state file.
+
+By hand, the same stack is (operator key generated, not typed; `ASSURANCE_API_KEYS` needs 32 or more characters):
+
+```bash
+export NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 \
+       NEURALBRIDGE_AI_PG_USER=neuralbridge NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev
+mkdir -p /tmp/nb-demo && chmod 700 /tmp/nb-demo
+python scripts/local_stack_db.py create nb_local_manual --seed deploy/ai/seed.sql   # drop later with: ... drop nb_local_manual
+OPKEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"             # do not echo it
+ASSURANCE_HOST=127.0.0.1 ASSURANCE_LEDGER=/tmp/nb-demo/art14.db ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
+  ASSURANCE_API_KEYS="$OPKEY" python -m uvicorn assurance.api.service:app --host 127.0.0.1 --port 8001 &
+NEURALBRIDGE_AI_PG_DATABASE=nb_local_manual NEURALBRIDGE_AI_STORE=/tmp/nb-demo/ai-store.db \
+  NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1 ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
+  python -m uvicorn neuralbridge.main:app --host 127.0.0.1 --port 8000 &
+```
+
 ```bash
 pip install -e ".[dev]"
 uvicorn neuralbridge.main:app --reload --port 8000

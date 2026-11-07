@@ -265,12 +265,16 @@ def test_no_moving_latest_tag_and_no_cache_and_no_secrets() -> None:
     assert "cache-to" not in text and "cache-from" not in text
 
 
-def test_every_action_is_pinned_to_a_version() -> None:
+def test_every_action_is_pinned_to_a_full_commit_sha() -> None:
+    # Pinned by full commit SHA (the release tag is in a trailing comment; tests/test_ops_release_pypi.py
+    # checks that comment). A tag or a branch can be moved by the action's owner; a SHA cannot.
+    import re
+
     for job in _workflow()["jobs"].values():
         for step in job["steps"]:
             u = step.get("uses")
             if u:
-                assert "@" in u and u.split("@", 1)[1][0] in "v0123456789", u
+                assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", u), u
 
 
 def test_verify_script_is_executable_and_fail_closed() -> None:

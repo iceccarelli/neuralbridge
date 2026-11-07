@@ -140,9 +140,9 @@ Permissions: workflow default `contents: read`; the `publish` job adds `packages
 write`, `attestations: write`; the `guard` job only `contents: read`. The job runs in a GitHub
 environment named `release`: **adding required reviewers to it (Settings, Environments) makes every
 publish wait for a person; this file cannot set that, and without it nothing waits.** The only
-credentials are the run's `GITHUB_TOKEN` and OIDC identity. Actions are pinned to major-version tags,
-as in the other workflows, **not** to commit SHAs (a tag can be moved by its owner; pinning SHAs is a
-decision for the founder). Changes from before: `release.yml` (an unsigned second push of the root image
+credentials are the run's `GITHUB_TOKEN` and OIDC identity. Every third-party action in every
+workflow is pinned to a full commit SHA with the release tag in a trailing comment (`uses: owner/name@<40 hex> # vX.Y.Z`);
+section 5c says how those SHAs were resolved and what that does and does not give you. Changes from before: `release.yml` (an unsigned second push of the root image
 and a moving `latest`) is deleted; the `release: published` trigger is removed (a release made from a tag
 fired both and built twice); `linux/arm64` is dropped (no QEMU step existed, so that build was never
 shown to work); the GHA build cache is not used for releases.
@@ -177,8 +177,79 @@ derived from the lock, not scanned from the image). No SLSA level is claimed.
 public (an outsider cannot pull them or fetch the attestations otherwise); add required reviewers to the
 `release` environment; push a `v*` tag from a commit on `main`; read the run; run
 `scripts/verify-release.sh` from a machine that is not the CI runner and record the digests; tell the
-operator to deploy by digest. `publish-pypi.yml` still publishes to PyPI when a GitHub release is
-published: it is outside this change, unsigned, and a second publish path to decide about.
+operator to deploy by digest. The PyPI path is a second, separate publish path: section 5b.
+
+**`scripts/verify-release.sh` today.** No image has been published, so there is no real digest to give it.
+Run without one it answers honestly (executed on 2026-11-07, exit status shown):
+
+```
+$ scripts/verify-release.sh --image ghcr.io/iceccarelli/neuralbridge-assurance
+UNCHECKED: --digest is required (verify a digest, never a tag)          # exit 2
+$ scripts/verify-release.sh --image ghcr.io/iceccarelli/neuralbridge-assurance --digest sha256:<64 hex of a real push>
+UNCHECKED: cosign is not installed                                       # exit 2, on a machine without cosign
+```
+
+Both are exit `2` = *could not check*, which is not a pass. It must only ever be run against the digest the
+release workflow printed for a real push; a made-up digest would at best fail with exit `1` and proves nothing.
+
+## 5b. The PyPI path (`publish-pypi.yml`): trusted publishing, written, NOT RUN
+
+There is no PyPI token anywhere in the repository or in GitHub secrets. Nothing has ever been
+published to PyPI from this workflow, and it has not run on GitHub; `actionlint` and `shellcheck` pass on it
+(CI job `workflow-lint`) and `scripts/build-dist.sh` (the script its build job runs) was executed locally.
+
+| Job | Permissions | What it does |
+|---|---|---|
+| `guard` | `contents: read` | decides *publish* or *dry run* in one place; on a publish run requires the commit to be an ancestor of `origin/main` |
+| `build` | `contents: read`, `id-token: write`, `attestations: write` | `scripts/build-dist.sh --out dist --expect-tag <tag>` (`python -m build`, `twine check --strict`, exactly one wheel and one sdist, name and version equal to `pyproject.toml`, tag equal to the version), then `actions/attest-build-provenance` over `dist/*` (publish runs only), then uploads `dist/` as a workflow artifact. No PyPI identity |
+| `publish` | `id-token: write` only | environment `pypi` (**approval gate**), downloads the artifact the build job made, `pypa/gh-action-pypi-publish` with PEP 740 attestations. No checkout, no repository code, no token |
+
+Triggers: a GitHub **release published**, or a manual dispatch. A manual dispatch is a **dry run by
+default** (build and check only; nothing is attested or uploaded); it publishes only if the `publish` input is
+ticked **and** the ref is a tag. A push, a pull request or a merge never publishes. A release made from a tag
+also fires `publish-docker.yml` (the tag push); the two workflows are independent.
+
+**Local dry run (the same build and checks, uploads nothing):**
+
+```bash
+pip install build twine
+scripts/build-dist.sh --out /tmp/dist-check --expect-tag v0.1.1      # exit 0; prints SHA-256 of the wheel and sdist
+```
+
+Exit `1`: a check failed (for example the tag does not equal the `pyproject.toml` version); exit `2`: could not
+run (missing tool, non-empty output directory). The package name on PyPI is `neuralbridge-middleware` (the
+`[project] name`); the earlier workflow pointed at `neuralbridge`, which is a different project.
+
+**Founder steps before the first PyPI release (none done; this file cannot do any of them):**
+
+1. Decide whether the package is published to PyPI at all. `pyproject.toml` declares the licence as
+   "Proprietary - All rights reserved"; a public release makes the sdist and wheel world-readable, and a
+   published version can be yanked but its filename can never be reused.
+2. On PyPI, add a *pending* trusted publisher for project `neuralbridge-middleware`: owner `iceccarelli`,
+   repository `neuralbridge`, workflow `publish-pypi.yml`, environment `pypi`.
+3. In GitHub, Settings > Environments > `pypi`: add **required reviewers** and restrict deployment to `v*`
+   tags. Without required reviewers the publish job does not wait for anyone.
+4. Rehearse on TestPyPI first (a second trusted publisher and a copy of the publish step with
+   `repository-url: https://test.pypi.org/legacy/`); that has not been done.
+5. After a real release, verify from a machine that is not the runner:
+   `gh attestation verify <file> --repo iceccarelli/neuralbridge --signer-workflow iceccarelli/neuralbridge/.github/workflows/publish-pypi.yml`.
+
+A green run would show that the files on PyPI are the bytes the build job produced from a commit on `main` at the
+tagged version, with a provenance statement from this workflow. It would not show the code is defect-free, nor
+that the build is reproducible: `python -m build` resolves `setuptools` and `wheel` from PyPI at build time
+(`[build-system] requires` has lower bounds only).
+
+## 5c. Pinned actions
+
+Every third-party action used by the four workflows is pinned to the full commit SHA that the tag named in
+its trailing comment pointed at on 2026-11-07. The SHAs were read from the actions' public repositories with
+`git ls-remote --tags https://github.com/<owner>/<name>` (annotated tags dereferenced), not typed in. They were
+not cross-checked against a second source (the sandbox that resolved them could not call the GitHub API).
+Each comment is the **newest** release in the old major (`actions/checkout@v4` became the SHA of `v4.4.0`), so
+a pin is also a minor-version bump of the action, and none of those bumps has run on GitHub yet. To re-resolve:
+`git ls-remote --tags https://github.com/actions/checkout 'refs/tags/v4.*'`. A pin protects against a moved tag; it
+does not make the action's code reviewed, and nothing updates the pins (Dependabot for `github-actions`
+would; whether to add it is the founder's decision). Base images and apt packages are still unpinned (5a).
 
 ## 5a. What is NOT established
 
@@ -203,7 +274,7 @@ published: it is outside this change, unsigned, and a second publish path to dec
   answers 200. The assurance service image had no `HEALTHCHECK`; it now has a standard-library probe of
   `/livez` (the command was run against a local server; Docker never executed it).
 - **Base images are not pinned by digest** (`python:3.11-slim`, `python:3.12-slim`), nor are apt
-  packages (`curl`), nor the GitHub Actions (major-version tags). Digests were not resolved here (that
+  packages (`curl`). The GitHub Actions are SHA-pinned (section 5c). Digests were not resolved here (that
   needs a registry call and goes stale). The root image has no Node stage any more (the former
   `src/dashboard` build was retired); the site is built by the `site` CI job with `npm ci`.
 - **Only one CI test leg runs from the lock**: Python 3.11 installs `requirements/test.lock` with
