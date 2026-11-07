@@ -6,6 +6,7 @@ thin, honest wrapper around one HTTP call to a real deployment.
 
 from __future__ import annotations
 
+import base64
 import importlib
 import os
 import socket
@@ -86,6 +87,10 @@ def running_api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     os.environ["ASSURANCE_API_KEYS"] = KEY
     os.environ["ASSURANCE_ACCOUNTS"] = str(tmp_path_factory.mktemp("mcp-accounts") / "accounts.db")
     os.environ["NEURALBRIDGE_AI_STORE"] = str(tmp_path_factory.mktemp("mcp-ai-store") / "ai.db")
+    # One credential key and one anti-rollback journal for the whole module (the server outlives each
+    # test, so the per-test ones from conftest would not match the store it is writing).
+    os.environ["NEURALBRIDGE_CREDENTIAL_KEYS"] = "mcp-test:" + base64.b64encode(os.urandom(32)).decode()
+    os.environ["NEURALBRIDGE_CREDENTIAL_JOURNAL"] = str(tmp_path_factory.mktemp("mcp-custody") / "journal.jsonl")
 
     import neuralbridge.api.dependencies as deps
 
@@ -119,7 +124,8 @@ def running_api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     thread.join(timeout=5)
     for var in ("NEURALBRIDGE_AI_PG_HOST", "NEURALBRIDGE_AI_PG_PORT", "NEURALBRIDGE_AI_PG_USER",
                 "NEURALBRIDGE_AI_PG_PASSWORD", "NEURALBRIDGE_AI_PG_DATABASE",
-                "ASSURANCE_API_KEYS", "ASSURANCE_ACCOUNTS", "NEURALBRIDGE_AI_STORE"):
+                "ASSURANCE_API_KEYS", "ASSURANCE_ACCOUNTS", "NEURALBRIDGE_AI_STORE",
+                "NEURALBRIDGE_CREDENTIAL_KEYS", "NEURALBRIDGE_CREDENTIAL_JOURNAL"):
         os.environ.pop(var, None)
 
 

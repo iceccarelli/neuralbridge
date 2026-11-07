@@ -591,8 +591,12 @@ class TestCredentialsNeverReturnedOrLogged:
         for entry in client.get(f"{API}/connections", headers=h(keys.a)).json():
             # `live` is a non-secret boolean: does THIS process hold the adapter. Right after a bind
             # in this process it is True.
-            assert set(entry) == {"id", "name", "adapter_type", "status", "source", "live"}
+            # custody / usable / cred_version / four_eyes are non-secret facts about HOW the credential
+            # is held and which approval policy is in force; none of them carries a credential.
+            assert set(entry) == {"id", "name", "adapter_type", "status", "source", "live", "custody",
+                                  "usable", "cred_version", "four_eyes"}
             assert entry["live"] is True
+            assert isinstance(entry["cred_version"], (int, type(None)))
 
 
 # ───────────────────────── additive migration of an existing store ─────────────────────────

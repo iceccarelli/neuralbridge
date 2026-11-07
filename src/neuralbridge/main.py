@@ -64,6 +64,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await check_seeded_role(force=True)
 
+    # Loud, not fatal: what bound /ai connections can and cannot do on this deployment, and which
+    # limiters stay per-process when more than one worker is declared (also on /health/ready).
+    from neuralbridge.ai.credentials import declared_workers, vault_for
+    from neuralbridge.api.dependencies import get_ai_store
+
+    custody = vault_for(get_ai_store())
+    if custody.mode != "shared_encrypted":
+        _log.warning("ai_credential_custody", mode=custody.mode, reason=custody.config.reason)
+    if declared_workers() > 1:
+        _log.warning("process_local_limiters", workers=declared_workers(),
+                     detail="concurrency gate, audit refusal limiter and assurance throttles are per worker")
+
     yield  # ← application runs here
 
     # Cleanup (database pools, Redis, etc.) would go here in production.
