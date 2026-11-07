@@ -882,7 +882,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>NeuralBridge: the integration layer the assurance product is built on.</h2>
             <p>
               A lightweight integration hub: a FastAPI backend, an MCP gateway for AI tool exposure, a small set of
-              adapters (supported scope intended, see the table), and a dashboard. It is intentionally narrower than
+              adapters (supported scope intended, see the table), and the web workspace at /ai. It is intentionally narrower than
               it once claimed to be. The rows below are the README&apos;s own table, word for word.
             </p>
           </div>

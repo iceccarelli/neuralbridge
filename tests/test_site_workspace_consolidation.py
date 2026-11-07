@@ -312,7 +312,7 @@ console.log(JSON.stringify({ steps: JOURNEY, a: JOURNEY.map(s => [availability(s
                 assert step["href"].split("#")[1] in ids, step
 
     def test_the_journey_never_says_a_thing_is_compliant_or_safe(self):
-        body = text("app/lib/journey.ts") + text("app/components/assurance/JourneyNav.tsx")
+        body = text("app/lib/workspaceJourney.ts") + text("app/components/assurance/JourneyNav.tsx")
         assert not re.search(r"\b(compliant|certified|guarantee[sd]?|is safe|proves? safe)\b", body, re.I)
 
 
