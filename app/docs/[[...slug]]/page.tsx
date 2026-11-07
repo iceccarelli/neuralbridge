@@ -28,11 +28,11 @@ const accessibleDocHtml = (html: string) =>
     });
 
 const HOME_DESCRIPTION =
-  'Industrial Autonomous Assurance documentation: getting started, each assurance engine, the capability table generated from the code, pricing as enforced, and platform status.';
+  'NeuralBridge documentation for Industrial Autonomous Assurance: getting started, each assurance engine, the capability table generated from the code, pricing as enforced, and platform status.';
 
 // The same sentence, kept inside the 120-160 characters a search snippet shows.
 const HOME_META_DESCRIPTION =
-  'Industrial Autonomous Assurance documentation: getting started, each assurance engine, the generated capability table, pricing as enforced and platform status.';
+  'NeuralBridge documentation for Industrial Autonomous Assurance: getting started, each engine, the capability table, pricing as enforced and platform status.';
 
 export async function generateMetadata({ params }: { params: DocParams }): Promise<Metadata> {
   const { slug } = await params;

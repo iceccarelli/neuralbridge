@@ -907,6 +907,10 @@ class TestGeneratedImageryIsDisclosed:
         rule = re.search(r"\.imagery-note\s*\{([^}]*)\}", css)
         assert rule and "display: none" not in rule.group(1)
         size = re.search(r"font-size:\s*([\d.]+)rem", rule.group(1))
+        if not size:  # a type-scale token: resolve it from :root, so the bound below still applies to a real number
+            token = re.search(r"font-size:\s*var\((--fs-[\w-]+)\)", rule.group(1))
+            assert token, "the caption has no font-size"
+            size = re.search(rf"{re.escape(token.group(1))}:\s*([\d.]+)rem", css)
         assert size and 0.7 <= float(size.group(1)) <= 0.9, "small, but not unreadably so"
 
     def test_the_images_really_are_generated_so_the_caption_is_true(self):

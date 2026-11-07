@@ -1,5 +1,5 @@
 import { ImageResponse } from 'next/og';
-import { BRAND, BRAND_SHORT, SITE_URL } from './seo';
+import { BRAND, BRAND_SHORT, PRODUCT, SITE_URL } from './seo';
 
 // The 1200x630 card every social crawler (Facebook, LinkedIn, WhatsApp, Slack, iMessage, X) shows when a
 // link is shared. One renderer for the site-wide card and the per-page cards, so the mark, colours and
@@ -56,7 +56,7 @@ export function ogCard({ kicker, title }: OgCardText): ImageResponse {
           >
             {BRAND_SHORT}
           </div>
-          <div style={{ color: '#ffffff', fontSize: '26px', fontWeight: 650 }}>{BRAND}</div>
+          <div style={{ color: '#ffffff', fontSize: '26px', fontWeight: 650 }}>{`${BRAND}  \u00b7  ${PRODUCT}`}</div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>

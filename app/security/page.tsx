@@ -7,7 +7,7 @@ import { loadRootDoc } from '../lib/docs';
 export const metadata: Metadata = buildMetadata({
   title: 'Security',
   description:
-    'How to report a vulnerability in Industrial Autonomous Assurance: the real reporting address and what to include, not a redirect to a GitHub issue.',
+    'How to report a vulnerability in NeuralBridge or Industrial Autonomous Assurance: the real reporting address and what to include, not a GitHub issue.',
   path: '/security',
 });
 

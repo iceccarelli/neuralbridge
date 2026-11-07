@@ -15,7 +15,7 @@ export interface SolutionPage {
   secondaryCta: { label: string; href: string; external?: boolean };
   /** Keys into IMAGES (app/lib/images.ts). `supporting` lines up with the
    * leading `proof` entries, positionally — not every proof item has one. */
-  images: { hero: string; supporting: string[] };
+  images?: { hero: string; supporting: string[] };
 }
 
 export const SOLUTIONS: SolutionPage[] = [
@@ -41,8 +41,32 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Advisories and fleet impact', body: 'How a supplier advisory is matched to enrolled machines by hash, and why a vendor advisory describes a product, not what you installed.', href: productHref('supplier-advisory-fleet-impact') },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },
-    secondaryCta: { label: 'Talk to sales', href: SALES },
+    secondaryCta: { label: 'Contact NeuralBridge', href: SALES },
     images: { hero: 'solution-manufacturer-hero', supporting: ['solution-manufacturer-drift', 'solution-manufacturer-fanout'] },
+  },
+  {
+    slug: 'system-integrator',
+    role: 'System integrator',
+    kicker: 'For the team that commissions and changes safety software on site',
+    headline: 'Every change you make on site is one the customer, and later an auditor, may ask you to evidence.',
+    lead:
+      'You commission cells, patch safety programs and re-zone scanners, often under a service ticket. The record of what you changed, against which baseline, and whether the earlier verification still stands tends to live on a laptop and in an email thread.',
+    clockAngle:
+      'Machinery Reg. Annex III 1.1.9 requires the machine to identify the software it needs to operate safely and to collect evidence of intervention in, or modification of, that software or its configuration, applying 20 Jan 2027. The manufacturer and the operator may each look to whoever made the change for that record. Nothing here makes an intervention compliant; it makes it recorded, dated and checkable.',
+    painPoints: [
+      { title: 'The change is yours; the question is theirs', body: 'An intervention on a safety-bearing item is easy to make and easy to forget to write down in a form the operator or the manufacturer can later check.' },
+      { title: 'Your change can end the coverage of an earlier verification', body: 'A verification covers one configuration. After a recorded change, the safety functions whose last verification predates it are listed, dated, rather than assumed still covered.' },
+      { title: 'A record the customer cannot check is one they must take on trust', body: 'Ledger exports and machine bundles can be re-checked offline by the customer or an auditor, with no account, and they say what they cannot establish.' },
+    ],
+    proof: [
+      { title: 'Record an intervention against a baseline', body: 'Seal an intervention record and a new manifest; the divergence from the declared baseline is listed item by item, not summarised as pass or fail.', href: productHref('continuous-machine-assurance') },
+      { title: 'See which verifications a change made stale', body: 'The staleness join names the safety functions whose last recorded verification is older than the change, and the tier each stands at.', href: productHref('machinery-regulation-evidence') },
+      { title: 'Collect without false drift alarms', body: 'Vendor tools stamp volatile headers into their own exports. The collect commands find those before they produce a year of false drift.', href: `/docs/assurance/collect` },
+      { title: 'Into the customer’s own ledger, offline', body: 'The offline kit writes to a ledger on the customer’s disk and refuses every outbound connection during a run. You do not host their evidence.', href: `/docs/assurance/kit` },
+      { title: 'A recorder attestation, accepted only under their keys', body: 'A trace can be signed by a recorder key; the verifier accepts it only under a trust list they hold. Without one it is a claim, not a validation.', href: `/docs/assurance/machine` },
+    ],
+    primaryCta: { label: 'Run the offline kit', href: QUICKSTART },
+    secondaryCta: { label: 'Ask about services', href: '/services' },
   },
   {
     slug: 'plant-operator',
@@ -71,7 +95,7 @@ export const SOLUTIONS: SolutionPage[] = [
   },
   {
     slug: 'compliance-officer',
-    role: 'Compliance officer',
+    role: 'Safety / compliance engineer',
     kicker: 'For the person who signs the filing',
     headline: 'The 24-hour clock does not pause for a spreadsheet.',
     lead:

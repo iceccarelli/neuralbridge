@@ -15,6 +15,6 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const solution = getSolution(slug);
   return ogCard({
     kicker: solution ? `For: ${solution.role}` : 'Solutions',
-    title: clip(solution ? solution.headline : 'Industrial Autonomous Assurance', 110),
+    title: clip(solution ? solution.headline : 'NeuralBridge Industrial Autonomous Assurance', 110),
   });
 }

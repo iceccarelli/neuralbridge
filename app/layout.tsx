@@ -23,6 +23,8 @@ export const metadata: Metadata = {
     'CRA Article 14',
     'Cyber Resilience Act evidence',
     'Machinery Regulation 2023/1230',
+    'machine safety software change assurance',
+    'supplier advisory fleet impact',
     'Annex III 1.1.9',
     'ISO/TS 15066',
     'Declaration of Conformity evidence',
@@ -86,9 +88,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <footer className="site-footer">
             <div className="shell footer-columns">
               <div>
-                <h2>Industrial Autonomous Assurance</h2>
-                <p style={{ fontSize: '0.82rem', lineHeight: 1.6, margin: 0 }}>
-                  Evidence infrastructure for machines whose software can hurt someone. Re-checking someone
+                <h2>NeuralBridge</h2>
+                <p style={{ fontSize: 'var(--fs-sm)', lineHeight: 1.6, margin: 0 }}>
+                  The company and platform behind Industrial Autonomous Assurance: evidence that a machine&apos;s safety
+                  software still matches what was verified. Re-checking someone
                   else&apos;s evidence needs no account. The file verifier allows 20 a day per address and manifest
                   diff 10; declaration, bundle, passport and attestation checks are not metered.
                   {!HOSTED_API && ' The hosted API is not deployed to a public endpoint yet; the offline kit runs these checks on your own machine.'}
@@ -96,12 +99,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </div>
 
               <div>
-                <h2>Products</h2>
+                <h2>Industrial Autonomous Assurance</h2>
                 <ul>
+                  <li><a href="/start">Get started</a></li>
                   <li><a href="/#products">Validator (free)</a></li>
                   <li><a href="/#pricing">Register — &euro;390/mo</a></li>
                   <li><a href="/#pricing">Cell — &euro;1,290/mo</a></li>
                   <li><a href="/assurance">Workspace (your key)</a></li>
+                  <li><a href="/services">Services</a></li>
                   <li>
                     {repoLink() ? (
                       <RepoLink path="/tree/main/src/assurance/api">Assurance API</RepoLink>
@@ -154,7 +159,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   {repoLink() && <li><RepoLink path="">GitHub repository</RepoLink></li>}
                   <li><a href="/roadmap">Roadmap</a></li>
                   {repoLink() && <li><RepoLink path="/blob/main/CONTRIBUTING.md">Contributing</RepoLink></li>}
-                  <li><a href="/security">Security</a></li>
+                  <li><a href="/trust">Trust &amp; data handling</a></li>
+                  <li><a href="/security">Security reporting</a></li>
                 </ul>
               </div>
 
@@ -169,7 +175,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div className="shell footer-bottom">
-              <span>&copy; 2026 Industrial Autonomous Assurance &middot; All rights reserved &middot; Built by Vincenzo Grimaldi</span>
+              <span>&copy; 2026 NeuralBridge &middot; Industrial Autonomous Assurance is a NeuralBridge product &middot; All rights reserved &middot; Built by Vincenzo Grimaldi</span>
               <RepoLink path="">{(repoLink() ?? '').replace('https://', '')}</RepoLink>
             </div>
           </footer>

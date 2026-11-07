@@ -7,15 +7,18 @@ import { ownerLink, repoSameAs } from './links';
 // tests/test_site_seo.py parses the built HTML and holds the limits below.
 
 export const SITE_URL = 'https://neuralbridge.io';
-export const BRAND = 'Industrial Autonomous Assurance';
-// The abbreviation the site already prints in its social image mark; used only when the full brand
-// would push a title past the limit.
-export const BRAND_SHORT = 'IAA';
+// NeuralBridge is the company and platform; Industrial Autonomous Assurance is its flagship product.
+// Page titles, the social site name, the manifest and the Organization node carry the company;
+// the product is named in the home title, the site description and the WebSite alternateName.
+export const BRAND = 'NeuralBridge';
+export const PRODUCT = 'Industrial Autonomous Assurance';
+// The two-letter mark the site prints in its social image and header lockup.
+export const BRAND_SHORT = 'NB';
 export const TITLE_MAX = 60;
 export const DESCRIPTION_MIN = 120;
 export const DESCRIPTION_MAX = 160;
 export const SITE_DESCRIPTION =
-  'Evidence infrastructure for CRA Article 14 and Machinery Regulation Annex III 1.1.9: a hash-chained record of what is on each machine, which checks were run against it, and when.';
+  'NeuralBridge builds Industrial Autonomous Assurance: tamper-evident evidence that a machine\u2019s safety software and configuration still match what was verified, with fleet impact for supplier advisories.';
 export const OG_IMAGE = {
   url: '/opengraph-image',
   width: 1200,
@@ -130,6 +133,7 @@ export function siteGraph() {
         '@type': 'Organization',
         '@id': ORG_ID,
         name: BRAND,
+        description: `NeuralBridge is the company and platform behind ${PRODUCT}, its flagship product.`,
         url: `${SITE_URL}/`,
         founder: { '@type': 'Person', name: 'Vincenzo Grimaldi', ...(owner ? { url: owner } : {}) },
         logo: { '@type': 'ImageObject', url: LOGO_URL, width: 512, height: 512 },
@@ -142,6 +146,7 @@ export function siteGraph() {
         '@type': 'WebSite',
         '@id': SITE_ID,
         name: BRAND,
+        alternateName: PRODUCT,
         url: `${SITE_URL}/`,
         description: SITE_DESCRIPTION,
         inLanguage: 'en',

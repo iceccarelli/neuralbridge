@@ -30,6 +30,7 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
   const { slug } = await params;
   const solution = getSolution(slug);
   if (!solution) notFound();
+  const supportingImages = solution.images?.supporting ?? [];
 
   return (
     <main id="top">
@@ -56,14 +57,16 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
               {solution.secondaryCta.label}
             </a>
           </div>
-          <RotatingImage
-            slot={IMAGES[solution.images.hero]}
-            aspect="21/9"
-            priority
-            sizes="100vw"
-            dots
-            className="pricing-media"
-          />
+          {solution.images && (
+            <RotatingImage
+              slot={IMAGES[solution.images.hero]}
+              aspect="21/9"
+              priority
+              sizes="100vw"
+              dots
+              className="pricing-media"
+            />
+          )}
         </div>
         <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
           <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface-alt)" />
@@ -108,9 +111,9 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
           <div className="tile-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
             {solution.proof.map((item, i) => (
               <article className="tile" key={item.title}>
-                {solution.images.supporting[i] && (
+                {supportingImages[i] && (
                   <RotatingImage
-                    slot={IMAGES[solution.images.supporting[i]]}
+                    slot={IMAGES[supportingImages[i]]}
                     aspect="4/3"
                     offsetMs={i * 900}
                     className="tile-media"

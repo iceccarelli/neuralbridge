@@ -6,7 +6,7 @@ import ContactForm from '../components/ContactForm';
 export const metadata: Metadata = buildMetadata({
   title: 'Contact',
   description:
-    'Talk to sales about Register or Cell, or reach the supplier feed program. One form that opens a pre-filled email in your own mail client; no CRM behind it yet.',
+    'Ask NeuralBridge about Register or Cell, a copy of the source, services or the supplier feed. One form that opens a pre-filled email in your own mail client.',
   path: '/contact',
 });
 
@@ -17,11 +17,13 @@ export default function ContactPage() {
         <div className="shell" style={{ maxWidth: '640px' }}>
           <div className="section-head">
             <span className="eyebrow">Contact</span>
-            <h1>Talk to a human</h1>
+            <h1>Contact NeuralBridge</h1>
             <p>
-              Register and Cell are sales-assisted today — no self-serve checkout is live yet (see{' '}
-              <a href="/#pricing">pricing</a> for why). The Supplier tier is unlisted and sales-assigned by design.
-              Fill this in and it opens a pre-filled email in your own mail client.
+              This is the one route for everything that is not self-serve: a copy of the source for the CLI and
+              offline kit, Register or Cell (sales-assisted today; no checkout is live, see{' '}
+              <a href="/#pricing">pricing</a> for why), the unlisted Supplier tier, and general questions about the{' '}
+              <a href="/services">services</a>. No response time is promised. Fill this in and it opens a
+              pre-filled email in your own mail client.
             </p>
           </div>
           <Suspense fallback={<div className="contact-form-fallback" aria-hidden="true" />}>
