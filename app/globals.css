@@ -2050,6 +2050,19 @@ table.status-table tbody tr:last-child td {
 @media (max-width: 640px) {
   .shell {
     width: min(calc(100% - 1.5rem), var(--max-width));
+  }
+  .topbar-inner {
+    gap: 0.5rem;
+  }
+  .brand-lockup {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .brand-name {
+    max-width: 100%;
+  }
+  .topbar-actions {
+    gap: 0;
   }.tile-grid,.solutions-grid,.pricing-grid,.trust-grid,.playground-grid,.intent-proof {
     grid-template-columns: 1fr;
   }
@@ -3404,6 +3417,31 @@ table.status-table tbody tr:last-child td {
 
 .note-box p:last-child {
   margin-bottom: 0;
+}
+
+.glance {
+  display: grid;
+  grid-template-columns: minmax(9rem, 12rem) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.glance dt {
+  font-weight: 600;
+}
+
+.glance dd {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .glance {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .glance dd {
+    margin-bottom: var(--space-2);
+  }
 }
 
 .page-hero {

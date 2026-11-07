@@ -40,7 +40,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
     blurb: s.headline,
   })),
   { title: 'Get started', group: 'Docs', href: '/start', blurb: 'From reading to your first enrolled machine, with what runs offline, what needs a hosted API and what is by request.' },
-  { title: 'Services', group: 'Docs', href: '/services', blurb: 'Seven kinds of help that could be scoped, with deliverables, exclusions and what exists today. No capacity or price offered.' },
+  { title: 'Services', group: 'Docs', href: '/services', blurb: 'Eight productised outcomes with inputs, deliverables, exclusions, evidence produced and what needs review. No capacity or price offered.' },
   { title: 'Trust and data handling', group: 'Docs', href: '/trust', blurb: 'Where data lives, provenance classes, what a record can prove, permissions and limitations.' },
   { title: 'Documentation', group: 'Docs', href: DOCS, blurb: 'Getting started, every engine, deploying the register.' },
   { title: 'Getting started', group: 'Docs', href: '/docs/getting-started', blurb: 'The offline kit walkthrough, one command at a time.' },

@@ -59,15 +59,16 @@ def _strings(value) -> list[str]:
     return []
 
 
-FIELDS = ["customer", "problem", "inputs", "deliverables", "exclusions", "dependencies",
-          "responsibilities", "verifiable", "today", "gap"]
-EXPECTED = ["Baseline evidence workshop", "Enrolment implementation", "Article 14 workflow configuration",
-            "Advisory and fleet-impact integration", "API and MCP integration", "Onboarding and training",
-            "Ongoing assurance operations"]
+FIELDS = ["customer", "problem", "inputs", "deliverables", "exclusions", "prerequisites",
+          "responsibilities", "evidence", "automated", "review", "support", "verifiable", "today", "gap"]
+EXPECTED = ["Industrial software and machine-evidence baseline", "Machine enrolment and assurance implementation",
+            "CRA Article 14 workflow configuration", "Machinery Regulation Annex III evidence workflow",
+            "Supplier advisory and fleet-impact integration", "NeuralBridge platform and API integration",
+            "Operator onboarding and training", "Ongoing assurance and evidence operations"]
 
 
 class TestCatalogueShape:
-    def test_exactly_the_seven_services_in_order(self, services):
+    def test_exactly_the_eight_services_in_order(self, services):
         assert [s["name"] for s in services] == EXPECTED
         assert len({s["id"] for s in services}) == len(services)
 
@@ -82,6 +83,16 @@ class TestCatalogueShape:
         for s in services:
             assert len(s["exclusions"]) >= 2, s["id"]
             assert s["availability"] in {"available", "partial", "gap"}
+
+    def test_no_package_price_hours_or_team_is_implied(self, services):
+        for text in _strings(services):
+            assert not re.search(r"\b\d+\s*(?:hours?|days?|weeks?|person-days?)\b|\bour (?:team|engineers|consultants)\b|\bpackage\b", text, re.I), text
+
+    def test_the_annex_iii_entry_states_the_regulatory_date_and_denies_compliance(self, services):
+        (annex,) = [s for s in services if s["id"] == "machinery-annex-iii"]
+        text = " ".join(_strings(annex))
+        assert "20 January 2027" in text and "2023/1230" in text
+        assert re.search(r"No statement that a machine is compliant, certified or safe", text)
 
     def test_the_disclaimer_denies_capacity_sla_certification_price_and_separates_entitlements(self, catalogue):
         text = " ".join(catalogue["disclaimer"])
@@ -124,7 +135,7 @@ class TestNothingIsPromised:
 class TestCapabilityClaimsAreTrue:
     def test_every_backticked_command_is_in_the_contract(self, services):
         domains = CONTRACT["cli_domains"]
-        for text in _strings([s["today"] + s["verifiable"] + s["deliverables"] + s["dependencies"] for s in services]):
+        for text in _strings([s["today"] + s["verifiable"] + s["deliverables"] + s["prerequisites"] for s in services]):
             for span in re.findall(r"`([^`]+)`", text):
                 head = span.split()
                 if head and head[0] in domains and len(head) > 1 and not head[1].startswith("-"):
@@ -132,7 +143,7 @@ class TestCapabilityClaimsAreTrue:
 
     @pytest.mark.parametrize("cap", ["kit.init", "kit.check", "kit.run", "machinery.enrol", "machinery.import_inventory",
                                      "machinery.diff", "machinery.coverage", "fleet.advisory", "fleet.import_csaf",
-                                     "watch.run", "ops.cycle", "ops.status", "ops.check", "tenant.export",
+                                     "watch.run", "machinery.passport", "machinery.passport_check", "machinery.manifest", "machinery.intervention", "machine.verify", "change.reverify", "ops.cycle", "ops.status", "ops.check", "tenant.export",
                                      "collect.check_plan", "change.replay", "evidence.verify"])
     def test_a_capability_called_available_exists_on_the_cli(self, cap):
         assert CAPS[cap]["surfaces"]["cli"]["status"] == "available", cap
