@@ -22,6 +22,9 @@ type DocParams = Promise<{ slug?: string[] }>;
 const accessibleDocHtml = (html: string) =>
   html
     .replace(/<pre>/g, '<pre tabindex="0">')
+    // a wide markdown table scrolls inside its own keyboard-focusable region instead of widening the page
+    .replace(/<table>/g, '<div class="docs-table-scroll" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>')
+    .replace(/<\/table>/g, '</table></div>')
     .replace(/<li><input disabled="" type="checkbox">([\s\S]*?)<\/li>/g, (_match, rest: string) => {
       const label = rest.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120).replace(/"/g, '&quot;');
       return '<li><input disabled="" type="checkbox" aria-label="' + label + '">' + rest + '</li>';

@@ -2186,12 +2186,6 @@ table.status-table tbody tr:last-child td {
   }
 }
 
-@media (max-width: 480px) {
-  .brand-name {
-    display: none;
-  }
-}
-
 @media (max-width: 640px) {
   .shell {
     width: min(calc(100% - 1.5rem), var(--max-width));
@@ -2311,6 +2305,7 @@ table.status-table tbody tr:last-child td {
 
 .docs-content {
   max-width: 74ch;
+  min-width: 0;
 }
 
 .docs-content h1 {
@@ -2435,7 +2430,7 @@ table.status-table tbody tr:last-child td {
 
 @media (max-width: 860px) {
   .docs-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 1.5rem;
   }
   .docs-sidebar {
@@ -3372,7 +3367,6 @@ table.status-table tbody tr:last-child td {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink-soft);
-  white-space: nowrap;
 }
 
 .tag.is-live {
@@ -3784,4 +3778,19 @@ table.status-table tbody tr:last-child td {
   .brand-product {
     font-size: 0.68rem;
   }
+}
+
+.docs-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 0 0 1.5rem;
+}
+
+.docs-table-scroll table {
+  margin: 0;
+}
+
+.docs-table-scroll:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }

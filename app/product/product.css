@@ -98,6 +98,7 @@
 }
 
 .product-step-caps a {
+  overflow-wrap: anywhere;
   color: var(--link);
   text-decoration: underline;
   text-underline-offset: 2px;
