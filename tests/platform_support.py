@@ -209,7 +209,7 @@ def scram_pg():
     if bindir is None:
         pytest.skip("PostgreSQL server binaries (initdb) not installed: cannot start a password-auth cluster")
     base = tempfile.mkdtemp(prefix="nb-scram-pg-", dir="/tmp")
-    os.chmod(base, 0o755)
+    os.chmod(base, 0o755)  # noqa: S103 - throwaway dir the server user must traverse
     prefix: list[str] = []
     if os.geteuid() == 0:  # initdb refuses to run as root
         shutil.chown(base, "postgres", "postgres")

@@ -1,4 +1,4 @@
-# ruff: noqa: F811  (fixtures are imported by name)
+# ruff: noqa: F811, F401  (fixtures are imported by name)
 """Resource controls on the adapter, /ai and MCP routes: body size, rate, concurrency, timeout.
 
 All limits are per process (documented in ``neuralbridge.security.limits``); these tests run

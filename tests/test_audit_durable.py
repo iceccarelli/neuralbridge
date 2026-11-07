@@ -5,7 +5,7 @@ Everything here uses the real storage classes (a real SQLite file; a real Postgr
 selectable backend). Process-restart and multi-process tests start real Python subprocesses.
 """
 
-# ruff: noqa: S603, F811  (subprocess runs this package's own interpreter; fixtures are imported by name)
+# ruff: noqa: S603, F811, F401  (subprocess runs this package's own interpreter; fixtures are imported by name)
 from __future__ import annotations
 
 import asyncio

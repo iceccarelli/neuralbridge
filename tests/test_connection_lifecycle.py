@@ -1,4 +1,4 @@
-# ruff: noqa: F811  (fixtures are imported by name)
+# ruff: noqa: F811, F401  (fixtures are imported by name)
 """Connection and credential lifecycle: create, rotate, revoke, delete — against real PostgreSQL.
 
 * the shared dev cluster (``:5432``, trust auth) for everything that does not depend on a
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 import pytest
 
@@ -30,7 +29,6 @@ from .platform_support import (
     Keys,
     audit_events,
     bind,
-    bind_body,
     client,
     env,
     h,
