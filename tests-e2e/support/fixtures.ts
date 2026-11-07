@@ -10,7 +10,8 @@ import { test as base, expect, type Page } from '@playwright/test';
 //   - first-party responses with status >= 400 (pages, scripts, styles, fonts, images, API calls)
 //
 // "First-party" = the site origin (baseURL) and the Assurance API origin
-// (NEXT_PUBLIC_ASSURANCE_API_URL). Third-party failures are not this suite's to judge.
+// (NEXT_PUBLIC_ASSURANCE_API_URL) and the NeuralBridge platform API origin (NEXT_PUBLIC_NEURALBRIDGE_API_URL, /ai).
+// Third-party failures are not this suite's to judge.
 //
 // Expected noise is allow-listed PER TEST or per describe block with a written reason, never globally:
 //
@@ -26,7 +27,11 @@ export type HealthAllow = { status: number; url: RegExp; why: string };
 
 const origins = (): string[] => {
   const out = new Set<string>();
-  for (const v of [process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:3000', process.env.NEXT_PUBLIC_ASSURANCE_API_URL]) {
+  for (const v of [
+    process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:3000',
+    process.env.NEXT_PUBLIC_ASSURANCE_API_URL,
+    process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL,
+  ]) {
     try {
       if (v) out.add(new URL(v).origin);
     } catch {
