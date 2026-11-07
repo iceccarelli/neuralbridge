@@ -264,8 +264,11 @@ def test_concurrent_first_writes_to_new_tenant_ledgers_do_not_corrupt(
                     f"/v1/cases/first-{uuid.uuid4().hex[:8]}/signal", json=_signal_body(i),
                     headers={"X-API-Key": key}))
         results = _blast(server, calls, threads=48)
-        assert Counter(r.status_code for r in results) == {201: len(calls)}, \
-            Counter((r.status_code, r.text[:120]) for r in results if r.status_code != 201)
+        # A 500 here is an unhandled exception in a worker; its traceback is in the server log,
+        # so a failure carries it rather than only the status line.
+        assert Counter(r.status_code for r in results) == {201: len(calls)}, (
+            Counter((r.status_code, r.text[:120]) for r in results if r.status_code != 201),
+            server.log.read_text(errors="replace")[-6000:])
         accounts += fresh
         if _workers_that_worked(server, before) >= 2:
             break
