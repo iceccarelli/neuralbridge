@@ -2634,6 +2634,14 @@
             "title": "Actor",
             "type": "string"
           },
+          "configuration_hash": {
+            "default": "",
+            "description": "the SafetyManifest.configuration_hash of the machine configuration this run was made against (64 hex digits; `POST /v1/machinery/diff` and the manifest routes return it). It is the filer's statement, sealed into the bundle. WITHOUT it the verification is unbound: coverage never reads a safety function `current` on an unbound verification, only `stale`, because nothing but dates would tie it to the machine's configuration",
+            "maxLength": 64,
+            "pattern": "^([0-9a-fA-F]{64})?$",
+            "title": "Configuration Hash",
+            "type": "string"
+          },
           "envelope": {
             "additionalProperties": true,
             "title": "Envelope",
@@ -2721,7 +2729,7 @@
     }
   },
   "info": {
-    "description": "\nRegister for **Regulation (EU) 2024/2847, Article 14** \u2014 reporting of actively\nexploited vulnerabilities and severe incidents.\n\nArticle 14 has applied since **11 September 2026**, and by Article 69(3) it\napplies to every in-scope product placed on the market **before 11 December\n2027**. There is no grandfathering for reporting. Reports go from the manufacturer\nto the CSIRT designated as coordinator and to ENISA, through ENISA's single reporting\nplatform (Art. 14(1), (3), (7); Art. 16); this service files nothing.\n\n**What this service does that a spreadsheet cannot**\n\n* Records the awareness timestamp independently. The reporting platform does\n  not yet capture it for vulnerabilities and records *detection* for incidents,\n  and awareness is the fact every deadline runs from.\n* Computes both final-report clocks correctly: 14 days from a corrective **or\n  mitigating** measure for a vulnerability, one calendar month from\n  **submission** of the 72-hour notification for an incident.\n* Validates a draft submission against the platform's 39-field specification\n  before anyone opens the platform.\n* Keeps every record in a hash-chained ledger, and refuses to export one that\n  does not verify.\n\nIt does not give legal advice, and it does not decide a judgement for you:\ntriage returns *undetermined* until a human answers.\n",
+    "description": "\nRegister for **Regulation (EU) 2024/2847, Article 14** \u2014 reporting of actively\nexploited vulnerabilities and severe incidents.\n\nArticle 14 has applied since **11 September 2026**, and by Article 69(3) it\napplies to every in-scope product placed on the market **before 11 December\n2027**. There is no grandfathering for reporting. Reports go from the manufacturer\nto the CSIRT designated as coordinator and to ENISA, through ENISA's single reporting\nplatform (Art. 14(1), (3), (7); Art. 16); this service files nothing.\n\n**What this service does that a spreadsheet cannot**\n\n* Records the awareness timestamp independently. The reporting platform does\n  not yet capture it for vulnerabilities and records *detection* for incidents,\n  and awareness is the fact every deadline runs from.\n* Computes both final-report clocks correctly: 14 days from a corrective **or\n  mitigating** measure for a vulnerability, one calendar month from\n  **submission** of the 72-hour notification for an incident.\n* Validates a draft submission against the platform's 39-field specification\n  before anyone opens the platform.\n* Keeps every record in a hash-chained ledger, and refuses to export one that\n  does not verify.\n\nIt does not give legal advice, and it does not decide a judgement for you:\ntriage returns *undetermined* until a human answers.\n\n**What runs where.** This API is the service in this repository: an operator runs it\n(hosted, or self-hosted from the same code) and each account's ledger lives there. That\nthe code exists is not a statement that a deployment is reachable (`docs/GO-LIVE.md`).\nCollection from a machine, the Watch run, the offline kit and everything that needs a\nprivate key are NOT done by this API: they run on the customer's own machine\n(`assurance collect`, `kit`, `watch run`, `machinery enrol` from files) and reach the\nservice only when a person chooses to push a result (`POST /v1/watch/report`). There is\nno hosted scheduler and no hosted collection. `GET /v1/capabilities` states, for every\ncapability, whether it is hosted, offline-only or operator-host-only.\n",
     "title": "Industrial Autonomous Assurance API",
     "version": "0.1.1"
   },
@@ -7896,6 +7904,129 @@
         ]
       }
     },
+    "/v1/machinery/export": {
+      "get": {
+        "description": "The machine's own ledger subject as ``assurance evidence verify`` expects it.\n\n``GET /v1/cases`` lists a machine key beside the case ids, but ``/v1/cases/{id}/export``\ncannot name one (the key holds ``/`` and ``#``), so a machine's manifests, interventions,\nverifications and passports could not be exported over HTTP. This route does. Same rules as\nthe case exports: the chain must verify (500 ``ledger_integrity`` otherwise), an anchor that\ncontradicts the ledger is 409, completeness is *not checked* without ``skeleton`` and a\nsigned ``anchor``, and a machine with no entry at all is 404 so an export is never an empty\nbundle that reads as clean. Gated like the other machinery routes (Cell): a lapsed\nsubscription answers 402 here, unlike the four case read-out routes.",
+        "operationId": "export_machine_v1_machinery_export_get",
+        "parameters": [
+          {
+            "description": "the machine key exactly as enrolled, `manufacturer/model#serial`. It is a query parameter because the key holds `/` and `#`, which cannot be a path segment",
+            "in": "query",
+            "name": "machine",
+            "required": true,
+            "schema": {
+              "description": "the machine key exactly as enrolled, `manufacturer/model#serial`. It is a query parameter because the key holds `/` and `#`, which cannot be a path segment",
+              "maxLength": 400,
+              "minLength": 1,
+              "title": "Machine",
+              "type": "string"
+            }
+          },
+          {
+            "description": "embed the newest signed attestation the service read from this account's own ledger as `anchor` (see `GET /v1/change/cases/{case_id}/export`)",
+            "in": "query",
+            "name": "anchor",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "embed the newest signed attestation the service read from this account's own ledger as `anchor` (see `GET /v1/change/cases/{case_id}/export`)",
+              "title": "Anchor",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "also carry the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry. Off by default: it names the account's other subjects",
+            "in": "query",
+            "name": "skeleton",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "also carry the position, kind, subject, time and hashes of every OTHER entry of this account's ledger (no evidence), so a verifier can see a removed entry. Off by default: it names the account's other subjects",
+              "title": "Skeleton",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Machine V1 Machinery Export Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "No API key, or one that is not valid (`WWW-Authenticate: ApiKey`)."
+          },
+          "402": {
+            "description": "Authenticated, but the plan does not include this (`plan_does_not_include_*`; the body names the plan that does)."
+          },
+          "404": {
+            "description": "`case_not_found`: the ledger holds no entry of a case kind under this id, so an export is never an empty bundle that reads clean."
+          },
+          "409": {
+            "description": "`anchor_contradicts_ledger`: the newest server-read signed attestation in this account's log does not match this ledger (shorter, or different history at a signed position). A rewind signal; nothing is exported. `?anchor=false` exports without the anchor but does not make the finding go away."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "description": "`ledger_integrity` (the account's chain does not verify) or `attestation_log_damaged` (the account's attestation log cannot be read, or ends in an unterminated line that may be the newest record, so the anchor cannot be chosen; never a silently unanchored export)."
+          },
+          "503": {
+            "description": "`attestation_busy`: the attestation log ends in an unfinished line and a signer holds its lock right now. Retry after `Retry-After`; nothing was decided or exported."
+          }
+        },
+        "summary": "A verifiable evidence bundle for one machine (manifests, changes, verifications, passports)",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
     "/v1/machinery/intervention": {
       "post": {
         "description": "Record a change to safety-relevant software.\n\nA change with no authorisation and no re-validation is recorded, not\nrefused \u2014 and its findings travel with it. Refusing would push the change\nback to where it lives now, which is nowhere.\n\nWhat is refused is a change that could not be about anything the ledger holds:\n``409 unknown_machine`` when no manifest is sealed under exactly this unit key (a key\nwith another case or serial is a different unit), ``422 unknown_function`` naming any\nsafety function the sealed manifest does not declare. Function ids are written back\nas the manifest spells them (``sf-1`` is ``SF-1``), and a blank list is accepted: the\nfunctions the manifest says the changed item implements are disturbed regardless\n(``effective_affects_functions``).",
@@ -8197,6 +8328,87 @@
           }
         },
         "summary": "Re-verify a machine passport. Free, permanently, for anyone.",
+        "tags": [
+          "machinery"
+        ]
+      }
+    },
+    "/v1/machinery/passport/check-ledger": {
+      "post": {
+        "description": "The hosted twin of ``assurance machinery check PASSPORT --ledger LEDGER``.\n\n``POST /v1/machinery/passport/check`` has no ledger, so it cannot see that a passport has\nbeen overtaken. This reads the CALLER'S OWN ledger (never another account's, never the\noperator's) and applies the same rules as the command: the named records must exist and\nmatch, the printed blocks must repeat the sealed body, and a passport the ledger shows has\nbeen superseded (a later look at another configuration, a later declared baseline, a\nrecorded change) is not ok. Reads only; seals nothing; not metered. An ``ok`` here says\nthe passport matches THIS ledger as it stands now, not that the machine is safe.",
+        "operationId": "check_passport_against_ledger_v1_machinery_passport_check_ledger_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PassportCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Check Passport Against Ledger V1 Machinery Passport Check Ledger Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "`ledger_chain_unverified`: the account's chain does not verify, so nothing was judged against it."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Re-verify a passport against YOUR account's ledger (is it still the machine?)",
         "tags": [
           "machinery"
         ]
@@ -9928,11 +10140,11 @@
       "name": "free"
     },
     {
-      "description": "The register. Needs a plan that includes it.",
+      "description": "The register. Needs a plan that includes it. Hosted records only: the service files nothing with ENISA or a CSIRT, and awareness, triage and filings are a named person's acts.",
       "name": "article 14"
     },
     {
-      "description": "Verify a recorded machine run against its declared safety envelope. The separation calculator and the bundle re-checker need no account.",
+      "description": "Verify a recorded machine run against its declared safety envelope, on the trace you post (the service does not collect it; the offline `assurance machine verify` does the same on local files). The separation calculator and the bundle re-checker need no account.",
       "name": "machine safety"
     },
     {
@@ -9940,8 +10152,24 @@
       "name": "machinery"
     },
     {
-      "description": "Every enrolled machine at once: component advisories fanned out to serial numbers, and Declarations of Conformity bound to a configuration.",
+      "description": "Every enrolled machine at once: component advisories fanned out to serial numbers, and Declarations of Conformity bound to a configuration. Hosted views of what the account enrolled or pushed; the service reads no machine.",
       "name": "fleet"
+    },
+    {
+      "description": "Record what a Watch run on YOUR machine chose to report. There is no hosted Watch: no scheduler, no collection, no reading of a machine. A machine absent from a push is stale, not clear.",
+      "name": "watch"
+    },
+    {
+      "description": "Active Assurance Cases on the account's hosted ledger. Drift and intervention cases are opened from manifests and records the caller supplies; closure, waiver and answering a decision are a named person's, and no agent tool does them.",
+      "name": "change"
+    },
+    {
+      "description": "Read-only views of the operator's shared public-source store (KEV, NVD, EPSS, CSAF). Nothing here fetches or records a feed: that is the operator's `intel refresh/ingest` on the host. Every answer carries the store's age (`store_freshness`); a stale or unknown store is not an all-clear.",
+      "name": "intel"
+    },
+    {
+      "description": "The service counter-signs the head of a ledger it holds with its own key. Making or holding YOUR signing key, and the recorder trust list, are offline and not offered over HTTP.",
+      "name": "attestation"
     },
     {
       "description": "Publish a signed component advisory to a hosted feed (Supplier tier, sales-assigned). Reading any feed needs no account.",

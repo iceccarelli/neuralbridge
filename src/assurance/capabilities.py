@@ -27,8 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["BY_DESIGN", "CAPABILITIES", "PLANNED", "SCHEMA", "Capability", "catalogue",
-           "discover", "problems"]
+__all__ = ["BY_DESIGN", "CAPABILITIES", "HOSTING_MODES", "PLANNED", "SCHEMA", "Capability",
+           "catalogue", "discover", "hosting", "problems"]
 
 SCHEMA = "assurance.capabilities/1"
 SURFACES = ("cli", "api", "mcp")
@@ -55,6 +55,52 @@ class Capability:
     def claims(self, surface: str) -> tuple[str, ...]:
         return getattr(self, surface)
 
+    @property
+    def hosting(self) -> str:
+        """One of :data:`HOSTING_MODES`, derived from which surfaces exist and why the API is
+        absent, so it cannot disagree with the declaration it is derived from."""
+        if self.api:
+            return "hosted_and_offline" if self.cli else "hosted_only"
+        reason = self.gaps.get("api", (BY_DESIGN, ""))[1]
+        if reason in (_KEYS_REASON, _TRUST_REASON) or "key custody" in reason \
+                or "trust is the verifier's" in reason:
+            return "operator_machine_only"
+        if reason in _OFFLINE_REASONS or "no hosted equivalent" in reason \
+                or "nothing to host" in reason or "offline" in reason:
+            return "offline_only"
+        if any(k in reason for k in ("operator tooling", "operator act", "account store file",
+                                     "account plane")):
+            return "operator_host_only"
+        return "offline_only"
+
+
+#: Where a capability RUNS, stated for every capability (see :func:`hosting`). The HTTP API is the
+#: service this repository contains: an operator runs it (on Fly or on their own host) and a
+#: customer's ledger lives there. Whether any deployment exists, and what it has been proven to do,
+#: is ``docs/GO-LIVE.md`` and not something this module asserts.
+HOSTING_MODES: dict[str, str] = {
+    "hosted_and_offline": (
+        "Served by the HTTP API on the calling account's own hosted ledger, and also runnable "
+        "offline from the command line on local files (the CLI opens no socket for it)."),
+    "hosted_only": (
+        "Served by the HTTP API (hosted, or self-hosted by running the same service). There is "
+        "no offline command for it."),
+    "offline_only": (
+        "Runs on the customer's own machine from local files and opens no socket. There is no "
+        "hosted equivalent: nothing here is scheduled, collected or run for the customer by a "
+        "hosted service."),
+    "operator_host_only": (
+        "Operator tooling that runs on the host that holds the service's data volume and "
+        "accounts. It is not an HTTP route and not an agent tool."),
+    "operator_machine_only": (
+        "Key custody or trust configuration performed on the operator's or verifier's own "
+        "machine. A request or a tool cannot supply or change it."),
+}
+
+_OFFLINE_REASONS = frozenset({
+    "runs on the customer's own machine and opens no socket; there is no hosted equivalent",
+    "reads a feed file on the operator's own machine, which a server-side tool cannot see"})
+
 
 def _t(v: str | tuple[str, ...]) -> tuple[str, ...]:
     return (v,) if isinstance(v, str) else tuple(v)
@@ -74,6 +120,9 @@ def _p(reason: str) -> tuple[str, str]:
     return (PLANNED, reason)
 
 
+_KEYS_REASON = "key custody: the private key is made and held on the operator's own machine"
+_TRUST_REASON = ("trust is the verifier's own configuration, edited on the operator's machine; a "
+                 "request or a tool cannot supply or change it")
 _HUMAN = ("a named person's act, so no agent surface (the Article 14 track, a case closure and "
           "a case opened from third-party content are human decisions; software drafts)")
 _WRITE = "writes the ledger of record; an agent is not offered a way to seal records"
@@ -128,8 +177,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("art14.case", "One case, with its deadlines",
        "art14 case", "GET /v1/cases/{case_id}", "art14_case"),
     _c("art14.history", "The audit history of one case: every ledger record, oldest first",
-       "art14 case", "GET /v1/cases/{case_id}/history", gaps={"mcp": _p(
-           "the MCP tool art14_case returns the case; the history is not offered to agents yet")}),
+       "art14 case", "GET /v1/cases/{case_id}/history", "art14_history"),
     _c("art14.case_ids", "List case ids", (), "GET /v1/cases", "register_cases",
        gaps={"cli": _d("`art14 register` shows every case, worst first, and is the CLI view")}),
     _c("art14.register", "Readiness across every case, worst first",
@@ -220,6 +268,12 @@ CAPABILITIES: tuple[Capability, ...] = (
        "machinery passport", "POST /v1/machinery/passport", gaps={"mcp": _d(_WRITE)}),
     _c("machinery.passport_check", "Re-verify a passport you did not produce",
        "machinery check", "POST /v1/machinery/passport/check", "machinery_passport_check"),
+    _c("machinery.export", "A verifiable evidence bundle for one machine's records",
+       "art14 export", "GET /v1/machinery/export", "machinery_export"),
+    _c("machinery.passport_check_ledger",
+       "Is this passport still true of the machine, judged against your own ledger?",
+       "machinery check", "POST /v1/machinery/passport/check-ledger",
+       "machinery_passport_check_ledger"),
 
     # --- fleet: every machine at once, and what a supplier advisory means for them ------------
     _c("fleet.machines", "Every enrolled machine, worst coverage first",
@@ -651,6 +705,12 @@ def _gates(app: Any) -> dict[str, list[str]]:
     return out
 
 
+def hosting(cap: Capability) -> dict[str, str]:
+    """``{"mode", "statement"}``: where this capability runs, in a sentence a buyer can quote."""
+    mode = cap.hosting
+    return {"mode": mode, "statement": HOSTING_MODES[mode]}
+
+
 def catalogue(app: Any) -> dict[str, Any]:
     """The catalogue with each surface's real status, ready to serve as JSON."""
     found = discover(app)
@@ -658,7 +718,8 @@ def catalogue(app: Any) -> dict[str, Any]:
     caps: list[dict[str, Any]] = []
     counts = {s: {"present": 0, "by_design": 0, "planned": 0} for s in SURFACES}
     for cap in CAPABILITIES:
-        entry: dict[str, Any] = {"id": cap.id, "service": cap.service, "summary": cap.summary}
+        entry: dict[str, Any] = {"id": cap.id, "service": cap.service, "summary": cap.summary,
+                                 "hosting": hosting(cap)}
         for surface in SURFACES:
             names = cap.claims(surface)
             if names:
@@ -682,7 +743,10 @@ def catalogue(app: Any) -> dict[str, Any]:
         "capabilities": caps,
         "counts": counts,
         "surfaces_checked": {s: len(found[s]) for s in SURFACES},
+        "hosting_modes": dict(HOSTING_MODES),
         "limits": [
+            "hosting states where the code runs (hosted API, offline command, operator host); it "
+            "does not say a deployment exists or is reachable: that is docs/GO-LIVE.md",
             "present means the command, route or tool exists; it does not prove the surfaces "
             "behave identically, only that a person declared them the same capability",
             "planned gaps are known and open; they are listed so they are not hidden",
