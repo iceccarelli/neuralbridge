@@ -65,6 +65,18 @@ async def readiness_check(
         "audit_backend": audit.storage.backend if audit else "unavailable",
         "audit_durable": bool(audit and audit.storage.durable),
     }
+    # Warning only (never flips readiness): the free /ai demo connection logs in as a role that
+    # can reach server files or programs. Absent when no demo DSN is configured.
+    from neuralbridge.ai.connections import check_seeded_role
+
+    role = await check_seeded_role()
+    if role is not None:
+        body["ai_demo_role"] = role
+        if role.get("privileged"):
+            body["warnings"] = [
+                "ai_demo_role_privileged: the seeded /ai demo database role is a superuser or a "
+                "server-file/program role; use a plain read-only role (docs/ai-local-setup.md)"
+            ]
     return JSONResponse(status_code=200 if all_ok else 503, content=body)
 
 

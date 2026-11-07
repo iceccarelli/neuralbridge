@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _log.critical("audit_sink_unavailable_at_startup")
         raise
 
+    # Loud, not fatal (CI's own Postgres service user is a superuser): a privileged demo role is
+    # an arbitrary-file/command primitive if any policy gap appears. Also shown on /health/ready.
+    from neuralbridge.ai.connections import check_seeded_role
+
+    await check_seeded_role(force=True)
+
     yield  # ← application runs here
 
     # Cleanup (database pools, Redis, etc.) would go here in production.
