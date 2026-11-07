@@ -13,6 +13,7 @@ error message that says "invalid state" teaches nobody anything.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -26,7 +27,7 @@ from ...core.errors import (
 )
 from ...core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
 from ...core.identity import format_utc, parse_utc, utc_now
-from ...evidence.ledger import EvidenceLedger
+from ...evidence.ledger import EvidenceLedger, LedgerEntry
 from .clock import Deadlines
 from .model import CASE_KIND, Awareness, NonReportGround, ProductVersion, Signal, Stage, Track
 from .srp import PayloadValidation, validate_payload
@@ -455,6 +456,15 @@ class Art14Register:
 
     def __init__(self, ledger: EvidenceLedger) -> None:
         self.ledger = ledger
+        # The entry the LAST append on this thread produced. A register is shared by every
+        # request thread of a worker, so it is thread-local: an HTTP answer must name the
+        # sequence number its own write received, not one a concurrent request or an identical
+        # earlier record happens to have (the ledger does not make content hashes unique).
+        self._written = threading.local()
+
+    def last_entry(self) -> LedgerEntry | None:
+        """The ledger entry this thread's most recent append produced, or ``None``."""
+        return getattr(self._written, "entry", None)
 
     # -- writing ----------------------------------------------------------
     def _append(
@@ -484,7 +494,8 @@ class Art14Register:
             # from, checked inside the write transaction: two writers cannot both
             # pass a "once" guard, and a clock-moving write cannot land on a case
             # that changed under it.
-            self.ledger.append(evidence, subject=case_id, expect_subject_head=expect_head)
+            self._written.entry = self.ledger.append(
+                evidence, subject=case_id, expect_subject_head=expect_head)
         except LedgerConflictError as exc:
             raise CaseError(
                 f"case {case_id} changed while this record was being prepared; re-read the "
