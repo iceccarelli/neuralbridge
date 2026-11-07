@@ -84,6 +84,7 @@ async def query_logs(
         event_type=event_type,
         start_time=start_time,
         end_time=end_time,
+        owner=None if scope.is_operator else scope.owner,
     ):
         if not can_see_audit_entry(scope, entry.details.get("owner")):
             continue
@@ -103,6 +104,20 @@ async def query_logs(
     }
 
 
+#: A spreadsheet reads a cell that begins with one of these as a formula (``+cmd|...``). The audit
+#: ``actor`` / ``action`` / ``resource`` fields carry client-chosen text, so the CSV export prefixes
+#: such a cell with a single quote (``'``): it then displays as text, at the cost of a visible ``'``.
+#: JSON export is unaffected.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: Any) -> Any:
+    text = value if isinstance(value, str) else None
+    if text is not None and text.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + text
+    return value
+
+
 def _render(events: list[AuditEntry], file_format: str) -> tuple[bytes, str]:
     rows = [e.model_dump(mode="json") for e in events]
     if file_format == "json":
@@ -111,7 +126,7 @@ def _render(events: list[AuditEntry], file_format: str) -> tuple[bytes, str]:
     writer = csv.DictWriter(buffer, fieldnames=list(AuditEntry.model_fields.keys()))
     writer.writeheader()
     for row in rows:
-        writer.writerow(row)
+        writer.writerow({k: _csv_cell(v) for k, v in row.items()})
     return buffer.getvalue().encode("utf-8"), "text/csv"
 
 
@@ -167,7 +182,7 @@ async def log_stats(
     actors: dict[str, int] = {}
     adapters: dict[str, int] = {}
     total = 0
-    async for entry in audit.query_events():
+    async for entry in audit.query_events(owner=None if scope.is_operator else scope.owner):
         if not can_see_audit_entry(scope, entry.details.get("owner")):
             continue
         total += 1

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { CREDENTIALS_CLEARED_EVENT, DECISION_CREDENTIAL_STORAGE as STORAGE } from '../../lib/credentials';
 import { call, type ApiOutcome, type CreatedOperator, type OperatorList } from '../../lib/assuranceApi';
 import { Refusal, Skeleton } from './PanelFrame';
 import { API_BASE, usePanel } from './usePanel';
@@ -8,7 +9,6 @@ import { API_BASE, usePanel } from './usePanel';
 // The operator key lives in React state and, for the life of this tab only, in sessionStorage so
 // that opening another case does not ask for it again. It is never logged, never placed in a URL,
 // and never sent anywhere but the configured API as the X-API-Key of a request.
-const STORAGE = 'nb-assurance-decision-credential';
 
 const SYNC = 'nb-decision-credential-changed';
 
@@ -24,7 +24,11 @@ export function useOperatorKey(): [string, (v: string) => void] {
     };
     read();
     window.addEventListener(SYNC, read);
-    return () => window.removeEventListener(SYNC, read);
+    window.addEventListener(CREDENTIALS_CLEARED_EVENT, read);
+    return () => {
+      window.removeEventListener(SYNC, read);
+      window.removeEventListener(CREDENTIALS_CLEARED_EVENT, read);
+    };
   }, []);
   const setKey = (v: string) => {
     setKeyState(v);
@@ -58,6 +62,12 @@ export default function DecisionCredential({
   const [role, setRole] = useState<'decider' | 'contributor'>('decider');
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<CreatedOperator | null>(null);
+  // Signing out also drops a freshly issued operator key that is still on screen.
+  useEffect(() => {
+    const drop = () => setCreated(null);
+    window.addEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+    return () => window.removeEventListener(CREDENTIALS_CLEARED_EVENT, drop);
+  }, []);
   const [createOut, setCreateOut] = useState<ApiOutcome<CreatedOperator> | null>(null);
   const [notice, setNotice] = useState('');
 
@@ -174,7 +184,7 @@ export default function DecisionCredential({
               </select>
             </label>
           )}
-          <button className="btn btn-outline" disabled={busy} onClick={() => void create()}>
+          <button className="btn btn-secondary" disabled={busy} onClick={() => void create()}>
             {noOperators ? 'Create first operator (decider)' : 'Create operator'}
           </button>
           {notice && (
@@ -203,14 +213,14 @@ export default function DecisionCredential({
           />
           <div className="aw-row">
             <button
-              className="btn btn-outline"
+              className="btn btn-secondary"
               onClick={() => {
                 setOpKey(created.api_key);
               }}
             >
               Use it as the decision credential in this tab
             </button>
-            <button className="btn btn-outline" onClick={() => setCreated(null)}>
+            <button className="btn btn-secondary" onClick={() => setCreated(null)}>
               I have stored it; hide it
             </button>
           </div>

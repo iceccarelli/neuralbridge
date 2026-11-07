@@ -42,6 +42,18 @@ ASCII digits), `seq` a positive integer, `source` one of `kev|nvd|epss|csaf`; ot
 
 ## What a response means
 
+* **The store's age travels with every answer.** `history`, `cve` and `candidates` carry
+  `store_freshness` (`checked: true`, `status` `fresh` | `stale` | `unknown`, `limit_hours`,
+  `limit_basis`, and one row per source with `retrieved_at`, `age_hours` and a state:
+  `fresh` | `stale` | `never_observed` | `unreadable` | `future`). Age is the server's clock
+  minus the observation's recorded `retrieved_at`, never the feed's own stamp. The limit is
+  **72 h** unless the operator sets `ASSURANCE_INTEL_MAX_AGE_HOURS` (`limit_basis:
+  server_setting`); there is no way to switch the check off. `stale` or `unknown` is not an
+  all-clear, and `fresh` means refreshed recently, not complete. `POST
+  /v1/change/assess/advisory/intel` returns the same object plus `intel_age_warnings`
+  (a warning: a person may knowingly open a case from older data, as `watch open-case`
+  does). Compatibility: the field is new; no existing field changed.
+
 * **Provenance on every statement:** observation `seq`, `source`, `url`, `retrieved_at`,
   `sha256`, `feed_stamp`; each response's `sources_consulted` also names the `parser_version` of
   every observation used and lists the sources with no accepted observation.

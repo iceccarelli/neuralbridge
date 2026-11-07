@@ -440,8 +440,12 @@ class TestAudit:
         a_events = client.get(f"{API}/audit", headers=h(keys.a)).json()
         b_events = client.get(f"{API}/audit", headers=h(keys.b)).json()
         assert a_events and b_events
-        assert {e["resource"] for e in a_events} == {f"postgres:{a_conn['id']}"}
-        assert {e["resource"] for e in b_events} == {f"postgres:{b_conn['id']}"}
+        # Own trail only. It now also carries the account's lifecycle events (connection_create),
+        # so assert every resource is one of this account's own, and that the execution is there.
+        assert {e["resource"] for e in a_events} == {f"postgres:{a_conn['id']}", f"connection:{a_conn['id']}"}
+        assert {e["resource"] for e in b_events} == {f"postgres:{b_conn['id']}", f"connection:{b_conn['id']}"}
+        assert any(e["event_type"] == "adapter_call" for e in a_events)
+        assert any(e["event_type"] == "connection_create" for e in a_events)
 
         anon = client.get(f"{API}/audit", headers=h()).json()
         assert anon == []
@@ -585,7 +589,10 @@ class TestCredentialsNeverReturnedOrLogged:
     def test_response_schema_has_no_credential_fields(self, client, keys: Keys) -> None:
         bind(client, keys.a, A_NAME)
         for entry in client.get(f"{API}/connections", headers=h(keys.a)).json():
-            assert set(entry) == {"id", "name", "adapter_type", "status", "source"}
+            # `live` is a non-secret boolean: does THIS process hold the adapter. Right after a bind
+            # in this process it is True.
+            assert set(entry) == {"id", "name", "adapter_type", "status", "source", "live"}
+            assert entry["live"] is True
 
 
 # ───────────────────────── additive migration of an existing store ─────────────────────────
@@ -733,8 +740,13 @@ class TestAuditLogsRouteIsTenantScoped:
         for _ in range(3):
             read(client, keys.a, a_conn["id"], operation="health_check")
         read(client, keys.b, b_conn["id"], operation="health_check")
-        r = client.get("/api/v1/logs", params={"limit": 5, "offset": 0}, headers=h(keys.b)).json()
+        # (b's trail also holds its own connection_create; filter to the executions to count them)
+        r = client.get(
+            "/api/v1/logs", params={"limit": 5, "offset": 0, "event_type": "adapter_call"}, headers=h(keys.b)
+        ).json()
         assert r["total"] == 1 and a_conn["id"] not in str(r)
+        everything = client.get("/api/v1/logs", params={"limit": 50}, headers=h(keys.b)).json()
+        assert everything["total"] == 2 and a_conn["id"] not in str(everything)
 
     def test_failed_call_error_text_is_not_visible_to_other_accounts(self, client, keys: Keys) -> None:
         a_conn = bind_unreachable(client, keys.a, "A-UNREACHABLE")
@@ -753,10 +765,13 @@ class TestAuditLogsRouteIsTenantScoped:
 
         b_stats = client.get("/api/v1/logs/stats", headers=h(keys.b))
         assert b_stats.status_code == 200
-        assert b_stats.json()["total_events"] == 1
+        # each trail = its reads + its own connection_create
+        assert b_stats.json()["event_types"] == {"connection_create": 1, "adapter_call": 1}
+        assert b_stats.json()["total_events"] == 2
         assert a_conn["id"] not in b_stats.text
-        assert client.get("/api/v1/logs/stats", headers=h(keys.a)).json()["total_events"] == 3
-        assert client.get("/api/v1/logs/stats", headers=h(OPERATOR_KEY)).json()["total_events"] == 4
+        a_stats = client.get("/api/v1/logs/stats", headers=h(keys.a)).json()
+        assert a_stats["event_types"]["adapter_call"] == 3 and a_stats["total_events"] == 4
+        assert client.get("/api/v1/logs/stats", headers=h(OPERATOR_KEY)).json()["total_events"] == 6
 
     def test_export_is_operator_only_and_leaves_no_file_behind(
         self, client, keys: Keys, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -942,3 +957,16 @@ class TestEachRawAdapterRouteHidesConnectionKeys:
         assert key not in client.get("/api/v1/adapters", headers=h(keys.b)).text
         assert key not in client.get("/api/v1/adapters", headers=h()).text
         assert key in client.get("/api/v1/adapters", headers=h(OPERATOR_KEY)).text
+
+
+def test_a_listed_connection_says_whether_this_process_holds_its_adapter():
+    """``live`` is True only when this process has the adapter; a record whose adapter is gone
+    (restart, another worker) stays listed and says it is not live, never pretends to be."""
+    from neuralbridge.ai.connections import list_connections
+    from neuralbridge.ai.schemas import ConnectionSummary
+
+    assert ConnectionSummary.model_fields["live"].default is False
+    import inspect
+
+    src = inspect.getsource(list_connections)
+    assert "live=registry.get(r.registry_key) is not None" in src

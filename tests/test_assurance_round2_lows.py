@@ -173,10 +173,10 @@ def _runner_envelope_and_trace():
 @pytest.mark.parametrize("attested, recovered", [(False, False), (True, True)])
 def test_watch_calls_a_function_recovered_only_at_validated(
         work, config, ledger, attested, recovered):
-    from .support_recorder import build_attested_bundle
+    from .support_recorder import build_attested_bundle, build_bound_bundle
     run_watch(config, ledger, now=T0)
     env, trace = _runner_envelope_and_trace()
-    seal = build_attested_bundle if attested else build_bundle
+    seal = build_attested_bundle if attested else build_bound_bundle
     seal(env, trace, actor=ACTOR, ledger=ledger, subject="Grimaldi/AR-7#0412")
     reexport(work, "0412")
     reexport(work, "0501")

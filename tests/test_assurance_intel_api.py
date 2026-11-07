@@ -419,6 +419,42 @@ def mcp_call(live, headers, tool: str, **args: Any) -> dict[str, Any]:
         os.environ.pop("ASSURANCE_API_KEY")
 
 
+def _assert_same_bodies(via_mcp, direct, label):
+    """The two answers are the same, except that ``store_freshness`` is read from the server's
+    clock at the instant of each call: ``assessed_at`` has one-second resolution and each
+    source's ``age_hours`` is rounded to 0.001 h (3.6 s), so two calls a few milliseconds apart
+    may straddle a boundary. Everything else must be identical; the two clock readings must
+    agree within a minute."""
+    from assurance.core.identity import parse_utc
+
+    def split(body):
+        if not isinstance(body, dict) or "store_freshness" not in body:
+            return body, None
+        rest = {k: v for k, v in body.items() if k != "store_freshness"}
+        fresh = dict(body["store_freshness"])
+        times = {"assessed_at": fresh.pop("assessed_at", None)}
+        rows = []
+        ages = []
+        for row in fresh.pop("sources", []):
+            row = dict(row)
+            ages.append(row.pop("age_hours", None))
+            rows.append(row)
+        return (rest, {**fresh, "sources": rows}), (times["assessed_at"], ages)
+
+    a, ta = split(via_mcp)
+    b, tb = split(direct)
+    assert a == b, label                      # all non-clock content, byte for byte
+    if ta is not None or tb is not None:
+        assert ta is not None and tb is not None, label
+        (at_a, ages_a), (at_b, ages_b) = ta, tb
+        assert abs((parse_utc(at_a) - parse_utc(at_b)).total_seconds()) < 60, label
+        assert len(ages_a) == len(ages_b), label
+        for x, y in zip(ages_a, ages_b, strict=True):
+            assert (x is None) == (y is None), label
+            if x is not None:
+                assert abs(x - y) < 60 / 3600, (label, x, y)
+
+
 def test_each_mcp_tool_returns_what_the_api_returns(cell, store_path):
     live, headers = cell
     pairs = [
@@ -435,7 +471,7 @@ def test_each_mcp_tool_returns_what_the_api_returns(cell, store_path):
         via_mcp = mcp_call(live, headers, tool, **args)
         direct = get(live, headers, path, **(params or {}))
         assert via_mcp["status"] == direct.status_code, (tool, via_mcp)
-        assert via_mcp["body"] == direct.json(), tool
+        _assert_same_bodies(via_mcp["body"], direct.json(), tool)
 
 
 def test_mcp_relays_the_503_and_the_401_402_unchanged(live_api, cell, monkeypatch, tmp_path):

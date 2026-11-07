@@ -126,7 +126,7 @@ class TestAFailureIsDatedByTheLedgersClockNotTheFilers:
         clock.at(10)
         seal_raw_body(ledger, fail_body("2026-10-01T08:00:00Z"))       # filed 10:00
         clock.at(11)
-        seal_raw_body(ledger, raw_body("2026-10-01T08:00:01Z", verified=CHECKS))   # filed 11:00
+        seal_raw_body(ledger, raw_body("2026-10-01T08:00:01Z", verified=CHECKS, fw=HASH_B))   # filed 11:00
         report, recs = coverage_of(ledger, [])
         assert [r.date_suspect for r in recs] == [False, False]
         assert report.functions[0].coverage is Coverage.FAILING
@@ -149,6 +149,7 @@ class TestAFailureIsDatedByTheLedgersClockNotTheFilers:
     def test_a_record_built_by_hand_with_no_filing_time_is_dated_by_its_start(self):
         def rec(seq, day, verified, not_verified):
             return VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
                 content_hash=f"{seq:064x}", effective_at=datetime(2026, 9, day, tzinfo=UTC),
                 ledger_seq=seq, product="p", product_version="1", verdict="x",
                 tier="validated", checks_verified=verified, checks_not_verified=not_verified)
@@ -430,7 +431,7 @@ class TestAnExplanationDoesNotEraseAChange:
         clock.at(9, 30)
         record_intervention(ledger, bot_update(when=datetime(2026, 9, 13, 12, tzinfo=UTC)))
         clock.at(10)
-        seal_raw_body(ledger, raw_body("2026-10-01T09:45:00Z", verified=CHECKS))
+        seal_raw_body(ledger, raw_body("2026-10-01T09:45:00Z", verified=CHECKS, fw=HASH_B))
         report, _ = coverage_of(ledger, m=manifest(mid="M2", fw=HASH_B))
         assert report.functions[0].coverage is Coverage.CURRENT
 
@@ -442,7 +443,7 @@ class TestAnExplanationDoesNotEraseAChange:
         clock.at(8, 41)
         record_intervention(ledger, update(when=D1.replace(hour=8, minute=40)))
         clock.at(8, 55)
-        seal_raw_body(ledger, raw_body("2026-10-01T08:50:00Z", verified=CHECKS))
+        seal_raw_body(ledger, raw_body("2026-10-01T08:50:00Z", verified=CHECKS, fw=HASH_B))
         clock.at(9)
         record_manifest(ledger, manifest(mid="M2", fw=HASH_B))
         report, _ = coverage_of(ledger, m=manifest(mid="M2", fw=HASH_B))
@@ -490,7 +491,7 @@ class TestAnExplanationDoesNotEraseAChange:
         clock.at(9)
         record_manifest(ledger, manifest(mid="M2", fw=HASH_B))
         clock.at(9, 20)
-        seal_raw_body(ledger, raw_body("2026-10-01T09:15:00Z", verified=CHECKS))
+        seal_raw_body(ledger, raw_body("2026-10-01T09:15:00Z", verified=CHECKS, fw=HASH_B))
         clock.at(9, 30)     # the paperwork arrives afterwards
         record_intervention(ledger, update(when=D1.replace(hour=8, minute=50)))
         report, _ = coverage_of(ledger, m=manifest(mid="M2", fw=HASH_B))

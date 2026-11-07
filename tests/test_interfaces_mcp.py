@@ -66,6 +66,9 @@ READ_ONLY_ALLOWED = [
     ("GET", r"/v1/spec/fields"),
     ("GET", rf"/v1/cases/{_ID}"),
     ("GET", rf"/v1/cases/{_ID}/export"),
+    ("GET", rf"/v1/cases/{_ID}/history"),
+    ("GET", r"/v1/machinery/export"),
+    ("POST", r"/v1/machinery/passport/check-ledger"),
     ("GET", r"/v1/register"),
     ("GET", r"/v1/register/breaches"),
     ("GET", r"/v1/ledger/verify"),
@@ -87,6 +90,9 @@ ALLOWED += READ_ONLY_ALLOWED
 READ_ONLY_TOOLS = {
     "spec_fields": ("GET", "/v1/spec/fields"),
     "art14_case": ("GET", "/v1/cases/case-0123456789abcdef"),
+    "art14_history": ("GET", "/v1/cases/case-0123456789abcdef/history"),
+    "machinery_export": ("GET", "/v1/machinery/export"),
+    "machinery_passport_check_ledger": ("POST", "/v1/machinery/passport/check-ledger"),
     "art14_register": ("GET", "/v1/register"),
     "art14_breaches": ("GET", "/v1/register/breaches"),
     "art14_export": ("GET", "/v1/cases/case-0123456789abcdef/export"),
@@ -310,10 +316,17 @@ async def test_the_read_only_tools_are_in_the_allow_list_and_reach_no_write_rout
             for m, p in seen:
                 assert matches(READ_ONLY_ALLOWED, m, p), (name, hostile, p)
                 assert not reaches_write(m, p), (name, hostile, p)
+                words = set(p.split("/"))
+                if (m, p) == ("POST", "/v1/machinery/passport/check-ledger"):
+                    # Exactly this route is a READ (it re-checks a passport against the ledger,
+                    # records nothing); the sealing route is POST /v1/machinery/passport. The
+                    # exact method+path is pinned by READ_ONLY_ALLOWED and the live-API write
+                    # routes above; only this one path is let past the 'passport' word.
+                    words -= {"passport"}
                 assert not {"decision", "resume", "resolve-decision", "waive-reverification",
                             "pin", "rotate", "revoke", "override", "feed-baseline", "declare",
                             "manifest", "intervention", "passport", "report"
-                            } & set(p.split("/")), (name, p)
+                            } & words, (name, p)
 
 
 @pytest.mark.asyncio

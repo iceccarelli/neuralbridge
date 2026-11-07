@@ -421,7 +421,7 @@ export default function CaseDetailPanel({
                   <textarea rows={2} value={resumeWhy} onChange={(e) => setResumeWhy(e.target.value)} />
                 </label>
                 <button
-                  className="btn btn-outline"
+                  className="btn btn-secondary"
                   disabled={busy}
                   onClick={() => {
                     if (!resumeWhy.trim()) {
@@ -456,13 +456,13 @@ export default function CaseDetailPanel({
                     <input value={owner} onChange={(e) => setOwner(e.target.value)} />
                   </label>
                   <button
-                    className="btn btn-outline"
+                    className="btn btn-secondary"
                     disabled={busy}
                     onClick={() => owner.trim() && void act('claim', { owner: owner.trim() })}
                   >
                     Claim
                   </button>
-                  <button className="btn btn-outline" disabled={busy} onClick={() => void act('advance', {})}>
+                  <button className="btn btn-secondary" disabled={busy} onClick={() => void act('advance', {})}>
                     Advance
                   </button>
                 </div>
@@ -479,7 +479,7 @@ export default function CaseDetailPanel({
                     <input value={verifHash} onChange={(e) => setVerifHash(e.target.value)} />
                   </label>
                   <button
-                    className="btn btn-outline"
+                    className="btn btn-secondary"
                     disabled={busy}
                     onClick={() => {
                       let parsed: unknown;
@@ -523,7 +523,7 @@ export default function CaseDetailPanel({
                       <textarea rows={2} value={answer} onChange={(e) => setAnswer(e.target.value)} />
                     </label>
                     <button
-                      className="btn btn-outline"
+                      className="btn btn-secondary"
                       disabled={busy}
                       onClick={() => {
                         if (!answer.trim()) {
@@ -565,7 +565,7 @@ export default function CaseDetailPanel({
                       <textarea rows={2} value={waiver} onChange={(e) => setWaiver(e.target.value)} />
                     </label>
                     <button
-                      className="btn btn-outline"
+                      className="btn btn-secondary"
                       disabled={busy}
                       onClick={() => {
                         if (!waiver.trim()) {
@@ -593,7 +593,7 @@ export default function CaseDetailPanel({
                   {(['closed', 'deferred', 'rejected'] as const).map((d) => (
                     <button
                       key={d}
-                      className="btn btn-outline"
+                      className="btn btn-secondary"
                       disabled={busy}
                       onClick={() => {
                         if (!reason.trim()) {

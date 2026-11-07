@@ -157,7 +157,9 @@ def seeded(client, store, monkeypatch, tmp_path):
     env, run = _ar7()
     body = with_attestation(
         {"envelope": env.to_dict(), "trace": run.hashable_payload(), "actor": "a.integrator",
-         "subject": MACHINE.key}, env, run, machine_serial="0412")
+         "subject": MACHINE.key,
+         "configuration_hash": covered_manifest().configuration_hash()},
+        env, run, machine_serial="0412")
     r = client.post("/v1/machine/verify", json=body, headers=h)
     assert r.status_code == 200 and r.json()["tier"] == "validated", r.text
     return h, path

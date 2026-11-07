@@ -3,8 +3,8 @@ import RepoLink from './components/RepoLink';
 import { ownerLink, QUICKSTART, repoSameAs, SALES, srcLink } from './lib/links';
 import structuredOffers from './lib/structured-offers.json';
 import { PLATFORM_STATUS } from './lib/platformStatus';
-import { SOLUTIONS } from './lib/solutions';
 import { PRODUCT_PAGES, productHref } from './lib/productPages';
+import { journeySteps, TAG_CLASS } from './lib/journey';
 import { buildMetadata } from './lib/seo';
 import { IMAGES } from './lib/images';
 import { HOSTED_API } from './lib/hostedApi';
@@ -17,10 +17,10 @@ import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
 export const metadata: Metadata = buildMetadata({
-  title: 'Industrial Autonomous Assurance | CRA Art. 14 evidence',
+  title: 'NeuralBridge | Industrial Autonomous Assurance',
   absoluteTitle: true,
   description:
-    'A hash-chained record of what is on each machine, which checks ran against it, and when. Evidence for CRA Article 14 and Machinery Regulation Annex III 1.1.9.',
+    'NeuralBridge builds Industrial Autonomous Assurance: tamper-evident records that show when a machine\u2019s safety software no longer matches its verification.',
   path: '/',
 });
 
@@ -162,6 +162,46 @@ const products = [
   },
 ] as const;
 
+
+const ROLES = [
+  {
+    name: 'Manufacturer',
+    line: 'Your Declaration of Conformity describes the machine as it was the day you signed it.',
+    href: '/solutions/manufacturer',
+    go: 'Manufacturer page',
+  },
+  {
+    name: 'System integrator',
+    line: 'You change safety software on site. Leave a record the customer and the manufacturer can check.',
+    href: '/solutions/system-integrator',
+    go: 'Integrator page',
+  },
+  {
+    name: 'Plant operator',
+    line: 'You did not change the firmware, and you will still be asked to explain what did.',
+    href: '/solutions/plant-operator',
+    go: 'Operator page',
+  },
+  {
+    name: 'Safety / compliance engineer',
+    line: 'Awareness, the two clocks and the reasoning behind a filing, in a record you can defend.',
+    href: '/solutions/compliance-officer',
+    go: 'Compliance page',
+  },
+  {
+    name: 'Auditor or insurer',
+    line: 'Check someone else’s evidence without an account, and see what the check cannot establish.',
+    href: '/solutions/insurer-auditor',
+    go: 'Auditor page',
+  },
+  {
+    name: 'Developer',
+    line: 'One domain function behind the CLI, the HTTP API and MCP. Routes, auth and what is not exposed, by design.',
+    href: '/developers',
+    go: 'Developer docs',
+  },
+] as const;
+
 // Offers and Products are emitted on the home page only (where the prices are shown), not on every
 // route: /checkout/success and /assurance are noindex and should carry no price markup.
 // Prices are unvalidated launch list prices, monthly, and say so; tests/test_site_copy_parity.py
@@ -191,68 +231,308 @@ export default function IndustrialAutonomousAssuranceSite() {
           dangerouslySetInnerHTML={{ __html: JSON.stringify(block) }}
         />
       ))}
-      {/* HERO */}
-      <section className="hero">
+      {/* HERO: what it is, for whom, in one screen */}
+      <section className="hero" aria-labelledby="home-title">
         <div className="shell hero-grid">
           <div>
-            <span className="kicker">Evidence infrastructure for machines whose software can hurt someone</span>
-            <h1>A hash-chained record of what is on each machine, which checks were run against it, and when.</h1>
+            <span className="kicker">NeuralBridge &middot; Industrial Autonomous Assurance</span>
+            <h1 id="home-title">Know the day your safety evidence stops describing the machine.</h1>
             <p className="hero-lead">
-              CRA Article 14 gives a manufacturer 24 hours from becoming aware of an actively exploited vulnerability to
-              file an early warning. Machinery Regulation Annex III 1.1.9 requires the machine to identify the software
-              it needs to operate safely and to collect evidence of intervention in, or modification of, it. Software does not satisfy either for you. What a hash-chained record can do
-              is let you evidence your own process, and show a reviewer which records stopped describing the machine.
+              NeuralBridge builds Industrial Autonomous Assurance: a tamper-evident record that ties each safety
+              verification to the exact software and configuration it covered. When a firmware patch, a parameter
+              change or a supplier advisory lands, it shows which machines and which safety functions are affected,
+              and who has to decide what happens next.
             </p>
             <div className="hero-actions">
-              <a className="btn btn-primary" href="#advisory-check">
-                {HOSTED_API
-                  ? 'A change or advisory just landed — check it free'
-                  : 'A change or advisory just landed — see the check, run it offline'}
+              <a className="btn btn-primary" href="/start">
+                Get started: the path from reading to your first machine
               </a>
-              <a className="btn btn-outline" href={SALES}>Talk to sales</a>
-              <a className="btn btn-outline" href="#pricing">See pricing</a>
+              <a className="btn btn-outline" href={productHref('industrial-autonomous-assurance')}>
+                How the product works
+              </a>
             </div>
+            <p className="statement-note">
+              <strong>NeuralBridge is the company and platform; Industrial Autonomous Assurance is its flagship product.</strong>{' '}
+              Today the CLI and offline kit run on your own machine from a source copy NeuralBridge supplies;{' '}
+              {HOSTED_API
+                ? 'a hosted API is connected to this site; '
+                : 'no hosted API is deployed publicly; '}
+              Register and Cell are sales-assisted. <a href="/start" style={{ color: '#ffffff', textDecoration: 'underline' }}>See what is available, step by step</a>.
+            </p>
           </div>
 
           <div>
-            <div className="hero-media-desktop" style={{ marginBottom: '1rem' }}>
-              <RotatingImage
-                slot={IMAGES['hero-hash-chained-cell']}
-                aspect="16/9"
-                priority
-                sizes="(max-width: 900px) 100vw, 45vw"
-                dots
-                className="hero-media"
-              />
-            </div>
-            <div className="hero-media-mobile" style={{ marginBottom: '1rem' }}>
-              {(() => {
-                const portrait = IMAGES['hero-hash-chained-cell'].portraitA;
-                return portrait ? (
-                  <div className="media-band hero-media" style={{ aspectRatio: '4/5' }}>
-                    <RotatingImage slot={{ a: portrait }} aspect="4/5" priority sizes="100vw" />
-                  </div>
-                ) : null;
-              })()}
-            </div>
-            <div className="hero-panel">
-              <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
-              <div className="hero-code" tabIndex={0} role="region" aria-label="Command example">{`pip install cryptography && export PYTHONPATH=src
-python -m assurance report demo --out demo/   # a worked report in a second; nothing to edit
-python -m assurance kit init plant/           # then your own: fill in kit.json and plans/cell.json
-python -m assurance kit check plant/kit.json  # lists any placeholder still in place
-python -m assurance kit run  plant/kit.json --out plant/out`}</div>
-              <p className="hero-panel-note">
-                Your ledger, your disk. No account, no API key, no upload. The demo uses synthetic machines; a kit run refuses
-                to produce evidence until the template values are replaced. The run arms a guard over the process's
-                socket layer and refuses every outbound connection, including name resolution.
-              </p>
-            </div>
+            <ol className="flow" aria-label="How a change becomes evidence">
+              <li>
+                <strong>A baseline is sealed</strong>
+                The machine&apos;s safety software and configuration, declared by a named person, each item marked as
+                read from the machine, supplied by the vendor, or declared.
+              </li>
+              <li>
+                <strong>Something changes</strong>
+                A firmware or safety-program change, an intervention, or a supplier advisory naming a component.
+              </li>
+              <li>
+                <strong>It is compared by hash</strong>
+                Against the baseline, then version, then name. A label that disagrees with the bytes is reported, not
+                smoothed over.
+              </li>
+              <li>
+                <strong>A case names what is unproven</strong>
+                Which machines, which safety functions, an owner, and a required re-verification.
+              </li>
+              <li>
+                <strong>A named person decides</strong>
+                Close, reject or defer. Software drafts; it does not decide, and an AI never decides a safety
+                conclusion.
+              </li>
+              <li>
+                <strong>Every step is chained</strong>
+                Each record is sealed to the one before it, and the head can be counter-signed by a key the ledger&apos;s
+                operator does not hold.
+              </li>
+            </ol>
+            <p className="flow-caption">The design, drawn as a list. Not a screenshot; nothing here is live data.</p>
           </div>
         </div>
         <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
-          <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface-alt)" />
+          <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface)" />
         </svg>
+      </section>
+
+      {/* THE PROBLEM */}
+      <section className="section" id="problem">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">The problem</span>
+            <h2>Safety evidence is true of one configuration. Machines do not stay in one.</h2>
+            <p>
+              A verification, a risk assessment and a Declaration of Conformity each describe the machine as it was on a
+              day. Service calls, patches and re-zoned scanners move it off that day, and nothing in a document
+              folder says so.
+            </p>
+          </div>
+          <ul className="ruled">
+            <li>
+              <h3>Changes silently invalidate evidence</h3>
+              <div>
+                <p>
+                  A safety-controller update or a PLC project patch can leave the paperwork reading as current while
+                  it no longer describes the machine. The plant is the one asked to explain it.
+                </p>
+                <p>
+                  <strong>Designed answer:</strong> bind each verification to a configuration hash, so the date a
+                  safety function&apos;s evidence stopped applying is a recorded fact, not an argument.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Advisories name products; you operate serial numbers</h3>
+              <div>
+                <p>
+                  A supplier advisory names a component and a version range. Finding which machines in a fleet run
+                  the affected artefact is a join nobody does by hand under time pressure, and a version label can
+                  disagree with the bytes on the controller.
+                </p>
+                <p>
+                  <strong>Designed answer:</strong> fan one advisory out across every enrolled machine, matched by
+                  hash, then version, then name, with a distinct answer when the evidence is missing.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Regulators ask for a traceable record</h3>
+              <div>
+                <p>
+                  CRA Article 14 (Reg. (EU) 2024/2847, applying since 11 Sep 2026) gives a manufacturer 24 hours from
+                  awareness of an actively exploited vulnerability to file an early warning. Machinery Regulation
+                  Annex III 1.1.9 (2023/1230, applying 20 Jan 2027) requires evidence of intervention in the safety
+                  software or its configuration.
+                </p>
+                <p>
+                  <strong>Designed answer:</strong> a hash-chained record of your own process. Software does not
+                  satisfy either regulation for you; people decide and file.
+                </p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      {/* WHY NOT WHAT YOU HAVE */}
+      <section className="section section-alt" id="why-not">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Why not what you already have</span>
+            <h2>The tools you have answer other questions.</h2>
+            <p>
+              These are descriptions of three categories of tool, not comparisons with named products. Each does its
+              own job well enough; none is built to say whether a verification still covers the machine in front of you.
+            </p>
+          </div>
+          <div className="cmp-wrap" tabIndex={0} role="region" aria-label="Comparison table, scrolls sideways on narrow screens">
+            <table className="cmp">
+              <thead>
+                <tr>
+                  <th scope="col">What you use</th>
+                  <th scope="col">What it is built to hold</th>
+                  <th scope="col">What it cannot show</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Spreadsheets and shared folders</th>
+                  <td>Rows people typed and PDFs people filed.</td>
+                  <td>
+                    That a row was not edited afterwards, or shortened. That a verification still matches the
+                    configuration now on the machine. Nothing prompts anyone when a version changes.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">PLM and document control</th>
+                  <td>The released design, its revisions and controlled documents.</td>
+                  <td>
+                    What is actually running on one delivered serial after commissioning and service calls, and which
+                    safety functions a recorded verification still stands for.
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">OT asset-inventory and vulnerability tools</th>
+                  <td>Discovered assets, firmware versions and known vulnerabilities.</td>
+                  <td>
+                    Which verification covered which configuration, a named person&apos;s recorded decision, or a
+                    record that can show it was neither edited nor quietly shortened.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="pricing-note">
+            Industrial Autonomous Assurance does not replace them. It reads their exports as input files: an inventory
+            export to enrol machines, a CSAF 2.0 advisory to check a fleet. Those importers are file-based and
+            evolving, not supported connectors (see the platform table below).
+          </p>
+        </div>
+      </section>
+
+      {/* DESIGNED OUTCOME */}
+      <section className="section" id="outcome">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">The designed outcome</span>
+            <h2>What the product is built to let you do.</h2>
+            <p>
+              Stated as capability. This page reports no customer result, saving or timing, because none has been
+              measured.
+            </p>
+          </div>
+          <ul className="ruled">
+            <li>
+              <h3>Name the stale evidence</h3>
+              <p>
+                After a recorded change, list the safety functions whose last verification predates it, dated, per
+                machine.
+              </p>
+            </li>
+            <li>
+              <h3>Put an advisory on your fleet</h3>
+              <p>
+                One supplier advisory in, a per-machine answer out: affected, not affected, or cannot tell, with the
+                matching basis shown.
+              </p>
+            </li>
+            <li>
+              <h3>Keep the Article 14 clocks and the reasoning</h3>
+              <p>
+                Awareness is a named person&apos;s decision; both deadline clocks run from it; the triage reasoning is
+                part of the record. The filing stays the manufacturer&apos;s.
+              </p>
+            </li>
+            <li>
+              <h3>Hand an auditor a file they can check without you</h3>
+              <p>
+                A ledger export or machine bundle that anyone can re-check offline, which says what it establishes
+                and what it cannot, including when completeness was not checked.
+              </p>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      {/* ROLE PATHS */}
+      <section className="section section-alt" id="roles">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Start from your seat</span>
+            <h2>Six roles, six honest starting points.</h2>
+            <p>Each page says what the problem looks like for that role and links only to things that exist.</p>
+          </div>
+          <ul className="paths">
+            {ROLES.map((role) => (
+              <li key={role.href}>
+                <a href={role.href}>
+                  <strong>{role.name}</strong>
+                  <span>{role.line}</span>
+                  <span className="path-go">{role.go} &rarr;</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      {/* THE PATH: reading to using */}
+      <section className="section" id="path">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">The path</span>
+            <h2>From reading this page to your first enrolled machine.</h2>
+            <p>
+              Each step says what exists today and where it runs: on your own machine, on a hosted API, by request, or
+              not at all.
+            </p>
+          </div>
+          <ol className="journey">
+            {journeySteps().map((step) => (
+              <li key={step.id}>
+                <div>
+                  <h3>{step.title}</h3>
+                  <p>{step.short}</p>
+                </div>
+                <div className="j-state">
+                  {step.tags.map((tag) => (
+                    <span className={`tag ${TAG_CLASS[tag.state]}`} key={tag.label}>
+                      {tag.label}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ol>
+          <p className="pricing-note">
+            <a href="/start" className="btn btn-primary">Open the full path, with commands</a>
+          </p>
+        </div>
+      </section>
+
+      {/* TRUST STRIP */}
+      <section className="trust-strip">
+        <div className="shell trust-grid">
+          {trustStrip.map((item, i) => (
+            <div className="trust-item trust-item-media" key={item.title}>
+              <RotatingImage
+                slot={IMAGES[item.imageKey]}
+                aspect="4/3"
+                offsetMs={i * 1500}
+                className="trust-item-image"
+              />
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.body}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* SECOND HERO: offline kit */}
@@ -292,6 +572,19 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                 Read the kit guide
               </a>
             </div>
+            <div className="hero-panel">
+              <div className="hero-panel-title">Run it now, inside your plant, nothing uploaded</div>
+              <div className="hero-code" tabIndex={0} role="region" aria-label="Command example">{`pip install cryptography && export PYTHONPATH=src
+python -m assurance report demo --out demo/   # a worked report in a second; nothing to edit
+python -m assurance kit init plant/           # then your own: fill in kit.json and plans/cell.json
+python -m assurance kit check plant/kit.json  # lists any placeholder still in place
+python -m assurance kit run  plant/kit.json --out plant/out`}</div>
+              <p className="hero-panel-note">
+                Your ledger, your disk. No account, no API key, no upload. The demo uses synthetic machines; a kit run refuses
+                to produce evidence until the template values are replaced. The run arms a guard over the process's
+                socket layer and refuses every outbound connection, including name resolution.
+              </p>
+            </div>
             <a
               className="docs-preview-card"
               href="/docs/assurance/kit"
@@ -301,26 +594,6 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               <span>KIT.md — the full offline enrolment walkthrough</span>
             </a>
           </div>
-        </div>
-      </section>
-
-      {/* TRUST STRIP */}
-      <section className="trust-strip">
-        <div className="shell trust-grid">
-          {trustStrip.map((item, i) => (
-            <div className="trust-item trust-item-media" key={item.title}>
-              <RotatingImage
-                slot={IMAGES[item.imageKey]}
-                aspect="4/3"
-                offsetMs={i * 1500}
-                className="trust-item-image"
-              />
-              <div>
-                <strong>{item.title}</strong>
-                <span>{item.body}</span>
-              </div>
-            </div>
-          ))}
         </div>
       </section>
 
@@ -469,30 +742,6 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
         </div>
       </section>
 
-      {/* SOLUTIONS BY BUYER */}
-      <section className="section section-alt" id="solutions">
-        <div className="shell">
-          <div className="section-head">
-            <span className="eyebrow">Solutions</span>
-            <h2>Built for the people who sign, verify, or get blamed.</h2>
-            <p>Five buyers, five reasons the paperwork stopped describing the machine.</p>
-          </div>
-          <div className="solutions-grid">
-            {SOLUTIONS.map((solution) => (
-              <a className="solution-card" href={`/solutions/${solution.slug}`} key={solution.slug}>
-                <span className="solution-role">{solution.role}</span>
-                <h3>{solution.headline}</h3>
-                <p>{solution.lead}</p>
-                <span className="tile-link" style={{ marginTop: '0.75rem' }}>
-                  <span className="tile-link-label">See the {solution.role.toLowerCase()} page</span>
-                  <span className="tile-link-arrow" aria-hidden>{'→'}</span>
-                </span>
-              </a>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* PRICING */}
       <section className="section" id="pricing">
         <div className="shell">
@@ -556,7 +805,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
                   <td className="check">✓</td>
                 </tr>
                 <tr>
-                  <td>/ai control plane — propose-and-approve writes, bind connections, an in-memory audit log for your account</td>
+                  <td>/ai control plane — propose-and-approve writes, bind connections, a durable audit log for your account</td>
                   <td>—</td>
                   <td className="check">✓</td>
                   <td className="check">✓</td>
@@ -633,7 +882,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             <h2>NeuralBridge: the integration layer the assurance product is built on.</h2>
             <p>
               A lightweight integration hub: a FastAPI backend, an MCP gateway for AI tool exposure, a small set of
-              adapters (supported scope intended, see the table), and a dashboard. It is intentionally narrower than
+              adapters (supported scope intended, see the table), and the web workspace at /ai. It is intentionally narrower than
               it once claimed to be. The rows below are the README&apos;s own table, word for word.
             </p>
           </div>
@@ -695,7 +944,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               Check an evidence file
             </a>
             <a className="btn btn-outline" href={SALES}>
-              Talk to sales
+              Contact NeuralBridge
             </a>
           </div>
         </div>

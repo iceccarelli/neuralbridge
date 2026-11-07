@@ -1,59 +1,74 @@
 import { test, expect } from './support/fixtures';
+import { aiSeed, enterKey, executions, hdr, insertSql, newMarker, platformApi, say } from './support/ai';
 
-// Phase 2: the free (Validator, no API key) path — reads work, a write
-// attempt shows a real upgrade card (402 payload), never a fake success
-// and never a bare error. See tests-e2e/ai.spec.ts for the paid path.
+// Entitlements on /ai, read from the real account store on every request: 402 when the caller is
+// authenticated (or anonymous) but not entitled to the write path, 401 for a key that is not valid. The UI must
+// show each refusal as what it is, never a fake success and never a generic "could not reach".
 
-async function apiIsUp(baseURL: string): Promise<boolean> {
-  try {
-    const apiBase = process.env.NEXT_PUBLIC_NEURALBRIDGE_API_URL || 'http://127.0.0.1:8000/api/v1';
-    const res = await fetch(`${apiBase}/ai/connections`);
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
+const PLAN_402 = { status: 402, url: /\/ai\/plan$/, why: 'the spec proposes a write as a caller whose plan has no control plane' };
 
-test.beforeEach(async ({ baseURL }) => {
-  const up = await apiIsUp(baseURL!);
-  test.skip(!up, 'NeuralBridge API not reachable — see docs/ai-local-setup.md');
+test('no key: reads work, a write shows the real upgrade card (402) and nothing runs', async ({ page, allowHealth }) => {
+  allowHealth(PLAN_402);
+  const marker = newMarker('free');
+  await page.goto('/ai');
+  await expect(page.getByText(/writes need upgrade/i)).toBeVisible();
+
+  await say(page, insertSql(marker));
+  await expect(page.getByText('Register or Cell required')).toBeVisible();
+  await expect(page.getByRole('link', { name: /see pricing/i }).first()).toHaveAttribute('href', '/#pricing');
+  await expect(page.getByText(/approval required/i)).toHaveCount(0);
+  await expect(page.getByText('Execution receipt')).toHaveCount(0);
+  expect(executions(marker)).toBe(0);
 });
 
-test('free tier: read works, write shows a real upgrade card', async ({ page }) => {
+test('a real key on a Validator (free) account is authenticated but not entitled: 402, nothing runs', async ({ page, request, allowHealth }) => {
+  allowHealth(PLAN_402);
+  const { free_account: key } = aiSeed();
+  const marker = newMarker('freekey');
   await page.goto('/ai');
-  await expect(page.getByLabel('Connection')).toBeVisible({ timeout: 10_000 });
+  await enterKey(page, key);
+  await expect(page.getByText(/writes need upgrade/i)).toBeVisible();
+  await say(page, insertSql(marker));
+  await expect(page.getByText('Register or Cell required')).toBeVisible();
+  expect(executions(marker)).toBe(0);
 
-  // Free tier is the default — no API key seeded for this test.
-  await expect(page.locator('.ai-plan-pill.free')).toBeVisible({ timeout: 10_000 });
-
-  // Read still works.
-  await page.getByLabel('Message').fill('list tables');
-  await page.getByLabel('Message').press('Enter');
-  await expect(page.getByText('Read OK')).toBeVisible({ timeout: 10_000 });
-
-  // Write is refused with a real upgrade card, not silently allowed and
-  // not a bare error.
-  await page.getByLabel('Message').fill("UPDATE demo_customers SET plan='register' WHERE id=1");
-  await page.getByLabel('Message').press('Enter');
-  await expect(page.getByText('Register or Cell required')).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('link', { name: /see pricing/i })).toHaveAttribute('href', '/#pricing');
-  await expect(page.getByText('Execution receipt')).not.toBeVisible();
-  await expect(page.getByText(/approval required/i)).not.toBeVisible();
-
-  await page.screenshot({ path: 'test-results/ai-free-upgrade-card.png', fullPage: true });
+  // Binding a connection and the full audit trail are the same paid door.
+  const bind = await request.post(`${platformApi()}/ai/connections`, { headers: hdr(key), data: { name: 'x', ...aiSeed().customer_db } });
+  expect(bind.status()).toBe(402);
+  expect((await bind.json()).detail.error).toBe('plan_does_not_include_ai_control_plane');
 });
 
-test('pasting a paid API key unlocks the write path in the same session', async ({ page }) => {
-  const paidKey = process.env.NEURALBRIDGE_E2E_PAID_KEY || 'demo-cell-key-12345';
-
+test('a key that is not valid gets the honest 401, not "could not reach" and not a free session', async ({ page, allowHealth }) => {
+  allowHealth({ status: 401, url: /\/ai\/(session|connections|capabilities)/, why: 'the spec presents a key the account store does not know' });
   await page.goto('/ai');
-  await expect(page.getByLabel('Connection')).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator('.ai-plan-pill.free')).toBeVisible({ timeout: 10_000 });
+  await enterKey(page, aiSeed().invalid_key);
+  await expect(page.getByText(/invalid or revoked api key|HTTP 401/i).first()).toBeVisible();
+  await expect(page.getByText(/could not reach the neuralbridge api/i)).toHaveCount(0);
+  await expect(page.getByLabel('Message')).toBeDisabled();
+});
 
-  await page.getByLabel('API key').fill(paidKey);
-  await expect(page.locator('.ai-plan-pill.cell')).toBeVisible({ timeout: 10_000 });
+test('a 402d write, then a paid key pasted in the same tab, is retried with no retyping and still never runs on the read-only shared demo', async ({ page, allowHealth }) => {
+  allowHealth(PLAN_402);
+  allowHealth({ status: 403, url: /\/ai\/plan$/, why: 'the shared seeded demo connection is read-only even for a paid account' });
+  const marker = newMarker('retry');
+  await page.goto('/ai');
+  await say(page, insertSql(marker));
+  await expect(page.getByText('Register or Cell required')).toBeVisible();
+  const retry = page.getByRole('button', { name: /retry now with your key/i });
+  await expect(retry).toBeDisabled();
+  await expect(page.getByLabel('Message')).toHaveValue('');
 
-  await page.getByLabel('Message').fill("UPDATE demo_customers SET plan='cell' WHERE id=1");
-  await page.getByLabel('Message').press('Enter');
-  await expect(page.getByText(/approval required/i)).toBeVisible({ timeout: 10_000 });
+  await enterKey(page, aiSeed().register_a);
+  await expect(retry).toBeEnabled();
+  // Wait for the refusal itself. `getByText(/read-only/i)` alone is satisfied at once by the
+  // "Shared demonstration database (read-only)" label already on the page, so without this the
+  // test could finish before the 403 arrived and the health fixture then (rightly) reported the
+  // 403 allowance as unused (seen on the hosted runner; reproduced by delaying the response).
+  const refused = page.waitForResponse((r) => /\/ai\/plan$/.test(r.url()) && r.request().method() === 'POST' && r.status() === 403);
+  await retry.click();
+  await refused;
+  // The free caller only had the shared demo, which no paid account may write: an honest refusal, not an execution.
+  await expect(page.getByText(/read-only/i).first()).toBeVisible();
+  await expect(page.getByText(/approval required/i)).toHaveCount(0);
+  expect(executions(marker)).toBe(0);
 });

@@ -30,9 +30,11 @@ ART14_CASE = "case-art14-reads"
 ACTOR = {"identifier": "m.braun", "role": "Entwicklungsleitung"}
 
 #: tool -> the plan its route needs. Everything else here is free (no key needed).
-REGISTER = ("art14_case", "art14_register", "art14_breaches", "art14_export", "ledger_verify")
+REGISTER = ("art14_case", "art14_history", "art14_register", "art14_breaches", "art14_export",
+            "ledger_verify")
 CELL = ("attest_log", "fleet_machines", "fleet_observations", "value_position", "change_replay",
-        "supplier_trust_list", "supplier_trust_check")
+        "supplier_trust_list", "supplier_trust_check", "machinery_export",
+        "machinery_passport_check_ledger")
 FREE = tuple(sorted(set(READ_ONLY_TOOLS) - set(REGISTER) - set(CELL)))
 
 
@@ -48,12 +50,20 @@ async def call(monkeypatch: pytest.MonkeyPatch, url: str, key: str | None, tool:
     return await getattr(server, tool)(**kwargs)
 
 
+def _machine_key(w: World) -> str:
+    m = (w.manifest or {}).get("machine") or {}
+    return f"{m.get('manufacturer')}/{m.get('model')}#{m.get('serial')}"
+
+
 def args_for(tool: str, w: World) -> dict[str, Any]:
     """Arguments that make each tool's route a real success against ``w``'s data."""
     return {
         "spec_fields": {"track": "actively_exploited_vulnerability", "stage": "early_warning"},
         "art14_case": {"case_id": ART14_CASE},
         "art14_export": {"case_id": ART14_CASE},
+        "art14_history": {"case_id": ART14_CASE},
+        "machinery_export": {"machine": _machine_key(w)},
+        "machinery_passport_check_ledger": {"passport": {}},   # not a passport: ok false, a 200
         "change_replay": {"case_id": w.case_id},
         "attest_verify": {"attestations": [{}]},          # an unreadable log: a 422 is the answer
         "machine_separation": {
@@ -113,7 +123,7 @@ async def test_a_tool_returns_what_its_route_returns(world, monkeypatch, tool) -
     reply = await call(monkeypatch, world.api_url, world.api_key, tool, **args)
     if method == "GET":
         direct = world.client.get(path, params={k: v for k, v in args.items()
-                                                if tool == "spec_fields"})
+                                                if tool in ("spec_fields", "machinery_export")})
     else:
         direct = world.client.post(path, json=args)
     assert reply["status"] == direct.status_code, (tool, reply, direct.text)
@@ -184,7 +194,9 @@ async def test_a_cell_tool_on_the_register_plan_is_the_apis_402(
         live_api, monkeypatch, tool) -> None:
     _, headers = live_api.account("reads-register@example.de", tier="register")
     kwargs = {"case_id": "case-x"} if tool == "change_replay" else (
-        {"feed": ""} if tool == "supplier_trust_check" else {})
+        {"feed": ""} if tool == "supplier_trust_check" else (
+            {"machine": "A/B#1"} if tool == "machinery_export" else (
+                {"passport": {}} if tool == "machinery_passport_check_ledger" else {})))
     reply = await call(monkeypatch, live_api.url, headers["X-API-Key"], tool, **kwargs)
     assert reply["status"] == 402, (tool, reply)
 

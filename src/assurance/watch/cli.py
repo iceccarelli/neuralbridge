@@ -40,6 +40,7 @@ from assurance.core.errors import AssuranceError
 from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.watch.advisories import feed_file_age
 from assurance.watch.config import WatchConfig
 from assurance.watch.freshness import assess_status_freshness
 from assurance.watch.intel_source import StoreAges, store_ages
@@ -312,6 +313,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
     ages = [store_ages(sub, clock) for sub in config.intel]
     if any(not a.ok for a in ages):
         code = 2          # only ever ADDS the intel condition, and only when one is subscribed
+    # The same for a signed feed file: its age is judged now, not as it was at the last run.
+    feed_ages = [(f.supplier_id, *feed_file_age(f, clock)) for f in config.feeds]
+    if any(problem for _, _, problem in feed_ages):
+        code = 2
     if args.json:
         doc = dict(body)
         doc["freshness"] = fresh.to_dict()
@@ -322,6 +327,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
             doc["intel_staleness"] = {
                 "assessed_at": format_utc(clock), "ok": all(a.ok for a in ages),
                 "subscriptions": [a.to_dict() for a in ages]}
+        if feed_ages:
+            doc["feed_staleness"] = {
+                "assessed_at": format_utc(clock), "ok": not any(p for _, _, p in feed_ages),
+                "feeds": [{"supplier_id": sid, **rec, "problem": problem}
+                          for sid, rec, problem in feed_ages]}
+        if (ages and any(not a.ok for a in ages)) or any(p for _, _, p in feed_ages):
+            doc["stored_verdict"] = stored_verdict
+            doc["verdict"] = "degraded"
         print(json.dumps(doc, indent=2, sort_keys=True))
     else:
         shown = "DEGRADED" if fresh.degraded else str(body.get("verdict", "")).upper()
@@ -340,6 +353,13 @@ def _cmd_status(args: argparse.Namespace) -> int:
                   + ", ".join(body["stale_observations"]))
         for a in ages:
             _print_ages(a, clock)
+        for sid, rec, problem in feed_ages:
+            state = "STALE" if problem else "fresh"
+            age = f"{rec['age_hours']:.1f} h" if rec.get("age_hours") is not None else "n/a"
+            print(f"  feed {neutralise(sid)} — file written {rec.get('modified_at') or 'unknown'}"
+                  f", age {age} / limit {rec['limit_hours']:g} h ({rec['limit_basis']}) — {state}")
+            if problem:
+                print(f"    !! {neutralise(problem)}")
     return code
 
 
@@ -348,9 +368,8 @@ def _print_ages(a: StoreAges, clock: datetime) -> None:
     if a.problem:
         print(f"    !! {a.problem_status}: {neutralise(a.problem)}")
         return
-    if not a.checked:
-        print("    age not checked (no max_age_hours is set on this subscription)")
-        return
+    basis = f" ({a.limit_basis} limit {a.limit_hours:g} h)"
+    print(f"    age is always checked{basis}")
     for src in a.ages:
         if src.age_hours is not None and src.state in ("fresh", "stale"):
             age = f"{src.age_hours:.1f} h"

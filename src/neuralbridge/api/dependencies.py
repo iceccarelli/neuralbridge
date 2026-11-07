@@ -19,7 +19,7 @@ from neuralbridge.ai.store import AiStore
 from neuralbridge.config import Settings
 from neuralbridge.config import get_settings as _get_settings
 from neuralbridge.core.router import AdapterRegistry, RequestRouter
-from neuralbridge.security.audit import AuditLogger, InMemoryAuditStorage
+from neuralbridge.security.audit import AuditLogger, build_audit_logger
 
 # ── Singletons ───────────────────────────────────────────────
 
@@ -35,10 +35,16 @@ def get_settings() -> Settings:
 
 
 def get_audit_logger() -> AuditLogger:
-    """Return the global audit logger singleton."""
+    """Return the global audit logger singleton — durable by default.
+
+    SQLite file ``neuralbridge-audit.db`` next to the /ai store
+    (``NEURALBRIDGE_AUDIT_DB`` overrides; ``NEURALBRIDGE_AUDIT_BACKEND`` selects
+    ``postgres`` or, explicitly, ``memory``). Raises ``AuditUnavailableError``
+    (mapped to 503 by the app) when the sink cannot be opened — never a silent
+    fall-back to memory."""
     global _audit_logger
     if _audit_logger is None:
-        _audit_logger = AuditLogger(storage=InMemoryAuditStorage())
+        _audit_logger = build_audit_logger()
     return _audit_logger
 
 

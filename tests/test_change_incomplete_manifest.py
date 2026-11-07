@@ -165,7 +165,9 @@ class TestReverifyNeedsACompleteLook:
         complete = manifest(item(content_hash="d" * 64), manifest_id="AFTER", taken_at=t1)
         record_manifest(ledger, complete)
         record_manifest(ledger, _partial(t1 + timedelta(minutes=10)))
-        bundle = seal_a_real_verification(ledger, when=t1 + timedelta(hours=1))
+        # the run states the COMPLETE look's configuration (a partial look is not a configuration)
+        bundle = seal_a_real_verification(ledger, when=t1 + timedelta(hours=1),
+                                          configuration_hash=complete.configuration_hash())
         done = _reverify(store, ledger, case, complete, bundle)
         assert done.status is CaseStatus.READY_TO_CLOSE
         assert done.required_reverifications == ()

@@ -245,6 +245,30 @@ class TestGolden003WriteRequiresApproval:
         assert r.json()["data"] == [{"n": 1}]  # the row is still there — nothing executed
 
 
+class TestFreeReadRefusesServerFileAndProgramSql:
+    """Red-team 2 H1: anonymous /ai/read reached pg_read_binary_file and a newline COPY ... TO PROGRAM."""
+
+    @pytest.mark.parametrize(
+        "sql",
+        ["SELECT pg_read_binary_file('/etc/hostname')", "COPY (SELECT 1)\nTO PROGRAM 'cat > /dev/null'",
+         "SELECT lo_import('/etc/hostname')", "SELECT 1; SELECT 2"],
+    )
+    def test_anonymous_read_refuses_before_the_database_is_touched(self, free_client: TestClient, sql: str) -> None:
+        cid = _get_connection_id(free_client)
+        r = free_client.post("/api/v1/ai/read", json={"connection_id": cid, "operation": "query", "params": {"sql": sql}})
+        assert r.status_code == 403, r.text
+        assert "Refused" in r.json()["detail"]
+
+    def test_a_plain_select_still_works_for_anonymous(self, free_client: TestClient) -> None:
+        cid = _get_connection_id(free_client)
+        r = free_client.post(
+            "/api/v1/ai/read",
+            json={"connection_id": cid, "operation": "query", "params": {"sql": "-- count\nSELECT count(*) AS n FROM ai_test_customers"}},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"] == [{"n": 1}]
+
+
 class TestGolden004DenyMaliciousExfil:
     @pytest.mark.parametrize(
         "sql",

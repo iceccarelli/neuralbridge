@@ -34,22 +34,29 @@ unentitled, read on every request. No plan flag is added for it.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import sqlite3
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 
 from assurance.api.deps import Machine
 from assurance.core.errors import AssuranceError
+from assurance.core.identity import format_utc, parse_utc, utc_now
 from assurance.intel.sources import SOURCE_ALIASES, SOURCES, resolve_source
 from assurance.intel.store import IntelStore, IntelStoreError, Observation
 from assurance.intel.view import EPSS_UNAVAILABLE_NOTE, KEV_NOT_ESTABLISHED, build_report
 
-__all__ = ["INTEL_STORE_ENV", "intel_router", "intel_store_path"]
+__all__ = ["INTEL_MAX_AGE_ENV", "INTEL_STORE_ENV", "intel_router", "intel_store_path",
+           "store_freshness"]
 
 INTEL_STORE_ENV = "ASSURANCE_INTEL_STORE"
+#: The operator's own limit for how old a source of the shared store may be before the hosted
+#: routes call it stale. Unset, the same conservative 72 h default the offline watch applies.
+INTEL_MAX_AGE_ENV = "ASSURANCE_INTEL_MAX_AGE_HOURS"
 
 intel_router = APIRouter(prefix="/v1/intel", tags=["intel"], dependencies=[Machine])
 
@@ -162,6 +169,74 @@ def _sources_consulted(store: IntelStore) -> dict[str, Any]:
     }
 
 
+def _age_limit() -> tuple[float, str]:
+    """``(hours, basis)``: the operator's explicit setting, else the default. A malformed setting
+    is ignored in favour of the default and says so in the basis, never silently unchecked."""
+    from assurance.watch.config import DEFAULT_SOURCE_MAX_AGE_HOURS, MAX_AGE_HOURS_LIMIT
+
+    raw = os.environ.get(INTEL_MAX_AGE_ENV, "").strip()
+    if not raw:
+        return DEFAULT_SOURCE_MAX_AGE_HOURS, "default"
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = float("nan")
+    if not math.isfinite(hours) or hours <= 0 or hours > MAX_AGE_HOURS_LIMIT:
+        return DEFAULT_SOURCE_MAX_AGE_HOURS, "default (the server setting is not a valid limit)"
+    return hours, "server_setting"
+
+
+def store_freshness(store: IntelStore, now: datetime | None = None) -> dict[str, Any]:
+    """How old is each recorded source of the shared store? Always judged, never optional.
+
+    Age is the clock minus the observation's recorded ``retrieved_at`` (when the operator's job
+    fetched or ingested it), never the feed's own stamp. ``status`` is ``stale`` when any
+    recorded source is older than the limit (or its time cannot be read, or lies in the future),
+    ``unknown`` when nothing has an accepted observation, and ``fresh`` only when every source
+    that has one is within the limit. ``fresh`` says the store was refreshed recently, not that
+    it is complete or that a source had nothing newer; a source with no accepted observation is
+    listed as ``never_observed`` and is not a clean bill.
+    """
+    clock = now if now is not None else utc_now()
+    limit, basis = _age_limit()
+    newest: dict[str, Observation] = {}
+    for seen in store.latest_accepted():
+        if seen.source not in newest or seen.seq > newest[seen.source].seq:
+            newest[seen.source] = seen
+    rows: list[dict[str, Any]] = []
+    for source in sorted(SOURCES):
+        o = newest.get(source)
+        if o is None:
+            rows.append({"source": source, "state": "never_observed", "retrieved_at": "",
+                         "seq": None, "age_hours": None})
+            continue
+        try:
+            age = (clock - parse_utc(o.retrieved_at)).total_seconds() / 3600
+        except ValueError:
+            rows.append({"source": source, "state": "unreadable", "retrieved_at": o.retrieved_at,
+                         "seq": o.seq, "age_hours": None})
+            continue
+        state = "future" if age < 0 else ("stale" if age > limit else "fresh")
+        rows.append({"source": source, "state": state, "retrieved_at": o.retrieved_at,
+                     "seq": o.seq, "age_hours": None if state == "future" else round(age, 3)})
+    observed = [r for r in rows if r["state"] != "never_observed"]
+    if not observed:
+        overall = "unknown"
+    elif any(r["state"] != "fresh" for r in observed):
+        overall = "stale"
+    else:
+        overall = "fresh"
+    return {
+        "checked": True, "status": overall, "assessed_at": format_utc(clock),
+        "limit_hours": limit, "limit_basis": basis, "sources": rows,
+        "note": ("age is the server's clock minus each source's recorded retrieval time; "
+                 "`fresh` means the store was refreshed within the limit, not that it is "
+                 "complete or that a source had nothing newer. `stale` or `unknown` means what "
+                 "follows may be out of date: it is not an all-clear. The limit is "
+                 f"{limit:g} h ({basis})."),
+    }
+
+
 def _scope() -> dict[str, Any]:
     return {"scope": "operator_owned_shared_public_data", "tenant_evidence": False,
             "writes": False, "note": _STORE_NOTE}
@@ -199,12 +274,13 @@ def intel_history(
     store = _open_store()
     try:
         rows = store.observations(source=wanted, after_seq=after_seq, limit=limit + 1)
+        freshness = store_freshness(store)
     except (sqlite3.Error, AssuranceError, TypeError, ValueError) as exc:
         raise _read_failed(exc) from exc
     page, more = rows[:limit], len(rows) > limit
     body: dict[str, Any] = {
         "status": "ok" if page else "empty", "store": _scope(),
-        "source": wanted, "after_seq": after_seq, "limit": limit,
+        "store_freshness": freshness, "source": wanted, "after_seq": after_seq, "limit": limit,
         "observations": [_observation(o) for o in page],
         "has_more": more, "next_after_seq": page[-1].seq if more else None,
         "not_established": [_SOURCE_NOTE],
@@ -275,7 +351,7 @@ def intel_cve(cve_id: str) -> dict[str, Any]:
                     "reason": ("at least one recorded source mentions this CVE" if mentioned
                                else "no recorded source mentions this CVE; unknown, not clear")},
         "sources_consulted": sources, "unreadable_observations": list(report.unreadable),
-        "not_established": notes,
+        "store_freshness": store_freshness(store), "not_established": notes,
     }
 
 
@@ -315,5 +391,6 @@ def intel_candidates() -> dict[str, Any]:
         "candidates": candidates, "not_representable": not_rep,
         "conflicts": list(report.conflicts), "enrichment_count": len(report.enrichments),
         "unreadable_observations": list(report.unreadable),
-        "sources_consulted": sources, "not_established": notes,
+        "sources_consulted": sources, "store_freshness": store_freshness(store),
+        "not_established": notes,
     }

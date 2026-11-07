@@ -83,7 +83,9 @@ test.describe('dynamic routes render their own page', () => {
   });
 
   test('the hero image keeps its high fetch priority (Next 16 stopped adding it for `priority`)', async ({ request }) => {
-    for (const p of ['/', '/solutions/manufacturer']) {
+    // `/` has no hero image any more (its hero is an original numbered diagram, so its LCP is text);
+    // the pages that still open with a photo must keep telling the browser it is the priority.
+    for (const p of ['/solutions/manufacturer']) {
       const html = await (await request.get(p)).text();
       expect(html, `${p} preloads its hero with fetchPriority=high`).toMatch(/<link[^>]+rel="preload"[^>]+as="image"[^>]+fetchPriority="high"|<link[^>]+fetchPriority="high"[^>]+rel="preload"/i);
       expect(html, `${p} hero <img>`).toMatch(/<img[^>]+fetchPriority="high"/i);

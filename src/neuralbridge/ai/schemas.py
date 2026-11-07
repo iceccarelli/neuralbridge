@@ -59,6 +59,10 @@ class ConnectionSummary(BaseModel):
     adapter_type: str
     status: str
     source: str  # "connections_api" | "seeded_from_env"
+    # True only when THIS server process holds the live adapter for the connection. A bound
+    # connection's record is durable but its credential is never stored, so after a restart (or
+    # on another worker) the record is still listed and ``live`` is False until it is bound again.
+    live: bool = False
 
 
 class Capability(BaseModel):

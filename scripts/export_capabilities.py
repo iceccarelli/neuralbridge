@@ -53,6 +53,7 @@ def build() -> dict[str, Any]:
                 "id": c["id"],
                 "service": c["service"],
                 "title": c["summary"],
+                "hosting": dict(c["hosting"]),
                 "surfaces": {s: _surface(c[s]) for s in SURFACES},
             }
             for c in cat["capabilities"]
@@ -92,6 +93,7 @@ def build() -> dict[str, Any]:
                 for s in SURFACES
             },
         },
+        "hosting_modes": dict(cat["hosting_modes"]),
         "cli_domains": cli_domains,
         "mcp_tools": sorted(found["mcp"]),
         "capabilities": caps,

@@ -22,15 +22,31 @@ All operations are logged to the audit trail via ``AuditLogger``.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
 import structlog
 
 from neuralbridge.adapters.base import BaseAdapter
-from neuralbridge.security.audit import AuditLogger
+from neuralbridge.security.audit import AuditLogger, AuditUnavailableError
+from neuralbridge.security.limits import (
+    ConcurrencyGate,
+    Limits,
+    NotDispatchedError,
+    SlidingWindowLimiter,
+)
 
 logger = structlog.get_logger(__name__)
+
+
+class AuditPreflightError(AuditUnavailableError, NotDispatchedError):
+    """The audit sink could not record, so the call was refused *before* the adapter ran."""
+
+
+class AdapterTimeoutError(TimeoutError):
+    """The adapter did not finish within the configured call timeout (the target's
+    state is unknown — the call was dispatched)."""
 
 
 class AdapterRegistry:
@@ -83,9 +99,14 @@ class RequestRouter:
         Immutable audit logger (CRA requirement).
     """
 
-    def __init__(self, registry: AdapterRegistry, audit_logger: AuditLogger) -> None:
+    def __init__(
+        self, registry: AdapterRegistry, audit_logger: AuditLogger, limits: Limits | None = None,
+    ) -> None:
         self._registry = registry
         self._audit = audit_logger
+        self.limits = limits or Limits.from_env()
+        self._rate = SlidingWindowLimiter(self.limits.rate_per_minute)
+        self._gate = ConcurrencyGate(self.limits.max_concurrent, self.limits.max_concurrent_per_adapter)
 
     async def route(
         self,
@@ -136,12 +157,66 @@ class RequestRouter:
         """
         adapter = self._registry.get(adapter_type)
         if adapter is None:
+            # Only plain adapter types are listed: per-connection keys (``postgres:<id>``) are
+            # tenants' bound connections and this text becomes a 400 body for any caller. The
+            # operator sees them through GET /adapters.
+            shared = [k for k in self._registry.list_all() if ":" not in k]
             raise ValueError(
                 f"Adapter '{adapter_type}' is not registered. "
-                f"Available: {self._registry.list_all()}"
+                f"Available: {shared}"
             )
 
         owner_detail = {"owner": owner} if owner else {}
+
+        # Refusals that happen before the adapter runs (NotDispatchedError): nothing
+        # reached the target, the caller may retry, and a claimed plan goes back to pending.
+        self._rate.check(owner or actor)
+        try:
+            await self._audit.ensure_writable()
+        except AuditUnavailableError as exc:
+            raise AuditPreflightError(str(exc)) from exc
+
+        with self._gate.slot(adapter_type):
+            return await self._dispatch(adapter, adapter_type, operation, params, request_id, actor, owner_detail)
+
+    async def validate(self, adapter_type: str, *, actor: str, owner: str | None = None) -> Any:
+        """``adapter.validate_credentials()`` under the same limits and audit as ``route``.
+
+        It can make a credentialed outbound call, so it takes the owner's rate-limit slot, the
+        adapter's concurrency slot and the call timeout, and always leaves an ``adapter_validate``
+        audit row (``success`` / ``failure``) with actor and tenant. Entitlement is the caller's
+        job (``neuralbridge.ai.guard.enforce_validate_gate``).
+        """
+        adapter = self._registry.get(adapter_type)
+        if adapter is None:
+            raise ValueError(f"Adapter '{adapter_type}' is not registered.")
+        self._rate.check(owner or actor)
+        try:
+            await self._audit.ensure_writable()
+        except AuditUnavailableError as exc:
+            raise AuditPreflightError(str(exc)) from exc
+        owner_detail = {"owner": owner} if owner else {}
+        with self._gate.slot(adapter_type):
+            try:
+                async with asyncio.timeout(self.limits.call_timeout) as deadline:
+                    result = await adapter.validate_credentials()
+            except TimeoutError as exc:
+                await self._audit.log_event(
+                    event_type="adapter_validate", actor=actor, resource=adapter_type, action="validate",
+                    result="timeout", details=owner_detail)
+                if deadline.expired():
+                    raise AdapterTimeoutError(
+                        f"adapter '{adapter_type}' did not finish within {self.limits.call_timeout:g}s") from exc
+                raise
+        await self._audit.log_event(
+            event_type="adapter_validate", actor=actor, resource=adapter_type, action="validate",
+            result="success" if result.success else "failure", details=owner_detail)
+        return result
+
+    async def _dispatch(
+        self, adapter: BaseAdapter, adapter_type: str, operation: str, params: dict[str, Any],
+        request_id: str | None, actor: str, owner_detail: dict[str, Any],
+    ) -> dict[str, Any]:
         start = time.monotonic()
         logger.info(
             "routing_request",
@@ -151,51 +226,69 @@ class RequestRouter:
         )
 
         try:
-            result = await adapter.execute(operation, params)
-            elapsed = time.monotonic() - start
-
-            # Audit trail (immutable, CRA-compliant)
-            await self._audit.log_event(
-                event_type="adapter_call",
-                actor=actor,
-                resource=adapter_type,
-                action=operation,
-                result="success",
-                details={
-                    "request_id": request_id,
-                    "duration_ms": round(elapsed * 1000, 2),
-                    **owner_detail,
-                },
-            )
-
-            logger.info(
-                "request_routed",
-                adapter_type=adapter_type,
-                operation=operation,
-                duration_ms=round(elapsed * 1000, 2),
-            )
-            return {
-                "status": "success",
-                "adapter": adapter_type,
-                "operation": operation,
-                "data": result,
-                "duration_ms": round(elapsed * 1000, 2),
-            }
-
+            async with asyncio.timeout(self.limits.call_timeout) as deadline:
+                result = await adapter.execute(operation, params)
+        except TimeoutError as exc:
+            failure: Exception = exc
+            if deadline.expired():
+                failure = AdapterTimeoutError(
+                    f"adapter '{adapter_type}' did not finish within {self.limits.call_timeout:g}s"
+                )
+                failure.__cause__ = exc
+            await self._audit_error(failure, adapter_type, operation, request_id, actor, owner_detail, start)
+            raise failure from exc
         except Exception as exc:
-            elapsed = time.monotonic() - start
-            await self._audit.log_event(
-                event_type="adapter_error",
-                actor=actor,
-                resource=adapter_type,
-                action=operation,
-                result="error",
-                details={
-                    "request_id": request_id,
-                    "error": str(exc),
-                    "duration_ms": round(elapsed * 1000, 2),
-                    **owner_detail,
-                },
-            )
-            logger.exception("request_routing_failed", adapter_type=adapter_type)
+            await self._audit_error(exc, adapter_type, operation, request_id, actor, owner_detail, start)
             raise
+        elapsed = time.monotonic() - start
+
+        # Audit trail (immutable, CRA-compliant). The adapter has already run; if the
+        # sink fails here the AuditUnavailableError propagates (outcome recorded as
+        # unknown by callers) rather than being reported as an adapter error.
+        await self._audit.log_event(
+            event_type="adapter_call",
+            actor=actor,
+            resource=adapter_type,
+            action=operation,
+            result="success",
+            details={
+                "request_id": request_id,
+                "duration_ms": round(elapsed * 1000, 2),
+                **owner_detail,
+            },
+        )
+
+        logger.info(
+            "request_routed",
+            adapter_type=adapter_type,
+            operation=operation,
+            duration_ms=round(elapsed * 1000, 2),
+        )
+        return {
+            "status": "success",
+            "adapter": adapter_type,
+            "operation": operation,
+            "data": result,
+            "duration_ms": round(elapsed * 1000, 2),
+        }
+
+    async def _audit_error(
+        self, exc: Exception, adapter_type: str, operation: str, request_id: str | None,
+        actor: str, owner_detail: dict[str, Any], start: float,
+    ) -> None:
+        elapsed = time.monotonic() - start
+        await self._audit.log_event(
+            event_type="adapter_error",
+            actor=actor,
+            resource=adapter_type,
+            action=operation,
+            result="error",
+            details={
+                "request_id": request_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "duration_ms": round(elapsed * 1000, 2),
+                **owner_detail,
+            },
+        )
+        logger.exception("request_routing_failed", adapter_type=adapter_type, error_type=type(exc).__name__)

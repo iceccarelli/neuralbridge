@@ -319,7 +319,11 @@ class TestPlatformStatusIsTheReadmeTable:
         # PostgreSQL is exercised against a real server only by the /ai and MCP integration tests ...
         owners = sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
                         if "NEURALBRIDGE_AI_PG_HOST" in p.read_text(encoding="utf-8"))
-        assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty")) for n in owners), owners
+        # test_multiworker_real counts /ai approvals executed across --workers 4 in a real Postgres
+        # table, so it is an /ai integration test too; it is named, not matched by prefix, so any
+        # other new user of the real server still has to be looked at here.
+        assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty",
+                                 "test_multiworker_real")) for n in owners), owners
         # ... and the REST adapter really sends requests: no canned data left, and a test serves it locally.
         rest = read("src/neuralbridge/adapters/apis/rest.py")
         assert re.search(r"await client\.send\(", rest) and "MOCK" not in rest and "mock_data" not in rest
@@ -348,14 +352,30 @@ PRIVACY = "app/privacy/page.tsx"
 
 
 def _storage_map() -> dict[str, set[str]]:
-    """key -> mechanisms, for every key passed to get/set/removeItem anywhere under ``app/``."""
+    """key -> mechanisms, for every key passed to get/set/removeItem anywhere under ``app/``.
+
+    Keys are resolved through ``const NAME = 'nb-...'`` (also through ``import { NAME as ALIAS }``),
+    through a template-literal prefix (``${PREFIX}${id}``) and through the legacy-key list. The keys
+    app/lib/credentials.ts defines are the single list sign-out clears, and its helpers take the
+    storage as an argument, so each one it names is filed under sessionStorage (its header says so,
+    and test_every_credentials_constant_is_used_with_session_storage checks that a caller does).
+    """
     files = {p: p.read_text(encoding="utf-8") for p in (ROOT / "app").rglob("*.ts*")}
     constants = {}
     for source in files.values():
-        constants.update(re.findall(r"\bconst\s+(\w+)\s*=\s*'((?:nb|iaa)-[a-z-]+)'", source))
+        constants.update(re.findall(r"\bconst\s+(\w+)\s*=\s*'((?:nb|iaa)-[a-z:-]+)'", source))
+    for source in files.values():
+        for imported in re.findall(r"import\s*\{([^}]*)\}", source):
+            for orig, alias in re.findall(r"(\w+)\s+as\s+(\w+)", imported):
+                if orig in constants:
+                    constants[alias] = constants[orig]
+    for source in files.values():
+        for alias, orig in re.findall(r"\bconst\s+(\w+)\s*=\s*(\w+);", source):
+            if orig in constants:
+                constants[alias] = constants[orig]
     legacy = set()
     for source in files.values():
-        for body in re.findall(r"LEGACY_KEYS\s*=\s*\[([^\]]*)\]", source):
+        for body in re.findall(r"LEGACY_KEY(?:S|_STORAGE)\s*=\s*\[([^\]]*)\]", source):
             legacy.update(re.findall(r"'([^']+)'", body))
     found: dict[str, set[str]] = {}
     for source in files.values():
@@ -371,8 +391,17 @@ def _storage_map() -> dict[str, set[str]]:
                     pytest.fail(f"storage key {arg!r} is not a constant this test can resolve")
                 for key in keys:
                     found.setdefault(key, set()).add(name)
+            for prefix in re.findall(rf"window\.{name}\.(?:get|set|remove)Item\(\s*`\$\{{(\w+)\}}", source):
+                if prefix not in constants:
+                    pytest.fail(f"storage key prefix {prefix!r} is not a constant this test can resolve")
+                found.setdefault(constants[prefix], set()).add(name)
         if re.search(r"document\.cookie\s*=", source):
             found.setdefault("<cookie>", set()).add("cookie")
+    credentials = (ROOT / "app/lib/credentials.ts").read_text(encoding="utf-8")
+    for key in re.findall(r"\bconst\s+\w+\s*=\s*'((?:nb|iaa)-[a-z:-]+)'", credentials):
+        found.setdefault(key, set()).add("sessionStorage")
+    for key in legacy:
+        found.setdefault(key, set()).add("sessionStorage")
     return found
 
 
@@ -387,13 +416,33 @@ class TestPrivacyDisclosesWhatTheCodeStores:
         mechanisms, keys = _browser_storage()
         assert {"localStorage", "sessionStorage"} <= mechanisms
         assert {"nb-api-key", "iaa-cookie-choice", "nb-ai-actor", "nb-ai-session",
-                "nb-assurance-decision-credential", "nb-console-api-key", "nb-ai-api-key"} <= keys
+                "nb-assurance-decision-credential", "nb-console-api-key", "nb-ai-api-key",
+                "nb-checkout-claim:"} <= keys
 
     def test_every_storage_mechanism_and_key_in_use_is_named_on_the_page(self):
         mechanisms, keys = _browser_storage()
         text = page_text(read(PRIVACY))
         missing = sorted(m for m in mechanisms | keys if m not in text)
         assert not missing, f"app/privacy/page.tsx does not mention: {missing}"
+
+    def test_every_credentials_constant_is_used_with_session_storage(self):
+        """app/lib/credentials.ts lists what sign-out clears; each key it names must really be
+        written to sessionStorage by a caller, never to localStorage (which sign-out does not touch)."""
+        credentials = read("app/lib/credentials.ts")
+        names = re.findall(r"export const (\w+)\s*=\s*'(?:nb|iaa)-[a-z:-]+'", credentials)
+        assert len(names) >= 5
+        others = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "app").rglob("*.ts*")
+                           if p.name != "credentials.ts")
+        assert "localStorage" not in credentials
+        for name in names:
+            if name == "CHECKOUT_CLAIM_PREFIX":
+                assert "sessionStorage.setItem(`${CLAIM_STORAGE_PREFIX}" in others
+            elif name.startswith("LEGACY"):
+                continue
+            else:
+                assert re.search(rf"\b{name}\b", others), f"{name} is never used outside credentials.ts"
+        for name in re.findall(r"window\.localStorage\.\w+Item\(\s*(\w+)", others):
+            assert name not in names, f"{name} is a credential and must not be in localStorage"
 
     def test_the_page_no_longer_says_a_single_flag_is_all_that_is_stored(self):
         text = page_text(read(PRIVACY))
@@ -907,6 +956,10 @@ class TestGeneratedImageryIsDisclosed:
         rule = re.search(r"\.imagery-note\s*\{([^}]*)\}", css)
         assert rule and "display: none" not in rule.group(1)
         size = re.search(r"font-size:\s*([\d.]+)rem", rule.group(1))
+        if not size:  # a type-scale token: resolve it from :root, so the bound below still applies to a real number
+            token = re.search(r"font-size:\s*var\((--fs-[\w-]+)\)", rule.group(1))
+            assert token, "the caption has no font-size"
+            size = re.search(rf"{re.escape(token.group(1))}:\s*([\d.]+)rem", css)
         assert size and 0.7 <= float(size.group(1)) <= 0.9, "small, but not unreadably so"
 
     def test_the_images_really_are_generated_so_the_caption_is_true(self):

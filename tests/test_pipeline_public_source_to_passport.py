@@ -275,9 +275,12 @@ def test_the_whole_pipeline(tmp_path):
                                               encoding="utf-8")
         att = RECORDER.write_attestation(root / f"attestation-{n}.json", envelope(), run,
                                          machine_serial=serial)
+        # the verification states the configuration of the machine's newest sealed manifest
+        cfg = manifests_from_ledger(EvidenceLedger(ledger), key)[-1].configuration_hash()
         v = op.sh("machine", "verify", "--envelope", "envelope.json", "--trace",
                   f"trace-{n}.json", "--recorder-attestation", att, "--recorder-trust", trust,
-                  "--actor", "Dana Reviewer", *led, "--subject", key, "--json", expect=0)
+                  "--actor", "Dana Reviewer", *led, "--subject", key, "--configuration-hash", cfg,
+                  "--json", expect=0)
         bundle = json.loads(v.stdout)
         assert '"tier": "validated"' in v.stdout and '"verdict": "pass"' in v.stdout
         vhash = bundle["evidence"]["content_hash"]
@@ -424,9 +427,11 @@ def test_the_csaf_route_needs_the_unsigned_override_and_a_reason(tmp_path):
     finding = next(f for f in json.loads(r.stdout)["advisories"]["findings"] if f["inspect_only"])
     aid = finding["advisory_id"]
     assert finding["trust_basis"] == "none" and finding["machines"] == []
-    # the store has no max_age_hours here: the run says that age was not judged
-    assert "age of the intel store was NOT checked" in " ".join(
-        json.loads(r.stdout)["checks_skipped"])
+    # the subscription states no max_age_hours: age is still judged, against the conservative
+    # default, and the run says which limit applied and that it is the default, never "not checked"
+    skipped = " ".join(json.loads(r.stdout)["checks_skipped"])
+    assert "limit 72 h, default: the conservative default; state max_age_hours" in skipped
+    assert "NOT checked" not in skipped
 
     args = ("watch", "open-case", "--config", "watch.json", *led, "--advisory-id", aid, *DANA)
     n0 = _entries(root / "ledger.db")

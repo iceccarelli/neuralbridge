@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from neuralbridge.adapters.base import AdapterResponse
+from neuralbridge.ai.connections import SEEDED_REGISTRY_KEY, register_seeded_adapter
 from neuralbridge.ai.identity import Actor
 from neuralbridge.ai.policy import PolicyError, evaluate
 from neuralbridge.ai.schemas import (
@@ -30,7 +31,7 @@ from neuralbridge.ai.schemas import (
     Provenance,
     QueryResultCard,
 )
-from neuralbridge.ai.store import AiStore, ConnectionRecord, PlanRecord, new_id
+from neuralbridge.ai.store import REVOKED, AiStore, ConnectionRecord, PlanRecord, new_id
 from neuralbridge.ai.tenancy import (
     Scope,
     can_access_plan,
@@ -38,7 +39,14 @@ from neuralbridge.ai.tenancy import (
     can_read_connection,
     is_demo,
 )
-from neuralbridge.core.router import AdapterRegistry, RequestRouter
+from neuralbridge.core.router import (
+    AdapterRegistry,
+    AdapterTimeoutError,
+    AuditPreflightError,
+    RequestRouter,
+)
+from neuralbridge.security.audit import AuditUnavailableError
+from neuralbridge.security.limits import ResourceLimitError
 
 _POSTGRES_CAPABILITIES: list[tuple[str, OperationClass, str]] = [
     ("health_check", OperationClass.READ, "Check the connection is reachable and report the server version."),
@@ -50,9 +58,15 @@ _POSTGRES_CAPABILITIES: list[tuple[str, OperationClass, str]] = [
 
 
 class OrchestratorError(Exception):
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(
+        self, status_code: int, detail: str, *, retry_after: int | None = None, not_dispatched: bool = False,
+    ) -> None:
         self.status_code = status_code
         self.detail = detail
+        #: Seconds for a ``Retry-After`` header (rate limit / busy).
+        self.retry_after = retry_after
+        #: True when the adapter was never invoked, so nothing ran on the target.
+        self.not_dispatched = not_dispatched
         super().__init__(detail)
 
 
@@ -81,7 +95,14 @@ def _require_live_adapter(registry: AdapterRegistry, conn: ConnectionRecord) -> 
     connection re-registers itself from env on first use after a restart
     (``connections.ensure_seeded_connection``); any other connection in
     that state needs the operator to bind it again with fresh credentials
-    — an honest 409, not a confusing adapter-not-found 500."""
+    — an honest 409, not a confusing adapter-not-found 500.
+
+    Every uvicorn worker has its own registry, so the seeded connection is re-registered here, in
+    the process that is about to use it, not only by the worker that listed connections. A bound
+    connection cannot be: its credentials were never stored, so under ``--workers N`` it is live
+    only in the worker that bound it (deploy/assurance/OPS.md, "Worker processes")."""
+    if conn.source == "seeded_from_env" and conn.registry_key == SEEDED_REGISTRY_KEY:
+        register_seeded_adapter(registry)
     if conn.registry_key not in registry:
         raise OrchestratorError(
             409,
@@ -104,6 +125,22 @@ _DEMO_READ_ONLY = (
 )
 
 
+def _connection_revoked(connection_id: str) -> OrchestratorError:
+    return OrchestratorError(
+        409,
+        f"Connection '{connection_id}' has been revoked and cannot be used. "
+        "Revocation is permanent: bind a new connection with POST /ai/connections.",
+    )
+
+
+def _require_active(conn: ConnectionRecord) -> None:
+    """A revoked connection refuses every operation on its next call. The status is
+    read from the shared store on each request, so this holds across worker
+    processes, not just in the one that handled the revocation."""
+    if conn.status == REVOKED:
+        raise _connection_revoked(conn.id)
+
+
 def _not_found_plan(plan_id: str) -> OrchestratorError:
     return OrchestratorError(404, f"Plan '{plan_id}' not found.")
 
@@ -124,7 +161,7 @@ def _visible_plan(store: AiStore, scope: Scope, plan_id: str) -> PlanRecord:
 
 def list_capabilities(store: AiStore, scope: Scope, connection_id: str) -> list[Capability]:
     conn = _visible_connection(store, scope, connection_id)
-    if conn.adapter_type != "postgres":
+    if conn.adapter_type != "postgres" or conn.status == REVOKED:
         return []
     return [
         Capability(
@@ -162,6 +199,16 @@ async def _run(
             actor=actor.as_audit_string(),
             owner=scope.owner,
         )
+    except ResourceLimitError as exc:
+        raise OrchestratorError(
+            exc.status_code, f"{exc.code}: {exc}", retry_after=exc.retry_after, not_dispatched=True,
+        ) from exc
+    except AuditPreflightError:
+        raise  # not dispatched; the app answers 503 audit_unavailable
+    except AuditUnavailableError:
+        raise  # dispatched, but the trail could not record it: callers treat the outcome as unknown
+    except AdapterTimeoutError as exc:
+        raise OrchestratorError(504, "The connection did not answer within the time limit.") from exc
     except Exception as exc:
         # The router has already logged the real error server-side and in the
         # owner's audit entry. The client gets a generic body: driver/OS text
@@ -179,6 +226,7 @@ async def read(
     """Execute a READ immediately. Refuses anything that isn't a READ.
     Only on a connection ``scope`` may read (its own, or the seeded demo)."""
     conn = _visible_connection(store, scope, connection_id)
+    _require_active(conn)
 
     try:
         decision = evaluate(conn.adapter_type, operation, params)
@@ -210,6 +258,7 @@ def create_plan(
         # Only the shared demo reaches here (anything else unplannable is
         # unreadable, so already a 404): it is visible, so a 403 is no oracle.
         raise OrchestratorError(403, _DEMO_READ_ONLY)
+    _require_active(conn)
 
     try:
         decision = evaluate(conn.adapter_type, operation, params)
@@ -289,6 +338,7 @@ async def approve_and_execute(
         raise OrchestratorError(404, f"Connection '{record.connection_id}' backing this plan no longer exists.")
     if not can_plan_on_connection(scope, conn):
         raise OrchestratorError(403, _DEMO_READ_ONLY if is_demo(conn) else f"Plan '{plan_id}' not found.")
+    _require_active(conn)
     _require_live_adapter(registry, conn)
 
     claimed = store.transition_plan(
@@ -300,8 +350,20 @@ async def approve_and_execute(
 
     try:
         response, provenance = await _run(router, scope, actor, conn, record.operation, record.params)
+    except (OrchestratorError, AuditPreflightError) as exc:
+        if isinstance(exc, AuditPreflightError) or exc.not_dispatched:
+            # Refused before the adapter ran (rate limit, busy, audit sink down): nothing
+            # happened on the target, so the claim is released and the plan is pending again.
+            store.transition_plan(
+                plan_id, expected=PlanStatus.APPROVED.value, status=PlanStatus.PENDING_APPROVAL.value,
+                reset_decision=True)
+        else:
+            # Upstream failed or timed out: outcome unknown.
+            store.transition_plan(
+                plan_id, expected=PlanStatus.APPROVED.value, status=PlanStatus.FAILED.value)
+        raise
     except BaseException:
-        # OrchestratorError (upstream failed) and cancellation alike: outcome unknown.
+        # Cancellation, or the trail failing after dispatch: outcome unknown.
         store.transition_plan(
             plan_id, expected=PlanStatus.APPROVED.value, status=PlanStatus.FAILED.value)
         raise

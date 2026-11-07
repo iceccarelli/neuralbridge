@@ -48,6 +48,7 @@ from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, Compone
 from assurance.fleet.impact import assess_impact
 from assurance.fleet.provenance import bare_provenance
 from assurance.fleet.registry import Fleet
+from assurance.machinery.manifest import SafetyManifest
 from assurance.machinery.record import interventions_from_ledger, manifests_from_ledger
 from assurance.machinery.staleness import VerificationRecord
 
@@ -393,9 +394,18 @@ class CliDriver(Driver):
         r = run_cli("machine", "verify", "--envelope", env, "--trace", tr, "--actor", who,
                     "--ledger", self.ledger_path, "--subject", KEY, "--json",
                     "--recorder-attestation", att, "--recorder-trust", trust,
+                    "--configuration-hash", self._configuration_hash(),
                     cwd=self.plant.root)
         assert r.returncode == 0, r.stdout + r.stderr
         return str(json.loads(r.stdout)["evidence"]["content_hash"])
+
+    def _configuration_hash(self) -> str:
+        """The configuration of the unit's newest sealed manifest: what a verification states."""
+        from assurance.evidence.ledger import EvidenceLedger
+        from assurance.machinery.record import manifests_from_ledger
+
+        return manifests_from_ledger(
+            EvidenceLedger(self.ledger_path), KEY)[-1].configuration_hash()
 
     def reverify(self, cid, vhash, who):
         path = self.plant.root / "manifest.json"
@@ -489,6 +499,9 @@ class ApiDriver(Driver):
         r = self.http.post("/v1/machine/verify", json={
             "envelope": envelope_dict(), "trace": run.hashable_payload(), "actor": who,
             "subject": KEY,
+            # a verification states the configuration it ran against (the plant's manifest)
+            "configuration_hash": SafetyManifest.from_dict(
+                self.plant.manifest_dict()).configuration_hash(),
             # signed offline by the recorder; the SERVER's own trust list decides (the
             # `live_api` fixture configures it)
             "recorder_attestations": RECORDER.attestation_dicts(

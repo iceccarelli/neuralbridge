@@ -279,7 +279,8 @@ def check_robots_and_sitemap(pages: dict[str, Page], sitemap_paths: set[str], ro
 # ---------------------------------------------------------------------------
 # the "business card": what a crawler or a chat app shows when the link is shared or searched
 # ---------------------------------------------------------------------------
-BRAND = "Industrial Autonomous Assurance"
+BRAND = "NeuralBridge"
+PRODUCT = "Industrial Autonomous Assurance"
 THEME = "#0f1b2d"
 OG_MAX_BYTES = 300_000  # WhatsApp drops previews whose image is much larger than this
 PUBLIC = ROOT / "public"
@@ -560,7 +561,10 @@ class TestStructuredData:
     def test_the_site_graph_is_organization_and_website_with_a_contact_point(self, site):
         nodes = {n["@type"]: n for n in jsonld_nodes(site["pages"]["/privacy"])}
         org, web = nodes["Organization"], nodes["WebSite"]
-        assert org["name"] == web["name"] == "Industrial Autonomous Assurance"
+        # NeuralBridge is the company and platform; the flagship product is named beside it, never instead of it
+        assert org["name"] == web["name"] == "NeuralBridge"
+        assert web["alternateName"] == PRODUCT
+        assert "NeuralBridge is the company" in org["description"] and PRODUCT in org["description"]
         assert org["contactPoint"]["url"] == f"{SITE}/contact"
         assert web["publisher"] == {"@id": org["@id"]}
         assert "potentialAction" not in web  # no search results page exists to point one at

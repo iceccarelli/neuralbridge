@@ -6,13 +6,14 @@ Industrial Autonomous Assurance does not need any of these: the offline kit, the
 the MCP server work on their own. The adapters below belong to the NeuralBridge integration platform it grew
 out of, and this page says exactly how far each one goes.
 
-**22 adapters: 2 supported with limits, 3 with a real client path that has never run against a live service, 17 canned.** A canned adapter makes no call to the service it is named after.
+**22 adapters: 1 supported with limits, 1 library only (real and tested, but no shipped code registers it), 3 with a real client path that has never run against a live service, 17 canned.** A canned adapter makes no call to the service it is named after.
 
 ## What the classification means
 
 | Classification | Meaning | Default behaviour |
 |---|---|---|
 | Supported, with limits | Calls the real service and is exercised against it by a test. | Runs. |
+| Library only (real and tested; no shipped loader registers it) | Real code, exercised by tests against a locally emulated service, but nothing in this repository creates and registers it in a running platform: an operator must register it in code (`registry.register(RestApiAdapter({...}), key="rest")`). Until then the platform answers 404 for it. | Runs once registered. |
 | Experimental (real client path, never run against a live service) | A real client path exists. | Runs only against the live service; a failed connection raises an error and never falls back to invented data. |
 | Experimental (canned: makes no call) | Returns canned results. | **Refused** with an error. Opt in for a demo or test with `allow_mock: true` in the adapter config or `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; every result is then flagged `mock: true`. |
 
@@ -24,7 +25,7 @@ An adapter that is not classified is treated as canned. Promoting one is a code 
 |---|---|---|---|---|
 | `graphql` | apis | Experimental (canned: makes no call) | `query`, `mutation`, `subscription`, `introspect` | `src/neuralbridge/adapters/apis/graphql.py` |
 | `odata` | apis | Experimental (canned: makes no call) | `query`, `create`, `update`, `delete`, `get_metadata` | `src/neuralbridge/adapters/apis/odata.py` |
-| `rest` | apis | Supported, with limits | `get`, `post`, `put`, `patch`, `delete`, `head` | `src/neuralbridge/adapters/apis/rest.py` |
+| `rest` | apis | Library only (real and tested; no shipped loader registers it) | `get`, `post`, `put`, `patch`, `delete`, `head` | `src/neuralbridge/adapters/apis/rest.py` |
 | `soap` | apis | Experimental (canned: makes no call) | `call`, `discover_operations`, `get_wsdl` | `src/neuralbridge/adapters/apis/soap.py` |
 | `aws_s3` | cloud | Experimental (canned: makes no call) | `list_buckets`, `list_objects`, `get_object`, `put_object`, `delete_object`, `generate_presigned_url` | `src/neuralbridge/adapters/cloud/aws_s3.py` |
 | `azure_blob` | cloud | Experimental (canned: makes no call) | `list_containers`, `list_blobs`, `upload_blob`, `download_blob`, `delete_blob`, `get_blob_properties` | `src/neuralbridge/adapters/cloud/azure_blob.py` |
@@ -48,19 +49,23 @@ An adapter that is not classified is treated as canned. Promoting one is a code 
 ## PostgreSQL (supported, with limits)
 
 - **Prerequisites:** a reachable PostgreSQL server and the `asyncpg` package (installed with the project).
-- **Configuration:** `host`, `port`, `user`, `password`, `database`, `ssl_mode` (default `prefer`), `pool_size` (default 10).
+- **Configuration:** `host`, `port`, `user`, `password`, `database`, `ssl_mode` (default `prefer`), `pool_size` (default 10), `statement_timeout_ms` (default 30000), `acquire_timeout` (default 10 s), `connect_timeout` (default 10 s), `max_rows` (default 10000).
 - **Permissions:** the adapter runs whatever its database role may run. Give it a role that can only do what you intend. The `/ai` control plane's policy gate (`neuralbridge/ai/guard.py`) treats reads as free, gates writes and destructive statements behind the `ai_control_plane` entitlement and refuses exfiltration-shaped SQL, but the database role is the real boundary.
-- **Failure modes:** a failed connection raises `ConnectionError`; the adapter never answers from canned data unless `allow_mock` is set.
-- **Limits:** the default `ssl_mode` is `prefer`, which does not refuse an unencrypted connection; set it explicitly for anything beyond a local test. The tests that run it against a real server (`tests/test_ai.py`) need PostgreSQL and fail rather than skip when `NEURALBRIDGE_REQUIRE_POSTGRES=1` (as in CI); they do not cover TLS modes or role permissions.
+- **Read-only is enforced in the adapter:** `query`, `list_tables`, `describe_table` and `health_check` run in a `READ ONLY` transaction, so `DELETE ... RETURNING`, `WITH x AS (DELETE ...)`, `nextval()`, DDL and `SELECT ... FOR UPDATE` fail in the database whatever the SQL text says. Only `execute_sql` can write.
+- **Failure modes:** each is a structured failure, not a hang or a raw exception: `statement_timeout`, `connection_lost` (the pool discards the dead connection; the next call works), `pool_exhausted`, `permission_denied`, `read_only_violation`, `result_too_large`. A failed connection raises `ConnectionError` naming the exception class only (never the host, port, user or password); the adapter never answers from canned data unless `allow_mock` is set.
+- **Limits:** the default `ssl_mode` is `prefer`, which does not refuse an unencrypted connection; set it explicitly for anything beyond a local test. The tests that run it against a real server (`tests/test_ai.py`) need PostgreSQL and fail rather than skip when `NEURALBRIDGE_REQUIRE_POSTGRES=1` (as in CI); `tests/test_postgres_adapter_failures.py` adds the failure modes above and password rejection (against a private scram-sha-256 PostgreSQL 16 started by the test). **Local evidence only:** no managed cloud PostgreSQL, no pooler (pgbouncer), no other server version, and no TLS mode other than `disable`/`prefer` has been exercised.
 
-## REST (supported, with limits)
+## REST (library only: real and tested, not wired to a shipped loader)
 
-- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or API-key header authentication. Credentials come from the adapter config (`credentials`, or `credentials_env` naming environment variables) and are never logged, put in errors or returned.
-- **Bounds:** http(s) only; private, loopback, link-local (including the cloud metadata address) and reserved destinations are refused unless `allow_private_network` is set; optional `allowed_hosts`; response size and wall-clock time are capped; redirects to another origin are never followed; a non-2xx status, a timeout or an oversized body is a structured failure, never a success.
-- **Limits:** the address check does not defend against DNS rebinding; ambient proxies are ignored unless `trust_env` is set. Tested by `tests/test_rest_adapter.py` against a local HTTP server that the test starts; no third-party API and no TLS certificate handling is covered.
+- **Wiring:** no code shipped in this repository creates or registers a `RestApiAdapter` (the module docstring's YAML `adapters:` block is documentation of the config shape; nothing reads it). In a default deployment `POST /api/v1/adapters/rest/execute` answers 400 unknown adapter. An operator who wants it registers it in code at startup, `registry.register(RestApiAdapter({...}), key="rest")`; every REST call is then a credentialed outbound request and needs the `ai_control_plane` entitlement (so does `/validate`). `tests/test_adapters_wiring.py` fails if shipped code starts registering it, so this label gets re-examined.
+- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or API-key header authentication. Credentials come from the adapter config (`credentials`, or `credentials_env` naming environment variables) and are never logged, put in errors or returned. `Link`, `X-Total-Count` and `X-RateLimit-*` response headers are passed through; pagination is caller-driven (the adapter does not follow `next` links).
+- **Bounds:** http(s) only; private, loopback, link-local (including the cloud metadata address) and reserved destinations are refused unless `allow_private_network` is set; optional `allowed_hosts`; response size and wall-clock time are capped; redirects to another origin are never followed; a non-2xx status, a timeout, a truncated body or an oversized body (also after gzip decoding) is a structured failure, never a success. TLS certificates are verified by default; `ca_cert_path` trusts only a given CA file (hostname still checked); `verify_ssl: false` disables the check and is logged.
+- **Retries (off by default):** `retry.max_attempts` (1-5) retries `get`/`head` (and, only if listed, `put`/`delete`; never `post`/`patch`) on 429/500/502/503/504 and on connection failures, with exponential backoff, honouring `Retry-After` up to `retry.max_retry_after`, all inside the one `timeout`. A TLS failure or any 4xx is never retried. Details in the module docstring of `src/neuralbridge/adapters/apis/rest.py`.
+- **Limits:** the address check does not defend against DNS rebinding; ambient proxies are ignored unless `trust_env` is set. Tested by `tests/test_rest_adapter.py` and `tests/test_rest_adapter_contract.py` against deterministic fixture servers that the tests start on loopback (auth schemes, 401/403/404/429 with Retry-After, 5xx, slow / truncated / oversized / chunked / gzip bodies, redirects, pagination, TLS with a locally generated self-signed certificate). **That is local integration evidence, not third-party production validation:** no vendor API, no real certificate chain, no real rate-limit policy and no DNS has been exercised.
 
 ## What is not claimed
 
-- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by any test in this repository, and REST has only been run against a local HTTP server started by its own test.
+- REST is not reachable from a default deployment (see its section above): a Supported label would need a shipped loader, an operator config format and an end-to-end test through the raw adapters route and the MCP gateway, none of which exist.
+- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by any test in this repository, and REST has only been run against local HTTP servers (deterministic fixtures) started by its own tests (local evidence; no third-party API).
 - The MySQL, MongoDB and BigQuery SDKs are not installed in CI, so those adapters cannot even be imported there; their failure paths are tested with the SDK modules stubbed, which shows our error handling, not that they work.
 - Supported does not mean certified, and an adapter existing is not a claim that an integration with that product is available.

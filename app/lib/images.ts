@@ -167,8 +167,8 @@ export const IMAGES: Record<string, ImageSlot> = {
     a: { src: `${A}/docs-offline-enrolment.jpg`, alt: 'Offline enrolment kit on a plant laptop with outbound Ethernet ports capped.' },
     b: { src: `${B}/docs-offline-enrolment.jpg`, alt: 'Rugged plant PC running a local enrolment kit check with outbound ports capped.' },
   },
-  // src/dashboard — never wired to the homepage "live console"; used only
-  // inside the dashboard app itself (or not at all from app/ yet).
+  // Made for the retired src/dashboard app — never wired to the homepage "live console";
+  // not used from app/ yet.
   'dashboard-empty-connections': {
     a: { src: `${A}/dashboard/dashboard-empty-connections.jpg`, alt: 'Empty industrial gateway faceplate labelled PostgreSQL and REST.' },
     b: { src: `${B}/dashboard/dashboard-empty-connections.jpg`, alt: 'Empty industrial ports labelled PostgreSQL and REST.' },

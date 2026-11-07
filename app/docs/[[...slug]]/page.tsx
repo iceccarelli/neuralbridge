@@ -22,17 +22,20 @@ type DocParams = Promise<{ slug?: string[] }>;
 const accessibleDocHtml = (html: string) =>
   html
     .replace(/<pre>/g, '<pre tabindex="0">')
+    // a wide markdown table scrolls inside its own keyboard-focusable region instead of widening the page
+    .replace(/<table>/g, '<div class="docs-table-scroll" tabindex="0" role="region" aria-label="Table, scrolls sideways"><table>')
+    .replace(/<\/table>/g, '</table></div>')
     .replace(/<li><input disabled="" type="checkbox">([\s\S]*?)<\/li>/g, (_match, rest: string) => {
       const label = rest.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120).replace(/"/g, '&quot;');
       return '<li><input disabled="" type="checkbox" aria-label="' + label + '">' + rest + '</li>';
     });
 
 const HOME_DESCRIPTION =
-  'Industrial Autonomous Assurance documentation: getting started, each assurance engine, the capability table generated from the code, pricing as enforced, and platform status.';
+  'NeuralBridge documentation for Industrial Autonomous Assurance: getting started, each assurance engine, the capability table generated from the code, pricing as enforced, and platform status.';
 
 // The same sentence, kept inside the 120-160 characters a search snippet shows.
 const HOME_META_DESCRIPTION =
-  'Industrial Autonomous Assurance documentation: getting started, each assurance engine, the generated capability table, pricing as enforced and platform status.';
+  'NeuralBridge documentation for Industrial Autonomous Assurance: getting started, each engine, the capability table, pricing as enforced and platform status.';
 
 export async function generateMetadata({ params }: { params: DocParams }): Promise<Metadata> {
   const { slug } = await params;

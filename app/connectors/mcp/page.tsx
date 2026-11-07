@@ -22,6 +22,8 @@ const MCP_TOOLS: McpTool[] = [
   { name: 'evidence_verify', route: 'POST /v1/evidence/verify', tier: 'free', agentWrite: false },
   { name: 'machinery_coverage', route: 'POST /v1/machinery/coverage', tier: 'cell', agentWrite: false },
   { name: 'machinery_passport_check', route: 'POST /v1/machinery/passport/check', tier: 'free', agentWrite: false },
+  { name: 'machinery_export', route: 'GET /v1/machinery/export', tier: 'register', agentWrite: false },
+  { name: 'machinery_passport_check_ledger', route: 'POST /v1/machinery/passport/check-ledger', tier: 'register', agentWrite: false },
   { name: 'fleet_report', route: 'GET /v1/fleet/report', tier: 'cell', agentWrite: false },
   { name: 'register_cases', route: 'GET /v1/cases', tier: 'register', agentWrite: false },
   { name: 'services', route: 'GET /v1/check/services', tier: 'free', agentWrite: false },
@@ -42,6 +44,7 @@ const MCP_TOOLS: McpTool[] = [
   // Read-only: a GET, or a POST that answers a question and records nothing.
   { name: 'spec_fields', route: 'GET /v1/spec/fields', tier: 'free', agentWrite: false },
   { name: 'art14_case', route: 'GET /v1/cases/{case_id}', tier: 'register', agentWrite: false },
+  { name: 'art14_history', route: 'GET /v1/cases/{case_id}/history', tier: 'register', agentWrite: false },
   { name: 'art14_register', route: 'GET /v1/register', tier: 'register', agentWrite: false },
   { name: 'art14_breaches', route: 'GET /v1/register/breaches', tier: 'register', agentWrite: false },
   { name: 'art14_export', route: 'GET /v1/cases/{case_id}/export', tier: 'register', agentWrite: false },

@@ -1,19 +1,11 @@
 # ──────────────────────────────────────────────────────────────
-# NeuralBridge — Multi-stage Production Docker Image
+# NeuralBridge — Production Docker Image
 # ──────────────────────────────────────────────────────────────
-# Stage 1: Build the React dashboard
-# Stage 2: Build the Python application
+# Python application only. The customer workspace is the Next.js site at the repository
+# root (deployed separately, see vercel.json); it is not part of this image.
 # ──────────────────────────────────────────────────────────────
 
-# ── Stage 1: Dashboard Build ─────────────────────────────────
-FROM node:22-alpine AS dashboard-builder
-WORKDIR /app/dashboard
-COPY src/dashboard/package*.json ./
-RUN npm install
-COPY src/dashboard/ ./
-RUN npm run build
-
-# ── Stage 2: Python Application ──────────────────────────────
+# ── Python Application ──────────────────────────────────────
 FROM python:3.11-slim AS production
 
 # Security: run as non-root user
@@ -40,9 +32,6 @@ RUN pip install --no-cache-dir --require-hashes --no-deps -r prod.lock
 COPY src/ /app/src/
 COPY pyproject.toml README.md ./
 
-# Copy built dashboard
-COPY --from=dashboard-builder /app/dashboard/dist /app/static/dashboard
-
 # Install the package itself only; every dependency is already pinned by the lock above
 # (--no-deps keeps pip from resolving anything new).
 RUN pip install --no-cache-dir --no-deps -e .
@@ -60,7 +49,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # Environment
 ENV NEURALBRIDGE_ENV=production \

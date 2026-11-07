@@ -111,6 +111,12 @@ def test_a_named_person_opens_an_nvd_derived_case(world):
     assert cite["observation_seq"] and cite["source"] == "nvd_cve_api"
     assert len(cite["sha256"]) == 64 and cite["retrieved_at"]
     assert any("genuine" in s for s in out["not_established"])
+    # the store was recorded on 2026-10-31: older than the 72 h limit, so the response says so
+    # (a warning: the person may knowingly open a case from older data, as `watch open-case`)
+    fresh = out["store_freshness"]
+    assert fresh["checked"] is True and fresh["status"] == "stale" and fresh["limit_hours"] == 72.0
+    assert out["intel_age_warnings"] and all("may be out of date" in x
+                                             for x in out["intel_age_warnings"])
     # opening decided nothing: nothing is resolved, every re-verification is outstanding
     assert case["resolved_decisions"] == [] and case["required_reverifications"]
     assert [c["case_id"] for c in cases(w)] == [case["case_id"]]

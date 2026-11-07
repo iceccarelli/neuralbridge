@@ -118,6 +118,11 @@ class BaseAdapter(ABC):
     supported_operations: list[str] = []
     #: One of BACKENDS. Unclassified adapters are treated as canned (``mock``) and refused by default.
     backend: str = "mock"
+    #: True only if code shipped in this repository creates and registers the adapter in a running
+    #: platform (a "real" adapter that nothing registers is a library: an operator must wire it in
+    #: code). ``scripts/export_integrations.py`` and the README table read it; a test fails if the
+    #: claim and the registering code disagree.
+    shipped_loader: bool = False
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}

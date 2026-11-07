@@ -1154,7 +1154,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     notEstablished: [
       'That an inventory file is complete or accurate. It is as declared by the source system, nothing was read from a machine, and an item missing from the file is missing from the record.',
       'That deletion removes every copy. Backups, replicas, exports and the account holder’s own copies are outside what the tool removes, and unlinked files are not overwritten.',
-      'That any connector is supported. A file importer is not an adapter, and the REST adapter in the platform layer returns canned data and sends no request.',
+      'That any connector is supported. A file importer is not an adapter, and in the platform layer the REST adapter is a tested library that no shipped loader registers (no deployment uses it unless an operator wires it in), while the other adapter modules are canned stand-ins that refuse to run unless a test opts in.',
       'That a live public-source fetch was exercised by the tests. The one networked step is not covered by the end-to-end pipeline test.',
     ],
     whoActs: [

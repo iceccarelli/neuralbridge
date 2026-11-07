@@ -15,6 +15,9 @@ import LedgerVerifyPanel from './assurance/LedgerVerifyPanel';
 import PassportPanel from './assurance/PassportPanel';
 import { Refusal } from './assurance/PanelFrame';
 import PlanPanel from './assurance/PlanPanel';
+import RegisterPanel from './assurance/RegisterPanel';
+import JourneyNav from './assurance/JourneyNav';
+import WorkspaceHeader, { ASSURANCE_ORIGIN } from './assurance/WorkspaceHeader';
 import { API_BASE, usePanel } from './assurance/usePanel';
 
 // The customer workspace. Every panel is its own request with its own loading, refusal and
@@ -73,6 +76,9 @@ export default function AssuranceWorkspace() {
         </span>
       </div>
 
+      <WorkspaceHeader surface="assurance" origin={ASSURANCE_ORIGIN} me={me} apiKey={key} />
+      <JourneyNav />
+
       {!API_BASE && <Refusal outcome={{ kind: 'unconfigured' }} what="Workspace" />}
       {API_BASE && !key && <p className="console-empty-note">Paste a key to load your fleet and cases.</p>}
 
@@ -119,6 +125,7 @@ export default function AssuranceWorkspace() {
       <LedgerVerifyPanel apiKey={key} me={me} />
       <PassportPanel apiKey={key} actor={actor} setActor={setActor} />
       <IntelPanel apiKey={key} />
+      <RegisterPanel apiKey={key} />
       <PlanPanel apiKey={key} me={me} />
     </div>
   );

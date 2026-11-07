@@ -181,13 +181,20 @@ class TestStatusShowsIntelAges:
         assert "NEVER OBSERVED" in line
         assert "fresh" in next(x for x in out.splitlines() if x.strip().startswith("nvd"))
 
-    def test_no_limit_says_age_not_checked_and_changes_no_exit_code(self, sealed, capsys):
-        last = json.loads(_status_json(self, sealed, _z(T0 + _hours(900)), capsys))
+    def test_no_limit_means_the_default_limit_and_a_stale_store_is_never_quiet(
+            self, sealed, capsys):
+        doc = json.loads(_status_json(self, sealed, _z(T0 + _hours(900)), capsys))
         code = self._status(sealed, _z(T0 + _hours(900)))
         out = capsys.readouterr().out
-        assert "age not checked" in out and "STALE" not in out
-        assert code == _exit_code(last["verdict"])
-        assert last["intel_staleness"]["subscriptions"][0]["age_checked"] is False
+        assert "age not checked" not in out and "STALE" in out
+        assert "default limit 72 h" in out
+        assert code == 2 and doc["verdict"] == "degraded"
+        sub = doc["intel_staleness"]["subscriptions"][0]
+        assert sub["age_checked"] is True and sub["limit_hours"] == 72.0
+        assert sub["limit_basis"] == "default"
+        # inside the default window the same store is fine
+        assert self._status(sealed, _z(T0 + _hours(60))) == _exit_code(
+            json.loads(_status_json(self, sealed, _z(T0 + _hours(60)), capsys))["verdict"])
 
     def test_a_missing_store_uses_the_runners_wording(self, sealed, capsys):
         _set_age(sealed, 24)

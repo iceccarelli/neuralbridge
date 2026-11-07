@@ -16,9 +16,10 @@ introduced without a reason tied to meaning, not mood.
 
 ## Radius
 
-Three sizes only: `--radius-sm` (buttons, small controls), `--radius-md`
-(tiles, solution cards), `--radius-lg` (pricing cards — the highest-stakes
+Three sizes only: `--radius-sm` (buttons, tags, small controls), `--radius-md`
+(tiles, cards, tables), `--radius-lg` (pricing cards — the highest-stakes
 surface on the page gets the most generous curve). Don't invent a fourth.
+`--radius-pill` is the one non-box shape, for status pills only.
 
 ## Elevation
 
@@ -53,16 +54,62 @@ Prices use `font-variant-numeric: tabular-nums` (`.price-amount`) so digits
 don't shift width as a user compares tiers — a detail that matters more on
 a pricing page than almost anywhere else on the site.
 
+## Identity: company and product
+
+NeuralBridge is the company and platform; Industrial Autonomous Assurance is
+its flagship product. The header lockup is the mark `NB`, the word
+`NeuralBridge` and, beneath it, the product name (`.brand-text`,
+`.brand-name`, `.brand-product`). `BRAND`, `PRODUCT` and `BRAND_SHORT` in
+`app/lib/seo.ts` are the only place the names are spelled for metadata: page
+titles end `| NeuralBridge`, `og:site_name` is NeuralBridge, the Organization
+node is NeuralBridge and the WebSite node carries the product as
+`alternateName`. Never use the product name as if it were the company, or the
+reverse.
+
+The look is an engineering document, not a SaaS dashboard: navy chrome, white
+reading surfaces, hairline rules for structure, a mono face for labels and
+numbering, and orange only for the one primary action. No gradients as
+decoration beyond the existing hero, no glassy cards, no invented screenshots
+or metrics. A diagram is drawn in HTML (`.flow`) so it stays legible at 390px
+and reads as a list to a screen reader.
+
+## Type scale and space
+
+Eight steps, `--fs-xs` (0.75rem) to `--fs-2xl` (1.75rem), plus `--mono`. Every
+`font-size` in `globals.css` is one of them, or a `clamp()` for a page title;
+the caret glyph and the brand subline are the only literal exceptions. Space
+is `--space-1` to `--space-6`; section rhythm and gaps in new rules use it.
+Text on the navy scale is `--on-dark` / `--on-dark-soft` / `--code-ink`, never a
+fresh hex.
+
+## The document layer
+
+New pages are built from a small set of parts at the end of `globals.css`,
+not from more card grids:
+
+- `.page-hero` — a short navy header with `h1`, one paragraph and a `.toc`.
+- `.ruled` — heading column plus body column between hairlines; the default
+  way to list problems, deliverables, limits.
+- `.cmp` in `.cmp-wrap` — a comparison table (scrolls inside a focusable
+  region below 640px).
+- `.paths` — role doors; `.journey` — numbered steps with the state of each.
+- `.tag` with `is-live` (green), `is-offline` (blue), `is-gap` (orange, by
+  request or needs an API) and `is-none` (dashed, not available). A tag says
+  where something runs or that it does not exist; it is never decoration.
+- `.note-box` — a limits or read-this-first block. `.flow` — numbered diagram.
+- `Inline` (`app/components/Inline.tsx`) turns `` `code` `` spans in data strings into `<code>`.
+
+Copy that states availability lives in import-free data modules
+(`app/lib/journey.ts` is the exception because it reads `HOSTED_API`;
+`app/lib/services.ts`, `productPages.ts`) so tests can read it.
+
 ## What this system does *not* yet cover
 
-The tokens above are wired into the components most people interact with
-first — buttons, tiles, solution cards, pricing cards, and the global focus
-ring. Older, lower-traffic parts of `globals.css` (mega-nav internals,
-search overlay, cookie consent) still carry hand-rolled
-`border-radius`/`box-shadow` values from earlier stages. Migrating those to
-the tokens is real, low-risk follow-up work — do it opportunistically
-whenever you're already touching one of those selectors, rather than as a
-separate sweep that touches nothing else.
+Normalised so far: radii (all box radii are tokens), the font-size scale,
+dark-surface text colours. Not yet: the mega-nav, search overlay and cookie
+banner still carry hand-written `box-shadow` values (six distinct), and about
+twenty literal hex values remain for hover and tint states on dark and pale
+surfaces. Move them to tokens when you touch those selectors.
 
 ## Imagery
 
@@ -108,16 +155,21 @@ different images.
 - `priority` — only the single LCP-critical hero image on a page. Every
   other instance lazy-loads.
 
-**Mobile heroes**: `.hero-media-desktop` / `.hero-media-mobile` are shown
+**The home page hero carries no photographic image**: it is the statement,
+the actions and the `.flow` diagram, so the largest paint is text. The two
+landing-hero slots remain in `images.ts` for the offline-kit band lower on the
+page. A page that renders no `priority` image is correct.
+
+**Mobile heroes** (where a hero does use a slot): `.hero-media-desktop` / `.hero-media-mobile` are shown
 and hidden by the same 900px breakpoint the mega-nav already uses. Below
 900px, a hero renders its `portraitA` (4:5) as a single image — never a
 squashed 16:9 crop, and never rotating (there is no portrait B).
 
-**Where art does *not* go**: the three `dashboard-*` slots belong to
-`src/dashboard`'s own UI (a separate app), not the marketing site — and are
+**Where art does *not* go**: the three `dashboard-*` slots were made for the
+retired `src/dashboard` app (now folded into the workspace screens) and are
 never used to depict a unified "live console" on the homepage. The
 homepage's own ai-ops proof tile uses `solution-aiops-dashboard-unwired`,
-which depicts the dashboard's disconnected, honest empty state on purpose.
+which depicts a disconnected, honest empty state on purpose.
 
 **OG image**: unaffected. `app/opengraph-image.tsx` (code-generated from
 these same design tokens) stays the canonical `og:image`/`twitter:image` —

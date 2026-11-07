@@ -705,6 +705,9 @@ class CoverageReport:
 UNDATABLE_PREFIX = "undatable:"
 #: ``invalidated_by`` of a function whose verification states it ran on another configuration.
 CONFIG_MISMATCH_PREFIX = "configuration:"
+#: ``invalidated_by`` of a function whose verification does not state which configuration it ran
+#: against. Such a verification is never ``current``: see :func:`assess_coverage`.
+UNBOUND_PREFIX = "unbound:"
 
 
 def _fail_time(v: VerificationRecord) -> datetime:
@@ -944,8 +947,9 @@ def assess_coverage(
                     "configuration does not show this one: run it again."),
             ))
             continue
-        for v in used.values():
-            if not v.configuration_hash and v.content_hash not in unbound:
+        no_binding = [v for v in used.values() if not v.configuration_hash]
+        for v in no_binding:
+            if v.content_hash not in unbound:
                 unbound.append(v.content_hash)
         if undatable and not after:
             # Verified, but only by a pass nobody can date: it cannot be shown to describe
@@ -965,6 +969,30 @@ def assess_coverage(
             ))
             continue
 
+        if no_binding and not after:
+            # Every manifest has a configuration hash, so a verification that does not say which
+            # one it ran against cannot be tied to THIS machine's configuration by anything but
+            # dates, and a change nobody recorded and no manifest shows would not move a date.
+            # Currency is never inferred from that: the function is stale (re-run it with the
+            # configuration hash, which binds it), never current.
+            coverages.append(FunctionCoverage(
+                function_id=fn.function_id, description=fn.description,
+                required_performance=fn.required_performance,
+                coverage=Coverage.STALE, checks=tuple(sorted(checks)),
+                last_verified_hash=last_good.content_hash,
+                last_verified_at=format_utc(last_good.effective_at),
+                invalidated_by=f"{UNBOUND_PREFIX}{no_binding[0].content_hash[:12]}",
+                detail=(
+                    f"verified only by {', '.join(v.content_hash[:12] for v in no_binding)} "
+                    f"(filed {format_utc(last_good.effective_at)[:10]}), which does not state "
+                    "which machine configuration it was run against. This machine's manifest "
+                    f"is configuration {current_cfg[:12]}; nothing but dates would tie the two, "
+                    "and a passing result that cannot be tied to the configuration is not "
+                    "counted as current. Run the verification again with its configuration "
+                    "hash (`machine verify --configuration-hash`, or `configuration_hash` on "
+                    "POST /v1/machine/verify)."),
+            ))
+            continue
         if not after:
             current_tiers.append(weakest)
         if _TIER_RANK.get(weakest, 0) < _TIER_RANK["validated"] and not after:
@@ -1042,13 +1070,13 @@ def assess_coverage(
         )
     if unbound:
         caveats.append(
-            "currency is judged by TIME ONLY for the verification(s) "
-            + ", ".join(h[:12] for h in unbound)
-            + ": none states which machine configuration it was run against, so nothing but "
-            "the dates ties it to the manifest's configuration "
-            f"({current_cfg[:12]}). A change nobody recorded and no manifest shows would not "
-            "make it stale. Seal verifications with their configuration hash "
-            "(`machine verify --configuration-hash`) to bind them.")
+            "verification(s) " + ", ".join(h[:12] for h in unbound)
+            + " state no machine configuration, so they are NOT counted as current for the "
+            f"manifest's configuration ({current_cfg[:12]}): nothing but the dates would tie "
+            "them to it, and a change nobody recorded and no manifest shows would not move a "
+            "date. Seal verifications with their configuration hash "
+            "(`machine verify --configuration-hash`, `configuration_hash` over HTTP and MCP) to "
+            "bind them.")
     for v in verifs:
         if v.tier_note:
             caveats.append(

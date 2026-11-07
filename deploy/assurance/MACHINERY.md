@@ -390,14 +390,35 @@ every machine as `gaps` with `chain_verified: false`.
 
 | state | meaning |
 |---|---|
-| `current` | a passing verification exists and nothing since has disturbed it |
-| `stale` | it was verified, and a later intervention invalidated that verification |
+| `current` | a passing verification exists, **states the configuration it ran against, and that is the manifest's**, and nothing since has disturbed it |
+| `stale` | it was verified, and a later intervention invalidated that verification; or the verification ran against another configuration (`configuration:<hash>`); or it states **no configuration at all** (`unbound:<hash>`); or it cannot be dated (`undatable:<hash>`) |
 | `failing` | the newest run of one of its checks did not pass it |
 | `never_verified` | at least one check it declares has never been verified |
 | `not_demonstrable` | the function declares no checks, so nothing could cover it |
 
 Only `current` counts as covered. `not_demonstrable` is not a pass — it is the
 system telling you it has nothing to say.
+
+### An unbound verification is never current
+
+A verification may state the configuration it was run against (`machine verify
+--configuration-hash H`; `configuration_hash` on `POST /v1/machine/verify` and the
+`machine_verify` MCP tool; `H` is the manifest's `configuration_hash`, which
+`POST /v1/machinery/manifest`, `machinery diff` and `collect run --json` print). Every
+manifest has a configuration hash, so a verification that states none cannot be tied to
+THIS machine's configuration by anything but dates, and a change nobody recorded and no
+manifest shows would not move a date. It therefore reads **`stale`** with
+`invalidated_by: unbound:<verification hash>` and the coverage report carries a caveat
+naming the verification. The fix is to run (or re-seal) the verification with its
+configuration hash. The fleet, the passport, the check pipeline, the value position and
+change cases all read this one state: nothing is ever "covered" on an unbound verification.
+
+*Migration / compatibility.* Before this change an unbound verification was judged by time
+only, with a caveat ("TIME ONLY"), and could read `current`. Existing sealed bundles are
+untouched (the sealed body is exactly what older builds wrote) but a ledger whose only
+evidence is unbound now reads `stale` until a bound verification is sealed; nothing is
+deleted and no switch restores the old reading. A verification's own sealed
+`configuration_hash` is the filer's statement; it is never inferred from the ledger.
 
 ## Intervention records
 
@@ -437,6 +458,20 @@ assurance machinery check passport.json --ledger register.db
 over HTTP, free and unmetered for anyone, for the same reason the verification
 bundle checker is free: a passport only its vendor can verify is a certificate,
 not evidence.
+
+`POST /v1/machinery/passport/check-ledger` (Cell, not metered, read-only; MCP
+`machinery_passport_check_ledger`) is the authenticated twin of `machinery check --ledger`:
+it reads the CALLER'S OWN ledger and applies the same rules, including **superseded**
+(a later look at another configuration, a later declared baseline or a recorded change makes
+the passport not ok). `checked.against_ledger` is `true` there and `false` on the free route,
+which cannot see that a passport was overtaken.
+
+A machine's records can be exported over HTTP with `GET /v1/machinery/export?machine=
+maker/model#serial` (Cell; MCP `machinery_export`): the same verifiable bundle as the case
+exports, for the machine's own ledger subject (manifests, changes, verifications, passports),
+checkable with `assurance evidence verify`. The key is a query parameter because it holds `/`
+and `#`. A lapsed subscription answers 402 here (the four case read-out routes are the only
+ones kept after a lapse).
 
 Checking a passport with no ledger returns `ok` **with** a stated limitation, not
 a clean pass. The seal proves the file was not edited. It does not prove the

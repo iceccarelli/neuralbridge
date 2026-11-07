@@ -431,6 +431,16 @@ tenant, a machine or a serial: any key it names can attest any serial for any ac
 is a hash, not a signature: whoever can write the ledger file can reseal a body with another
 `unit_key`. An attestation proves what a key signed, not that the machine is safe.
 
+### Binding a verification to the configuration it ran against
+
+`POST /v1/machine/verify` (and the `machine_verify` MCP tool) take an optional
+`configuration_hash` (64 hex digits: the machine manifest's `configuration_hash`), as
+`machine verify --configuration-hash` does on the CLI. It is the filer's statement, sealed
+into the bundle. Without it the verification is **unbound**: coverage never reads a safety
+function `current` on it (only `stale`, `unbound:<hash>`), and the response says so
+(`configuration_bound: false`, `configuration_note`). See `MACHINERY.md`, "An unbound
+verification is never current", for the migration note.
+
 ### Sealing, replay and the checker
 
 The sealed body (engine 6) records the assessment (`recorder_attestation`: statuses,

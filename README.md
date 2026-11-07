@@ -212,7 +212,7 @@ src/assurance/        the product
   bridge/             supplier advisory -> Article 14 intake
   api/                FastAPI surface, billing, entitlements
 src/neuralbridge/     the integration platform this grew out of (below)
-src/dashboard/        Vite/React admin UI (not wired to the assurance API)
+app/                  the Next.js site and customer workspace (/assurance, /console, /ai)
 ```
 
 ```bash
@@ -246,7 +246,7 @@ The project is intentionally being narrowed so that users can clone it, understa
 | **Backend API** | A FastAPI service for connections, management, and tool exposure |
 | **Integration Layer** | A small set of adapter-driven connection patterns |
 | **MCP Gateway** | A common access layer for tool listing and invocation |
-| **Dashboard** | A basic UI for managing and understanding connections |
+| **Customer workspace** | The Next.js site: `/assurance` (fleet, cases, evidence), `/ai` (data sources, adapters, audit log) and `/console` (REST console), each reading the real API |
 | **Auditability** | A practical audit trail for system actions |
 | **Security Foundations** | Authentication and authorization building blocks that are being tightened over time |
 
@@ -261,8 +261,8 @@ This README therefore focuses on the smaller product that the repository can gro
 | FastAPI backend | **Supported** |
 | Connection management model | **Supported as a core direction** |
 | MCP tool listing / invocation layer | **Supported** |
-| Dashboard foundation (separate Vite admin UI, not wired to the assurance API) | **Experimental / evolving** |
-| Basic audit trail (in memory by default; cleared on restart) | **Experimental / evolving** |
+| Customer workspace (the Next.js site: /assurance, /console, /ai, reading the real APIs) | **Experimental / evolving** |
+| Basic audit trail (durable, append-only, hash-chained SQLite by default) | **Experimental / evolving** |
 | Small set of working adapters | **Intended supported scope** |
 | Broad adapter ecosystem | **Experimental / evolving** |
 | Full enterprise compliance posture | **Not part of the core promise yet** |
@@ -281,7 +281,7 @@ The way to describe NeuralBridge today is this:
 That is a narrower claim than the original vision, but it is a stronger foundation. The current priority is not maximum breadth. It is a smaller platform that can be run, tested, and understood end-to-end.
 
 ## Architecture Overview
-The architecture is intentionally straightforward. External systems are connected through adapter logic, exposed through backend services, and surfaced to users or AI workflows through a gateway and dashboard.
+The architecture is intentionally straightforward. External systems are connected through adapter logic, exposed through backend services, and surfaced to users or AI workflows through a gateway and the customer workspace.
 
 ```mermaid
 flowchart TB
@@ -289,14 +289,14 @@ flowchart TB
     B --> C[Connection Management]
     C --> D[FastAPI Backend]
     D --> E[MCP Gateway]
-    D --> F[Dashboard]
+    D --> F[Customer workspace]
     D --> G[Audit Trail]
     D --> H[Auth and Access Control]
     E --> I[AI Workflows and Tools]
     F --> J[Operators and Developers]
 ```
 
-This is the core mental model for the repository: adapters connect systems, the backend organizes them, the gateway exposes them, and the dashboard makes them easier to manage.
+This is the core mental model for the repository: adapters connect systems, the backend organizes them, the gateway exposes them, and the customer workspace makes them easier to manage.
 
 ## Request Flow
 The following flow shows the intended path for a typical system interaction.
@@ -304,7 +304,7 @@ The following flow shows the intended path for a typical system interaction.
 ```mermaid
 sequenceDiagram
     participant User as User or Operator
-    participant UI as Dashboard or Client
+    participant UI as Workspace or Client
     participant API as NeuralBridge API
     participant GW as MCP Gateway
     participant AD as Adapter
@@ -334,7 +334,7 @@ This diagram is not meant to imply that every supported path is fully mature tod
 | `src/neuralbridge/core` | Gateway and orchestration-related logic |
 | `src/neuralbridge/security` | Authentication, RBAC-related code, audit logic, and sandbox-related foundations |
 | `src/neuralbridge/compliance` | Compliance-oriented utilities that are still evolving |
-| `src/dashboard` | Frontend interface for managing and understanding connections |
+| `app/` | The Next.js site and customer workspace (`/assurance`, `/ai`, `/console`); the former `src/dashboard` Vite app was retired into it |
 
 ## Adapter Strategy
 NeuralBridge contains a broad set of adapter files, but the project is being repositioned around a **smaller supported subset**. That means the most useful short-term direction is to clearly distinguish what is **supported now** from what is **planned or experimental**.
@@ -352,13 +352,13 @@ The project should aim to support a few adapters very well before claiming broad
 Other adapters may remain in the repository, but they should be described as **experimental**, **in progress**, or **planned** until they are covered by clear setup instructions and repeatable tests.
 
 ## Adapter Status
-Every adapter states exactly one of **Supported** (real, and a test exercises it against a real or locally emulated service), **Evolving** (a real client path exists but no test has run it against a live service) or **Not implemented** (canned data only; refused by default). The status comes from each adapter's `backend` attribute; `tests/test_integrations_directory.py` fails if this table and the code disagree. Details: [docs/integrations.md](docs/integrations.md).
+Every adapter states exactly one of **Supported** (real, a test exercises it against a real or locally emulated service, and code shipped here registers it in a running platform), **Library only** (real and tested the same way, but nothing shipped registers it: an operator must register it in code), **Evolving** (a real client path exists but no test has run it against a live service) or **Not implemented** (canned data only; refused by default). The status comes from each adapter's `backend` attribute; `tests/test_integrations_directory.py` fails if this table and the code disagree. Details: [docs/integrations.md](docs/integrations.md).
 
 | Adapter | Status | Evidence |
 |---|---|---|
 | `graphql` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `odata` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
-| `rest` | Supported | Real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key). Exercised against a local HTTP server started by `tests/test_rest_adapter.py`; not run against any third-party API. |
+| `rest` | Library only | Not wired: no shipped code creates or registers it (an operator must `registry.register(RestApiAdapter({...}), key="rest")` in code; by default `/adapters/rest/*` answers unknown adapter, and once registered every call needs the `ai_control_plane` entitlement). The adapter itself is real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key, TLS verification with an optional pinned CA, opt-in bounded retries of idempotent methods honouring Retry-After). Exercised against deterministic fixture servers started by `tests/test_rest_adapter.py` and `tests/test_rest_adapter_contract.py` (local evidence only); not run against any third-party API. |
 | `soap` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `aws_s3` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `azure_blob` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
@@ -367,7 +367,7 @@ Every adapter states exactly one of **Supported** (real, and a test exercises it
 | `bigquery` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
 | `mongodb` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
 | `mysql` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
-| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` (needs a server; fails, not skips, in CI). |
+| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` and `tests/test_postgres_adapter_failures.py` (read-only transactions, statement timeout, connection loss, permission errors, pool exhaustion, password rejection; need a server; fail, not skip, in CI). Local evidence only: no managed service, pooler or other version. |
 | `snowflake` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `sap_erp` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `salesforce` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
@@ -380,7 +380,7 @@ Every adapter states exactly one of **Supported** (real, and a test exercises it
 | `notion` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 
 ## Installation
-The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend and dashboard treated as explicit development components.
+The recommended way to work with NeuralBridge right now is from source, in a clean virtual environment, with the backend (and, for the web workspace, the Next.js site in `app/`) treated as explicit development components.
 
 ### Backend Setup
 ```bash
@@ -391,15 +391,16 @@ source .venv/bin/activate
 pip install -e ".[dev]"      # platform + assurance API + MCP gateways + test tools
 ```
 
-### Dashboard Setup
-If you want to work with the frontend, install the dashboard dependencies separately from within the dashboard directory according to the project’s frontend setup.
+### Workspace Setup
+The customer workspace is the root Next.js app. From the repository root:
 
 ```bash
-cd src/dashboard
-pnpm install
+npm ci
+NEXT_PUBLIC_ASSURANCE_API_URL=http://127.0.0.1:8001 \
+NEXT_PUBLIC_NEURALBRIDGE_API_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-The exact dashboard startup command should follow the frontend package configuration currently checked into the repository.
+A screen whose API address is not set says so and stays disabled; it never simulates an answer.
 
 ## Quick Start
 The intended quick start for NeuralBridge is a small local workflow that proves the core system path.
@@ -415,8 +416,8 @@ Then open:
 http://localhost:8000/docs
 ```
 
-### 2. Start the Dashboard
-Run the dashboard locally from `src/dashboard` using the project’s configured frontend development command.
+### 2. Start the Workspace
+Run `npm run dev` at the repository root (see Workspace Setup) and open `/ai`.
 
 ### 3. Verify the Core Path
 The most valuable first-run checks are the following:
@@ -471,7 +472,7 @@ neuralbridge/
 │ ├── core/
 │ ├── security/
 │ └── utils/
-├── src/dashboard/
+├── app/
 ├── tests/
 ├── docs/
 ├── examples/
@@ -498,17 +499,15 @@ The most valuable tests for the reduced-scope version of the project are:
 | Audit trail behavior | Proves system actions are traceable |
 | Auth and access control | Protects the minimum secure boundary |
 
-## Dashboard Role
-The dashboard is a meaningful part of the developer and operator experience, but its role should stay grounded in the supported product scope.
+## Web Workspace Role
+There is one customer interface: the Next.js site in `app/`. Its workspace screens (`/assurance`, `/console`, `/ai`) call the real APIs and show which account, plan, API origin and environment they are talking to. The separate Vite dashboard that used to live in `src/dashboard` showed illustrative numbers and was retired; what had real value moved into the workspace on real endpoints.
 
-Today, the dashboard is best understood as a way to:
-
-| Dashboard Role | Meaning |
+| Workspace role | Meaning |
 |---|---|
-| Visualize available system functions | Help users understand the platform |
-| Create and inspect connections | Support the core connection model |
-| Manage supported integration paths | Focus attention on what actually works |
-| Complement the API, not replace reality | Keep the UI aligned with the backend |
+| Show what the API actually returns | No figure is shown that a backend measure does not back; demonstration data is labelled |
+| Create and inspect connections | Bind a PostgreSQL database (`POST /ai/connections`), see whether this server holds its adapter |
+| Read the audit trail and the Article 14 register | On request, from the authorised endpoints, with loading, empty, refused, unreachable and stale states |
+| Follow the machine lifecycle | Enrol, collect, verify, advisory, human decision, re-verify, passport; each step says whether it is hosted on this deployment or runs on your machine |
 
 ## Roadmap Direction
 The long-term direction remains broader than the current public promise, but the order matters. NeuralBridge should first become a dependable small platform before it becomes a broad one.
@@ -517,7 +516,7 @@ The long-term direction remains broader than the current public promise, but the
 flowchart LR
     A[Stable Backend Runtime] --> B[Small Adapter Set]
     B --> C[Gateway and Audit Reliability]
-    C --> D[Cleaner Dashboard Experience]
+    C --> D[Clearer Workspace Experience]
     D --> E[Stronger Security Boundaries]
     E --> F[Broader Adapter Expansion]
     F --> G[Advanced Compliance Features]

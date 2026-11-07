@@ -38,9 +38,10 @@ def ledger(tmp_path):
 
 def _seal(ledger, *, configuration_hash=""):
     env, run = _inputs(WHEN)
-    extra = {"configuration_hash": configuration_hash} if configuration_hash else {}
+    # Always passed, "" included: tests/support_recorder.py binds a verification to the ledger's
+    # manifest unless told otherwise, and "" is how a test seals an UNBOUND one on purpose.
     return build_attested_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key,
-                                 **extra)
+                                 configuration_hash=configuration_hash)
 
 
 def _report(ledger, m):
@@ -94,7 +95,11 @@ class TestABoundVerification:
         assert len(ledger) == 0
 
 
-class TestAnUnboundVerificationSaysSo:
+class TestAnUnboundVerificationIsNeverCurrent:
+    """A verification that states no configuration used to be judged by time alone, with a
+    caveat. For a machine whose manifest carries a configuration hash (every manifest does) that
+    let a change nobody recorded keep a function ``current``. It now reads ``stale``."""
+
     def test_the_body_is_exactly_what_older_builds_sealed(self, ledger):
         bundle = _seal(ledger)
         assert "configuration_hash" not in bundle.evidence.body
@@ -102,15 +107,48 @@ class TestAnUnboundVerificationSaysSo:
         assert record.configuration_hash == ""
         assert "configuration_hash" not in record.to_dict()
 
-    def test_currency_is_by_time_only_and_the_report_says_so(self, ledger):
+    def test_it_is_stale_not_current_and_says_how_to_bind_it(self, ledger):
         m = manifest()
         record_manifest(ledger, m)
         bundle = _seal(ledger)
         rep = _report(ledger, m)
-        assert {f.coverage for f in rep.functions} == {Coverage.CURRENT}    # unchanged
-        note = next(c for c in rep.checks_skipped if "TIME ONLY" in c)
-        assert bundle.content_hash[:12] in note
+        assert {f.coverage for f in rep.functions} == {Coverage.STALE}
+        assert Coverage.CURRENT not in {f.coverage for f in rep.functions}
+        stale = rep.functions[0]
+        assert stale.invalidated_by == f"unbound:{bundle.content_hash[:12]}"
+        assert "does not state which machine configuration" in stale.detail
+        assert "configuration hash" in stale.detail and "Run the verification again" in stale.detail
+        note = next(c for c in rep.checks_skipped if "state no machine configuration" in c)
+        assert bundle.content_hash[:12] in note and "NOT counted as current" in note
 
-    def test_no_note_when_nothing_is_current_on_it(self, ledger):
+    def test_a_newer_bound_verification_restores_the_cover(self, ledger):
+        m = manifest()
+        record_manifest(ledger, m)
+        _seal(ledger)
+        _seal(ledger, configuration_hash=m.configuration_hash())
+        rep = _report(ledger, m)
+        assert {f.coverage for f in rep.functions} == {Coverage.CURRENT}
+
+    def test_an_intervention_is_still_the_explanation_when_there_is_one(self, ledger):
+        m = manifest()
+        record_manifest(ledger, m)
+        _seal(ledger)
+        rep = assess_coverage(
+            m, VerificationRecord.from_ledger(ledger, subject=MACHINE.key),
+            interventions_from_ledger(ledger, MACHINE.key))
+        assert all(f.coverage is not Coverage.CURRENT for f in rep.functions)
+
+    def test_no_note_when_nothing_rests_on_it(self, ledger):
         rep = _report(ledger, manifest())
-        assert not any("TIME ONLY" in c for c in rep.checks_skipped)
+        assert not any("state no machine configuration" in c for c in rep.checks_skipped)
+
+    def test_the_fleet_never_calls_a_unit_with_only_unbound_evidence_covered(self, ledger):
+        from assurance.fleet.registry import Fleet
+
+        m = manifest()
+        record_manifest(ledger, m)
+        _seal(ledger)
+        fleet = Fleet.from_ledger(ledger)
+        summary = fleet.summary()
+        assert summary.covered == 0 and summary.covered_at_community == 0
+        assert summary.with_gaps == 1

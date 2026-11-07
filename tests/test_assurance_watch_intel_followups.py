@@ -26,7 +26,12 @@ from assurance.evidence.ledger import EvidenceLedger
 from assurance.intel.fetch import ingest_bytes
 from assurance.intel.sources import SOURCES, nvd_url
 from assurance.watch.cli import main
-from assurance.watch.config import IntelSubscription, WatchConfig, WatchError
+from assurance.watch.config import (
+    DEFAULT_SOURCE_MAX_AGE_HOURS,
+    IntelSubscription,
+    WatchConfig,
+    WatchError,
+)
 from assurance.watch.runner import run_watch
 
 from .intel_support import dump, epss_doc, fixture_json, kev_doc
@@ -86,10 +91,12 @@ class TestConfigMaxAge:
         with pytest.raises(WatchError, match="max_age_hours"):
             IntelSubscription.from_dict({"store": "i.db", "max_age_hours": bad})
 
-    def test_absent_means_not_checked_and_keeps_the_hash(self, plant):
+    def test_absent_means_the_default_limit_and_keeps_the_hash(self, plant):
         _set_age(plant, None)
         c = WatchConfig.from_json(plant["dir"] / "watch.json")
         assert c.intel[0].max_age_hours is None
+        assert c.intel[0].effective_max_age_hours == DEFAULT_SOURCE_MAX_AGE_HOURS == 72.0
+        assert c.intel[0].limit_basis == "default"
         assert "max_age_hours" not in c.intel[0].to_dict()
         _set_age(plant, 24)
         c2 = WatchConfig.from_json(plant["dir"] / "watch.json")
@@ -130,13 +137,22 @@ class TestStaleness:
         assert self._feed(_run(plant, T0 + _hours(24) + timedelta(seconds=1),
                                seal=False)).status == "stale"
 
-    def test_without_a_limit_the_run_says_age_was_not_checked(self, plant):
+    def test_without_a_limit_the_default_applies_and_is_recorded(self, plant):
         _set_age(plant, None)
-        run = _run(plant, T0 + _hours(5000))            # absurdly old: still not judged
-        assert self._feed(run).status == "verified"
-        text = " ".join(run.checks_skipped)
-        assert "age of the intel store was NOT checked" in text
-        assert "silently stopped" in text
+        fresh = _run(plant, T0 + _hours(70), seal=False)
+        assert self._feed(fresh).status == "verified"
+        assert self._feed(fresh).age["limit_hours"] == 72.0
+        assert self._feed(fresh).age["limit_basis"] == "default"
+        assert "NOT checked" not in " ".join(fresh.checks_skipped)
+        run = _run(plant, T0 + _hours(5000))            # absurdly old: judged, never quiet
+        out = self._feed(run)
+        assert out.status == "stale" and run.verdict == "degraded"
+        assert "limit is 72 h" in " ".join(out.problems)
+        assert "conservative default" in " ".join(run.checks_skipped)
+
+    def test_an_explicit_limit_is_recorded_as_explicit(self, plant):
+        out = self._feed(_run(plant, T0 + _hours(2), seal=False))
+        assert out.age["limit_hours"] == 24.0 and out.age["limit_basis"] == "explicit"
 
     def test_with_a_limit_the_run_says_what_the_clock_is(self, plant):
         text = " ".join(_run(plant, T0).checks_skipped)
@@ -238,7 +254,8 @@ def seen(tmp_path):
     """A plant whose machines are sealed, the finding announced once (run 1)."""
     p = _plant(tmp_path)
     _fill_at(p["store"])
-    first = run_watch(WatchConfig.from_json(p["dir"] / "watch.json"), p["ledger"])
+    first = run_watch(WatchConfig.from_json(p["dir"] / "watch.json"), p["ledger"],
+                      now=T0 + _hours(2))
     assert first.advisories.new
     p["id"] = f"nvd:{CVE}"
     return p
@@ -368,7 +385,8 @@ class TestOpenCase:
 
     def test_the_runner_then_shows_it_outstanding_not_new(self, seen):
         assert _open(seen) == 0
-        run = run_watch(WatchConfig.from_json(seen["dir"] / "watch.json"), seen["ledger"])
+        run = run_watch(WatchConfig.from_json(seen["dir"] / "watch.json"), seen["ledger"],
+                        now=T0 + _hours(3))
         assert run.advisories.new == ()
         assert [f.state for f in run.advisories.findings] == ["outstanding"]
         assert run.verdict == "quiet"

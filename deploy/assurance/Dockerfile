@@ -47,11 +47,26 @@ ENV PYTHONPATH=/app \
 
 EXPOSE 8080
 
+# Container-level liveness only (the process answers); readiness is /healthz and is deliberately
+# not what Docker restarts on. No curl in the slim image, so the standard library does the GET.
+# Not exercised by a docker build in this repository's sandbox (no daemon); the same URL is what
+# the CI assurance-image job requests with scripts/smoke_assurance_service.py.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/livez', timeout=4).status == 200 else 1)"]
+
 # One worker, on purpose. The evidence ledger and the account store are SQLite
 # on a single volume; a second process on a second machine would fork the
 # evidence chain, which is the precise failure this package was written to
 # prevent. Scale by making the machine bigger, or move the stores to Postgres
 # first.
+#
+# What is and is not known about more than one worker ON ONE HOST (tests/test_multiworker_real.py
+# starts real `--workers 4` processes over a shared volume): concurrent appends keep one valid
+# hash chain, concurrent first writes to new tenant ledgers do not corrupt, the daily allowance is
+# exact. Not covered: a network filesystem (SQLite locking is not reliable there), and the
+# per-process limiters (the checkout/claim throttles and the Stripe call budget are in memory, so
+# N workers admit N times the configured rate). That is why this stays 1 until someone decides
+# otherwise; the test shows it is not blocked by chain safety.
 #
 # Proxy headers: uvicorn's `--proxy-headers` is ON by default, but it trusts
 # `X-Forwarded-For` / `X-Forwarded-Proto` only from the addresses in

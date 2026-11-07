@@ -2,7 +2,7 @@
 NeuralBridge Adapter Management Routes.
 
 CRUD endpoints for registering, configuring, and invoking adapters.
-Business users interact with these endpoints through the React dashboard;
+People use the web workspace (the /ai, /console and /assurance screens of the site);
 agents interact via the MCP gateway (which delegates here internally).
 """
 
@@ -13,16 +13,18 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from neuralbridge.ai.audit_events import gate_validate_with_audit, gate_with_audit
 from neuralbridge.ai.entitlements import Principal, current_principal, scope_for
-from neuralbridge.ai.guard import enforce_write_gate, is_connection_key
+from neuralbridge.ai.guard import is_connection_key
 from neuralbridge.ai.identity import Actor, get_current_actor
 from neuralbridge.api.dependencies import (
     get_adapter_registry,
     get_audit_logger,
     get_request_router,
 )
-from neuralbridge.core.router import AdapterRegistry, RequestRouter
-from neuralbridge.security.audit import AuditLogger
+from neuralbridge.core.router import AdapterRegistry, AdapterTimeoutError, RequestRouter
+from neuralbridge.security.audit import AuditLogger, AuditUnavailableError, redact_text
+from neuralbridge.security.limits import ResourceLimitError
 
 router = APIRouter(prefix="/adapters")
 
@@ -38,7 +40,7 @@ class AdapterCreateRequest(BaseModel):
 
 class AdapterExecuteRequest(BaseModel):
     """Payload for executing an operation on a registered adapter."""
-    operation: str = Field(..., description="Operation name (e.g. 'query', 'send_message').")
+    operation: str = Field(..., max_length=128, description="Operation name (e.g. 'query', 'send_message').")
     params: dict[str, Any] = Field(default_factory=dict, description="Operation parameters.")
 
 
@@ -139,7 +141,10 @@ async def execute_adapter(
     unaffected by that gate (see the guard module's own docstring for why).
     """
     _hide_connection_key(adapter_type, principal)
-    await enforce_write_gate(adapter_type, request.operation, request.params, principal)
+    await gate_with_audit(
+        audit, surface="adapters_route", actor=actor.as_audit_string(), adapter_type=adapter_type,
+        operation=request.operation, params=request.params, principal=principal,
+    )
     try:
         result = await router_dep.route(
             adapter_type=adapter_type,
@@ -149,32 +154,63 @@ async def execute_adapter(
             owner=scope_for(principal).owner,
         )
         return result
+    except AuditUnavailableError:
+        raise  # -> 503 audit_unavailable (app-level handler)
+    except ResourceLimitError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"error": exc.code, "message": str(exc)},
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except AdapterTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ConnectionError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=redact_text(str(exc))) from exc
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact_text(str(exc))) from exc
 
 
 @router.post("/{adapter_type}/validate", summary="Validate adapter credentials")
 async def validate_credentials(
     adapter_type: str,
     registry: AdapterRegistry = Depends(get_adapter_registry),
+    router_dep: RequestRouter = Depends(get_request_router),
+    audit: AuditLogger = Depends(get_audit_logger),
+    actor: Actor = Depends(get_current_actor),
     principal: Principal = Depends(current_principal),
 ) -> dict[str, Any]:
-    """Test whether the configured credentials for an adapter are valid."""
+    """Test whether the configured credentials for an adapter are valid.
+
+    This makes the server use its credentials (the REST adapter sends its bearer token to the
+    configured base URL), so it is gated like a write — the ``ai_control_plane`` entitlement for
+    every adapter type (402 otherwise, audited), rate limited and audited as ``adapter_validate``.
+    """
     _hide_connection_key(adapter_type, principal)
-    adapter = registry.get(adapter_type)
-    if not adapter:
+    await gate_validate_with_audit(
+        audit, surface="adapters_route", actor=actor.as_audit_string(), adapter_type=adapter_type,
+        principal=principal,
+    )
+    if not registry.get(adapter_type):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Adapter '{adapter_type}' not found.",
         )
-    result = await adapter.validate_credentials()
-    return result.to_dict()
+    try:
+        result = await router_dep.validate(adapter_type, actor=actor.as_audit_string(), owner=scope_for(principal).owner)
+    except AuditUnavailableError:
+        raise
+    except ResourceLimitError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"error": exc.code, "message": str(exc)},
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except AdapterTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+    payload: dict[str, Any] = result.to_dict()
+    return payload
 
 
 @router.get("/{adapter_type}/schema", summary="Get adapter config schema")

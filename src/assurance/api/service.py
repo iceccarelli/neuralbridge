@@ -87,6 +87,16 @@ platform (Art. 14(1), (3), (7); Art. 16); this service files nothing.
 
 It does not give legal advice, and it does not decide a judgement for you:
 triage returns *undetermined* until a human answers.
+
+**What runs where.** This API is the service in this repository: an operator runs it
+(hosted, or self-hosted from the same code) and each account's ledger lives there. That
+the code exists is not a statement that a deployment is reachable (`docs/GO-LIVE.md`).
+Collection from a machine, the Watch run, the offline kit and everything that needs a
+private key are NOT done by this API: they run on the customer's own machine
+(`assurance collect`, `kit`, `watch run`, `machinery enrol` from files) and reach the
+service only when a person chooses to push a result (`POST /v1/watch/report`). There is
+no hosted scheduler and no hosted collection. `GET /v1/capabilities` states, for every
+capability, whether it is hosted, offline-only or operator-host-only.
 """
 
 
@@ -236,10 +246,17 @@ def create_app(**kwargs: Any) -> FastAPI:
             {"name": "free", "description": "The field specification and the dry-run "
                                             "validator. No account needed."},
             {"name": "article 14", "description": "The register. Needs a plan that "
-                                                  "includes it."},
+                                                  "includes it. Hosted records only: the "
+                                                  "service files nothing with ENISA or a "
+                                                  "CSIRT, and awareness, triage and "
+                                                  "filings are a named person's acts."},
             {"name": "machine safety", "description": "Verify a recorded machine run "
                                                      "against its declared safety "
-                                                     "envelope. The separation "
+                                                     "envelope, on the trace you post "
+                                                     "(the service does not collect "
+                                                     "it; the offline `assurance "
+                                                     "machine verify` does the same on "
+                                                     "local files). The separation "
                                                      "calculator and the bundle "
                                                      "re-checker need no account."},
             {"name": "machinery", "description": "Machinery Regulation Annex III "
@@ -251,7 +268,35 @@ def create_app(**kwargs: Any) -> FastAPI:
             {"name": "fleet", "description": "Every enrolled machine at once: "
                                              "component advisories fanned out to "
                                              "serial numbers, and Declarations of "
-                                             "Conformity bound to a configuration."},
+                                             "Conformity bound to a configuration. "
+                                             "Hosted views of what the account "
+                                             "enrolled or pushed; the service reads "
+                                             "no machine."},
+            {"name": "watch", "description": "Record what a Watch run on YOUR machine "
+                                             "chose to report. There is no hosted Watch: "
+                                             "no scheduler, no collection, no reading of "
+                                             "a machine. A machine absent from a push is "
+                                             "stale, not clear."},
+            {"name": "change", "description": "Active Assurance Cases on the account's "
+                                              "hosted ledger. Drift and intervention "
+                                              "cases are opened from manifests and "
+                                              "records the caller supplies; closure, "
+                                              "waiver and answering a decision are a "
+                                              "named person's, and no agent tool does "
+                                              "them."},
+            {"name": "intel", "description": "Read-only views of the operator's shared "
+                                             "public-source store (KEV, NVD, EPSS, CSAF). "
+                                             "Nothing here fetches or records a feed: "
+                                             "that is the operator's `intel refresh/"
+                                             "ingest` on the host. Every answer carries "
+                                             "the store's age (`store_freshness`); a "
+                                             "stale or unknown store is not an "
+                                             "all-clear."},
+            {"name": "attestation", "description": "The service counter-signs the head of "
+                                                   "a ledger it holds with its own key. "
+                                                   "Making or holding YOUR signing key, and "
+                                                   "the recorder trust list, are offline "
+                                                   "and not offered over HTTP."},
             {"name": "supplier", "description": "Publish a signed component advisory "
                                                 "to a hosted feed (Supplier tier, "
                                                 "sales-assigned). Reading any feed "
