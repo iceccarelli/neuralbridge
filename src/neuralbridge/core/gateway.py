@@ -29,6 +29,7 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
+from fastapi import HTTPException
 
 from neuralbridge.ai.audit_events import gate_with_audit
 from neuralbridge.ai.entitlements import get_accounts, resolve_principal, scope_for
@@ -230,6 +231,14 @@ class MCPGateway:
                 )
             except AuditUnavailableError:
                 logger.critical("mcp_error_not_audited", request_id=request.id)
+            if isinstance(exc, HTTPException):
+                # The same gate refusal the HTTP routes answer (402 plan, 403 policy, 404 ...), with its
+                # status and structured body, instead of an opaque internal error.
+                return MCPResponse(
+                    id=request.id,
+                    error={"code": -32000, "message": f"http_{exc.status_code}",
+                           "data": {"status": exc.status_code, "detail": exc.detail}},
+                )
             if isinstance(exc, ResourceLimitError):
                 return MCPResponse(
                     id=request.id,
