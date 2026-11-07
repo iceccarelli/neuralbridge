@@ -36,6 +36,7 @@ nav:
     - Machine safety: assurance/machine.md
     - Machinery Annex III: assurance/machinery.md
     - Fleet advisory: assurance/fleet.md
+    - SBOM and advisory import: assurance/ingest.md
     - Change assurance: assurance/change.md
     - Public-source intelligence: assurance/intel.md
     - Watch: assurance/watch.md

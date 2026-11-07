@@ -1027,6 +1027,14 @@ def test_no_read_only_three_surface_capability_is_left_unexercised():
                                            "tests/test_assurance_passport_ledger_check_api.py; the CLI "
                                            "form (machinery check --ledger) is covered by "
                                            "tests/test_assurance_passport_superseded.py",
+        # SBOM drafts and CSAF supplier advisories: the three surfaces are compared field by
+        # field on one synthetic document in tests/test_assurance_ingest_parity.py (the imports
+        # write a draft / a record, so they are not in this file's read-only worlds).
+        "ingest.sbom_import": "compared by tests/test_assurance_ingest_parity.py",
+        "ingest.sbom_drafts": "compared by tests/test_assurance_ingest_parity.py",
+        "ingest.csaf_import": "compared by tests/test_assurance_ingest_parity.py",
+        "ingest.csaf_records": "compared by tests/test_assurance_ingest_parity.py",
+        "ingest.csaf_impact": "compared by tests/test_assurance_ingest_parity.py",
     }
     triple = [c.id for c in cat.CAPABILITIES if c.cli and c.api and c.mcp]
     missing = [i for i in triple if i not in EXERCISED and i not in declared_exempt]

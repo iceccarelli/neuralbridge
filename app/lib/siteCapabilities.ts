@@ -50,6 +50,7 @@ export const SERVICE_TITLE: Record<string, string> = {
   collect: 'Collect',
   evidence: 'Evidence and the ledger',
   fleet: 'Fleet',
+  ingest: 'SBOM and advisory import',
   intel: 'Public-source intelligence',
   kit: 'Offline kit',
   machine: 'Machine safety',

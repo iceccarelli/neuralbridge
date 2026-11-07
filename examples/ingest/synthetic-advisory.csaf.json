@@ -1,0 +1,142 @@
+{
+  "document": {
+    "category": "csaf_security_advisory",
+    "csaf_version": "2.0",
+    "title": "SYNTHETIC: ControlCo safety controller firmware watchdog defect",
+    "publisher": {
+      "category": "vendor",
+      "name": "ControlCo (SYNTHETIC)",
+      "namespace": "https://controlco.example"
+    },
+    "distribution": { "tlp": { "label": "WHITE" } },
+    "references": [
+      {
+        "category": "self",
+        "summary": "SYNTHETIC advisory; not published by any real party",
+        "url": "https://controlco.example/advisories/CC-SYN-2026-0001"
+      }
+    ],
+    "tracking": {
+      "id": "CC-SYN-2026-0001",
+      "status": "final",
+      "version": "2",
+      "initial_release_date": "2026-03-01T08:00:00Z",
+      "current_release_date": "2026-03-12T08:00:00Z",
+      "revision_history": [
+        { "date": "2026-03-01T08:00:00Z", "number": "1", "summary": "Initial release" },
+        { "date": "2026-03-12T08:00:00Z", "number": "2", "summary": "Fixed version added" }
+      ]
+    }
+  },
+  "product_tree": {
+    "branches": [
+      {
+        "category": "vendor",
+        "name": "ControlCo",
+        "branches": [
+          {
+            "category": "product_name",
+            "name": "Safety controller firmware",
+            "branches": [
+              {
+                "category": "product_version",
+                "name": "3.8.2",
+                "product": {
+                  "name": "ControlCo Safety controller firmware 3.8.2",
+                  "product_id": "CSAFPID-0001",
+                  "product_identification_helper": {
+                    "hashes": [
+                      {
+                        "filename": "safety-controller-3.8.2.bin",
+                        "file_hashes": [
+                          { "algorithm": "sha256",
+                            "value": "fe21623f37fada0422f8405c6f920036a8bdd84af16ece4f71dad17d6ec19f69" }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "category": "product_version",
+                "name": "3.9.0",
+                "product": {
+                  "name": "ControlCo Safety controller firmware 3.9.0",
+                  "product_id": "CSAFPID-0002"
+                }
+              },
+              {
+                "category": "product_version",
+                "name": "3.7.0",
+                "product": {
+                  "name": "ControlCo Safety controller firmware 3.7.0",
+                  "product_id": "CSAFPID-0003"
+                }
+              },
+              {
+                "category": "product_version_range",
+                "name": "vers:semver/<3.6.0",
+                "product": {
+                  "name": "ControlCo Safety controller firmware before 3.6.0",
+                  "product_id": "CSAFPID-0004"
+                }
+              }
+            ]
+          },
+          {
+            "category": "product_name",
+            "name": "Unrelated gateway",
+            "branches": [
+              {
+                "category": "product_version",
+                "name": "1.0",
+                "product": {
+                  "name": "ControlCo Unrelated gateway 1.0",
+                  "product_id": "CSAFPID-0005"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "category": "vendor",
+        "name": "Open Motion GmbH",
+        "branches": [
+          {
+            "category": "product_name",
+            "name": "libmotion",
+            "branches": [
+              {
+                "category": "product_version",
+                "name": "1.4.0",
+                "product": {
+                  "name": "Open Motion libmotion 1.4.0",
+                  "product_id": "CSAFPID-0006"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "vulnerabilities": [
+    {
+      "cve": "CVE-2026-0001",
+      "title": "SYNTHETIC watchdog defect",
+      "product_status": {
+        "known_affected": ["CSAFPID-0001", "CSAFPID-0004", "CSAFPID-0006"],
+        "fixed": ["CSAFPID-0002"],
+        "known_not_affected": ["CSAFPID-0003", "CSAFPID-0005"]
+      },
+      "remediations": [
+        {
+          "category": "vendor_fix",
+          "details": "SYNTHETIC: update the safety controller firmware to 3.9.0.",
+          "product_ids": ["CSAFPID-0001"]
+        }
+      ]
+    }
+  ]
+}

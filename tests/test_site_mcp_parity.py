@@ -68,8 +68,11 @@ def test_the_tier_shown_for_a_tool_is_the_tier_of_its_route():
 def test_the_agent_write_tools_are_exactly_the_post_tools_that_are_not_verification():
     tools = _page_tools()
     writers = {n for n, (_r, _t, w) in tools.items() if w}
+    # the five change-queue writes, and the two imports that record a DRAFT (an SBOM inventory
+    # pending review, an unsigned CSAF advisory); neither import reviews, enrols or decides
     assert writers == {"change_claim", "change_advance", "change_reverify",
-                       "change_assess_drift", "change_assess_intervention"}
+                       "change_assess_drift", "change_assess_intervention",
+                       "sbom_import", "csaf_import"}
     # a human-only decision has no tool, and the page says so
     for name in tools:
         assert not any(w in name for w in ("decide", "close", "reject", "defer", "resume", "resolve", "waive"))

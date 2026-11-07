@@ -41,6 +41,8 @@ const MCP_TOOLS: McpTool[] = [
   { name: 'change_reverify', route: 'POST /v1/change/cases/{case_id}/reverification', tier: 'cell', agentWrite: true },
   { name: 'change_assess_drift', route: 'POST /v1/change/assess/drift', tier: 'cell', agentWrite: true },
   { name: 'change_assess_intervention', route: 'POST /v1/change/assess/intervention', tier: 'cell', agentWrite: true },
+  { name: 'sbom_import', route: 'POST /v1/ingest/sbom', tier: 'cell', agentWrite: true },
+  { name: 'csaf_import', route: 'POST /v1/ingest/csaf', tier: 'cell', agentWrite: true },
   // Read-only: a GET, or a POST that answers a question and records nothing.
   { name: 'spec_fields', route: 'GET /v1/spec/fields', tier: 'free', agentWrite: false },
   { name: 'art14_case', route: 'GET /v1/cases/{case_id}', tier: 'register', agentWrite: false },
@@ -61,11 +63,17 @@ const MCP_TOOLS: McpTool[] = [
   { name: 'change_replay', route: 'GET /v1/change/cases/{case_id}/replay', tier: 'cell', agentWrite: false },
   { name: 'supplier_trust_list', route: 'GET /v1/supplier/trust', tier: 'cell', agentWrite: false },
   { name: 'supplier_trust_check', route: 'POST /v1/supplier/trust/evaluate', tier: 'cell', agentWrite: false },
+  { name: 'sbom_drafts', route: 'GET /v1/ingest/sbom', tier: 'cell', agentWrite: false },
+  { name: 'sbom_draft', route: 'GET /v1/ingest/sbom/{draft_id}', tier: 'cell', agentWrite: false },
+  { name: 'csaf_records', route: 'GET /v1/ingest/csaf', tier: 'cell', agentWrite: false },
+  { name: 'csaf_record', route: 'GET /v1/ingest/csaf/{advisory_ref}', tier: 'cell', agentWrite: false },
+  { name: 'csaf_impact', route: 'GET /v1/ingest/csaf/{advisory_ref}/impact', tier: 'cell', agentWrite: false },
 ];
 const TOOL_BY_ROUTE = new Map(MCP_TOOLS.map((t) => [t.route, t]));
 const TOOL_COUNT = MCP_TOOLS.length;
 const FREE_COUNT = MCP_TOOLS.filter((t) => t.tier === 'free').length;
-const WRITE_TOOLS = MCP_TOOLS.filter((t) => t.agentWrite);
+const WRITE_TOOLS = MCP_TOOLS.filter((t) => t.agentWrite && t.name.startsWith('change_'));
+const IMPORT_TOOLS = MCP_TOOLS.filter((t) => t.agentWrite && !t.name.startsWith('change_'));
 
 // Decisions only a named person makes. There is deliberately no MCP tool for any of these.
 const HUMAN_ONLY = new Set([
@@ -236,6 +244,18 @@ neuralbridge-ai-mcp`}</pre>
               decisions are <strong>human-only</strong>: they have no MCP tool, by design, and stay on the CLI and the
               HTTP API. Each write takes an <code>actor</code> name; it is asserted by the caller and recorded, not
               proven — the API refuses a blank one but does not check who is behind the key.
+            </p>
+            <p>
+              <strong>Third-party documents become drafts.</strong> {IMPORT_TOOLS.map((t, i) => (
+                <span key={t.name}>
+                  {i > 0 ? ' and ' : ''}
+                  <code>{t.name}</code>
+                </span>
+              ))}{' '}
+              record a draft inventory from a CycloneDX SBOM (pending a named person&apos;s review: no serial number,
+              nothing marked safety-relevant or measured) and an unsigned, inspect-only supplier advisory from a
+              CSAF 2.0 document. Reviewing a draft enrols a machine and decides which software is safety-relevant,
+              so it has no tool.
             </p>
             <p>
               <strong>Public-source intelligence is read-only here.</strong> The{' '}

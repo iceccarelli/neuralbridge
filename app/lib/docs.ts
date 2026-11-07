@@ -30,6 +30,7 @@ const ENGINE_PAGES: { slug: string; title: string; source: string }[] = [
   { slug: 'machine', title: 'Machine safety', source: 'deploy/assurance/MACHINE.md' },
   { slug: 'machinery', title: 'Machinery Annex III', source: 'deploy/assurance/MACHINERY.md' },
   { slug: 'fleet', title: 'Fleet advisory', source: 'deploy/assurance/FLEET.md' },
+  { slug: 'ingest', title: 'SBOM and advisory import', source: 'deploy/assurance/INGEST.md' },
   { slug: 'change', title: 'Change assurance', source: 'deploy/assurance/CHANGE.md' },
   { slug: 'intel', title: 'Public-source intelligence', source: 'deploy/assurance/INTEL.md' },
   { slug: 'watch', title: 'Watch', source: 'deploy/assurance/WATCH.md' },

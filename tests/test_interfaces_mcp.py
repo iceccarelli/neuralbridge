@@ -58,6 +58,9 @@ ALLOWED = [
     ("POST", rf"/v1/change/cases/{_ID}/reverification"),
     ("POST", r"/v1/change/assess/drift"),
     ("POST", r"/v1/change/assess/intervention"),
+    # the two imports record a DRAFT / an unsigned supplier advisory; neither reviews or decides
+    ("POST", r"/v1/ingest/sbom"),
+    ("POST", r"/v1/ingest/csaf"),
 ]
 #: The read-only tools (a GET, or a POST that answers a question and records nothing). Kept apart
 #: from ALLOWED so a test can say "these, and only these, never write": nothing here may ever
@@ -84,6 +87,11 @@ READ_ONLY_ALLOWED = [
     ("GET", rf"/v1/change/cases/{_ID}/replay"),
     ("GET", r"/v1/supplier/trust"),
     ("POST", r"/v1/supplier/trust/evaluate"),
+    ("GET", r"/v1/ingest/sbom"),
+    ("GET", rf"/v1/ingest/sbom/{_ID}"),
+    ("GET", r"/v1/ingest/csaf"),
+    ("GET", rf"/v1/ingest/csaf/{_ID}"),
+    ("GET", rf"/v1/ingest/csaf/{_ID}/impact"),
 ]
 ALLOWED += READ_ONLY_ALLOWED
 #: The tools added for read-only parity, each with the one call it documents.

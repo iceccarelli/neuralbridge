@@ -48,6 +48,7 @@ from .deps import (
 )
 from .evidence_routes import evidence_router as evidence_verify_router
 from .fleet_routes import fleet_router
+from .ingest_routes import ingest_router
 from .intel_routes import intel_router
 from .logging_filters import install as install_log_filters
 from .machine_routes import machine_router
@@ -385,6 +386,7 @@ def create_app(**kwargs: Any) -> FastAPI:
     application.include_router(value_router)
     application.include_router(watch_router)
     application.include_router(fleet_router)
+    application.include_router(ingest_router)
     application.include_router(check_router)
     application.include_router(evidence_verify_router)
     application.include_router(attest_router)
