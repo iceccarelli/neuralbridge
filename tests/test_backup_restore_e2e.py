@@ -287,8 +287,22 @@ def test_restore_into_an_existing_empty_directory_works(volume, tmp_path):
     target = tmp_path / "empty"
     target.mkdir()
     restore_check.restore(_backup(volume, tmp_path), target)
-    assert restore_check.verify(target)["status"] in {"ok", "failed"}  # ai-store.db was voided
+    # the only thing a strict verify of the restored volume objects to is the /ai store the restore
+    # itself changed (voided plans); every ledger and the accounts DB still match the manifest
+    result = restore_check.verify(target)
+    assert result["status"] == "failed"
+    assert [p.split(":")[0] for p in result["problems"]] == ["ai-store.db"], result["problems"]
     assert (target / "accounts.db").is_file()
+
+
+def test_a_restore_without_an_ai_store_verifies_clean_afterwards(volume, tmp_path):
+    root, _ids, _ai = volume
+    out = tmp_path / "no-ai"
+    restore_check.backup(root, out)
+    target = tmp_path / "restored"
+    result = restore_check.restore(out, target)
+    assert result["ai_plans_voided"] == {}
+    assert restore_check.verify(target)["status"] == "ok"
 
 
 def test_a_second_restore_to_the_same_target_is_refused(volume, tmp_path):
