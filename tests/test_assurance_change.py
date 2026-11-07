@@ -62,7 +62,7 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import VerificationRecord
 
-from .support_recorder import build_attested_bundle
+from .support_recorder import build_attested_bundle, build_bound_bundle
 
 ENG = Actor("a.integrator", "safety engineer")
 TECH = Actor("m.tech", "service technician")
@@ -133,7 +133,8 @@ def _inputs(when, subject=None):
 _INPUTS: dict[str, tuple] = {}
 
 
-def seal_a_real_verification(ledger, *, when, subject=None, attested=True):
+def seal_a_real_verification(ledger, *, when, subject=None, attested=True,
+                             configuration_hash=None):
     """Seal a verification of a field recording.
 
     By default a recorder the verifier trusts attested the recording (a real signature,
@@ -142,8 +143,9 @@ def seal_a_real_verification(ledger, *, when, subject=None, attested=True):
     recording with only its declared provenance, which the engine caps at ``community``.
     """
     env, run = _inputs(when, subject)
-    seal = build_attested_bundle if attested else build_bundle
-    bundle = seal(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key)
+    seal = build_attested_bundle if attested else build_bound_bundle
+    extra = {} if configuration_hash is None else {"configuration_hash": configuration_hash}
+    bundle = seal(env, run, actor=ENG, ledger=ledger, subject=subject or MACHINE.key, **extra)
     _INPUTS[bundle.content_hash] = (env, run)
     return bundle
 
@@ -1424,12 +1426,13 @@ class TestF1ReverifyAcceptsOnlyTheRightEvidence:
     def test_a_function_whose_checks_the_bundle_did_not_pass_is_not_cleared(
             self, ledger, store):
         case, observed = drive(ledger, store, CaseStatus.AWAITING_REVERIFICATION)
-        bundle = seal_a_real_verification(ledger, when=LATER)
         funcs = (SafetyFunction("SF-01", "Protective stop on zone intrusion", "PL d",
                                 verified_by=("ssm_separation", "stop_characterisation",
                                              "laser_scan_resolution")),
                  FUNCS[1])
         wider = manifest(item(content_hash="d" * 64), functions=funcs, manifest_id="NOW")
+        bundle = seal_a_real_verification(ledger, when=LATER,
+                                          configuration_hash=wider.configuration_hash())
         record_manifest(ledger, wider)               # ledger truth, not the caller's say-so
         c = reverify(store, case.case_id, wider, verifs(ledger, MACHINE.key), [],
                      verification_content_hash=bundle.content_hash, actor=REVIEWER)

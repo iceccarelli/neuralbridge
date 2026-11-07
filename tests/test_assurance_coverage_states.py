@@ -29,7 +29,6 @@ import pytest
 from assurance.check.pipeline import run_enrolled_check
 from assurance.core.evidence import Actor
 from assurance.fleet.registry import Fleet
-from assurance.machine.bundle import build_bundle
 from assurance.machine.trace import OperatingMode
 from assurance.machinery.cli import main as machinery_cli
 from assurance.machinery.intervention import Intervention, InterventionKind
@@ -43,6 +42,7 @@ from assurance.machinery.record import (
 )
 from assurance.machinery.staleness import Coverage, VerificationRecord, assess_coverage
 
+from .support_recorder import build_bound_bundle as build_bundle
 from .support_trust_hardening import KEY, ledger, manifest, trace_in_modes
 from .test_assurance_machine_provenance import ACTOR, envelope
 from .test_assurance_staleness_integrity import Clock
@@ -70,7 +70,8 @@ def _man():
 def _seal(led, modes, *, speed=300.0, tid="RUN", start=None):
     tr = trace_in_modes(modes, speed=speed, trace_id=tid,
                         **({"started_at": start} if start else {}))
-    return build_bundle(envelope(), tr, actor=ACTOR, ledger=led, subject=KEY)
+    return build_bundle(envelope(), tr, actor=ACTOR, ledger=led, subject=KEY,
+                        configuration_hash=_man().configuration_hash())
 
 
 def _states(led, man=None):

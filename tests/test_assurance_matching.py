@@ -406,6 +406,8 @@ class TestImpactAcrossMachines:
 # =====================================================================
 
 def vrec(seq, at, verified, not_verified=(), tier="validated", verdict="pass", **kw):
+    # a verification states the configuration it ran against (an unbound one is never current)
+    kw.setdefault("configuration_hash", man().configuration_hash())
     return VerificationRecord(
         content_hash=f"{seq:064x}", effective_at=at, ledger_seq=seq, product="AR-7",
         product_version="2.4.1", verdict=verdict, tier=tier,
@@ -553,7 +555,6 @@ class TestDatingTheJoin:
             self, ledger):
         """From the ledger: a trace that claims to start in 2099 was filed today. An
         intervention recorded before today must not read as older than the trace."""
-        from assurance.machine.bundle import build_bundle
         from assurance.machine.envelope import (
             FigureBasis,
             SafetyEnvelope,
@@ -563,6 +564,8 @@ class TestDatingTheJoin:
         )
         from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
         from assurance.machinery.record import record_intervention
+
+        from .support_recorder import build_bound_bundle as build_bundle
 
         m = man()
         record_manifest(ledger, m)

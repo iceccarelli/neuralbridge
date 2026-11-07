@@ -21,7 +21,7 @@ from assurance.fleet.registry import Fleet
 from assurance.machinery.record import interventions_from_ledger, record_manifest
 from assurance.machinery.staleness import VerificationRecord
 
-from .support_recorder import build_attested_bundle
+from .support_recorder import build_attested_bundle, ledger_configuration_hash
 from .support_trust_hardening import KEY, attested_bundle
 from .support_trust_hardening import ledger as make_ledger
 from .support_trust_hardening import manifest as fleet_manifest
@@ -69,7 +69,9 @@ def test_an_attested_legacy_bundle_is_blocked_by_its_unit_binding_not_a_missing_
         ledger, store):
     case, observed = _awaiting(ledger, store)
     env, run = _inputs(LATER, "legacy")
-    legacy = build_attested_bundle(env, run, actor=ENG, machine_serial=MACHINE.serial)
+    legacy = build_attested_bundle(env, run, actor=ENG, machine_serial=MACHINE.serial,
+                                   configuration_hash=ledger_configuration_hash(
+                                       ledger, MACHINE.key))
     assert legacy.tier.value == "validated" and "unit_key" not in legacy.evidence.body
     case = _reverify_with(ledger, store, case, observed, legacy)
     reason = blocked_reason(case)
@@ -87,7 +89,8 @@ def test_a_declared_provenance_bundle_keeps_the_old_code(ledger, store):
     case, observed = _awaiting(ledger, store)
     env, run = _inputs(LATER, "declared")
     from assurance.machine.bundle import build_bundle
-    declared = build_bundle(env, run, actor=ENG, subject=MACHINE.key)
+    declared = build_bundle(env, run, actor=ENG, subject=MACHINE.key,
+                            configuration_hash=ledger_configuration_hash(ledger, MACHINE.key))
     assert declared.tier.value == "community"
     case = _reverify_with(ledger, store, case, observed, declared)
     reason = blocked_reason(case)
@@ -100,7 +103,8 @@ class TestTheFleetRow:
         from .support_trust_hardening import legacy_bundle
         led = make_ledger(tmp_path)
         record_manifest(led, fleet_manifest())
-        bundle, rec = legacy_bundle("0001")
+        bundle, rec = legacy_bundle(
+            "0001", configuration_hash=fleet_manifest().configuration_hash())
         led.append(bundle.evidence, subject=KEY)
         row = Fleet.from_ledger(led, recorder_trust=rec.trust()).to_dict()["machines"][0]
         assert row["verdict"] == "covered_at_community"
@@ -128,7 +132,9 @@ def test_a_mix_of_reasons_names_both_remedies(ledger, store):
     from dataclasses import replace
     case, observed = _awaiting(ledger, store)
     env, run = _inputs(LATER, "legacy")
-    legacy = build_attested_bundle(env, run, actor=ENG, machine_serial=MACHINE.serial)
+    legacy = build_attested_bundle(env, run, actor=ENG, machine_serial=MACHINE.serial,
+                                   configuration_hash=ledger_configuration_hash(
+                                       ledger, MACHINE.key))
     case = _reverify_with(ledger, store, case, observed, legacy)
     first, second = case.required_reverifications[:2]
     mixed = replace(

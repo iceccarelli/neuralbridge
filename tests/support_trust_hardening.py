@@ -15,7 +15,8 @@ from typing import Any
 
 from assurance.core.evidence import Actor, Evidence
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import EvidenceBundle, build_bundle
+from assurance.machine.bundle import EvidenceBundle
+from assurance.machine.bundle import build_bundle as _build_bundle
 from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
 from assurance.machinery.manifest import (
     HashSource,
@@ -33,6 +34,19 @@ from .test_assurance_machine_provenance import ACTOR, envelope, laptop_trace
 KEY = "Acme/AR-7#0001"
 CHECKS = ("workspace_containment", "speed_limit")
 FW = "a" * 64
+
+
+def build_bundle(envelope, trace, **kw):
+    """``build_bundle`` that, when filed into a ledger under a unit key, states the configuration
+    of the newest manifest the ledger holds for that unit (a careful filer does; production never
+    infers it). Pass ``configuration_hash=""`` to seal an unbound verification on purpose."""
+    if "configuration_hash" not in kw and kw.get("ledger") is not None:
+        from .support_recorder import ledger_configuration_hash
+
+        cfg = ledger_configuration_hash(kw["ledger"], str(kw.get("subject") or ""))
+        if cfg:
+            kw["configuration_hash"] = cfg
+    return _build_bundle(envelope, trace, **kw)
 
 
 def manifest(
@@ -63,11 +77,23 @@ def serial_of(unit_key: str) -> str:
 def attested_bundle(
     unit_key: str, *, attest_serial: str | None = None, rec: Recorder | None = None,
     trace: Trace | None = None, file_under: EvidenceLedger | None = None,
+    configuration_hash: str | None = None,
 ) -> tuple[EvidenceBundle, Recorder]:
     """A bundle sealed FOR ``unit_key`` on a recording a trusted recorder attested.
 
-    ``attest_serial`` defaults to the key's own serial (the honest case).
+    ``attest_serial`` defaults to the key's own serial (the honest case). It states the
+    configuration of this module's standard manifest for the unit (``manifest(maker, model,
+    serial)``) unless ``configuration_hash`` says otherwise (``""`` = unbound, on purpose).
     """
+    if configuration_hash is None:
+        from .support_recorder import ledger_configuration_hash
+
+        maker, _, rest = unit_key.partition("/")
+        model, _, unit_serial = rest.partition("#")
+        # the ledger's own manifest for the unit when it holds one, else the standard one
+        configuration_hash = (
+            (ledger_configuration_hash(file_under, unit_key) if file_under is not None else "")
+            or manifest(maker, model, unit_serial).configuration_hash())
     env, tr = envelope(), trace or laptop_trace()
     rec = rec or Recorder()
     att = rec.attest_for(
@@ -75,12 +101,13 @@ def attested_bundle(
         else attest_serial).to_dict()
     bundle = build_bundle(
         env, tr, actor=ACTOR, recorder_attestations=[att], recorder_trust=rec.trust(),
-        subject=unit_key, ledger=file_under)
+        subject=unit_key, ledger=file_under, configuration_hash=configuration_hash)
     return bundle, rec
 
 
 def legacy_bundle(serial: str, *, rec: Recorder | None = None,
-                  trace: Trace | None = None) -> tuple[EvidenceBundle, Recorder]:
+                  trace: Trace | None = None,
+                  configuration_hash: str | None = None) -> tuple[EvidenceBundle, Recorder]:
     """A bundle as sealed before the unit key was recorded: bound to a serial only.
 
     Built honestly through ``build_bundle`` with a product-line subject and an explicit
@@ -88,17 +115,27 @@ def legacy_bundle(serial: str, *, rec: Recorder | None = None,
     """
     env, tr = envelope(), trace or laptop_trace()
     rec = rec or Recorder()
+    if configuration_hash is None:
+        configuration_hash = manifest(serial=serial or "0001").configuration_hash()
     att = rec.attest_for(env, tr, machine_serial=serial).to_dict()
     bundle = build_bundle(env, tr, actor=ACTOR, recorder_attestations=[att],
-                          recorder_trust=rec.trust(), machine_serial=serial)
+                          recorder_trust=rec.trust(), machine_serial=serial,
+                          configuration_hash=configuration_hash)
     return bundle, rec
 
 
 def community_bundle(unit_key: str, trace: Trace | None = None,
                      file_under: EvidenceLedger | None = None) -> EvidenceBundle:
     """A bundle whose provenance the filer merely declared (tier community)."""
+    from .support_recorder import ledger_configuration_hash
+
+    maker, _, rest = unit_key.partition("/")
+    model, _, unit_serial = rest.partition("#")
+    kw: dict[str, Any] = {"configuration_hash": (
+        (ledger_configuration_hash(file_under, unit_key) if file_under is not None else "")
+        or manifest(maker, model, unit_serial).configuration_hash())}
     return build_bundle(envelope(), trace or laptop_trace(), actor=ACTOR,
-                        subject=unit_key, ledger=file_under)
+                        subject=unit_key, ledger=file_under, **kw)
 
 
 def reseal_body(evidence: Evidence, **changes: Any) -> Evidence:

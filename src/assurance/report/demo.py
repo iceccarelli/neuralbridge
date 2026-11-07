@@ -260,7 +260,10 @@ def build_demo(workdir: str | Path) -> DemoFleet:
             build_bundle(envelope, _trace(serial, feb, speed=400.0,
                                           separation=2200.0),
                          actor=ENG, ledger=ledger,
-                         subject=result.manifest.machine.key)
+                         subject=result.manifest.machine.key,
+                         # a verification states the configuration it ran against; an unbound
+                         # one is never current (the demo's story is the intervention)
+                         configuration_hash=result.manifest.configuration_hash())
 
         if intervened:
             record_intervention(ledger, Intervention(

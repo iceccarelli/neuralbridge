@@ -19,7 +19,6 @@ from assurance.check import AssuranceVerdict, CheckError, run_ad_hoc_check, run_
 from assurance.core.evidence import Actor
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.advisory import AdvisorySeverity, AffectedArtefact, ComponentAdvisory
-from assurance.machine.bundle import build_bundle
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -39,6 +38,8 @@ from assurance.machinery.manifest import (
     SafetyManifest,
 )
 from assurance.machinery.record import record_intervention, record_manifest
+
+from .support_recorder import build_bound_bundle
 
 ENG = Actor("a.integrator", "safety engineer")
 TECH = Actor("m.tech", "service technician")
@@ -128,7 +129,7 @@ def enrol(ledger, serial, *, verify=True, intervene=False, functions=FUNCS):
                     samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                          tcp_speed=400.0, mode=OperatingMode.SSM,
                                          separation=2200.0) for i in range(10)))
-        build_bundle(env, run, actor=ENG, ledger=ledger, subject=man.machine.key)
+        build_bound_bundle(env, run, actor=ENG, ledger=ledger, subject=man.machine.key)
     if intervene:
         record_intervention(ledger, Intervention(
             intervention_id=f"INT-{serial}", machine_key=man.machine.key,

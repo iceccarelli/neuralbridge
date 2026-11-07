@@ -15,7 +15,6 @@ import pytest
 from assurance.core.evidence import Actor, ValidationState
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
-from assurance.machine.bundle import build_bundle
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -55,7 +54,7 @@ from assurance.machinery.staleness import (
     assess_coverage,
 )
 
-from .support_recorder import build_attested_bundle
+from .support_recorder import build_attested_bundle, build_bound_bundle
 
 ENG = Actor(identifier="a.integrator", role="safety engineer")
 TECH = Actor(identifier="m.tech", role="service technician")
@@ -120,6 +119,7 @@ def intervention(**over):
 def verification(seq=1, at=datetime(2026, 2, 9, tzinfo=UTC), verified=("ssm_separation",
                   "stop_characterisation", "speed_limit"), not_verified=()):
     return VerificationRecord(
+                configuration_hash=manifest().configuration_hash(),
         content_hash=f"{seq:064x}", effective_at=at, ledger_seq=seq,
         product="AR-7", product_version="2.4.1", verdict="pass", tier="validated",
         checks_verified=tuple(verified), checks_not_verified=tuple(not_verified),
@@ -475,7 +475,7 @@ def seal_a_real_verification(ledger, *, when, speed=400.0, separation=2200.0, at
                 samples=tuple(Sample(t=i / 50, tcp=(0.0, 0.0, 1000.0),
                                      tcp_speed=speed, mode=OperatingMode.SSM,
                                      separation=separation) for i in range(10)))
-    seal = build_attested_bundle if attested else build_bundle
+    seal = build_attested_bundle if attested else build_bound_bundle
     return seal(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key)
 
 

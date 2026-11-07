@@ -185,7 +185,8 @@ class TestTheAnonymousRoute:
         env, tr = att_envelope(), make_trace()
         v = client.post("/v1/machine/verify", json=with_attestation({
             "envelope": env.to_dict(), "trace": tr.hashable_payload(),
-            "actor": "a.integrator", "subject": KEY}, env, tr, machine_serial="0001"),
+            "actor": "a.integrator", "subject": KEY,
+            "configuration_hash": man.configuration_hash()}, env, tr, machine_serial="0001"),
             headers=h)
         assert v.status_code == 200, v.text
         assert v.json()["tier"] == "validated"

@@ -275,9 +275,12 @@ def test_the_whole_pipeline(tmp_path):
                                               encoding="utf-8")
         att = RECORDER.write_attestation(root / f"attestation-{n}.json", envelope(), run,
                                          machine_serial=serial)
+        # the verification states the configuration of the machine's newest sealed manifest
+        cfg = manifests_from_ledger(EvidenceLedger(ledger), key)[-1].configuration_hash()
         v = op.sh("machine", "verify", "--envelope", "envelope.json", "--trace",
                   f"trace-{n}.json", "--recorder-attestation", att, "--recorder-trust", trust,
-                  "--actor", "Dana Reviewer", *led, "--subject", key, "--json", expect=0)
+                  "--actor", "Dana Reviewer", *led, "--subject", key, "--configuration-hash", cfg,
+                  "--json", expect=0)
         bundle = json.loads(v.stdout)
         assert '"tier": "validated"' in v.stdout and '"verdict": "pass"' in v.stdout
         vhash = bundle["evidence"]["content_hash"]

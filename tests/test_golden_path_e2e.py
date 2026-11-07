@@ -45,6 +45,7 @@ import pytest
 from assurance.change.store import OPENED_KIND
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.evidence.verify_export import _SAME_PARTY
+from assurance.machinery.manifest import SafetyManifest
 
 from . import interfaces_fixtures as fx
 from .interfaces_scenario import PERSON, Plant, run_cli, run_started
@@ -221,7 +222,8 @@ def attest_sign(tmp: Path, account_id: str, signing_key: Path) -> dict[str, Any]
     return json.loads(r.stdout)
 
 
-def verify_run(hosted: Hosted, key: str, serial: str, *, attested: bool) -> dict[str, Any]:
+def verify_run(hosted: Hosted, key: str, serial: str, *, attested: bool,
+               plant: Plant) -> dict[str, Any]:
     """File a verification of ``serial`` through ``POST /v1/machine/verify``.
 
     ``attested`` adds a real signature, by the shared test recorder, over the actual
@@ -231,7 +233,11 @@ def verify_run(hosted: Hosted, key: str, serial: str, *, attested: bool) -> dict
     run = trace(when, trace_id=f"RUN-{serial}-{when:%Y%m%d%H%M%S}")
     body: dict[str, Any] = {
         "envelope": envelope_dict(), "trace": run.hashable_payload(),
-        "actor": PERSON, "subject": key_of(serial)}
+        "actor": PERSON, "subject": key_of(serial),
+        # the verification states the configuration it ran against: the machine as the plant
+        # now is (after the firmware change); one that states none is never current
+        "configuration_hash": SafetyManifest.from_dict(
+            plant.manifest_dict(key_of(serial))).configuration_hash()}
     if attested:
         body["recorder_attestations"] = RECORDER.attestation_dicts(
             envelope(), run, machine_serial=serial)
@@ -482,7 +488,7 @@ class TestTheGoldenPath:
             advance_to_reverification(hosted, a_key, cid[serial])
 
         # -- 1. validated: a trusted recorder attested the run ---------------------------
-        good = verify_run(hosted, a_key, VALIDATED, attested=True)
+        good = verify_run(hosted, a_key, VALIDATED, attested=True, plant=plant)
         assert good["tier"] == "validated"
         assert good["recorder_attestation"]["status"] == "accepted"
         assert good["recorder_attestation"]["attested"] is True
@@ -503,7 +509,7 @@ class TestTheGoldenPath:
         assert shut["status"] == "closed"
 
         # -- 3. refused: an unattested verification is community and clears nothing ------
-        weak = verify_run(hosted, a_key, REFUSED, attested=False)
+        weak = verify_run(hosted, a_key, REFUSED, attested=False, plant=plant)
         assert weak["tier"] == "community"
         assert weak["recorder_attestation"]["attested"] is False
         held = reverify(hosted, a_key, plant, cid[REFUSED], REFUSED, weak["content_hash"])
@@ -745,7 +751,7 @@ class TestWithoutAServerRecorderTrustList:
         case_id = plant.expected_drift_case_id(key_of(VALIDATED))
         advance_to_reverification(hosted, a_key, case_id)
 
-        signed_by_a_recorder = verify_run(hosted, a_key, VALIDATED, attested=True)
+        signed_by_a_recorder = verify_run(hosted, a_key, VALIDATED, attested=True, plant=plant)
         assert signed_by_a_recorder["recorder_trust"]["status"] == trust
         assert signed_by_a_recorder["recorder_attestation"]["attested"] is False
         assert signed_by_a_recorder["tier"] == "community"
