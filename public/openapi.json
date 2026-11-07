@@ -569,6 +569,92 @@
         "title": "CoverageIn",
         "type": "object"
       },
+      "CsafIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "allow_draft": {
+            "default": false,
+            "title": "Allow Draft",
+            "type": "boolean"
+          },
+          "document": {
+            "maxLength": 8388608,
+            "minLength": 1,
+            "title": "Document",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          },
+          "source_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sha256"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "supplied_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplied At"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "title": "CsafIn",
+        "type": "object"
+      },
       "DecisionIn": {
         "additionalProperties": false,
         "properties": {
@@ -709,6 +795,87 @@
           "observed"
         ],
         "title": "DiffIn",
+        "type": "object"
+      },
+      "DocumentIn": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "document": {
+            "maxLength": 8388608,
+            "minLength": 1,
+            "title": "Document",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          },
+          "source_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Sha256"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "supplied_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supplied At"
+          }
+        },
+        "required": [
+          "document"
+        ],
+        "title": "DocumentIn",
         "type": "object"
       },
       "DriftIn": {
@@ -1667,6 +1834,59 @@
           "verification_content_hash"
         ],
         "title": "ReverificationIn",
+        "type": "object"
+      },
+      "ReviewIn": {
+        "additionalProperties": true,
+        "description": "A named person's decision on a draft. The fields are checked by the domain function,\nwhich says what is wrong with each in ``violations``; ``extra`` is left open so an unknown\nfield is reported there, in the same words as on the command line.",
+        "properties": {
+          "actor": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Actor",
+            "type": "string"
+          },
+          "components": {
+            "items": {},
+            "maxItems": 5000,
+            "title": "Components",
+            "type": "array"
+          },
+          "decision": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Decision",
+            "type": "string"
+          },
+          "functions": {
+            "items": {},
+            "maxItems": 100,
+            "title": "Functions",
+            "type": "array"
+          },
+          "identity": {
+            "additionalProperties": true,
+            "title": "Identity",
+            "type": "object"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "role": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "reason"
+        ],
+        "title": "ReviewIn",
         "type": "object"
       },
       "RevokeIn": {
@@ -6326,6 +6546,611 @@
         "summary": "The whole fleet on one page a plant manager can read",
         "tags": [
           "fleet"
+        ]
+      }
+    },
+    "/v1/ingest/csaf": {
+      "get": {
+        "operationId": "get_csaf_advisories_v1_ingest_csaf_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Csaf Advisories V1 Ingest Csaf Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The CSAF supplier advisories recorded in your ledger",
+        "tags": [
+          "ingest"
+        ]
+      },
+      "post": {
+        "description": "Validate and record a CSAF 2.0 document: its SHA-256, publisher, tracking and dates, and\neach vulnerability's product statuses. It is unsigned third-party content and inspect-only.\n`GET /v1/ingest/csaf/{advisory_ref}/impact` matches it to the enrolled fleet.",
+        "operationId": "post_csaf_v1_ingest_csaf_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CsafIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Csaf V1 Ingest Csaf Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "413": {
+            "description": "`too_large`."
+          },
+          "422": {
+            "description": "`invalid_csaf` (the violations list every CSAF 2.0 structural rule broken), `document_not_final`, `too_deep`, `invalid_source`, `source_hash_mismatch`. Nothing was recorded."
+          }
+        },
+        "summary": "Import a CSAF 2.0 advisory as a recorded, unsigned supplier advisory",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/v1/ingest/csaf/{advisory_ref}": {
+      "get": {
+        "operationId": "get_csaf_advisory_v1_ingest_csaf__advisory_ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "advisory_ref",
+            "required": true,
+            "schema": {
+              "title": "Advisory Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Csaf Advisory V1 Ingest Csaf  Advisory Ref  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "`advisory_not_found`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One recorded CSAF advisory in full",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/v1/ingest/csaf/{advisory_ref}/impact": {
+      "get": {
+        "description": "Every enrolled machine is `affected`, `under_investigation`, `fixed`, `not_affected` or\n`unknown`, with the reason and the evidence. A match that is not certain is `unknown`; a\nmachine the advisory does not name is `unknown` with the reason `not_named`. Inspect-only.",
+        "operationId": "get_csaf_impact_v1_ingest_csaf__advisory_ref__impact_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "advisory_ref",
+            "required": true,
+            "schema": {
+              "title": "Advisory Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Csaf Impact V1 Ingest Csaf  Advisory Ref  Impact Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "`advisory_not_found`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What a recorded CSAF advisory says about each enrolled machine",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/v1/ingest/sbom": {
+      "get": {
+        "operationId": "get_sbom_drafts_v1_ingest_sbom_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Sbom Drafts V1 Ingest Sbom Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The SBOM drafts in your ledger and their review state",
+        "tags": [
+          "ingest"
+        ]
+      },
+      "post": {
+        "description": "Validate a CycloneDX JSON SBOM (1.4, 1.5, 1.6) and record it as a draft.\n\nThe draft never carries a machine serial number, never marks a component safety-relevant and\nnever marks one as read from the machine; a missing version, purl, supplier or digest is\nrecorded as unknown. Every decision in it is `pending_review` until a named person reviews it\n(`POST /v1/ingest/sbom/{draft_id}/review`). The same bytes again are `already_imported`.",
+        "operationId": "post_sbom_v1_ingest_sbom_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Sbom V1 Ingest Sbom Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "413": {
+            "description": "`too_large`: the document is over the size this importer reads."
+          },
+          "422": {
+            "description": "`invalid_sbom` (the violations list every structural rule broken), `unsupported_spec_version`, `no_components`, `too_deep`, `invalid_source`, `source_hash_mismatch`. Nothing was recorded."
+          }
+        },
+        "summary": "Import a CycloneDX SBOM as a DRAFT inventory pending named human review",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/v1/ingest/sbom/{draft_id}": {
+      "get": {
+        "operationId": "get_sbom_draft_v1_ingest_sbom__draft_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Sbom Draft V1 Ingest Sbom  Draft Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "`draft_not_found`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One SBOM draft in full, with its review state and a blank review template",
+        "tags": [
+          "ingest"
+        ]
+      }
+    },
+    "/v1/ingest/sbom/{draft_id}/review": {
+      "post": {
+        "description": "Approve or reject a draft. Approval enrols the machine through the enrolment front door.\n\nA human decision: it needs an operator key with the `decider` role. The machine's\nmanufacturer, model and serial number, and an explicit include/exclude, kind and safety\nfunction for every component, are the reviewer's; nothing is defaulted. A review is made once.",
+        "operationId": "post_sbom_review_v1_ingest_sbom__draft_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "fly-client-ip",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fly-Client-Ip"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Sbom Review V1 Ingest Sbom  Draft Id  Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "`operator_required` / `decider_role_required`: an account-level key cannot make a human decision."
+          },
+          "404": {
+            "description": "`draft_not_found`."
+          },
+          "409": {
+            "description": "`already_reviewed`, `configuration_differs`, `identity_conflict` or `ledger_chain_unverified`. Nothing was recorded."
+          },
+          "422": {
+            "description": "`invalid_review`: the violations say what each decision lacks."
+          }
+        },
+        "summary": "A named decider approves (and enrols) or rejects an SBOM draft",
+        "tags": [
+          "ingest"
         ]
       }
     },

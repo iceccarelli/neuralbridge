@@ -153,6 +153,8 @@ DECISIONS = [
     ("POST", "/v1/supplier/trust/revoke", None),
     ("POST", "/v1/supplier/trust/override", None),
     ("POST", "/v1/supplier/trust/feed-baseline", None),
+    # approving an SBOM draft enrols a machine and decides which software is safety-relevant
+    ("POST", "/v1/ingest/sbom/{draft_id}/review", {"decision": "approve", "reason": "r"}),
 ]
 
 

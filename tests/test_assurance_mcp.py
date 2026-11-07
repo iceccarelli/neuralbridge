@@ -101,7 +101,10 @@ async def test_tool_list_matches_the_wrapped_routes() -> None:
                          "attest_service_key", "machine_separation", "machinery_diff",
                          "fleet_machines", "fleet_observations", "fleet_declaration_check",
                          "value_position", "change_replay", "supplier_trust_list",
-                         "supplier_trust_check"}
+                         "supplier_trust_check",
+                         # SBOM drafts and CSAF supplier advisories (tests/test_assurance_ingest_*.py)
+                         "sbom_import", "sbom_drafts", "sbom_draft", "csaf_import",
+                         "csaf_records", "csaf_record", "csaf_impact"}
 
 
 @pytest.mark.asyncio

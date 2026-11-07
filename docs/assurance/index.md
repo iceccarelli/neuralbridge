@@ -10,6 +10,7 @@ a bare checkout and runs the offline kit end to end.
 | [Machine safety](machine.md) | `assurance machine verify` | ISO/TS 15066 separation with `Sh` over `Tr + Ts`; `unchecked` is a first-class outcome |
 | [Machinery Annex III](machinery.md) | `assurance machinery coverage` | The staleness join — a sign-off from before a change, dated against the change itself |
 | [Fleet advisory](fleet.md) | `assurance fleet advisory` | `HASH_MISMATCH` — a label that contradicts the bytes on the machine, reported as exactly that |
+| [SBOM and advisory import](ingest.md) | `assurance ingest sbom-import` | An SBOM becomes a draft that never invents a serial or marks software safety-relevant; an advisory match that is not certain is `unknown`, never a guess |
 | [Change assurance](change.md) | `assurance change assess-drift` | A change is a case with an owner and a re-verification, closed only by a named person's decision; closure is never inferred |
 | [Public-source intelligence](intel.md) | `assurance intel history` | A CVE no recorded source mentions is `unknown`, never clear; hosted routes read the operator's store and answer 503 until one is configured |
 | [Watch](watch.md) | `assurance watch run` | Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares a code with "nothing moved" |

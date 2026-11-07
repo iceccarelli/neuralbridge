@@ -76,7 +76,9 @@ __all__ = [
     "MAX_PRODUCTS",
     "CsafImport",
     "advisory_from_csaf",
+    "is_plain_version_token",
     "load_csaf_document",
+    "read_product_tree",
 ]
 
 #: Product definitions (tree leaves plus ``full_product_names`` plus relationships) one
@@ -118,10 +120,38 @@ class _Product:
     #: Range text from a ``product_version_range`` branch, or from a ``product_version`` name
     #: that is not one plain token.
     ranges: tuple[str, ...]
+    #: SHA-256 file hashes the publisher states for this product (lower-case hex), from its
+    #: ``product_identification_helper``. Used only for identity, never to clear a machine.
+    hashes: tuple[str, ...] = ()
+    purl: str = ""
+    cpe: str = ""
 
 
 def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _helper(product: Mapping[str, Any]) -> tuple[tuple[str, ...], str, str]:
+    """``(sha256 hashes, purl, cpe)`` from a product's identification helper; tolerant of
+    anything malformed (the structural validator, not this reader, is where that is refused)."""
+    helper = product.get("product_identification_helper")
+    if not isinstance(helper, Mapping):
+        return (), "", ""
+    found: dict[str, None] = {}
+    hashes = helper.get("hashes")
+    for group in hashes if isinstance(hashes, list) else ():
+        files = group.get("file_hashes") if isinstance(group, Mapping) else None
+        for entry in files if isinstance(files, list) else ():
+            if not isinstance(entry, Mapping):
+                continue
+            algorithm = _text(entry.get("algorithm")).casefold().replace("-", "")
+            value = _text(entry.get("value")).casefold()
+            if algorithm == "sha256" and _SHA256.fullmatch(value):
+                found[value] = None
+    return tuple(found), _text(helper.get("purl")), _text(helper.get("cpe"))
 
 
 def is_plain_version_token(label: str) -> bool:
@@ -266,7 +296,8 @@ def _walk(tree: Mapping[str, Any]) -> _Tree:
             if exact and not is_plain_version_token(exact):
                 ranges.insert(0, exact)
                 exact = ""
-            candidate = _Product(vendor, name, exact, tuple(ranges))
+            hashes, purl, cpe = _helper(product)
+            candidate = _Product(vendor, name, exact, tuple(ranges), hashes, purl, cpe)
             if pid not in defs:
                 defs[pid] = candidate
             elif defs[pid] == candidate:
@@ -320,6 +351,17 @@ def _walk(tree: Mapping[str, Any]) -> _Tree:
                 "They are not interpreted; products that exist only as relationships were "
                 "not imported.")
     return out
+
+
+def read_product_tree(document: Mapping[str, Any]) -> _Tree:
+    """The product definitions of a parsed CSAF document, as the importer reads them.
+
+    ``products`` are the definitions that carry a vendor, a product name and a version or range;
+    ``unusable`` and ``elsewhere`` name the ones that do not, and why. Raises
+    :class:`AdvisoryError` for a tree that is malformed, too deep or too large.
+    """
+    tree = document.get("product_tree")
+    return _walk(tree if isinstance(tree, Mapping) else {})
 
 
 # --------------------------------------------------------------------------- the translation
