@@ -319,7 +319,11 @@ class TestPlatformStatusIsTheReadmeTable:
         # PostgreSQL is exercised against a real server only by the /ai and MCP integration tests ...
         owners = sorted(p.name for p in (ROOT / "tests").glob("test_*.py")
                         if "NEURALBRIDGE_AI_PG_HOST" in p.read_text(encoding="utf-8"))
-        assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty")) for n in owners), owners
+        # test_multiworker_real counts /ai approvals executed across --workers 4 in a real Postgres
+        # table, so it is an /ai integration test too; it is named, not matched by prefix, so any
+        # other new user of the real server still has to be looked at here.
+        assert all(n.startswith(("test_ai", "test_neuralbridge_mcp", "test_site_honesty",
+                                 "test_multiworker_real")) for n in owners), owners
         # ... and the REST adapter really sends requests: no canned data left, and a test serves it locally.
         rest = read("src/neuralbridge/adapters/apis/rest.py")
         assert re.search(r"await client\.send\(", rest) and "MOCK" not in rest and "mock_data" not in rest
