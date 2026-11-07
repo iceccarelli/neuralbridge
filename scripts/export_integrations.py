@@ -111,36 +111,59 @@ def render() -> str:
         "",
         "- **Prerequisites:** a reachable PostgreSQL server and the `asyncpg` package (installed with the project).",
         "- **Configuration:** `host`, `port`, `user`, `password`, `database`, `ssl_mode` (default `prefer`), "
-        "`pool_size` (default 10).",
+        "`pool_size` (default 10), `statement_timeout_ms` (default 30000), `acquire_timeout` (default 10 s), "
+        "`connect_timeout` (default 10 s), `max_rows` (default 10000).",
         "- **Permissions:** the adapter runs whatever its database role may run. Give it a role that can only do what "
         "you intend. The `/ai` control plane's policy gate (`neuralbridge/ai/guard.py`) treats reads as free, gates "
         "writes and destructive statements behind the `ai_control_plane` entitlement and refuses exfiltration-shaped "
         "SQL, but the database role is the real boundary.",
-        "- **Failure modes:** a failed connection raises `ConnectionError`; the adapter never answers from canned "
-        "data unless `allow_mock` is set.",
+        "- **Read-only is enforced in the adapter:** `query`, `list_tables`, `describe_table` and `health_check` run "
+        "in a `READ ONLY` transaction, so `DELETE ... RETURNING`, `WITH x AS (DELETE ...)`, `nextval()`, DDL and "
+        "`SELECT ... FOR UPDATE` fail in the database whatever the SQL text says. Only `execute_sql` can write.",
+        "- **Failure modes:** each is a structured failure, not a hang or a raw exception: `statement_timeout`, "
+        "`connection_lost` (the pool discards the dead connection; the next call works), `pool_exhausted`, "
+        "`permission_denied`, `read_only_violation`, `result_too_large`. A failed connection raises "
+        "`ConnectionError` naming the exception class only (never the host, port, user or password); the adapter "
+        "never answers from canned data unless `allow_mock` is set.",
         "- **Limits:** the default `ssl_mode` is `prefer`, which does not refuse an unencrypted connection; set it "
         "explicitly for anything beyond a local test. The tests that run it against a real server "
         "(`tests/test_ai.py`) need PostgreSQL and fail rather than skip when `NEURALBRIDGE_REQUIRE_POSTGRES=1` "
-        "(as in CI); they do not cover TLS modes or role permissions.",
+        "(as in CI); `tests/test_postgres_adapter_failures.py` adds the failure modes above and password "
+        "rejection (against a private scram-sha-256 PostgreSQL 16 started by the test). **Local evidence only:** "
+        "no managed cloud PostgreSQL, no pooler (pgbouncer), no other server version, and no TLS mode other than "
+        "`disable`/`prefer` has been exercised.",
         "",
         "## REST (supported, with limits)",
         "",
         "- **What it does:** real GET / POST / PUT / PATCH / DELETE / HEAD through `httpx` with bearer, basic or "
         "API-key header authentication. Credentials come from the adapter config (`credentials`, or "
-        "`credentials_env` naming environment variables) and are never logged, put in errors or returned.",
+        "`credentials_env` naming environment variables) and are never logged, put in errors or returned. "
+        "`Link`, `X-Total-Count` and `X-RateLimit-*` response headers are passed through; pagination is "
+        "caller-driven (the adapter does not follow `next` links).",
         "- **Bounds:** http(s) only; private, loopback, link-local (including the cloud metadata address) and "
         "reserved destinations are refused unless `allow_private_network` is set; optional `allowed_hosts`; "
         "response size and wall-clock time are capped; redirects to another origin are never followed; a non-2xx "
-        "status, a timeout or an oversized body is a structured failure, never a success.",
+        "status, a timeout, a truncated body or an oversized body (also after gzip decoding) is a structured "
+        "failure, never a success. TLS certificates are verified by default; `ca_cert_path` trusts only a given CA "
+        "file (hostname still checked); `verify_ssl: false` disables the check and is logged.",
+        "- **Retries (off by default):** `retry.max_attempts` (1-5) retries `get`/`head` (and, only if listed, "
+        "`put`/`delete`; never `post`/`patch`) on 429/500/502/503/504 and on connection failures, with exponential "
+        "backoff, honouring `Retry-After` up to `retry.max_retry_after`, all inside the one `timeout`. A TLS "
+        "failure or any 4xx is never retried. Details in the module docstring of "
+        "`src/neuralbridge/adapters/apis/rest.py`.",
         "- **Limits:** the address check does not defend against DNS rebinding; ambient proxies are ignored unless "
-        "`trust_env` is set. Tested by `tests/test_rest_adapter.py` against a local HTTP server that the test "
-        "starts; no third-party API and no TLS certificate handling is covered.",
+        "`trust_env` is set. Tested by `tests/test_rest_adapter.py` and `tests/test_rest_adapter_contract.py` "
+        "against deterministic fixture servers that the tests start on loopback (auth schemes, 401/403/404/429 "
+        "with Retry-After, 5xx, slow / truncated / oversized / chunked / gzip bodies, redirects, pagination, TLS "
+        "with a locally generated self-signed certificate). **That is local integration evidence, not third-party "
+        "production validation:** no vendor API, no real certificate chain, no real rate-limit policy and no DNS "
+        "has been exercised.",
         "",
         "## What is not claimed",
         "",
         "- No adapter other than PostgreSQL and REST is exercised against a real or locally emulated service by "
-        "any test in this repository, and REST has only been run against a local HTTP server started by its own "
-        "test.",
+        "any test in this repository, and REST has only been run against local HTTP servers (deterministic fixtures) started by its own "
+        "tests (local evidence; no third-party API).",
         "- The MySQL, MongoDB and BigQuery SDKs are not installed in CI, so those adapters cannot even be imported "
         "there; their failure paths are tested with the SDK modules stubbed, which shows our error handling, not "
         "that they work.",

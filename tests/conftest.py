@@ -8,6 +8,7 @@ and compliance module testing.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Generator
 
 import pytest
@@ -23,6 +24,21 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_sink(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """The platform audit trail is a durable SQLite file by default; keep every test's
+    file in its own tmp dir (never the working directory) and drop the process-wide
+    logger so the next test builds its own. Tests of the default path / backend
+    selection ``monkeypatch.delenv`` these."""
+    if not os.environ.get("NEURALBRIDGE_AUDIT_DB"):
+        monkeypatch.setenv("NEURALBRIDGE_AUDIT_DB", str(tmp_path / "audit-default.db"))
+    import neuralbridge.api.dependencies as deps
+
+    deps._audit_logger = None
+    yield
+    deps._audit_logger = None
 
 
 @pytest.fixture

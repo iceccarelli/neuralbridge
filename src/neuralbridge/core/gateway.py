@@ -29,11 +29,13 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
+from fastapi import HTTPException
 
-from neuralbridge.ai.entitlements import get_accounts, resolve_principal
-from neuralbridge.ai.guard import enforce_write_gate
+from neuralbridge.ai.audit_events import gate_with_audit
+from neuralbridge.ai.entitlements import get_accounts, resolve_principal, scope_for
 from neuralbridge.core.router import RequestRouter
-from neuralbridge.security.audit import AuditLogger
+from neuralbridge.security.audit import AuditLogger, AuditUnavailableError, redact_text
+from neuralbridge.security.limits import Limits, ResourceLimitError
 
 logger = structlog.get_logger(__name__)
 
@@ -173,7 +175,15 @@ class MCPGateway:
         MCPResponse
             JSON-RPC 2.0 response with ``result`` or ``error``.
         """
-        # Parse
+        # Parse. The same body cap as the HTTP API (NEURALBRIDGE_MAX_BODY_BYTES) applies to the
+        # raw JSON-RPC message, so the gateway is not a way round it.
+        cap = Limits.from_env().max_body_bytes
+        size = len(raw.encode("utf-8", "ignore")) if isinstance(raw, str) else len(json.dumps(raw, default=str))
+        if size > cap:
+            return MCPResponse(
+                id="unknown",
+                error={"code": -32600, "message": f"request_too_large: message exceeds {cap} bytes"},
+            )
         if isinstance(raw, str):
             try:
                 data = json.loads(raw)
@@ -191,12 +201,13 @@ class MCPGateway:
         logger.info("mcp_request_received", method=request.method, request_id=request.id)
 
         # Dispatch
+        owner: str | None = None
         try:
             result: Any = None
             if request.method == "tools/list":
                 result = self.list_tools()
             elif request.method == "tools/call":
-                result = await self._execute_tool(request)
+                result, owner = await self._execute_tool(request)
             elif request.method == "initialize":
                 result = self._handle_initialize(request)
             elif request.method == "ping":
@@ -208,28 +219,61 @@ class MCPGateway:
                 )
         except Exception as exc:
             logger.exception("mcp_request_failed", request_id=request.id)
-            await self._audit.log_event(
-                event_type="mcp_error",
-                actor=f"mcp:{self._default_actor}",
-                resource=request.method,
-                action="call",
-                result="error",
-                details={"request_id": request.id, "error": str(exc)},
-            )
+            try:
+                await self._audit.log_event(
+                    event_type="mcp_error",
+                    actor=f"mcp:{self._default_actor}",
+                    resource=request.method,
+                    action="call",
+                    result="error",
+                    details={"request_id": request.id, "error": str(exc),
+                             **({"owner": owner} if owner else {})},
+                )
+            except AuditUnavailableError:
+                logger.critical("mcp_error_not_audited", request_id=request.id)
+            if isinstance(exc, HTTPException):
+                # The same gate refusal the HTTP routes answer (402 plan, 403 policy, 404 ...), with its
+                # status and structured body, instead of an opaque internal error.
+                return MCPResponse(
+                    id=request.id,
+                    error={"code": -32000, "message": f"http_{exc.status_code}",
+                           "data": {"status": exc.status_code, "detail": exc.detail}},
+                )
+            if isinstance(exc, ResourceLimitError):
+                return MCPResponse(
+                    id=request.id,
+                    error={"code": -32000, "message": f"{exc.code}: {exc}",
+                           "data": {"status": exc.status_code, "retry_after": exc.retry_after}},
+                )
+            if isinstance(exc, AuditUnavailableError):
+                return MCPResponse(
+                    id=request.id,
+                    error={"code": -32000, "message": "audit_unavailable: the audit trail cannot record; "
+                                                      "the operation was refused",
+                           "data": {"status": 503}},
+                )
             return MCPResponse(
                 id=request.id,
-                error={"code": -32603, "message": str(exc)},
+                error={"code": -32603, "message": redact_text(str(exc))},
             )
 
         # Audit success
-        await self._audit.log_event(
-            event_type="mcp_request",
-            actor=f"mcp:{self._default_actor}",
-            resource=request.method,
-            action="call",
-            result="success",
-            details={"request_id": request.id, "method": request.method},
-        )
+        try:
+            await self._audit.log_event(
+                event_type="mcp_request",
+                actor=f"mcp:{self._default_actor}",
+                resource=request.method,
+                action="call",
+                result="success",
+                details={"request_id": request.id, "method": request.method,
+                         **({"owner": owner} if owner else {})},
+            )
+        except AuditUnavailableError:
+            return MCPResponse(
+                id=request.id,
+                error={"code": -32000, "message": "audit_unavailable: the call ran but could not be recorded",
+                       "data": {"status": 503}},
+            )
         return MCPResponse(id=request.id, result=result)
 
     # ── Private Helpers ──────────────────────────────────────
@@ -248,7 +292,7 @@ class MCPGateway:
             },
         }
 
-    async def _execute_tool(self, request: MCPRequest) -> Any:
+    async def _execute_tool(self, request: MCPRequest) -> tuple[Any, str]:
         """
         Delegate a ``tools/call`` to the appropriate adapter via the Router.
         """
@@ -271,7 +315,11 @@ class MCPGateway:
             principal = resolve_principal(api_key, get_accounts(), anonymous_subject=f"mcp:{actor}")
         except ValueError as exc:
             raise ValueError(f"invalid_api_key: {exc}") from exc
-        await enforce_write_gate(tool.adapter_type, operation, params, principal)
+        owner = scope_for(principal).owner
+        await gate_with_audit(
+            self._audit, surface="mcp_gateway", actor=f"mcp:{actor}", adapter_type=tool.adapter_type,
+            operation=operation, params=params, principal=principal,
+        )
 
         result = await self._router.route(
             adapter_type=tool.adapter_type,
@@ -279,8 +327,9 @@ class MCPGateway:
             params=params,
             request_id=request.id,
             actor=f"mcp:{actor}",
+            owner=owner,
         )
-        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
+        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}, owner
 
     # ── Transport Loops ──────────────────────────────────────
 

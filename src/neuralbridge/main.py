@@ -12,14 +12,23 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from neuralbridge import __version__
+from neuralbridge.api.dependencies import get_audit_logger
 from neuralbridge.api.routes import adapters, ai, compliance, connections, health, logs
 from neuralbridge.config import Settings, get_settings
+from neuralbridge.security.audit import AuditUnavailableError
+from neuralbridge.security.limits import BodySizeLimitMiddleware
 from neuralbridge.utils.logger import setup_logging
+
+_log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -39,6 +48,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Store settings in app state for dependency injection
     app.state.settings = settings
+
+    # Fail loudly: a platform that cannot record its audit trail must not start
+    # serving. (A sink that breaks later turns /health/ready red and refuses
+    # security-relevant operations with 503; see AuditLogger.ensure_writable.)
+    try:
+        await get_audit_logger().ensure_writable()
+    except AuditUnavailableError:
+        _log.critical("audit_sink_unavailable_at_startup")
+        raise
 
     yield  # ← application runs here
 
@@ -75,6 +93,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan,
     )
+
+    @app.exception_handler(AuditUnavailableError)
+    async def _audit_unavailable(_request: Request, _exc: AuditUnavailableError) -> JSONResponse:
+        # Nothing about the sink (path, DSN, driver text) goes to the client.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": {"error": "audit_unavailable",
+                                "message": "The audit trail cannot record; the operation was refused."}},
+            headers={"Retry-After": "30"},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default 422 echoes the submitted value (``input``) of every bad
+        # field, which would send a rejected request's password straight back to
+        # the caller (and into any proxy log). Keep location/message/type only.
+        errors = [{k: v for k, v in e.items() if k in ("loc", "msg", "type")} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+    # Request bodies are capped (NEURALBRIDGE_MAX_BODY_BYTES, default 1 MiB): 413 beyond it.
+    app.add_middleware(BodySizeLimitMiddleware)
 
     # ── CORS ─────────────────────────────────────────────────
     app.add_middleware(

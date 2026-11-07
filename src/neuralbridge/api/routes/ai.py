@@ -23,11 +23,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, SecretStr
 
 from neuralbridge.ai import orchestrator
-from neuralbridge.ai.connections import create_connection, delete_connection, list_connections
+from neuralbridge.ai.audit_events import params_digest, record
+from neuralbridge.ai.connections import (
+    ConnectionLifecycleError,
+    create_connection,
+    delete_connection,
+    list_connections,
+    revoke_connection,
+    rotate_connection,
+)
 from neuralbridge.ai.entitlements import (
     Principal,
     current_principal,
@@ -63,14 +71,34 @@ router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 def _raise(exc: OrchestratorError) -> None:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail, headers=headers) from exc
+
+
+def _raise_lifecycle(exc: ConnectionLifecycleError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-async def _paid_principal(principal: Principal = Depends(current_principal)) -> Principal:
+async def _paid_principal(
+    request: Request,
+    principal: Principal = Depends(current_principal),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+) -> Principal:
     """FastAPI dependency wrapping ``require_ai_control_plane`` — the one
     door every WRITE-shaped /ai route (and the raw adapters/MCP paths that
-    share this policy) goes through."""
-    return await require_ai_control_plane(principal)
+    share this policy) goes through. A refusal (402) is audited with the
+    actor and tenant before it is re-raised."""
+    try:
+        return await require_ai_control_plane(principal)
+    except HTTPException as exc:
+        if exc.status_code == 402:
+            await record(
+                audit_logger, event_type="entitlement_denied", actor=actor.as_audit_string(),
+                owner=scope_for(principal).owner, resource=request.url.path, action=request.method,
+                result="denied", details={"surface": "ai_route", "tier": principal.tier}, quiet=True,
+            )
+        raise
 
 
 async def _scope(principal: Principal = Depends(current_principal)) -> Scope:
@@ -87,9 +115,18 @@ class BindConnectionRequest(BaseModel):
     host: str
     port: int = 5432
     user: str
-    password: str
+    #: Write-only. A ``SecretStr`` so it can never reach a log line, a repr or a
+    #: validation-error echo; it is stored nowhere and returned nowhere.
+    password: SecretStr
     database: str
     ssl_mode: str = "prefer"
+
+
+class RotateConnectionRequest(BaseModel):
+    """New credentials for an existing connection (same host/port/database)."""
+
+    user: str
+    password: SecretStr
 
 
 @router.get("/session", summary="Resolve the current actor identity and entitlement")
@@ -126,16 +163,100 @@ async def bind_connection(
     registry: AdapterRegistry = Depends(get_adapter_registry),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> ConnectionSummary:
-    record = create_connection(
+    await audit_logger.ensure_writable()  # no credential is accepted if the act cannot be recorded
+    created = create_connection(
         registry, store, owner=scope.owner, name=request.name, host=request.host, port=request.port,
-        user=request.user, password=request.password, database=request.database,
+        user=request.user, password=request.password.get_secret_value(), database=request.database,
         ssl_mode=request.ssl_mode,
     )
-    return ConnectionSummary(
-        id=record.id, name=record.name, adapter_type=record.adapter_type,
-        status=record.status, source=record.source,
+    await record(
+        audit_logger, event_type="connection_create", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"connection:{created.id}", action="create", result="success",
+        details={"connection_id": created.id, "adapter_type": created.adapter_type, "name": created.name,
+                 "host": request.host, "port": request.port, "database": request.database,
+                 "ssl_mode": request.ssl_mode},
     )
+    return ConnectionSummary(
+        id=created.id, name=created.name, adapter_type=created.adapter_type,
+        status=created.status, source=created.source,
+    )
+
+
+@router.post("/connections/{connection_id}/rotate", summary="Replace a connection's credentials")
+async def rotate(
+    connection_id: str,
+    request: RotateConnectionRequest,
+    registry: AdapterRegistry = Depends(get_adapter_registry),
+    store: AiStore = Depends(get_ai_store),
+    scope: Scope = Depends(_scope),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+) -> ConnectionSummary:
+    """Owner-only and, like unbind, **not** behind the paid gate (a lapsed account can still
+    take a credential out of service). The new credentials are verified against the target
+    before the live adapter is swapped; on failure the old ones keep working. Write-only: the
+    password is in no response, log line or audit record. 404 for a missing or foreign id,
+    409 if revoked, 422 if the target rejects the credentials."""
+    await audit_logger.ensure_writable()
+    result, summary = "success", None
+    try:
+        rotated = await rotate_connection(
+            registry, store, scope, connection_id, user=request.user,
+            password=request.password.get_secret_value(),
+        )
+        summary = ConnectionSummary(
+            id=rotated.id, name=rotated.name, adapter_type=rotated.adapter_type,
+            status=rotated.status, source=rotated.source,
+        )
+    except ConnectionLifecycleError as exc:
+        result = f"refused:{exc.status_code}"
+        await record(
+            audit_logger, event_type="connection_rotate", actor=actor.as_audit_string(), owner=scope.owner,
+            resource=f"connection:{connection_id}", action="rotate", result=result,
+            details={"connection_id": connection_id},
+        )
+        _raise_lifecycle(exc)
+    await record(
+        audit_logger, event_type="connection_rotate", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"connection:{connection_id}", action="rotate", result=result,
+        details={"connection_id": connection_id},
+    )
+    assert summary is not None
+    return summary
+
+
+@router.post("/connections/{connection_id}/revoke", summary="Revoke a connection (permanent)")
+async def revoke(
+    connection_id: str,
+    registry: AdapterRegistry = Depends(get_adapter_registry),
+    store: AiStore = Depends(get_ai_store),
+    scope: Scope = Depends(_scope),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+) -> dict[str, Any]:
+    """Owner-only, not paid-gated. Takes effect on the very next call from any worker:
+    reads, plans and approvals against the connection answer 409, and plans still pending on
+    it are denied. Idempotent. 404 for a missing or foreign id."""
+    await audit_logger.ensure_writable()
+    try:
+        changed = await revoke_connection(
+            registry, store, scope, connection_id, by=actor.as_audit_string())
+    except ConnectionLifecycleError as exc:
+        await record(
+            audit_logger, event_type="connection_revoke", actor=actor.as_audit_string(), owner=scope.owner,
+            resource=f"connection:{connection_id}", action="revoke", result=f"refused:{exc.status_code}",
+            details={"connection_id": connection_id},
+        )
+        _raise_lifecycle(exc)
+    await record(
+        audit_logger, event_type="connection_revoke", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"connection:{connection_id}", action="revoke",
+        result="success" if changed else "already_revoked", details={"connection_id": connection_id},
+    )
+    return {"revoked": connection_id, "already_revoked": not changed}
 
 
 @router.delete("/connections/{connection_id}", summary="Unbind one of your connections")
@@ -144,12 +265,21 @@ async def unbind_connection(
     registry: AdapterRegistry = Depends(get_adapter_registry),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_scope),
+    actor: Actor = Depends(get_current_actor),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> dict[str, str]:
     """Owner-only, and deliberately **not** behind the paid gate: removing a
     connection shrinks exposure, so an account whose plan lapsed can still
     unbind what it bound. Someone else's id, a missing id, the shared seeded
     demo (for non-operators) and any anonymous caller all answer the same 404."""
-    if not await delete_connection(registry, store, scope, connection_id):
+    await audit_logger.ensure_writable()
+    deleted = await delete_connection(registry, store, scope, connection_id)
+    await record(
+        audit_logger, event_type="connection_delete", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"connection:{connection_id}", action="delete", result="success" if deleted else "refused:404",
+        details={"connection_id": connection_id},
+    )
+    if not deleted:
         raise HTTPException(status_code=404, detail=f"Connection '{connection_id}' not found.")
     return {"deleted": connection_id}
 
@@ -193,12 +323,27 @@ async def plan(
     actor: Actor = Depends(get_current_actor),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> ApprovalCard:
+    await audit_logger.ensure_writable()
+    base = {"connection_id": request.connection_id, "operation": request.operation,
+            "params_sha256": params_digest(request.params)}
     try:
-        return orchestrator.create_plan(store, scope, actor, request.connection_id, request.operation, request.params)
+        card = orchestrator.create_plan(store, scope, actor, request.connection_id, request.operation, request.params)
     except OrchestratorError as exc:
+        await record(
+            audit_logger, event_type="plan_propose", actor=actor.as_audit_string(), owner=scope.owner,
+            resource=f"connection:{request.connection_id}", action="propose",
+            result=f"refused:{exc.status_code}", details=base, quiet=True,
+        )
         _raise(exc)
         raise
+    await record(
+        audit_logger, event_type="plan_propose", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"plan:{card.plan.id}", action="propose", result="success",
+        details={**base, "plan_id": card.plan.id, "operation_class": card.plan.operation_class.value},
+    )
+    return card
 
 
 @router.get("/plan/{plan_id}", summary="Inspect a plan's current status")
@@ -220,12 +365,36 @@ async def approve(
     registry: AdapterRegistry = Depends(get_adapter_registry),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> ExecutionReceipt:
+    await audit_logger.ensure_writable()
+    who, ref = actor.as_audit_string(), f"plan:{plan_id}"
     try:
-        return await orchestrator.approve_and_execute(request_router, registry, store, scope, actor, plan_id)
+        receipt = await orchestrator.approve_and_execute(request_router, registry, store, scope, actor, plan_id)
     except OrchestratorError as exc:
+        # Distinguish "refused before anything ran" (plan still pending, or never ours) from
+        # "approved, then the execution failed" (plan is `failed`; outcome unknown).
+        after = store.get_plan(plan_id)
+        failed = after is not None and after.status == "failed"
+        await record(
+            audit_logger, event_type="plan_execute" if failed else "plan_approve", actor=who, owner=scope.owner,
+            resource=ref, action="execute" if failed else "approve",
+            result=f"failure:{exc.status_code}" if failed else f"refused:{exc.status_code}",
+            details={"plan_id": plan_id}, quiet=not failed,
+        )
         _raise(exc)
         raise
+    await record(
+        audit_logger, event_type="plan_approve", actor=who, owner=scope.owner, resource=ref, action="approve",
+        result="success", details={"plan_id": plan_id, "connection_id": receipt.provenance.connection_id},
+    )
+    await record(
+        audit_logger, event_type="plan_execute", actor=who, owner=scope.owner, resource=ref, action="execute",
+        result="success" if receipt.success else "failure",
+        details={"plan_id": plan_id, "connection_id": receipt.provenance.connection_id,
+                 "request_id": receipt.provenance.request_id},
+    )
+    return receipt
 
 
 @router.post("/plan/{plan_id}/deny", summary="Deny a pending plan — Register/Cell, nothing executes")
@@ -235,12 +404,25 @@ async def deny(
     actor: Actor = Depends(get_current_actor),
     store: AiStore = Depends(get_ai_store),
     scope: Scope = Depends(_paid_scope),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> Plan:
+    await audit_logger.ensure_writable()
     try:
-        return orchestrator.deny_plan(store, scope, actor, plan_id, reason)
+        denied = orchestrator.deny_plan(store, scope, actor, plan_id, reason)
     except OrchestratorError as exc:
+        await record(
+            audit_logger, event_type="plan_deny", actor=actor.as_audit_string(), owner=scope.owner,
+            resource=f"plan:{plan_id}", action="deny", result=f"refused:{exc.status_code}",
+            details={"plan_id": plan_id}, quiet=True,
+        )
         _raise(exc)
         raise
+    await record(
+        audit_logger, event_type="plan_deny", actor=actor.as_audit_string(), owner=scope.owner,
+        resource=f"plan:{plan_id}", action="deny", result="success",
+        details={"plan_id": plan_id, "reason": reason},
+    )
+    return denied
 
 
 #: Free callers can still see *their own* recent activity — just not the
@@ -258,15 +440,16 @@ async def audit(
     """Only entries stamped with the caller's own account (``details.owner``,
     set server-side from the validated principal). Entries with no owner
     (written before tenancy, or by non-/ai callers) are operator-only; the
-    operator sees everything. The trail lives in the process's
-    ``InMemoryAuditStorage`` (``api/dependencies.get_audit_logger``): it is
-    lost on restart and is not shared between workers."""
+    operator sees everything. The trail is durable (SQLite by default,
+    ``api/dependencies.get_audit_logger``) and shared by every worker process;
+    newest first."""
     scope = scope_for(principal)
     effective_limit = limit if principal.plan.ai_control_plane else min(limit, _FREE_AUDIT_LIMIT)
     events = []
-    async for entry in audit_logger.query_events():
+    async for entry in audit_logger.query_events(
+        owner=None if scope.is_operator else scope.owner, limit=effective_limit, newest_first=True,
+    ):
         if not can_see_audit_entry(scope, entry.details.get("owner")):
             continue
         events.append(entry.model_dump(mode="json"))
-    events.sort(key=lambda e: e["timestamp"], reverse=True)
     return events[:effective_limit]

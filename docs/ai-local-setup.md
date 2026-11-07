@@ -108,7 +108,42 @@ Credentials are still never persisted (only the seeded demo connection,
 whose credentials live in env vars, re-registers itself automatically
 after a restart; an operator-bound additional connection needs its
 credentials re-supplied via `POST /ai/connections` if the process
-restarts — see that endpoint's docstring).
+restarts — see that endpoint's docstring). `POST /ai/connections/{id}/rotate`
+(body `{user, password}`) is exactly that re-supply: the new credentials are
+checked against the target before the live adapter is swapped, and a refused
+rotation leaves the working ones in place. `POST /ai/connections/{id}/revoke`
+is permanent and takes effect on the very next call from any worker process
+(the status lives in the store, which every request re-reads); pending plans
+on it are denied. Both, like `DELETE`, work for an account whose plan lapsed.
+
+### The audit trail is durable too
+
+The platform audit trail (`/api/v1/ai/audit`, `/api/v1/logs`) is an
+append-only, hash-chained SQLite file, `neuralbridge-audit.db` next to the
+store above. Configure it with:
+
+| Variable | Meaning |
+|---|---|
+| `NEURALBRIDGE_AUDIT_DB` | path of the SQLite file (default: `neuralbridge-audit.db` in the directory of `NEURALBRIDGE_AI_STORE`) |
+| `NEURALBRIDGE_AUDIT_BACKEND` | `sqlite` (default), `postgres` (needs `NEURALBRIDGE_AUDIT_PG_DSN`, a secret; table `nb_audit_log`) or `memory` (explicit opt-in; lost on restart) |
+
+Several worker processes may share the file (WAL, atomic chained append). If
+the sink cannot be written the app refuses to start, `/api/v1/health/ready`
+answers 503 `degraded`, and adapter calls and credential/plan operations are
+refused with 503 rather than run unrecorded. Nothing deletes or rotates
+records: archive the file at a documented cut-over when your retention
+policy requires it. Existing deployments need no migration; the file is
+created on first start (before this change the trail was in memory and was
+lost on every restart).
+
+### Resource controls (per process)
+
+`NEURALBRIDGE_MAX_BODY_BYTES` (1 MiB; 413), `NEURALBRIDGE_RATE_LIMIT_PER_MINUTE`
+(120 per tenant, 0 = off; 429 + `Retry-After`), `NEURALBRIDGE_MAX_CONCURRENT_CALLS`
+(32) and `NEURALBRIDGE_MAX_CONCURRENT_PER_ADAPTER` (8) (503 + `Retry-After`),
+`NEURALBRIDGE_ADAPTER_CALL_TIMEOUT` (60 s; 504). They apply identically to the
+raw adapters route, `/ai` and the MCP gateway. With several worker processes
+each process has its own counters.
 
 ## MCP: neuralbridge-ai-mcp
 

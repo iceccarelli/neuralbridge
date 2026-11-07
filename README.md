@@ -358,7 +358,7 @@ Every adapter states exactly one of **Supported** (real, and a test exercises it
 |---|---|---|
 | `graphql` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `odata` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
-| `rest` | Supported | Real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key). Exercised against a local HTTP server started by `tests/test_rest_adapter.py`; not run against any third-party API. |
+| `rest` | Supported | Real, bounded HTTP (SSRF refusal, size/time/redirect limits, bearer/basic/api-key, TLS verification with an optional pinned CA, opt-in bounded retries of idempotent methods honouring Retry-After). Exercised against deterministic fixture servers started by `tests/test_rest_adapter.py` and `tests/test_rest_adapter_contract.py` (local evidence only); not run against any third-party API. |
 | `soap` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `aws_s3` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `azure_blob` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
@@ -367,7 +367,7 @@ Every adapter states exactly one of **Supported** (real, and a test exercises it
 | `bigquery` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
 | `mongodb` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
 | `mysql` | Evolving | Real client path; its SDK is not installed in CI and no test has run it against a live service. Fails closed. |
-| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` (needs a server; fails, not skips, in CI). |
+| `postgres` | Supported | Exercised against a real PostgreSQL server by `tests/test_ai.py` and `tests/test_postgres_adapter_failures.py` (read-only transactions, statement timeout, connection loss, permission errors, pool exhaustion, password rejection; need a server; fail, not skip, in CI). Local evidence only: no managed service, pooler or other version. |
 | `snowflake` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `sap_erp` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
 | `salesforce` | Not implemented | Returns canned data only. `execute` is refused unless `allow_mock` / `NEURALBRIDGE_ALLOW_MOCK_ADAPTERS=1`; results are then flagged `mock: true`. |
