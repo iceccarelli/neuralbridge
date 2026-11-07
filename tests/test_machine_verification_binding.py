@@ -38,9 +38,10 @@ def ledger(tmp_path):
 
 def _seal(ledger, *, configuration_hash=""):
     env, run = _inputs(WHEN)
-    extra = {"configuration_hash": configuration_hash} if configuration_hash else {}
+    # Always passed, "" included: tests/support_recorder.py binds a verification to the ledger's
+    # manifest unless told otherwise, and "" is how a test seals an UNBOUND one on purpose.
     return build_attested_bundle(env, run, actor=ENG, ledger=ledger, subject=MACHINE.key,
-                                 **extra)
+                                 configuration_hash=configuration_hash)
 
 
 def _report(ledger, m):
@@ -129,8 +130,6 @@ class TestAnUnboundVerificationIsNeverCurrent:
         assert {f.coverage for f in rep.functions} == {Coverage.CURRENT}
 
     def test_an_intervention_is_still_the_explanation_when_there_is_one(self, ledger):
-        pass
-
         m = manifest()
         record_manifest(ledger, m)
         _seal(ledger)

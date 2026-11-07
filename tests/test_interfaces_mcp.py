@@ -316,10 +316,17 @@ async def test_the_read_only_tools_are_in_the_allow_list_and_reach_no_write_rout
             for m, p in seen:
                 assert matches(READ_ONLY_ALLOWED, m, p), (name, hostile, p)
                 assert not reaches_write(m, p), (name, hostile, p)
+                words = set(p.split("/"))
+                if (m, p) == ("POST", "/v1/machinery/passport/check-ledger"):
+                    # Exactly this route is a READ (it re-checks a passport against the ledger,
+                    # records nothing); the sealing route is POST /v1/machinery/passport. The
+                    # exact method+path is pinned by READ_ONLY_ALLOWED and the live-API write
+                    # routes above; only this one path is let past the 'passport' word.
+                    words -= {"passport"}
                 assert not {"decision", "resume", "resolve-decision", "waive-reverification",
                             "pin", "rotate", "revoke", "override", "feed-baseline", "declare",
                             "manifest", "intervention", "passport", "report"
-                            } & set(p.split("/")), (name, p)
+                            } & words, (name, p)
 
 
 @pytest.mark.asyncio

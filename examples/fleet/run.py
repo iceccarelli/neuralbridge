@@ -72,6 +72,13 @@ def manifest(serial: str, version: str, fw_hash: str) -> dict:
     }
 
 
+def config_hash(serial: str, version: str, fw_hash: str) -> str:
+    """The configuration hash the sealed manifest for this machine carries (the product's own code)."""
+    from assurance.machinery.manifest import SafetyManifest
+
+    return SafetyManifest.from_dict(manifest(serial, version, fw_hash)).configuration_hash()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true")
@@ -117,7 +124,10 @@ def main() -> int:
             (work / f"trace-{serial}.json").write_text(json.dumps(trace), "utf-8")
             verify = ["machine", "verify", "--envelope", "envelope.json", "--trace",
                       f"trace-{serial}.json", "--actor", "v.demo", "--ledger", ledger, "--subject",
-                      f"DemoCo/AR-7#{serial}", "--machine-serial", serial]
+                      f"DemoCo/AR-7#{serial}", "--machine-serial", serial,
+                      # state which configuration this run was made against: a verification that
+                      # names none is never read as current (it could only be tied by dates)
+                      "--configuration-hash", config_hash(serial, version, fw_hash)]
             if how == "attested":
                 sign = cli(work, "machine", "recorder-sign", "--key", "rec.pem", "--trace",
                            f"trace-{serial}.json", "--product", PRODUCT, "--product-version",

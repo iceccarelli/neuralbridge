@@ -56,6 +56,10 @@ def main() -> int:
         for name in ("envelope", "manifest", "intervention", "trace-before", "trace-after"):
             (work / f"{name}.json").write_text((HERE / f"{name}.json").read_text("utf-8"), "utf-8")
         ledger = "ledger.db"
+        from assurance.machinery.manifest import SafetyManifest
+
+        config_hash = SafetyManifest.from_dict(
+            json.loads((work / "manifest.json").read_text("utf-8"))).configuration_hash()
 
         step("keygen: a throwaway recorder key", cli(work, "attest", "keygen", "--out", "rec.pem"),
              0, "a fresh Ed25519 key pair for this run", "that any real recorder exists")
@@ -78,10 +82,13 @@ def main() -> int:
                        "--attested-on", attested_on, "--out", f"att-{tag}.json")
             if sign.returncode != 0:
                 return sign
+            # name the configuration this run was made against: a verification that names none
+            # is never read as current (it could only be tied to the machine by dates)
             return cli(work, "machine", "verify", "--envelope", "envelope.json", "--trace",
                        f"trace-{tag}.json", "--recorder-attestation", f"att-{tag}.json",
                        "--recorder-trust", "trust.json", "--actor", "v.demo", "--ledger", ledger,
-                       "--subject", KEY, "--machine-serial", "DEMO-0001", "--out",
+                       "--subject", KEY, "--machine-serial", "DEMO-0001",
+                       "--configuration-hash", config_hash, "--out",
                        f"bundle-{tag}.json")
 
         step("verify (before the change): the recorded run against the declared envelope",
