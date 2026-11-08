@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,9 @@ class LiveApi:
     url: str
     accounts: Any
     root: Path
+    # Every client handed out by client(): an httpx.Client keeps a pooled socket open until it is
+    # closed, and most callers (`client = live_api.client()`) never close it. The fixture does.
+    _clients: list[httpx.Client] = field(default_factory=list, repr=False)
 
     def account(self, email: str, tier: str = "cell") -> tuple[str, dict[str, str]]:
         """A real account on ``tier`` and the header that authenticates it."""
@@ -59,7 +62,14 @@ class LiveApi:
         return deps._tenant_register_for(str(deps.tenant_ledger_path(account_id))).ledger
 
     def client(self) -> httpx.Client:
-        return httpx.Client(base_url=self.url, timeout=30.0)
+        client = httpx.Client(base_url=self.url, timeout=30.0)
+        self._clients.append(client)
+        return client
+
+    def close_clients(self) -> None:
+        for client in self._clients:
+            client.close()
+        self._clients.clear()
 
 
 @contextmanager
@@ -122,6 +132,10 @@ def live_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveAp
     clear()
     try:
         with serve(create_app()) as url:
-            yield LiveApi(url=url, accounts=deps.get_accounts(), root=tmp_path)
+            live = LiveApi(url=url, accounts=deps.get_accounts(), root=tmp_path)
+            try:
+                yield live
+            finally:
+                live.close_clients()
     finally:
         clear()

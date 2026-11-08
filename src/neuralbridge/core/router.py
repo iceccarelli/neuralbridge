@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
 
 import structlog
 
@@ -38,6 +39,16 @@ from neuralbridge.security.limits import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+class RateCheck(Protocol):
+    """A per-key rate limiter: ``check`` returns, or raises ``RateLimitedError``."""
+
+    def check(self, key: str) -> None: ...
+
+
+#: Awaited with a per-connection registry key; raises ``ValueError`` to refuse it.
+ConnectionGuard = Callable[[str], Awaitable[None]]
 
 
 class AuditPreflightError(AuditUnavailableError, NotDispatchedError):
@@ -59,8 +70,10 @@ class AdapterRegistry:
 
     def __init__(self) -> None:
         self._adapters: dict[str, BaseAdapter] = {}
+        #: Credential version each per-connection adapter was built from (see ``neuralbridge.ai.credentials``).
+        self._versions: dict[str, int] = {}
 
-    def register(self, adapter: BaseAdapter, key: str | None = None) -> None:
+    def register(self, adapter: BaseAdapter, key: str | None = None, version: int | None = None) -> None:
         """Register an adapter instance.
 
         Keyed by its declared type name by default — the original,
@@ -71,11 +84,21 @@ class AdapterRegistry:
         which is the one caller that needs more than one Postgres
         connection live at once.
         """
-        self._adapters[key or adapter.adapter_type] = adapter
+        name = key or adapter.adapter_type
+        self._adapters[name] = adapter
+        if version is None:
+            self._versions.pop(name, None)
+        else:
+            self._versions[name] = version
         logger.info("adapter_registered", adapter_type=adapter.adapter_type, key=key or adapter.adapter_type)
 
     def unregister(self, adapter_type: str) -> None:
         self._adapters.pop(adapter_type, None)
+        self._versions.pop(adapter_type, None)
+
+    def version_of(self, adapter_type: str) -> int | None:
+        """The credential version the live adapter under this key was built from, if recorded."""
+        return self._versions.get(adapter_type)
 
     def get(self, adapter_type: str) -> BaseAdapter | None:
         return self._adapters.get(adapter_type)
@@ -101,12 +124,22 @@ class RequestRouter:
 
     def __init__(
         self, registry: AdapterRegistry, audit_logger: AuditLogger, limits: Limits | None = None,
+        *, rate_limiter: RateCheck | None = None, connection_guard: ConnectionGuard | None = None,
     ) -> None:
         self._registry = registry
         self._audit = audit_logger
         self.limits = limits or Limits.from_env()
-        self._rate = SlidingWindowLimiter(self.limits.rate_per_minute)
+        #: Per-tenant call limiter. Process-local unless the caller supplies a shared one
+        #: (``api/dependencies.get_request_router`` does); see ``neuralbridge.security.limits``.
+        self._rate: RateCheck = rate_limiter or SlidingWindowLimiter(self.limits.rate_per_minute)
+        #: Called with a per-connection registry key before it is used, so a raw/operator call cannot
+        #: reach a connection that was revoked or rotated in another worker (``ai/credentials.py``).
+        self._connection_guard = connection_guard
         self._gate = ConcurrencyGate(self.limits.max_concurrent, self.limits.max_concurrent_per_adapter)
+
+    async def _guard_connection(self, adapter_type: str) -> None:
+        if self._connection_guard is not None and ":" in adapter_type:
+            await self._connection_guard(adapter_type)
 
     async def route(
         self,
@@ -155,6 +188,7 @@ class RequestRouter:
         ValueError
             If the adapter type is not registered.
         """
+        await self._guard_connection(adapter_type)
         adapter = self._registry.get(adapter_type)
         if adapter is None:
             # Only plain adapter types are listed: per-connection keys (``postgres:<id>``) are
@@ -187,6 +221,7 @@ class RequestRouter:
         audit row (``success`` / ``failure``) with actor and tenant. Entitlement is the caller's
         job (``neuralbridge.ai.guard.enforce_validate_gate``).
         """
+        await self._guard_connection(adapter_type)
         adapter = self._registry.get(adapter_type)
         if adapter is None:
             raise ValueError(f"Adapter '{adapter_type}' is not registered.")

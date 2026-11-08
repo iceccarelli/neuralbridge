@@ -28,9 +28,14 @@ Four more reads
 serve public-source intelligence from the operator's shared observation store (``intel_history``,
 ``intel_observation``, ``intel_cve``, ``intel_candidates``; Cell tier); there is no tool that
 ingests or fetches a feed, and an unconfigured store is the API's real 503, never an empty
-list. Everything beyond the case work reads or verifies and never decides or records, and none of it can supply a
+list. Seven more tools take third-party documents (``sbom_import``, ``sbom_drafts``, ``sbom_draft``,
+``csaf_import``, ``csaf_records``, ``csaf_record``, ``csaf_impact``): the two imports record a
+DRAFT inventory (pending a named person's review) and an unsigned, inspect-only supplier advisory,
+and the rest read. Everything beyond the case work and those two imports reads or verifies and
+never decides or records, and none of it can supply a
 trust list or a public key, so what an agent asks the server to check is judged under the server's
-own configuration. There is no tool that assesses an advisory, and no tool that closes, rejects,
+own configuration. There is no tool that opens a case from an advisory, none that reviews or approves
+an SBOM draft (approval enrols a machine and decides which software is safety-relevant), and no tool that closes, rejects,
 defers or resumes a case, answers its open questions or waives a re-verification: those are a
 named person's, on the CLI or the HTTP API.
 
@@ -883,6 +888,121 @@ async def intel_candidates() -> dict[str, Any]:
     exists".
     """
     return await _call("GET", "/v1/intel/candidates")
+
+
+# Third-party SBOMs and advisories. An SBOM becomes a DRAFT pending a named person's review, and a
+# CSAF advisory becomes a recorded, unsigned, inspect-only supplier statement. There is no tool
+# that reviews a draft (approving it enrols a machine and decides which software is safety-
+# relevant: a named decider's act, on the CLI or the HTTP API).
+
+_DRAFT_ID = re.compile(r"sbom-[0-9a-f]{32}")
+_ADVISORY_REF = re.compile(r"csaf-[0-9a-f]{32}")
+
+
+def _document_body(
+    document: str, source_name: str, supplied_at: str, source_url: str, source_sha256: str,
+    actor: str, dry_run: bool,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"document": document}
+    for key, value in (("source_name", source_name), ("supplied_at", supplied_at),
+                       ("source_url", source_url), ("source_sha256", source_sha256),
+                       ("actor", actor)):
+        if value:
+            body[key] = value
+    if dry_run:
+        body["dry_run"] = True
+    return body
+
+
+@mcp.tool()
+async def sbom_import(
+    document: str, source_name: str = "", supplied_at: str = "", source_url: str = "",
+    source_sha256: str = "", actor: str = "", dry_run: bool = False,
+) -> dict[str, Any]:
+    """POST /v1/ingest/sbom — import a CycloneDX JSON SBOM (1.4, 1.5, 1.6) as a DRAFT machine-
+    software inventory pending a named person's review. Cell-tier only.
+
+    ``document`` is the SBOM text exactly as received; its SHA-256 is recorded. The draft never
+    has a machine serial number, never marks a component safety-relevant and never marks one as
+    measured; a missing version, purl, supplier or digest is ``unknown``. Every decision in it is
+    ``pending_review``. This tool cannot review or approve a draft, which enrols a machine: that
+    is a named decider's act. ``dry_run`` validates and returns the draft without recording it.
+    """
+    return await _call("POST", "/v1/ingest/sbom", json_body=_document_body(
+        document, source_name, supplied_at, source_url, source_sha256, actor, dry_run))
+
+
+@mcp.tool()
+async def sbom_drafts() -> dict[str, Any]:
+    """GET /v1/ingest/sbom — the SBOM drafts in the account's ledger and whether each is
+    ``pending_review``, ``approved_and_enrolled`` or ``rejected``. Read-only; Cell-tier only."""
+    return await _call("GET", "/v1/ingest/sbom")
+
+
+@mcp.tool()
+async def sbom_draft(draft_id: str) -> dict[str, Any]:
+    """GET /v1/ingest/sbom/{draft_id} — one SBOM draft in full: its source SHA-256, every
+    component as supplied (unknown fields are null), the identity candidates the document names
+    (never a serial) and its review state. Read-only; Cell-tier only."""
+    if not _DRAFT_ID.fullmatch(draft_id):
+        return _invalid("invalid_draft_id", "a draft id looks like sbom- and 32 hex digits.")
+    return await _call("GET", f"/v1/ingest/sbom/{draft_id}")
+
+
+@mcp.tool()
+async def csaf_import(
+    document: str, source_name: str = "", supplied_at: str = "", source_url: str = "",
+    source_sha256: str = "", actor: str = "", allow_draft: bool = False, dry_run: bool = False,
+) -> dict[str, Any]:
+    """POST /v1/ingest/csaf — import a CSAF 2.0 advisory as a recorded SUPPLIER ADVISORY.
+    Cell-tier only.
+
+    ``document`` is the CSAF JSON text exactly as received. It is validated against the CSAF 2.0
+    structure, its SHA-256, publisher (name, namespace, category), tracking id / version / status
+    and release dates are recorded, and so is each vulnerability's product status. It is unsigned
+    third-party content and inspect-only. It records no conclusion about any machine: read
+    ``csaf_impact`` for that.
+    """
+    body = _document_body(document, source_name, supplied_at, source_url, source_sha256, actor,
+                          dry_run)
+    if allow_draft:
+        body["allow_draft"] = True
+    return await _call("POST", "/v1/ingest/csaf", json_body=body)
+
+
+@mcp.tool()
+async def csaf_records() -> dict[str, Any]:
+    """GET /v1/ingest/csaf — the CSAF supplier advisories recorded in the account's ledger, with
+    publisher, tracking id and version, status and SHA-256. Read-only; Cell-tier only."""
+    return await _call("GET", "/v1/ingest/csaf")
+
+
+@mcp.tool()
+async def csaf_record(advisory_ref: str) -> dict[str, Any]:
+    """GET /v1/ingest/csaf/{advisory_ref} — one recorded CSAF advisory in full: the document
+    identity, the products and each vulnerability's product statuses. Read-only; Cell-tier."""
+    if not _ADVISORY_REF.fullmatch(advisory_ref):
+        return _invalid("invalid_advisory_ref", "an advisory ref looks like csaf- and 32 hex "
+                                                "digits.")
+    return await _call("GET", f"/v1/ingest/csaf/{advisory_ref}")
+
+
+@mcp.tool()
+async def csaf_impact(advisory_ref: str) -> dict[str, Any]:
+    """GET /v1/ingest/csaf/{advisory_ref}/impact — what a recorded CSAF advisory says about each
+    enrolled machine: ``affected``, ``under_investigation``, ``fixed``, ``not_affected`` or
+    ``unknown``, each with its reason code and evidence. Records nothing. Read-only; Cell-tier.
+
+    A match that is not certain is ``unknown`` (a different supplier, a version the publisher did
+    not name, a range that cannot be compared without guessing); a machine the advisory does not
+    name is ``unknown`` with ``not_named``, which is not "unaffected". The document is unsigned:
+    the result is inspect-only, and a person decides what it means for a safety function. This
+    tool does not open a case.
+    """
+    if not _ADVISORY_REF.fullmatch(advisory_ref):
+        return _invalid("invalid_advisory_ref", "an advisory ref looks like csaf- and 32 hex "
+                                                "digits.")
+    return await _call("GET", f"/v1/ingest/csaf/{advisory_ref}/impact")
 
 
 def main() -> None:

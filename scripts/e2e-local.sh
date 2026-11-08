@@ -53,6 +53,13 @@ export NEXT_PUBLIC_NEURALBRIDGE_API_URL="http://127.0.0.1:$PLATFORM_PORT/api/v1"
 export PLAYWRIGHT_BASE_URL="http://127.0.0.1:$WEB_PORT"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
 unset STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+# The key-claim route (POST /v1/checkout/complete) allows 20 requests per minute per client address, per
+# process (src/assurance/api/billing_routes.py). Every browser test reaches the API from 127.0.0.1, and the
+# checkout-success specs poll that route, so on a fast machine one minute of the suite exceeds 20 and a later
+# spec gets a real 429 (seen: assurance-checkout.spec.ts:168 failing in both projects on 2026-11-07, while
+# passing in an earlier, slower run). The limit is raised for THIS throwaway API only; the production default
+# is unchanged and its behaviour is covered by tests/test_billing_rate_limits.py.
+export ASSURANCE_RATE_CLAIM="${ASSURANCE_RATE_CLAIM:-1000}"
 
 ai_teardown() {  # drop the throwaway customer role/table of the current project
   [ "$E2E_AI" = 1 ] && [ -f "${NEURALBRIDGE_E2E_AI_SEED:-/nonexistent}" ] && "$PYTHON" scripts/e2e_seed_ai.py teardown "$NEURALBRIDGE_E2E_AI_SEED" >/dev/null 2>&1
@@ -106,6 +113,13 @@ start_api() {  # $1 = project name
     if ! "$PYTHON" scripts/e2e_seed_ai.py seed "$NEURALBRIDGE_E2E_AI_SEED" >"$d/ai-seed.log" 2>&1; then
       cat "$d/ai-seed.log" >&2; return 4
     fi
+    # Credential custody fails closed without a key and a journal (binding a connection answers 503
+    # credential_custody_unconfigured), so the throwaway platform gets BOTH, per run: a random 32-byte key
+    # (in the child's environment only, never on a command line or in a log) and a journal in a directory
+    # OUTSIDE the store's directory, as production requires.
+    mkdir -p "$WORK/custody" && chmod 700 "$WORK/custody"
+    NEURALBRIDGE_CREDENTIAL_KEYS="e2e:$("$PYTHON" -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')" \
+    NEURALBRIDGE_CREDENTIAL_JOURNAL="$WORK/custody/journal" \
     NEURALBRIDGE_AI_STORE="$d/ai-store.db" setsid "$PYTHON" -m uvicorn neuralbridge.main:app --port "$PLATFORM_PORT" >"$d/platform.log" 2>&1 &
     PLAT_PID=$!; echo "$PLAT_PID" >>"$PIDFILE"
     up=0

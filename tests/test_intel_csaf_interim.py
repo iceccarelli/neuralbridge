@@ -38,6 +38,7 @@ from .intel_support import (
     dump,
     provider_metadata,
 )
+from .support_sqlite import connect as sqlite_connect
 from .test_assurance_intel_api import STORE_ENV, get
 from .test_assurance_watch_intel import _plant
 
@@ -206,7 +207,7 @@ def test_cli_refuses_the_option_for_other_sources(tmp_path, capsys):
 
 def test_provenance_is_still_append_only(store):
     obs = fetch_one(store, interim(), allow_interim=True)
-    with sqlite3.connect(store.path) as db, pytest.raises(sqlite3.DatabaseError,
+    with sqlite_connect(store.path) as db, pytest.raises(sqlite3.DatabaseError,
                                                           match="append-only"):
         db.execute("UPDATE provenance SET meta_json='{}' WHERE seq=?", (obs.seq,))
 
@@ -217,14 +218,14 @@ def test_an_existing_store_without_the_field_still_reads(store):
     assert "allow_interim" not in reopened.provenance(1)
     assert build_report(reopened).candidates[0].notes[0] != NOTE
     # no schema change: the flag is a key of the existing provenance meta_json
-    with sqlite3.connect(store.path) as db:
+    with sqlite_connect(store.path) as db:
         cols = [r[1] for r in db.execute("PRAGMA table_info(provenance)")]
     assert cols == ["seq", "provider", "listed_at", "settled", "meta_json"]
 
 
 def test_a_missing_flag_makes_the_payload_unreadable_never_silently_trusted(store):
     obs = fetch_one(store, interim(), allow_interim=True)
-    with sqlite3.connect(store.path) as db:
+    with sqlite_connect(store.path) as db:
         db.execute("DROP TRIGGER provenance_no_update")
         db.execute("UPDATE provenance SET meta_json='{}' WHERE seq=?", (obs.seq,))
     report = build_report(IntelStore(store.path))

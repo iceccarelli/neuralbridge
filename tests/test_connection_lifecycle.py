@@ -39,6 +39,7 @@ from .platform_support import (
     reset_singletons,
     scram_pg,
 )
+from .support_sqlite import connect as sqlite_connect
 
 pytestmark = requires_postgres
 
@@ -108,7 +109,8 @@ class TestSecretsAreWriteOnly:
         caplog.set_level("DEBUG")
         conn = bind_scram(client, keys.a, scram_role)
         responses = [json.dumps(conn)]
-        assert set(conn) == {"id", "name", "adapter_type", "status", "source", "live"}
+        assert set(conn) == {"id", "name", "adapter_type", "status", "source", "live", "custody", "usable",
+                             "cred_version", "four_eyes"}
         assert isinstance(conn["live"], bool)
         responses.append(client.get(f"{API}/connections", headers=h(keys.a)).text)
         r = read(client, keys.a, conn["id"], operation="query", sql="SELECT current_user")
@@ -173,11 +175,13 @@ class TestRotate:
         # a refused rotation left the working credential in place
         assert read(client, keys.a, conn["id"], operation="query", sql="SELECT current_user").status_code == 200
 
-    def test_rotation_resupplies_credentials_after_a_restart(self, client, keys: Keys, scram_role) -> None:
+    def test_rotation_works_after_a_restart_and_the_credential_survived_it(self, client, keys: Keys, scram_role) -> None:
         conn = bind_scram(client, keys.a, scram_role)
         reset_singletons()  # "restart": registry and router are gone, the store file remains
-        down = read(client, keys.a, conn["id"], operation="query", sql="SELECT 1")
-        assert down.status_code == 409 and "no live adapter" in down.json()["detail"]
+        # The credential is sealed in the store (neuralbridge.ai.credentials), so a restart no longer
+        # loses it. Rotation is still how it is replaced; the old behaviour (credentials only in the
+        # process) is the explicit single-worker mode, tested in test_credential_custody.py.
+        assert read(client, keys.a, conn["id"], operation="query", sql="SELECT 1").status_code == 200
         assert rotate(client, keys.a, conn["id"]).status_code == 200
         assert read(client, keys.a, conn["id"], operation="query", sql="SELECT 1").status_code == 200
 
@@ -263,13 +267,11 @@ class TestRevoke:
 
     def test_a_lapsed_free_account_can_still_revoke_what_it_bound(self, client, keys: Keys, env) -> None:
         """Revoke/rotate/delete shrink exposure, so they are not behind the paid gate."""
-        import sqlite3
-
         from assurance.billing.accounts import AccountStore
 
         conn = bind(client, keys.a, "lapsed")
         account = AccountStore(str(env)).resolve_key(keys.a).account
-        with sqlite3.connect(env) as db:  # the subscription lapses
+        with sqlite_connect(env) as db:  # the subscription lapses
             db.execute("UPDATE accounts SET status='cancelled' WHERE id=?", (account.id,))
         assert plan(client, keys.a, conn["id"], "SELECT 1").status_code == 402  # paid path is closed ...
         assert revoke(client, keys.a, conn["id"]).status_code == 200            # ... revoking is not

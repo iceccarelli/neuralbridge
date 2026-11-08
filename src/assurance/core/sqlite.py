@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from typing import TypeVar
 
-__all__ = ["enable_wal", "retry_locked"]
+__all__ = ["enable_wal", "is_not_a_database", "retry_locked"]
 
 T = TypeVar("T")
 
@@ -97,3 +97,9 @@ def enable_wal(db: sqlite3.Connection) -> None:
             db.execute("PRAGMA journal_mode=WAL")
 
     retry_locked(go, db=db)
+
+
+def is_not_a_database(exc: sqlite3.Error) -> bool:
+    """SQLite's own verdict that a file is not a SQLite database at all."""
+    return "not a database" in str(exc).lower()
+

@@ -27,6 +27,7 @@ _DOMAINS = {
     "machine": "assurance.machine.cli",
     "machinery": "assurance.machinery.cli",
     "fleet": "assurance.fleet.cli",
+    "ingest": "assurance.ingest.cli",
     "bridge": "assurance.bridge.cli",
     "watch": "assurance.watch.cli",
     "attest": "assurance.attest.cli",

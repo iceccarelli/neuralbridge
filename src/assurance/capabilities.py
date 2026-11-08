@@ -302,6 +302,31 @@ CAPABILITIES: tuple[Capability, ...] = (
     _c("fleet.value", "Your assurance position, derived from your own ledger",
        "value report", "GET /v1/value", "value_position"),
 
+    # --- ingest: third-party SBOMs and advisories, as drafts and supplier statements ----------
+    _c("ingest.sbom_import",
+       "Import a CycloneDX SBOM as a DRAFT inventory pending a named person's review",
+       "ingest sbom-import", "POST /v1/ingest/sbom", "sbom_import"),
+    _c("ingest.sbom_drafts", "The SBOM drafts in a ledger, and one in full with its review state",
+       ("ingest sbom-list", "ingest sbom-show"),
+       ("GET /v1/ingest/sbom", "GET /v1/ingest/sbom/{draft_id}"), ("sbom_drafts", "sbom_draft")),
+    _c("ingest.sbom_review",
+       "A named person approves (and enrols) or rejects an SBOM draft: identity, every component, "
+       "its kind and the safety functions it implements are theirs",
+       "ingest sbom-review", "POST /v1/ingest/sbom/{draft_id}/review",
+       gaps={"mcp": _d("approving a draft enrols a machine and decides which software is safety-"
+                       "relevant: " + _HUMAN)}),
+    _c("ingest.csaf_import",
+       "Import a CSAF 2.0 advisory as a recorded, unsigned, inspect-only supplier advisory",
+       "ingest csaf-import", "POST /v1/ingest/csaf", "csaf_import"),
+    _c("ingest.csaf_records", "The recorded CSAF advisories in a ledger, and one in full",
+       ("ingest csaf-list", "ingest csaf-show"),
+       ("GET /v1/ingest/csaf", "GET /v1/ingest/csaf/{advisory_ref}"),
+       ("csaf_records", "csaf_record")),
+    _c("ingest.csaf_impact",
+       "What a recorded CSAF advisory says about each enrolled machine: affected, "
+       "under_investigation, fixed, not_affected or unknown, with the reason",
+       "ingest csaf-impact", "GET /v1/ingest/csaf/{advisory_ref}/impact", "csaf_impact"),
+
     # --- change: the Active Assurance Cases queue ----------------------------------------------
     _c("change.assess_drift", "Turn a manifest divergence into a case",
        "change assess-drift", "POST /v1/change/assess/drift", "change_assess_drift"),

@@ -41,6 +41,21 @@ def _isolated_audit_sink(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator
     deps._audit_logger = None
 
 
+@pytest.fixture(autouse=True)
+def _credential_custody(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Bound /ai connections need a credential key AND an anti-rollback journal kept outside the
+    store's directory, or binding fails closed (neuralbridge.ai.credentials). Give every test its
+    own throwaway key and journal; tests of the unconfigured / misconfigured paths ``delenv`` them.
+    The journal sits in a SIBLING of ``tmp_path`` because it may not live inside the store's directory."""
+    import base64
+
+    if not os.environ.get("NEURALBRIDGE_CREDENTIAL_KEYS") and not os.environ.get("NEURALBRIDGE_CREDENTIAL_KEY_FILE"):
+        monkeypatch.setenv("NEURALBRIDGE_CREDENTIAL_KEYS", "test-key-1:" + base64.b64encode(os.urandom(32)).decode())
+        monkeypatch.delenv("NEURALBRIDGE_CREDENTIAL_ACTIVE_KEY", raising=False)
+        monkeypatch.setenv("NEURALBRIDGE_CREDENTIAL_JOURNAL", str(tmp_path.parent / f"{tmp_path.name}-custody" / "journal.jsonl"))
+    yield
+
+
 @pytest.fixture
 def api_client() -> TestClient:
     """Create a FastAPI test client."""

@@ -60,6 +60,24 @@ The seeded demo connection is shared by every caller, so by default a paid
 account can only READ it; it proposes/approves writes on connections it binds
 itself (`POST /ai/connections`). For the local single-user demo (the buyer
 path in `docs/buyer-journey.md`, `scripts/verify-buyer-path.sh`) that writes
+
+## Binding your own connection needs credential custody
+
+Binding a customer connection (`POST /ai/connections`) answers **503 `credential_custody_unconfigured`**
+until the platform has a key and a journal. This is deliberate: a bound credential is sealed with
+AES-256-GCM for every worker, and the journal (outside the store's directory) is what stops a restored
+backup from reviving a revoked credential. For a throwaway local run, in the shell that starts uvicorn:
+
+```bash
+export NEURALBRIDGE_CREDENTIAL_KEYS="local:$(python -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')"
+mkdir -p /tmp/nb-custody && chmod 700 /tmp/nb-custody
+export NEURALBRIDGE_CREDENTIAL_JOURNAL=/tmp/nb-custody/journal   # NOT inside the directory of NEURALBRIDGE_AI_STORE
+```
+
+`scripts/local-stack.sh up` and `scripts/e2e-local.sh` do this for you with a fresh random key per run. Never
+reuse a local key anywhere real, and never paste one into chat or a ticket. Production key custody (where
+the key comes from, where the journal lives) is a deployment decision: see `docs/platform.md`.
+
 the demo database, export this in the shell running uvicorn:
 
 ```bash
@@ -69,8 +87,40 @@ export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1   # LOCAL DEVELOPMENT ONLY — ne
 Without it a paid account's plan on the demo connection gets a real `403`
 ("demo connection is read-only").
 
+### The whole local buyer-path stack in one command
+
+`scripts/local-stack.sh` does the steps below for you and cleans up after itself. It needs only a
+PostgreSQL server whose role may create databases (by default the dev role documented above:
+`neuralbridge` / `neuralbridge_dev` on `127.0.0.1:5432`; override with `NEURALBRIDGE_AI_PG_*`):
+
 ```bash
-pip install -e ".[dev]"
+scripts/local-stack.sh verify   # up, run scripts/verify-buyer-path.sh against it, then ALWAYS down; exits with the check's status
+scripts/local-stack.sh up       # leave it running (prints the verify command); ports 8001 (Assurance) and 8000 (platform)
+scripts/local-stack.sh down     # stop both, drop ITS database (nb_local_<random>) and delete ITS data directory (/tmp/nb-demo)
+```
+
+It creates its own database and seeds it from `deploy/ai/seed.sql`, generates a throwaway operator key
+(at least 32 characters, written `0600`, never printed), sets `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1`
+(local only) and points both APIs at one `ASSURANCE_ACCOUNTS` file. It refuses to start if port 8000 or 8001 is
+already serving something, and `down` only drops the database named in its own state file.
+
+By hand, the same stack is (operator key generated, not typed; `ASSURANCE_API_KEYS` needs 32 or more characters):
+
+```bash
+export NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 \
+       NEURALBRIDGE_AI_PG_USER=neuralbridge NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev
+mkdir -p /tmp/nb-demo && chmod 700 /tmp/nb-demo
+python scripts/local_stack_db.py create nb_local_manual --seed deploy/ai/seed.sql   # drop later with: ... drop nb_local_manual
+OPKEY="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"             # do not echo it
+ASSURANCE_HOST=127.0.0.1 ASSURANCE_LEDGER=/tmp/nb-demo/art14.db ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
+  ASSURANCE_API_KEYS="$OPKEY" python -m uvicorn assurance.api.service:app --host 127.0.0.1 --port 8001 &
+NEURALBRIDGE_AI_PG_DATABASE=nb_local_manual NEURALBRIDGE_AI_STORE=/tmp/nb-demo/ai-store.db \
+  NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1 ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
+  python -m uvicorn neuralbridge.main:app --host 127.0.0.1 --port 8000 &
+```
+
+```bash
+python -m pip install -e ".[dev]"
 uvicorn neuralbridge.main:app --reload --port 8000
 ```
 

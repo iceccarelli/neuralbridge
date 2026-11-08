@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel>=0.41.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,12 @@ name = "neuralbridge-middleware"
 version = "0.1.1"
 description = "Industrial Autonomous Assurance: hash-chained evidence and change-assurance for machines whose software can affect safety, with an offline kit, API and MCP server. Includes the experimental NeuralBridge adapter platform it grew out of. Supports your own CRA Art. 14 and Machinery Regulation evidence process; it is not a certification."
 readme = "README.md"
-license = {text = "Proprietary - All rights reserved. See LICENSE."}
+# PEP 639: an SPDX *LicenseRef* expression, because this is a proprietary, all-rights-reserved
+# licence with no SPDX identifier. The text is the LICENSE file (shipped as License-File). setuptools
+# understands `license` as an SPDX string and `license-files` from 77.0.0; the older
+# `license = {text = ...}` table and the "License ::" classifier are deprecated and warn.
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [
     {name = "NeuralBridge Contributors"}
@@ -21,7 +26,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
@@ -116,16 +120,27 @@ mysql = [
     "aiomysql>=0.2.0",
     "pymysql>=1.1.0",
 ]
-# Everything the test suite imports: both surfaces plus the MCP gateways.
+# Everything the test suite imports (both surfaces plus the MCP gateways) and everything CI's lint
+# job runs (ruff, mypy and mypy's stubs). The one reproducible local setup is
+#   python -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'
+# requirements/dev.txt (CI lint) and requirements/test.txt (CI tests) must stay equivalent for the
+# shared tools; tests/test_dev_install_parity.py fails when they do not.
 dev = [
     "neuralbridge-middleware[platform,assurance-api,assurance-mcp]",
     "packaging>=23.0",
     "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
+    "pytest-asyncio>=0.24.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
-    "ruff>=0.3.0",
+    "ruff>=0.3.0,<0.18",
     "mypy>=1.8.0",
+    "build>=1.2.0",
+    "twine>=5.0.0",
+    # CI's lint job (`mypy src/neuralbridge/ src/assurance/`) installs requirements/dev.txt, which
+    # carries these stubs; without them yaml/pymysql are untyped here and mypy disagrees with CI.
+    # tests/test_dev_install_parity.py keeps this list and requirements/dev.txt/test.txt equal.
+    "types-PyYAML>=6.0.0",
+    "types-PyMySQL>=1.1.0",
     "pre-commit>=3.6.0",
     "httpx>=0.27.0",
 ]
@@ -196,6 +211,8 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Explicit (pytest-asyncio >= 0.24): leaving it unset makes every run emit a deprecation warning.
+asyncio_default_fixture_loop_scope = "function"
 addopts = "--cov=neuralbridge --cov=assurance --cov-report=term-missing --cov-report=html"
 
 [tool.mypy]

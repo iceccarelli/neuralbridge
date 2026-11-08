@@ -1,0 +1,47 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-01T08:30:00Z",
+    "component": {
+      "type": "device",
+      "bom-ref": "synthetic-machine-ar7",
+      "name": "AR-7 Palletising Cell (SYNTHETIC DEMO)",
+      "supplier": { "name": "DemoCo" }
+    }
+  },
+  "components": [
+    {
+      "type": "firmware",
+      "bom-ref": "fw-safety-controller",
+      "name": "Safety controller firmware",
+      "version": "3.8.2",
+      "supplier": { "name": "ControlCo" },
+      "purl": "pkg:generic/controlco/safety-controller-firmware@3.8.2",
+      "hashes": [
+        { "alg": "SHA-256", "content": "fe21623f37fada0422f8405c6f920036a8bdd84af16ece4f71dad17d6ec19f69" }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-motion",
+      "name": "libmotion",
+      "version": "1.4.0",
+      "supplier": { "name": "OpenMotion" },
+      "purl": "pkg:generic/openmotion/libmotion@1.4.0"
+    },
+    {
+      "type": "application",
+      "bom-ref": "app-hmi",
+      "name": "operator-hmi"
+    },
+    {
+      "type": "operating-system",
+      "bom-ref": "os-rt",
+      "name": "rt-linux",
+      "version": "5.15"
+    }
+  ]
+}

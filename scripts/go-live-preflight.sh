@@ -54,7 +54,7 @@ log "1. scripts/verify-buyer-path.sh"
 ASSURANCE_API_URL="$ASSURANCE_API_URL" \
 NEURALBRIDGE_API_URL="$NEURALBRIDGE_API_URL" \
 ASSURANCE_ACCOUNTS="$ASSURANCE_ACCOUNTS" \
-"$(dirname "$0")/verify-buyer-path.sh" \
+PYTHON="${PYTHON:-python3}" "$(dirname "$0")/verify-buyer-path.sh" \
   || fail "verify-buyer-path.sh did not pass — see its own output above for which check failed"
 log "verify-buyer-path.sh: PASSED"
 
@@ -64,7 +64,7 @@ NEURALBRIDGE_AI_PG_PORT="$NEURALBRIDGE_AI_PG_PORT" \
 NEURALBRIDGE_AI_PG_USER="$NEURALBRIDGE_AI_PG_USER" \
 NEURALBRIDGE_AI_PG_PASSWORD="$NEURALBRIDGE_AI_PG_PASSWORD" \
 NEURALBRIDGE_AI_PG_TEST_DATABASE="$NEURALBRIDGE_AI_PG_TEST_DATABASE" \
-python3 -m pytest tests/test_ai_buyer_journey.py -v --no-cov \
+NEURALBRIDGE_REQUIRE_POSTGRES=1 "${PYTHON:-python3}" -m pytest tests/test_ai_buyer_journey.py -v --no-cov -p no:cacheprovider \
   || fail "pytest tests/test_ai_buyer_journey.py did not pass — see pytest output above. If the failure is a Postgres connection error, this is not a code regression, it means NEURALBRIDGE_AI_PG_* is wrong or Postgres isn't reachable, not that the buyer journey is broken."
 log "pytest tests/test_ai_buyer_journey.py: PASSED"
 

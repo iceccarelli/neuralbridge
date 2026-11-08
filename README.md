@@ -388,7 +388,20 @@ git clone https://github.com/iceccarelli/neuralbridge.git
 cd neuralbridge
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"      # platform + assurance API + MCP gateways + test tools
+python -m pip install -e ".[dev]"   # platform + assurance API + MCP gateways + test, ruff, mypy + stubs
+```
+
+That one command is the whole development environment; CI's lint job and test matrix install the
+same set from `requirements/dev.txt` / `requirements/test.txt`, and
+`tests/test_dev_install_parity.py` fails if the two ever disagree. Run what CI runs, in this order
+(the first command names a missing dependency; `mypy` in an incomplete environment instead prints
+hundreds of unrelated errors):
+
+```bash
+python -m pytest tests/test_dev_install_parity.py -q --no-cov   # is this environment complete?
+ruff check src/ tests/
+mypy src/neuralbridge/ src/assurance/ --ignore-missing-imports
+python -m pytest tests/ -q --no-cov -rsfxE
 ```
 
 ### Workspace Setup

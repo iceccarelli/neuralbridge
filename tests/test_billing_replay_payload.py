@@ -19,12 +19,13 @@ from .support_billing import (  # noqa: F401
     sign,
     subscription_event,
 )
+from .support_sqlite import rows as sqlite_rows
 
 OLD = "2020-01-01T00:00:00Z"
 
 
 def _rows(env, sql):
-    return sqlite3.connect(env / "accounts.db").execute(sql).fetchall()
+    return sqlite_rows(env / "accounts.db", sql)
 
 
 def test_the_session_marker_outlives_the_event_retention(billing_client, billing_env):

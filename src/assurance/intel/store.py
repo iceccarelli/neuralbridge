@@ -317,31 +317,32 @@ class IntelStore:
         run again inside the write transaction (a race, or an uncheckpointed WAL).
         """
         try:
-            if not self.path.is_file() or self.path.stat().st_size == 0:
+            if not self.path.is_file():
                 return
-            with self.path.open("rb") as handle:
-                header = handle.read(100)
+            size = self.path.stat().st_size
         except OSError:
             return          # let the normal open report it
+        if size == 0:
+            return
         what = str(self.path)
-        if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+        if size < 100:      # shorter than a SQLite header: SQLite itself would call it "empty"
             raise IntelStoreError(f"{what} is not an intel observation store.")
-        app_id = int.from_bytes(header[68:72], "big")
-        if app_id not in (0, _APP_ID):
-            raise IntelStoreError(f"{what} is not an intel observation store.")
-        if app_id == 0:
+        # SQLite reads the header; no plain descriptor is opened on the file (closing one would
+        # release the locks SQLite holds for another thread in this process; see
+        # the live-connection registry in ``evidence.ledger``). ``immutable`` locks nothing and creates nothing.
+        try:
+            db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro&immutable=1",
+                                 uri=True, timeout=5.0)
             try:
-                db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro&immutable=1",
-                                     uri=True, timeout=5.0)
-                try:
-                    tables = db.execute(
-                        "SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
-                finally:
-                    db.close()
-            except sqlite3.Error:
-                raise IntelStoreError(f"{what} is not an intel observation store.") from None
-            if tables:
-                raise IntelStoreError(f"{what} is not an intel observation store.")
+                current = db.execute("PRAGMA application_id").fetchone()[0]
+                tables = db.execute(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+            finally:
+                db.close()
+        except sqlite3.Error:
+            raise IntelStoreError(f"{what} is not an intel observation store.") from None
+        if current not in (0, _APP_ID) or (current == 0 and tables):
+            raise IntelStoreError(f"{what} is not an intel observation store.")
 
     @classmethod
     def open_existing(cls, path: str | Path, *, label: str | None = None) -> IntelStore:

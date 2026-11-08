@@ -486,7 +486,7 @@ export default function IndustrialAutonomousAssuranceSite() {
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">The path</span>
-            <h2>From reading this page to your first enrolled machine.</h2>
+            <h2>From a first visit to ongoing assurance.</h2>
             <p>
               Each step says what exists today and where it runs: on your own machine, on a hosted API, by request, or
               not at all.

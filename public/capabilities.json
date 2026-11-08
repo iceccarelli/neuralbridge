@@ -2116,6 +2116,184 @@
         "mode": "hosted_and_offline",
         "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
       },
+      "id": "ingest.csaf_impact",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ingest/csaf/{advisory_ref}/impact"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest csaf-impact"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "csaf_impact"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "What a recorded CSAF advisory says about each enrolled machine: affected, under_investigation, fixed, not_affected or unknown, with the reason"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "ingest.csaf_import",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/ingest/csaf"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest csaf-import"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "csaf_import"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Import a CSAF 2.0 advisory as a recorded, unsigned, inspect-only supplier advisory"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "ingest.csaf_records",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ingest/csaf",
+            "GET /v1/ingest/csaf/{advisory_ref}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest csaf-list",
+            "ingest csaf-show"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "csaf_record",
+            "csaf_records"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The recorded CSAF advisories in a ledger, and one in full"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "ingest.sbom_drafts",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "GET /v1/ingest/sbom",
+            "GET /v1/ingest/sbom/{draft_id}"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest sbom-list",
+            "ingest sbom-show"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "sbom_draft",
+            "sbom_drafts"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "The SBOM drafts in a ledger, and one in full with its review state"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "ingest.sbom_import",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/ingest/sbom"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest sbom-import"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "names": [
+            "sbom_import"
+          ],
+          "status": "available"
+        }
+      },
+      "title": "Import a CycloneDX SBOM as a DRAFT inventory pending a named person's review"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
+      "id": "ingest.sbom_review",
+      "service": "ingest",
+      "surfaces": {
+        "api": {
+          "names": [
+            "POST /v1/ingest/sbom/{draft_id}/review"
+          ],
+          "status": "available"
+        },
+        "cli": {
+          "names": [
+            "ingest sbom-review"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "approving a draft enrols a machine and decides which software is safety-relevant: a named person's act, so no agent surface (the Article 14 track, a case closure and a case opened from third-party content are human decisions; software drafts)",
+          "status": "by_design"
+        }
+      },
+      "title": "A named person approves (and enrols) or rejects an SBOM draft: identity, every component, its kind and the safety functions it implements are theirs"
+    },
+    {
+      "hosting": {
+        "mode": "hosted_and_offline",
+        "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
+      },
       "id": "intel.candidates",
       "service": "intel",
       "surfaces": {
@@ -3523,6 +3701,16 @@
       "import-csaf",
       "list"
     ],
+    "ingest": [
+      "csaf-impact",
+      "csaf-import",
+      "csaf-list",
+      "csaf-show",
+      "sbom-import",
+      "sbom-list",
+      "sbom-review",
+      "sbom-show"
+    ],
     "intel": [
       "candidates",
       "history",
@@ -3588,25 +3776,25 @@
     ]
   },
   "counts": {
-    "api_routes": 95,
-    "capabilities": 128,
-    "cli_commands": 109,
-    "cli_domains": 20,
-    "mcp_tools": 46,
+    "api_routes": 103,
+    "capabilities": 134,
+    "cli_commands": 117,
+    "cli_domains": 21,
+    "mcp_tools": 53,
     "surfaces": {
       "api": {
-        "available": 89,
+        "available": 95,
         "by_design": 39,
         "planned": 0
       },
       "cli": {
-        "available": 114,
+        "available": 120,
         "by_design": 13,
         "planned": 1
       },
       "mcp": {
-        "available": 45,
-        "by_design": 83,
+        "available": 50,
+        "by_design": 84,
         "planned": 0
       }
     }
@@ -3638,6 +3826,10 @@
     "change_export",
     "change_replay",
     "change_reverify",
+    "csaf_impact",
+    "csaf_import",
+    "csaf_record",
+    "csaf_records",
     "evidence_verify",
     "fleet_declaration_check",
     "fleet_machine_assurance",
@@ -3660,6 +3852,9 @@
     "machinery_passport_check_ledger",
     "plans",
     "register_cases",
+    "sbom_draft",
+    "sbom_drafts",
+    "sbom_import",
     "services",
     "spec_fields",
     "spec_validate",

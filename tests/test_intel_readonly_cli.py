@@ -6,8 +6,6 @@ A mistyped ``--store`` used to create an empty SQLite file and answer "no observ
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from assurance.cli import main as top
@@ -15,6 +13,7 @@ from assurance.intel.store import IntelStore, IntelStoreError
 
 from . import interfaces_fixtures as fx
 from .intel_support import FIXTURES
+from .support_sqlite import connect as sqlite_connect
 from .test_assurance_intel_api import (
     CVE_LISTED,
     STORE_ENV,
@@ -63,7 +62,8 @@ def test_open_existing_never_creates_and_refuses_foreign_files(tmp_path):
         IntelStore.open_existing(tmp_path / "nope.db")
     assert list(tmp_path.iterdir()) == []
     foreign = tmp_path / "other.db"
-    sqlite3.connect(foreign).execute("CREATE TABLE t(x)").connection.commit()
+    with sqlite_connect(foreign) as db:
+        db.execute("CREATE TABLE t(x)")
     with pytest.raises(IntelStoreError, match="not an intel observation store"):
         IntelStore.open_existing(foreign)
     empty = tmp_path / "empty.db"
@@ -91,7 +91,7 @@ def test_ingest_still_creates_the_store(capsys, tmp_path):
 
 # ------------------------------------------------------------ tampered TEXT payload
 def _tamper_body_as_text(path):
-    with sqlite3.connect(path) as db:
+    with sqlite_connect(path) as db:
         db.execute("DROP TRIGGER blobs_no_update")
         db.execute("UPDATE blobs SET body = 'not bytes at all'")
 

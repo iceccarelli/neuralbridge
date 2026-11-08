@@ -55,6 +55,7 @@ services:
     volumes:
       - .:/app
       - demo_accounts:/data
+      - demo_custody:/custody
     environment:
       NEURALBRIDGE_AI_PG_HOST: postgres
       NEURALBRIDGE_AI_PG_PORT: "5432"
@@ -63,6 +64,10 @@ services:
       NEURALBRIDGE_AI_PG_DATABASE: neuralbridge_ai
       ASSURANCE_ACCOUNTS: /data/accounts.db
       NEURALBRIDGE_AI_STORE: /data/ai-store.db
+      # Credential custody fails closed without a key and a journal on a DIFFERENT volume from the store.
+      # Generate once per demo:  export NEURALBRIDGE_CREDENTIAL_KEYS="demo:$(python3 -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')"
+      NEURALBRIDGE_CREDENTIAL_KEYS: ${NEURALBRIDGE_CREDENTIAL_KEYS:?set NEURALBRIDGE_CREDENTIAL_KEYS (see the comment above)}
+      NEURALBRIDGE_CREDENTIAL_JOURNAL: /custody/journal
     ports:
       - "8000:8000"
     depends_on:
@@ -97,3 +102,4 @@ services:
 
 volumes:
   demo_accounts:
+  demo_custody:

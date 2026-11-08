@@ -53,7 +53,7 @@ def _parse_time(value: str | None, name: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=422,
             detail=f"{name} must be an ISO 8601 timestamp.",
         ) from exc
 

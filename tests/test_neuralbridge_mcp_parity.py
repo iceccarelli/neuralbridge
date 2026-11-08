@@ -13,6 +13,7 @@ Real uvicorn server, real PostgreSQL, real accounts and audit sink. LOCAL eviden
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import os
@@ -60,13 +61,17 @@ def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
     saved = {k: os.environ.get(k) for k in (
         "NEURALBRIDGE_AI_PG_HOST", "NEURALBRIDGE_AI_PG_PORT", "NEURALBRIDGE_AI_PG_USER", "NEURALBRIDGE_AI_PG_PASSWORD",
         "NEURALBRIDGE_AI_PG_DATABASE", "ASSURANCE_API_KEYS", "ASSURANCE_ACCOUNTS", "NEURALBRIDGE_AI_STORE",
-        "NEURALBRIDGE_AUDIT_DB", "NEURALBRIDGE_RATE_LIMIT_PER_MINUTE")}
+        "NEURALBRIDGE_AUDIT_DB", "NEURALBRIDGE_RATE_LIMIT_PER_MINUTE", "NEURALBRIDGE_CREDENTIAL_KEYS",
+        "NEURALBRIDGE_CREDENTIAL_JOURNAL")}
     os.environ.update({
         "NEURALBRIDGE_AI_PG_HOST": PG_HOST, "NEURALBRIDGE_AI_PG_PORT": str(PG_PORT), "NEURALBRIDGE_AI_PG_USER": PG_USER,
         "NEURALBRIDGE_AI_PG_PASSWORD": PG_PASSWORD, "NEURALBRIDGE_AI_PG_DATABASE": PG_DATABASE,
         "ASSURANCE_API_KEYS": OPERATOR, "ASSURANCE_ACCOUNTS": str(root / "accounts.db"),
         "NEURALBRIDGE_AI_STORE": str(root / "ai.db"), "NEURALBRIDGE_AUDIT_DB": str(root / "audit.db"),
         "NEURALBRIDGE_RATE_LIMIT_PER_MINUTE": "0",
+        # one key + journal for the module: the server outlives each test (see conftest._credential_custody)
+        "NEURALBRIDGE_CREDENTIAL_KEYS": "parity:" + base64.b64encode(os.urandom(32)).decode(),
+        "NEURALBRIDGE_CREDENTIAL_JOURNAL": str(tmp_path_factory.mktemp("parity-custody") / "journal.jsonl"),
     })
     os.environ.pop("ASSURANCE_ALLOW_UNAUTHENTICATED", None)
     from assurance.api import deps as adeps
@@ -173,11 +178,12 @@ class TestAiToolsMatchTheRoutes:
         }
         assert claimed <= routes, claimed - routes
         # Deliberately not exposed to agents: credential handling (bind / rotate / revoke / unbind),
-        # plan inspection and the session probe. A change here is a decision, not an accident.
+        # plan inspection, the session probe and the approval policy (four-eyes is a human / operator
+        # decision, so an agent neither reads nor sets it). A change here is a decision, not an accident.
         assert routes - claimed == {
             ("GET", "/ai/session"), ("POST", "/ai/connections"), ("DELETE", "/ai/connections/{plan_id}"),
             ("POST", "/ai/connections/{plan_id}/rotate"), ("POST", "/ai/connections/{plan_id}/revoke"),
-            ("GET", "/ai/plan/{plan_id}"),
+            ("GET", "/ai/plan/{plan_id}"), ("GET", "/ai/policy"), ("PUT", "/ai/policy"),
         }
 
     def test_discovery_and_reads_return_what_the_route_returns(self, stack: Stack, monkeypatch) -> None:

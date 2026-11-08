@@ -46,7 +46,7 @@ from typing import Any
 from ..core.errors import LedgerConflictError, LedgerIntegrityError
 from ..core.evidence import Evidence
 from ..core.identity import content_hash_of, format_utc, parse_utc, utc_now
-from ..core.sqlite import enable_wal, retry_locked
+from ..core.sqlite import enable_wal, is_not_a_database, retry_locked
 from . import chain_cache
 
 __all__ = ["GENESIS", "LEDGER_SCHEMA_VERSION", "MAX_SKELETON_ENTRIES",
@@ -208,7 +208,74 @@ def _file_state(path: Path) -> tuple[Any, ...]:
             tuple(path.with_name(path.name + sfx).exists() for sfx in ("-wal", "-shm", "-journal")))
 
 
-class _GuardedConnection(sqlite3.Connection):
+# -- live-connection registry ---------------------------------------------------------------
+# POSIX advisory locks belong to the PROCESS: closing any file descriptor on a file releases every
+# lock this process holds on it, including those SQLite holds for another thread's transaction. A
+# plain read or copy of a ledger file is therefore only safe when this process has no SQLite
+# connection to it. Every connection this module opens is counted per file so that the one place
+# that must copy raw files (the private copy of a crash-copy ledger) can prove that, and otherwise
+# voids the read instead (which the caller retries). Nothing here starts a process: the offline kit
+# imports this module and must open no socket and spawn nothing.
+_LIVE_LOCK = threading.Lock()
+_LIVE: dict[str, int] = {}
+
+
+def _release_live(key: str) -> None:
+    with _LIVE_LOCK:
+        left = _LIVE.get(key, 0) - 1
+        if left > 0:
+            _LIVE[key] = left
+        else:
+            _LIVE.pop(key, None)
+
+
+class _TrackedConnection(sqlite3.Connection):
+    """A connection that is counted in ``_LIVE`` from creation until it is closed."""
+
+    _live_key: str | None = None
+
+    def close(self) -> None:
+        key, self._live_key = self._live_key, None
+        try:
+            super().close()
+        finally:
+            if key is not None:
+                _release_live(key)
+
+    def __del__(self) -> None:  # an unclosed connection must not block copies forever
+        key, self._live_key = self._live_key, None
+        if key is not None:
+            _release_live(key)
+
+
+def _connect_tracked(key: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+    with _LIVE_LOCK:
+        _LIVE[key] = _LIVE.get(key, 0) + 1
+    try:
+        db = sqlite3.connect(*args, factory=kwargs.pop("factory", _TrackedConnection), **kwargs)
+    except BaseException:
+        _release_live(key)
+        raise
+    db._live_key = key  # type: ignore[attr-defined]
+    return db
+
+
+def _copy_when_no_live_connection(key: str, pairs: list[tuple[Path, Path]]) -> None:
+    """Copy files with ordinary descriptors, but only while this process has no connection to ``key``.
+
+    The registry lock is held for the copy, so no connection can be opened meanwhile.
+    """
+    with _LIVE_LOCK:
+        if _LIVE.get(key, 0) > 0:
+            raise LedgerChangedWhileReadError(
+                f"{key} is open in this process, so it is not copied (closing a plain descriptor "
+                "on it would release the locks of a transaction in flight). The read is voided, "
+                "not served. Retry.")
+        for src, dst in pairs:
+            shutil.copy2(src, dst)
+
+
+class _GuardedConnection(_TrackedConnection):
     """A read-only connection that cleans up after itself and can void its own reads.
 
     ``guard`` runs when the connection is closed (after the handle is released) and raises if
@@ -235,14 +302,6 @@ class _GuardedConnection(sqlite3.Connection):
 _VOIDED_READ_ATTEMPTS = 8
 
 
-def _is_transient_io(exc: sqlite3.OperationalError) -> bool:
-    """SQLite's generic I/O error (primary code 10, any extended code), and nothing else."""
-    code = getattr(exc, "sqlite_errorcode", None)
-    if isinstance(code, int):
-        return (code & 0xFF) == 10
-    return str(exc).strip().lower() == "disk i/o error"
-
-
 def _retry_voided(fn: Any) -> Any:
     """Re-run a whole read whose snapshot was voided by a writer (see ``_connect_ro``).
 
@@ -260,15 +319,6 @@ def _retry_voided(fn: Any) -> Any:
                 return fn(self, *args, **kwargs)
             except LedgerChangedWhileReadError:
                 if attempt == _VOIDED_READ_ATTEMPTS - 1:
-                    raise
-                time.sleep(0.02 * (attempt + 1))
-            except sqlite3.OperationalError as exc:
-                # A reader that opens a WAL file while another process is recreating or
-                # truncating its -shm / -wal sidecar can get SQLITE_IOERR ("disk I/O error")
-                # for a read that would succeed a moment later (seen as a 500 on a hosted
-                # runner under four workers). The read has changed nothing, so it is re-run
-                # from scratch, boundedly; a persistent fault still raises after the last try.
-                if not _is_transient_io(exc) or attempt == _VOIDED_READ_ATTEMPTS - 1:
                     raise
                 time.sleep(0.02 * (attempt + 1))
 
@@ -444,22 +494,30 @@ class EvidenceLedger:
         """
         p = self.path
         try:
-            if not p.is_file() or p.stat().st_size == 0:
+            if not p.is_file():
                 return
-            with p.open("rb") as handle:
-                header = handle.read(100)
+            size = p.stat().st_size
         except OSError:
             return          # let the normal open report it
-        if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+        if size == 0:
+            return
+        if size < 100:      # the header alone is 100 bytes; SQLite itself would call 1 byte "empty"
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it is not a SQLite database; refusing to write to it.")
+        # No plain file descriptor is opened on the database here (or anywhere in this class):
+        # closing one releases the POSIX locks SQLite holds for another thread's transaction in
+        # this process (see the live-connection registry above). SQLite itself decides whether this is a database.
         try:
             foreign = self._ro_probe(_holds_foreign_tables, retry_errors=True)
         except LedgerChangedWhileReadError:
             # Other processes are creating or writing this file right now. This check is only
             # an early refusal: the read-write open re-checks inside its own connection.
             return
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            if is_not_a_database(exc):
+                raise LedgerIntegrityError(
+                    f"{p} is not a ledger: it is not a SQLite database; "
+                    "refusing to write to it.") from None
             raise LedgerIntegrityError(
                 f"{p} is not a ledger: it cannot be read as one; "
                 "refusing to write to it.") from None
@@ -509,10 +567,9 @@ class EvidenceLedger:
             target = scratch / resolved.name
             cleanup = lambda: shutil.rmtree(scratch, ignore_errors=True)  # noqa: E731
             try:
-                shutil.copy2(resolved, target)
-                for sfx in ("-wal", "-journal"):
-                    if sfx in present:
-                        shutil.copy2(sidecars[sfx], scratch / (resolved.name + sfx))
+                _copy_when_no_live_connection(str(resolved), [(resolved, target)] + [
+                    (sidecars[sfx], scratch / (resolved.name + sfx))
+                    for sfx in ("-wal", "-journal") if sfx in present])
             except OSError as exc:
                 cleanup()
                 raise LedgerChangedWhileReadError(
@@ -535,8 +592,8 @@ class EvidenceLedger:
         else:
             mode = "mode=ro"
         try:
-            db = sqlite3.connect(f"{target.as_uri()}?{mode}", uri=True, timeout=5.0,
-                                 isolation_level=None, factory=_GuardedConnection)
+            db = _connect_tracked(str(target), f"{target.as_uri()}?{mode}", uri=True, timeout=5.0,
+                                  isolation_level=None, factory=_GuardedConnection)
         except BaseException:
             if cleanup is not None:
                 cleanup()
@@ -593,18 +650,14 @@ class EvidenceLedger:
     def _is_existing_ledger_file(self) -> bool:
         """True for a non-empty file that has the ledger's ``meta`` and ``chain`` tables.
 
-        Both journal modes qualify (header bytes 18-19 are 1 for a rollback journal, 2 for WAL):
-        the old open switched the first to WAL and, for the second, opened it read-write, which
+        Both journal modes qualify: the old open switched the first to WAL and, for the second,
+        opened it read-write, which
         checkpoints a ``-wal`` into the main file and deletes it on close -- bytes changed by a
         call that only meant to read. A missing, empty, foreign or partly created file keeps the
         ordinary open (the writing path has its own refusals).
         """
         try:
             if not self.path.is_file() or self.path.stat().st_size == 0:
-                return False
-            with self.path.open("rb") as handle:
-                header = handle.read(100)
-            if len(header) < 100 or header[18:20] not in (b"\x01\x01", b"\x02\x02"):
                 return False
             names = self._ro_probe(lambda db: {r[0] for r in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")})
@@ -705,14 +758,16 @@ class EvidenceLedger:
             # and the schema step after it would turn that into a fresh ledger that acknowledges
             # records the deletion's export never held. ``mode=rw`` fails when the file is missing.
             try:
-                db = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=rw", uri=True,
-                                     timeout=30.0, isolation_level=None)
+                db = _connect_tracked(str(self.path.resolve()),
+                                      f"{self.path.resolve().as_uri()}?mode=rw", uri=True,
+                                      timeout=30.0, isolation_level=None)
             except sqlite3.OperationalError as exc:
                 raise LedgerIntegrityError(
                     f"{self.path} was a ledger when this handle was opened and cannot be opened for "
                     f"writing now ({exc}); it was removed or replaced. Nothing was written.") from exc
         else:
-            db = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+            db = _connect_tracked(str(self.path.resolve()), self.path, timeout=30.0,
+                                  isolation_level=None)
         db.row_factory = sqlite3.Row
         enable_wal(db)
         db.execute("PRAGMA synchronous=FULL")

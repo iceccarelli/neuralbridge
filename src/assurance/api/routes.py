@@ -188,12 +188,23 @@ def _decider(payload: ActorIn, principal: Principal) -> Actor:
 
 
 def _recorded(register: Art14Register, case_id: str, evidence) -> RecordedOut:
-    entry = register.ledger.get(evidence.content_hash)
+    """The 201 body. A 201 means the record is durably in the ledger, so this refuses to answer
+    unless it can name the ledger entry THIS request's append produced (``ledger_seq`` is never
+    0, and never another record's number: content hashes are not unique in the ledger).
+    """
+    entry = register.last_entry()
+    if entry is None or entry.content_hash != evidence.content_hash or entry.subject != case_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "ledger_write_unconfirmed",
+                    "detail": "the record was not confirmed in the ledger; do not treat it as "
+                              "recorded. Re-read the case before retrying."},
+        )
     return RecordedOut(
         case_id=case_id,
         content_hash=evidence.content_hash,
         kind=evidence.kind,
-        ledger_seq=entry.seq if entry else 0,
+        ledger_seq=entry.seq,
         outstanding=register.case(case_id).outstanding(),
     )
 

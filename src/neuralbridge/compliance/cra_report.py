@@ -17,7 +17,7 @@ Markdown formats.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 import structlog
@@ -244,7 +244,7 @@ class CRAReportGenerator:
         Returns:
             A dictionary containing the readiness status and details.
         """
-        days_to_deadline = (CRA_DEADLINE - datetime.utcnow()).days
+        days_to_deadline = (CRA_DEADLINE - datetime.now(UTC).replace(tzinfo=None)).days
         readiness = {
             "cra_deadline": CRA_DEADLINE.isoformat(),
             "days_to_deadline": days_to_deadline,

@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -457,6 +458,8 @@ class ApiDriver(Driver):
         self._operators: dict[str, dict[str, str]] = {}
         self.plant = plant
         self.http = httpx.Client(base_url=base_url, headers=headers, timeout=60.0)
+        # Callers never close a driver; an httpx.Client keeps its pooled socket until it is.
+        weakref.finalize(self, self.http.close)
 
     def _out(self, r) -> Out:
         kind = {200: "ok", 409: "refused", 404: "notfound", 422: "invalid",

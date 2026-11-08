@@ -430,7 +430,7 @@ def counter_sign(
         )
     except AttestationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=422,
             detail={"error": "not_a_ledger_head", "detail": str(exc)},
         ) from exc
 
@@ -538,7 +538,7 @@ def verify(
     """
     if len(body.attestations) > MAX_VERIFY_RECORDS:
         raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            status_code=413,
             detail={
                 "error": "too_many_attestations",
                 "limit": MAX_VERIFY_RECORDS,
@@ -549,7 +549,7 @@ def verify(
         records = [HeadAttestation.from_dict(r) for r in body.attestations]
     except (AttestationError, ValueError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=422,
             detail={"error": "unreadable_attestation", "detail": str(exc)},
         ) from exc
 
@@ -558,7 +558,7 @@ def verify(
             key = VerifyingKey.from_pem(body.public_key_pem)
         except SigningKeyError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=422,
                 detail={"error": "unreadable_public_key", "detail": str(exc)},
             ) from exc
         supplied = True

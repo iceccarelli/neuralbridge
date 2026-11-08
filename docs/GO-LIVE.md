@@ -15,68 +15,59 @@ path landing in parallel).
 
 ## Preflight (no secrets, run anywhere)
 
-All four items below were executed in this rehearsal against a real local
-stack — Postgres 16, a real `assurance.api.service:app`, a real
-`neuralbridge.main:app`, no mocking anywhere. Exact output is under
-**What was actually run and its output**.
+Every command below was run, as written, against a real local stack: PostgreSQL 16, a real
+`assurance.api.service:app`, a real `neuralbridge.main:app`, no mocking. The output is under
+**What was actually run and its output**. If a command here does not work as written, that is a bug in this
+document: fix the document.
 
-### 1. Bring up the local stack
+### 1. Bring up the local stack (one command)
 
 ```bash
-# Postgres (adjust to however Postgres runs in your environment)
-pg_ctlcluster 16 main start   # or: docker run -p 5432:5432 postgres:16
-
-# One-time: create the role/db docs/ai-local-setup.md documents
-psql -h 127.0.0.1 -U postgres -c \
-  "CREATE ROLE neuralbridge LOGIN PASSWORD 'neuralbridge_dev';"
-psql -h 127.0.0.1 -U postgres -c \
-  "CREATE DATABASE neuralbridge_ai OWNER neuralbridge;"
-psql -h 127.0.0.1 -U postgres -c \
-  "CREATE DATABASE neuralbridge_ai_test OWNER neuralbridge;"
-PGPASSWORD=neuralbridge_dev psql -h 127.0.0.1 -U neuralbridge \
-  -d neuralbridge_ai -f deploy/ai/seed.sql
-
-pip install -e '.[dev]'
-
-# Assurance API — ASSURANCE_API_KEYS (or ASSURANCE_ALLOW_UNAUTHENTICATED=1)
-# is required for a no-key request to come back 401 instead of a "this
-# instance isn't configured at all" 503 — see the Failure modes table below,
-# row "auth_mode unconfigured".
-ASSURANCE_LEDGER=/tmp/nb-demo/art14.db \
-ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
-ASSURANCE_API_KEYS=local-operator-key \
-uvicorn assurance.api.service:app --host 127.0.0.1 --port 8001 &
-
-# /ai API (same ASSURANCE_ACCOUNTS path — this is what makes one key work
-# on both surfaces)
-NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 \
-NEURALBRIDGE_AI_PG_USER=neuralbridge NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev \
-NEURALBRIDGE_AI_PG_DATABASE=neuralbridge_ai \
-ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
-uvicorn neuralbridge.main:app --host 127.0.0.1 --port 8000 &
+pip install -e '.[dev]'                  # once
+scripts/local-stack.sh verify            # up, scripts/verify-buyer-path.sh against it, then ALWAYS down
 ```
 
-Or, with a Docker daemon available: `docker compose -f docker-compose.ai.yml
--f docker-compose.demo.yml up -d` (see `docker-compose.demo.yml`'s own
-header). **This rehearsal had no Docker daemon available**, same constraint as
-an earlier rehearsal — the compose file was
-not exercised with a live `docker compose up` here either. The direct-uvicorn
-path above was used instead and is what produced every result in this doc.
+`scripts/local-stack.sh` needs a PostgreSQL server whose role may create databases (default: the documented
+dev role `neuralbridge` / `neuralbridge_dev` on `127.0.0.1:5432`; override with `NEURALBRIDGE_AI_PG_HOST`,
+`_PORT`, `_USER`, `_PASSWORD`). It creates its own database `nb_local_<random>`, seeds it from
+`deploy/ai/seed.sql`, starts the Assurance API on `:8001` and the platform API on `:8000` sharing one
+`ASSURANCE_ACCOUNTS` file, with the local-only `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1` and a generated
+operator key of 32 or more characters that is written `0600` and never printed. It refuses to start if a
+port is already serving. `scripts/local-stack.sh up` leaves it running, `down` removes everything it made
+(and only that). If PostgreSQL is not running, start it first (`pg_ctlcluster 16 main start`, or
+`docker run -p 5432:5432 -e POSTGRES_USER=neuralbridge -e POSTGRES_PASSWORD=neuralbridge_dev postgres:16`).
+
+The same stack by hand, with the exact variables it needs, is in `docs/ai-local-setup.md`. Two traps that the
+earlier version of this section fell into: `ASSURANCE_API_KEYS` must be **at least 32 characters** (the service
+refuses to start with a shorter key; generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`,
+do not type one), and without `NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1` the `/ai` plan call in the buyer path gets a real
+`403` ("demo connection is read-only"). `ASSURANCE_API_KEYS` (or `ASSURANCE_ALLOW_UNAUTHENTICATED=1` with
+`ASSURANCE_HOST=127.0.0.1`) is what makes a no-key request answer `401` instead of the "instance not configured" `503`
+(Failure modes table, row "auth_mode unconfigured").
+
+Or, with a Docker daemon available: `docker compose -f docker-compose.ai.yml -f docker-compose.demo.yml up -d`
+(see `docker-compose.demo.yml`'s own header). **No Docker daemon was available in the rehearsal environment**, so the
+compose files were not exercised with a live `docker compose up`; the direct-uvicorn path above is what produced
+every result in this document.
 
 ### 2. `scripts/verify-buyer-path.sh`
+
+`scripts/local-stack.sh verify` runs it for you. Against a stack you started yourself with `up`:
 
 ```bash
 ASSURANCE_API_URL=http://127.0.0.1:8001 \
 NEURALBRIDGE_API_URL=http://127.0.0.1:8000/api/v1 \
 ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
-./scripts/verify-buyer-path.sh
+scripts/verify-buyer-path.sh
 ```
 
-Must exit 0. Checks, in order: `GET /v1/plans` returns the real tiers;
-`POST /v1/checkout` refuses honestly (4xx/5xx, never a fabricated checkout
-URL) when no Stripe price is configured; a Cell-tier key minted through the
-real `AccountStore` opens a real register case and then unlocks `/ai`'s
-plan→approve path with the same key.
+Must exit 0. Every step makes real HTTP requests (the script counts them and refuses to pass with fewer than
+8). Checks, in order: `GET /v1/plans` returns the real tiers; `POST /v1/checkout` answers exactly `503
+price_not_configured` (any other status, and above all any 2xx, fails) while no Stripe price is configured; a request
+with no key gets `401` on the Assurance API and `402` on `/ai`; a Cell-tier key minted through the real `AccountStore`
+opens a real register case (a real `content_hash` and `ledger_seq`) and then unlocks `/ai`'s plan then approve path
+with the same key (`pending_approval`, then a receipt with `success: true`). The script uses `PYTHON` (default
+`python3`) to import `assurance`; it does not start any server and exits 1 with a reason if either API is unreachable.
 
 ### 3. `scripts/demo-walkthrough.sh` (optional, same shape as #2 with screenshots-pack framing)
 
@@ -92,20 +83,22 @@ Covers the same golden path as #2 via `scripts/seed_demo.py`, with `GET
 not required to run both — kept here because it's the one
 `docker-compose.demo.yml`'s `seed` job also calls.
 
-### 4. `pytest tests/test_ai_buyer_journey.py -v`
+### 4. `python -m pytest tests/test_ai_buyer_journey.py -v`
 
 ```bash
 NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 \
 NEURALBRIDGE_AI_PG_USER=neuralbridge NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev \
-NEURALBRIDGE_AI_PG_TEST_DATABASE=neuralbridge_ai_test \
-pytest tests/test_ai_buyer_journey.py -v --no-cov
+NEURALBRIDGE_AI_PG_TEST_DATABASE=<a database you created for tests> \
+NEURALBRIDGE_REQUIRE_POSTGRES=1 \
+python -m pytest tests/test_ai_buyer_journey.py -v --no-cov
 ```
 
-Must show 2 passed (`test_free_caller_blocked_on_both_paid_surfaces`,
-`test_one_cell_key_unlocks_both_paid_surfaces`). Needs a real Postgres for
-the `/ai` slice's entitlement store — there is no SQLite fallback for this
-test file, so a founder without Postgres locally cannot run it and should
-rely on CI or a throwaway `postgres:16` container instead.
+Must show 2 passed (`test_free_caller_blocked_on_both_paid_surfaces`, `test_one_cell_key_unlocks_both_paid_surfaces`)
+and 0 skipped. Use `python -m pytest`, not the bare `pytest` entry point, which may bind a different interpreter.
+`NEURALBRIDGE_REQUIRE_POSTGRES=1` turns a missing server into a failure instead of a skip. Needs a real PostgreSQL for the
+`/ai` slice's entitlement store: there is no SQLite fallback. The test creates and drops tables inside that database, so give it
+a database of its own (`python scripts/local_stack_db.py create nb_local_mytests` makes one the same way
+`local-stack.sh` does). `scripts/go-live-preflight.sh` runs #2 and #4 together against a stack that is already up.
 
 ### 5. Browser tests against isolated real services (`scripts/e2e-local.sh`)
 
@@ -118,9 +111,19 @@ PostgreSQL is required (`NEURALBRIDGE_AI_PG_*`; without one the script exits 5 r
 skipping, and `E2E_AI=0` runs the assurance-only subset on purpose).
 
 ```bash
-NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 NEURALBRIDGE_AI_PG_USER=... \
-NEURALBRIDGE_AI_PG_PASSWORD=... NEURALBRIDGE_AI_PG_TEST_DATABASE=... scripts/e2e-local.sh
+npm ci                                   # once: the Playwright browser tests and the site build need node_modules
+NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 NEURALBRIDGE_AI_PG_USER=neuralbridge \
+NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev NEURALBRIDGE_AI_PG_TEST_DATABASE=<your own throwaway database> \
+scripts/e2e-local.sh
 ```
+
+The PostgreSQL role must be allowed to create roles (the seed makes a random-password customer role and
+drops it again). The script binds `3000` (site), `8001` (Assurance API) and `8000` (platform API) and refuses
+to start if any is serving, so stop `scripts/local-stack.sh up` first, or move the e2e run with `WEB_PORT`,
+`API_PORT` and `PLATFORM_PORT`. `PYTHON=/path/to/python` selects an interpreter that has the repo's dependencies
+(for a checkout that is not the one `pip install -e` points at, use that checkout's own virtual environment).
+It prints Playwright's own totals per project (`N passed`, and `N skipped` / `N failed` when non-zero); the run is
+green only if both projects exit 0.
 
 Every spec fails on an uncaught page error, a console error or a failed first-party request;
 allow-listing is per test with a reason in code. The `/ai` journey covers connection, plan,
@@ -151,57 +154,133 @@ serves a request. `deploy/assurance/OPS.md` section 9 has the measurements and t
 
 ### What was actually run and its output (this rehearsal)
 
-Local stack: Postgres 16 (`neuralbridge`/`neuralbridge_dev`@`neuralbridge_ai`
-and `neuralbridge_ai_test`), `assurance.api.service:app` on `:8011` (moved
-off the documented `:8001` only because this shared sandbox already had
-another process bound there — no code or config reason), `neuralbridge.main:app`
-on `:8000`.
+Run on 2026-11-07 in a sandbox with PostgreSQL 16 on `127.0.0.1:5432`, Python 3.13, Node 22, Chromium from
+`/opt/pw-browsers`. No Docker daemon, no Stripe, no Fly, no GHCR, no PyPI and no production credential were used. Secrets were
+generated per run and are not shown; output below is shortened where marked `...`.
 
 ```
-$ ASSURANCE_API_URL=http://127.0.0.1:8011 \
-  NEURALBRIDGE_API_URL=http://127.0.0.1:8000/api/v1 \
-  ASSURANCE_ACCOUNTS=/tmp/nb-demo/accounts.db \
-  ./scripts/verify-buyer-path.sh
-== 1. GET /v1/plans — the real, enforced pricing table ==
+$ scripts/rehearse-local.sh
+[PASS] plans.none_purchasable: 3 plans, purchasable=[]
+[PASS] checkout.register_refused_honestly: HTTP 503 price_not_configured; no Stripe call is possible (no key set)
+[PASS] webhook.reject_missing_header: HTTP 400            ... (forged, tampered, stale, malformed: all 400, nothing granted)
+[PASS] webhook.replay_is_a_noop: HTTP 200 {'handled': 'checkout.session.completed', 'duplicate': True, ...}
+[PASS] claim.second_collection_410: HTTP 410
+[PASS] entitlement.no_key_401: HTTP 401
+[PASS] entitlement.register_key_on_cell_route_402: HTTP 402 plan_does_not_include_signed_attestation
+[PASS] lifecycle.key_revocation_is_immediate: before=201, revoke HTTP 200, after=401
+[PASS] lifecycle.cancelled_can_still_read_verify_export: list 200, case 200, verify 200, export 200, header=evidence-readout-only
+[PASS] restore.restored_volume_serves_same_entitlements: lapsed read 200, lapsed write 402, revoked key 401
+[PASS] logs.no_secret_in_server_output: server logs hold no key, token or secret and no traceback
+PASS: 39/39 steps. local rehearsal, not a hosted staging proof.          # exit 0
+
+$ scripts/rehearse-local.sh --with-site
+... the same 39 steps, plus [PASS] site.served_and_buyer_pages_answer
+PASS: 40/40 steps. local rehearsal, not a hosted staging proof.          # exit 0
+```
+
+```
+$ scripts/local-stack.sh verify
+create nb_local_<random>: ok
+local-stack: up. Assurance API :8001, platform API :8000, database nb_local_<random>, data /tmp/nb-demo
 == GET /v1/plans: OK (3 tiers). ==
-== 2. POST /v1/checkout refuses honestly without a real Stripe price configured ==
-== POST /v1/checkout: HTTP 503 (honest refusal, as expected on an instance with no Stripe price configured). ==
-== 3. Register + /ai golden path with a real Cell-tier fixture key ==
-== Minted a real Cell-tier fixture key via AccountStore. ==
+== POST /v1/checkout: HTTP 503 price_not_configured (honest refusal: no Stripe price is configured). ==
 == Free/no-key caller refused on both surfaces (401 / 402), as required. ==
-== Register case write: OK ({"case_id":"verify-buyer-path-4224","content_hash":"ccd1db97eb...","kind":"art14.signal","ledger_seq":1,...}) ==
-== /ai plan -> approve with the SAME key: OK ({"plan_id":"fcfb5816-...","success":true,...,"provenance":{...,"mocked":false},...}) ==
-== ALL CHECKS PASSED — plans is real, checkout refuses honestly without Stripe, and one Cell-tier key opens both paid surfaces. ==
-$ echo $?
-0
+== Register case write: OK ({"case_id":"verify-buyer-path-...","content_hash":"c2553...","kind":"art14.signal","ledger_seq":1,...}) ==
+== /ai plan -> approve with the SAME key: OK ({"plan_id":"4d5eefe2-...","success":true,...,"provenance":{...}}) ==
+== 9 real HTTP requests made (no mocks). ==
+== ALL CHECKS PASSED ... ==
+local-stack: verify-buyer-path.sh exit status 0
+drop nb_local_<random>: ok
+local-stack: down; database nb_local_<random> dropped, /tmp/nb-demo removed                # exit 0
 ```
 
+The same checks were also run (each exit 0) as the documented separate commands against `scripts/local-stack.sh up`:
+`scripts/verify-buyer-path.sh` (9 requests), `scripts/demo-walkthrough.sh` (ends `GOLDEN PATH COMPLETE`), and
+`scripts/go-live-preflight.sh` (`verify-buyer-path.sh: PASSED`, then `tests/test_ai_buyer_journey.py ... 2 passed`, 0 skipped); and
+the "by hand" block of `docs/ai-local-setup.md` was extracted and run verbatim (`VERIFY_EXIT=0`).
+
 ```
-$ NEURALBRIDGE_AI_PG_HOST=127.0.0.1 NEURALBRIDGE_AI_PG_PORT=5432 \
-  NEURALBRIDGE_AI_PG_USER=neuralbridge NEURALBRIDGE_AI_PG_PASSWORD=neuralbridge_dev \
-  NEURALBRIDGE_AI_PG_TEST_DATABASE=neuralbridge_ai_test \
-  pytest tests/test_ai_buyer_journey.py -v --no-cov
-tests/test_ai_buyer_journey.py::TestGoldenOneKeyTwoSurfaces::test_free_caller_blocked_on_both_paid_surfaces PASSED [ 50%]
-tests/test_ai_buyer_journey.py::TestGoldenOneKeyTwoSurfaces::test_one_cell_key_unlocks_both_paid_surfaces PASSED [100%]
-======================== 2 passed, 2 warnings in 0.92s =========================
+$ scripts/e2e-local.sh        (own throwaway database; ports moved to 3100/8100/8101 only because another job shared the host)
+=== project desktop-chromium ===
+  118 passed (5.1m)
+=== project mobile-chromium ===
+  118 passed (5.6m)
+e2e exit status 0                  # 236 passed, 0 failed, 0 skipped, 0 flaky, no E2E_AI=0
 ```
 
-(A first attempt with the default `--cov` flags on produced a spurious error
-on the second test's teardown — a coverage-report file contention from
-another process writing to this same shared checkout at the same time, not a
-real test failure. `--no-cov` reproduces cleanly; note this if CI ever shows
-the same one-off error with no code change behind it.)
+Earlier runs of the same script on the same commit on the same shared 4-core host (load average 13 to 19 from other jobs)
+were not clean, and are recorded because they say what the suite is sensitive to: one run failed
+`assurance-lifecycle.spec.ts:103` (desktop), `ai-race.spec.ts:40` and `assurance-trust.spec.ts:207` (mobile) under load; the next
+failed `assurance-checkout.spec.ts:168` in both projects with a real `429` from `POST /v1/checkout/complete`, because that route
+allows 20 requests per minute per address and the checkout specs, on a fast machine, exceed it. That one is a defect of the
+harness, not of the product: `scripts/e2e-local.sh` now sets `ASSURANCE_RATE_CLAIM=1000` for its throwaway API only (production
+default unchanged; its behaviour is covered by `tests/test_billing_rate_limits.py`), and the run above is the first with that
+change. The three load-dependent failures did not recur in the final run and were not investigated further; if
+they recur on an idle machine they are real.
 
-`docker-compose.demo.yml`: not exercised with a live `docker compose up` —
-no Docker daemon in this rehearsal's environment (`docker compose version`
-answers, but there is no daemon behind it here). `docker compose -f
-docker-compose.ai.yml -f docker-compose.demo.yml config` was run and
-succeeded cleanly (exit 0, valid merged config — no daemon needed for that
-command), confirming the overlay is at least syntactically sound; that is
-not the same as a real `up`, so still worth a founder or CI run with an
-actual daemon before relying on it as the canonical demo path.
+`docker-compose.demo.yml` was not exercised with a live `docker compose up` (no daemon). Release tooling, run locally and
+not published: `actionlint` (exit 0 over all four workflows), `shellcheck` (exit 0 over the release and local-stack
+scripts), `scripts/build-dist.sh --out <dir> --expect-tag v0.1.1` (exit 0: `neuralbridge_middleware-0.1.1-py3-none-any.whl` and
+`.tar.gz`, `twine check --strict` PASSED for both) and with `--expect-tag v9.9.9` (exit 1, refused before building);
+`scripts/verify-release.sh` without a digest prints `UNCHECKED: --digest is required` (exit 2): no image has been published, so
+there is no real digest to verify.
 
-Playwright: not run (see item 5 above — reason given, not skipped silently).
+## Deployment topology: what the code enforces and what it needs
+
+Read this before choosing a host, a volume or a machine count. Each line says where it comes from; a line
+marked *not enforced* is a constraint the operator must hold, because nothing in the code refuses the
+alternative.
+
+| Constraint | Value | Source and status |
+|---|---|---|
+| Storage of the evidence ledger, per-account ledgers, accounts and attestation logs | SQLite in WAL mode (`PRAGMA journal_mode=WAL`, `synchronous=FULL`), one file per ledger on **one local volume** | `src/assurance/core/sqlite.py` (`enable_wal`), `src/assurance/evidence/ledger.py`, `src/assurance/billing/accounts.py` |
+| Writers per ledger inside one file | one at a time: every append is one `BEGIN IMMEDIATE` transaction that spans the read of the tail and the write, so a second writer waits (up to 30 s, then an error) and chains onto the first | `ledger.py` module docstring; `tests/test_multiworker_real.py` |
+| **Machines running ledger writers** | **1.** Two machines have two volumes and two chains from genesis that each verify and disagree; `restore_check verify --against-live` finds such a fork only afterwards | `deploy/assurance/fly.toml` (`min_machines_running = max_machines_running = 1`, `auto_stop_machines = false`). *Not enforced by the application:* the code cannot see a second machine |
+| Processes (`uvicorn --workers N`) on that one machine | **Tested maximum: 4**, on one host and one local filesystem (`tests/test_multiworker_real.py` starts real `--workers 4` process trees and checks 48 concurrent appends: gapless sequence, valid links, SQLite `integrity_check` ok). More than 4 workers and sustained load were **not** tested. The assurance image ships `--workers 1`, the platform image `--workers 4` | `deploy/assurance/OPS.md` section 9, `deploy/assurance/Dockerfile`, `Dockerfile`. *Not enforced:* uvicorn accepts any N |
+| Shared volume, NFS, SMB, EFS, a clustered or network filesystem | **Not supported.** SQLite WAL coordinates its readers and writers through a shared-memory `-shm` file and file locks, which require every process to be on the same host and a filesystem with working locking; on a network filesystem the chain's single-writer guarantee is not available. Not tested, and no code detects or refuses it | *Not enforced.* `OPS.md` section 9 lists "SQLite on a network filesystem" under "not tested" |
+| Kubernetes `replicas`, Helm `replicaCount` | The shipped `deploy/k8s/deployment.yaml` and `deploy/helm/values.yaml` say 3 and mount no volume. That is not a supported topology for the ledger or the account store (and `/ai`'s own SQLite store, `NEURALBRIDGE_AI_STORE`, is per replica). They are unexercised examples | Warning added at the top of both files; nothing was deployed from them |
+| Platform `/ai` bound connections under `--workers N` | A **bound** connection (`POST /ai/connections`) is live only on the worker that bound it, because credentials are never stored (`GET /ai/connections` reports `live: false` elsewhere) | `src/neuralbridge/ai/connections.py`, `OPS.md` section 9 |
+
+### Backup consistency and restore behaviour (what is true)
+
+- `python -m assurance.evidence.restore_check backup DATA OUT` snapshots each SQLite file with SQLite's online backup API,
+  so a backup taken while the service is running is transactionally consistent per file. A plain `cp`/`rsync` of a WAL database
+  can lose its newest records and is not a backup. Different files (accounts, operator ledger, each tenant ledger) are
+  snapshotted one after another, not at one instant; each is internally consistent.
+- It writes `backup-manifest.json` (size, SHA-256, ledger length and head link per file). The manifest is checksums, not a signature:
+  keep its `manifest_sha256` somewhere the backup's holder cannot rewrite. Checkout keys that were minted but not yet collected
+  (`pending_keys`) are not copied. `ops cycle` does not back up the `/ai` store (`--ai-store` is a manual option).
+- `restore_check restore BACKUP TARGET` verifies the backup first and refuses (exit 1, nothing written) anything that is not
+  `ok`, a non-empty target, a symlink, or a path overlapping the backup. It never overwrites a live volume. It restores into a new
+  directory, re-verifies against the manifest, then renames into place. Pending or approved `/ai` plans in a restored store are voided.
+- The restore drill (`OPS.md` section 4) and `scripts/rehearse-local.sh` (backup, verify, restore, a second API process on
+  the restored volume) were run on one local filesystem. Not shown: that a volume-level snapshot (for example a Fly volume
+  snapshot) taken under load restores cleanly (SQLite recovers a WAL after a crash, but this was not tested here, so take
+  `restore_check backup` as well and drill it); an off-host copy (the operator's to make); restore time on a large volume.
+
+### Rate limits that are per process
+
+These counters live in the memory of one worker process and are forgotten on restart. With `W` workers the effective limit is
+up to `W x limit` (for the shipped platform image, `W = 4`), and the edge limit (Fly proxy, Cloudflare, a firewall) is the operator's
+to set. Safe deployment constraint until a shared limiter exists: **run one worker per machine where the limit matters, or
+divide the configured limit by the worker count, and put an edge limit in front of every public route.**
+
+| Limiter | Default | Env override | Where |
+|---|---|---|---|
+| `POST /v1/checkout`, per client address | 5 per 60 s | `ASSURANCE_RATE_CHECKOUT` (`<count>[/<seconds>]`, `0` off) | `src/assurance/api/billing_routes.py` |
+| `POST /v1/checkout/complete` (key claim), per client address | 20 per 60 s | `ASSURANCE_RATE_CLAIM` | same |
+| Stripe checkout budget, per client address | 20 per 3600 s | `ASSURANCE_STRIPE_CHECKOUT_BUDGET_PER_ADDRESS` | same |
+| Stripe checkout budget, all callers (one counter per process) | 120 per 3600 s | `ASSURANCE_STRIPE_CHECKOUT_BUDGET` | same. Many addresses can still exhaust it |
+| Unmetered machine check, per client address | 60 per 60 s | `ASSURANCE_RATE_CHECK_MACHINE` | `src/assurance/api/check_routes.py` |
+| Platform router calls (adapters, `/ai`, MCP gateway), per tenant | 120 per minute | `NEURALBRIDGE_RATE_LIMIT_PER_MINUTE` (`0` off) | `src/neuralbridge/security/limits.py`, `core/router.py` |
+| Platform concurrency gate: in flight globally / per adapter | 32 / 8 | `NEURALBRIDGE_MAX_CONCURRENT_CALLS`, `NEURALBRIDGE_MAX_CONCURRENT_PER_ADAPTER` | same |
+| `/ai` refusal audit events (a 402/403 row is written only if a token is left): per tenant / all callers | burst 30, +12 per minute / burst 100, +30 per minute | none | `src/neuralbridge/ai/audit_events.py` |
+| Machine verification admission (running + waiting + per account) | per event loop, i.e. per worker | none | `src/assurance/api/machine_routes.py` |
+| Hash-chain verification cache (not a limit, but per process): the full re-walk happens at most every `ASSURANCE_CHAIN_RECHECK_SECONDS` per process, so an in-place edit of an old record is seen within that interval (default 60 s; `0` = every check) and always on export and `GET /v1/ledger/verify` | per process | `ASSURANCE_CHAIN_RECHECK_SECONDS` | `src/assurance/evidence/chain_cache.py` |
+
+**Not** per process (shared through the files, exact across workers, covered by `test_multiworker_real.py`): the free daily
+allowance of unauthenticated or Validator-tier reads (48 concurrent calls against a limit of 20 gave exactly 20 `200` and 28
+`429`), entitlements, and `/ai` plan approval (executes exactly once, counted in PostgreSQL).
 
 ## Post-secrets checklist (founder's own machine only)
 
@@ -286,25 +365,18 @@ it is cross-referenced, not repeated.
        -d '{"received_at":"...","channel":"customer_or_integrator","received_by":"you@yourcompany.com","description":"go-live check","product_name":"...","actor":{"identifier":"you@yourcompany.com","role":"operator"}}'
      ```
 
-5. **Cell-tier machine-verification path** (Agent C's parallel work —
-   `POST /v1/machine/verify` and the Console's Cell verification card,
-   expected anchor `#cell-verify`; not present in this branch as of this
-   rehearsal, so this step is written for whenever that PR lands, not
-   re-verified here).
+5. **Cell-tier machine-verification path.** `POST /v1/machine/verify` (`src/assurance/api/machine_routes.py`) and the
+   Console's Cell verification card (anchor `#cell-verify`, `app/components/FirstCell.tsx`) exist on this branch; the
+   local browser suite exercises them against the real local API (`tests-e2e/console-first-cell.spec.ts`, section 5
+   above). What it does not exercise is the hosted deployment, so run this against the deployed host:
    ```bash
    curl -s -X POST https://<your-fly-app>.fly.dev/v1/machine/verify \
      -H "X-API-Key: $CELL_KEY" -H 'Content-Type: application/json' \
-     -d @<a real machine-run envelope — see machine_routes.py's schema>
+     -d @<a real machine-run envelope, see the schema in machine_routes.py>
    ```
-   A Register-tier key must get the same `402` a free caller gets (Cell-only,
-   per `src/assurance/api/machine_routes.py`'s own docstring: "`POST
-   /v1/machine/verify` is the product. It needs the Cell plan."); a Cell key
-   must get a real `200` with a verification verdict, not a mocked one. In
-   the browser, confirm the Console's Cell verification card (`#cell-verify`
-   once that surface ships) renders the same real verdict, not a stub.
-   **Do not sign off this step until Agent C's PR has actually merged** —
-   until then, `/v1/machine/verify` on `main` is unaffected by this
-   rehearsal and this step is a placeholder, not a passed check.
+   A Register-tier key must get the same `402` a free caller gets (Cell-only, per the route's own docstring); a Cell key
+   must get a real `200` with a verification verdict, not a mocked one. In the browser, confirm the Console's Cell
+   verification card (`/console#cell-verify`) renders that same real verdict, not a stub.
 
 ## Failure modes table
 
