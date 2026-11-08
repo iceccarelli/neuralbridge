@@ -65,9 +65,14 @@ def team(env):
     store = AccountStore(str(env))
     acct = store.upsert_account(email="team@example.com", tier="register", company="Team")
     other = store.upsert_account(email="stranger@example.com", tier="register", company="Stranger")
+    # Proposer and approver are keys bound to two NAMED operators: with four-eyes in force an
+    # account-level key proves the account, not a person, so it cannot take either part
+    # (TestAccountLevelKeysCannotMakeTheDecision). ``service`` is such an unbound key.
+    _, proposer_key = store.create_operator(acct.id, "Proposer P", "decider")
+    _, approver_key = store.create_operator(acct.id, "Approver A", "decider")
     return SimpleNamespace(
-        id=acct.id, proposer=store.issue_key(acct.id, label="proposer"),
-        approver=store.issue_key(acct.id, label="approver"), stranger=store.issue_key(other.id, label="x"),
+        id=acct.id, proposer=proposer_key, approver=approver_key,
+        service=store.issue_key(acct.id, label="service"), stranger=store.issue_key(other.id, label="x"),
         stranger_id=other.id,
     )
 

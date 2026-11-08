@@ -26,6 +26,7 @@ from neuralbridge.ai.approval import (
     expiry_for,
     independence_problem,
     is_expired,
+    named_operator_problem,
 )
 from neuralbridge.ai.connections import SEEDED_REGISTRY_KEY, register_seeded_adapter
 from neuralbridge.ai.credentials import CustodyError, vault_for
@@ -311,6 +312,10 @@ def create_plan(
         raise OrchestratorError(
             403, "four_eyes_required: this account requires an independently authenticated approver, so a "
                  "plan can only be proposed by a caller identified by an API key.")
+    if policy.four_eyes:
+        problem = named_operator_problem(caller, role="proposer")
+        if problem is not None:
+            raise OrchestratorError(403, f"four_eyes_required: {problem}.")
 
     if not decision.requires_approval:
         raise OrchestratorError(
