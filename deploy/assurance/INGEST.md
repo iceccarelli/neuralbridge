@@ -201,6 +201,7 @@ the product's version or range. Everything else is `unknown`:
 | `not_addressed_by_vulnerability` | one vulnerability's `product_status` does not mention the item at all. Absence is not a statement |
 | `document_not_final` | a `fixed` / `not_affected` withheld because the document is a draft or interim |
 | `ledger_chain_unverified`, `look_incomplete` | a `fixed` / `not_affected` withheld because the ledger chain does not verify, or the latest look at the machine was incomplete or failed |
+| `configuration_not_observed` | a `fixed` / `not_affected` withheld because the software on the machine was never observed: its manifest is a declared baseline (`as_declared`, not `as_found`), or the item matched by label only (no hash read off the unit). A clear needs an `as_found` look whose item hash was read from the unit |
 
 A hash the manifest carries that was **not** read off the unit (declared, or from a vendor) is not
 compared: it says what should be there, not what is. A machine's result is the worst of its
@@ -209,8 +210,13 @@ doubtful match to an `affected` product also prevents a `fixed`/`not_affected` r
 item. Each result carries the matched product ids, how the identity was established and the
 document's provenance (SHA-256, publisher, tracking, ledger entry).
 
+A machine whose result was withheld, or whose manifest is declared-only, makes the impact
+`complete: false` whatever else it says (a declared label proves nothing about what runs). An
+`affected` or `under_investigation` result from a declared or label-only match is still reported, with a
+caveat: it is a lead for a human to check against the machine, not a conclusion.
+
 Exit codes: 0 every machine is fixed, not_affected or not named and nothing is incomplete; 1 at
-least one machine is affected; 3 **not a clear** (a machine is under_investigation or unknown,
+least one machine is affected; 3 **not a clear** (a machine is under_investigation or unknown, a clear was withheld or rests on a declared baseline,
 the advisory is partial, the fleet is empty or the ledger chain does not verify); 2 could not run.
 
 ### What the result is, and is not
