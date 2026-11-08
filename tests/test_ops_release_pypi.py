@@ -252,3 +252,26 @@ def test_go_live_runbook_has_no_short_operator_key_and_names_the_one_command() -
     for m in re.finditer(r"ASSURANCE_API_KEYS=(\S+)", text):
         assert "secrets.token_urlsafe" in m.group(1) or m.group(1).lstrip('"').startswith("$"), m.group(0)
     assert textwrap.dedent("python -m pytest") in text
+
+
+def test_no_workflow_grants_security_events_write_without_uploading_sarif() -> None:
+    # Least privilege (red-team finding C): `security-events: write` once sat at workflow level for every job
+    # although nothing uploads SARIF. It is allowed only on a job that uses the SARIF upload action.
+    for wf_path in sorted(WORKFLOWS.glob("*.yml")):
+        wf = _load(wf_path)
+        top = wf.get("permissions")
+        assert isinstance(top, dict), f"{wf_path.name}: the workflow needs an explicit top-level permissions block"
+        assert top.get("security-events") != "write", f"{wf_path.name}: workflow-level security-events: write"
+        for name, job in wf["jobs"].items():
+            perms = job.get("permissions", top)
+            if isinstance(perms, dict) and perms.get("security-events") == "write":
+                uploads = any("upload-sarif" in str(s.get("uses", "")) for s in job.get("steps", []))
+                assert uploads, f"{wf_path.name}:{name} has security-events: write but uploads no SARIF"
+
+
+def test_ci_default_permissions_are_read_only_and_each_job_write_is_listed() -> None:
+    wf = _load(CI)
+    assert wf["permissions"] == {"contents": "read"}
+    writes = {name: sorted(k for k, v in job["permissions"].items() if v == "write")
+              for name, job in wf["jobs"].items() if "permissions" in job}
+    assert writes == {"sbom": ["attestations", "id-token"], "deploy-docs": ["id-token", "pages"]}

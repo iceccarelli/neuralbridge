@@ -960,11 +960,28 @@ def csaf_impact(ledger: EvidenceLedger, advisory_ref: str, *, recorder_trust: An
                 withheld = "ledger_chain_unverified"
             elif record.look_problems:
                 withheld = "look_incomplete"
+        # A clear needs OBSERVED software: an as_found manifest AND an item read from the unit
+        # (hash match). A declared baseline or a label-only match says what the machine was
+        # shipped with / what someone typed, not what runs on it.
+        declared_only = manifest.source is not ManifestSource.AS_FOUND
+        label_only = [r for r in item_results if r["state"] in ("fixed", "not_affected")
+                      and not str(r["item_hash_basis"]).startswith("read_from_unit")]
+        if not withheld and state in ("fixed", "not_affected") and (declared_only or label_only):
+            withheld = "configuration_not_observed"
         if withheld:
             state, reasons = "unknown", [withheld]
-            caveats.append("a 'fixed' / 'not_affected' result is withheld: " + (
-                "the ledger chain does not verify" if withheld == "ledger_chain_unverified"
-                else "the latest look at this machine was incomplete or failed"))
+            caveats.append("a 'fixed' / 'not_affected' result is withheld: " + {
+                "ledger_chain_unverified": "the ledger chain does not verify",
+                "look_incomplete": "the latest look at this machine was incomplete or failed",
+                "configuration_not_observed": (
+                    "the software on this machine was never observed (a declared baseline, or a "
+                    "match by label with no hash read from the unit); a clear needs an observed "
+                    "configuration"),
+            }[withheld])
+        if state in ("affected", "under_investigation") and (declared_only or any(
+                not str(r["item_hash_basis"]).startswith("read_from_unit") for r in item_results)):
+            caveats.append(f"'{state}' rests on a declared or label-only match: it is a LEAD for "
+                           "a human to check against the machine, not a conclusion")
         if manifest.source is not ManifestSource.AS_FOUND:
             caveats.append("the configuration is known only from a declared baseline: what is "
                            "installed was never observed")
@@ -976,6 +993,7 @@ def csaf_impact(ledger: EvidenceLedger, advisory_ref: str, *, recorder_trust: An
             "reason_codes": reasons, "named_by_advisory": bool(item_results),
             "configuration_basis": manifest.source.value, "items": item_results,
             "caveats": caveats, "look_problems": list(record.look_problems),
+            "clear_withheld": bool(withheld), "rests_on_declared_data": declared_only,
         })
     counts = {s: sum(1 for m in machines if m["state"] == s) for s in STATES}
     not_named = sum(1 for m in machines if not m["named_by_advisory"])
@@ -988,7 +1006,9 @@ def csaf_impact(ledger: EvidenceLedger, advisory_ref: str, *, recorder_trust: An
     if body["partial"]:
         caveats.insert(0, "the recorded advisory is PARTIAL: " + "; ".join(body["partial_reasons"]))
     complete = (fleet.chain_verified and bool(machines) and not body["partial"]
-                and counts["unknown"] == not_named and counts["under_investigation"] == 0)
+                and counts["unknown"] == not_named and counts["under_investigation"] == 0
+                and not any(m["clear_withheld"] or m["rests_on_declared_data"]
+                            for m in machines))
     return {
         "schema": IMPACT_SCHEMA, "advisory_ref": advisory_ref,
         "provenance": _provenance(entry, body),
@@ -997,8 +1017,9 @@ def csaf_impact(ledger: EvidenceLedger, advisory_ref: str, *, recorder_trust: An
         "complete": complete,
         "complete_note": ("every machine is affected, fixed, not_affected or not named by the "
                           "advisory" if complete else
-                          "some machine is under_investigation or unknown, or the advisory or the "
-                          "ledger is incomplete: this is not a clear"),
+                          "some machine is under_investigation or unknown, a clear was withheld "
+                          "or rests on a declared baseline, or the advisory or the ledger is "
+                          "incomplete: this is not a clear"),
         "ledger_chain_verified": fleet.chain_verified,
         "machines": machines, "does_not_establish": caveats,
     }
