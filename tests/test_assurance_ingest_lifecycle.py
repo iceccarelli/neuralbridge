@@ -174,6 +174,10 @@ def ran(tmp_path_factory) -> Run:
         label="close before re-verification")
 
     # 6. a re-verification needs a LOOK at the unit, not the declared baseline
+    # The case's trigger is the intervention's occurred_at (`when`, now + 1 s, whole seconds). A look
+    # taken in that same second predates the change and the product, rightly, refuses it ("predates
+    # this case's trigger"). On a fast runner that happened; wait until the clock is past `when`.
+    time.sleep(1.2)
     found = SafetyManifest(
         manifest_id="LOOK-1", machine=enrolled.machine, source=ManifestSource.AS_FOUND,
         taken_at=datetime.now(UTC), taken_by=Actor("m.tech", "service technician", "person"),

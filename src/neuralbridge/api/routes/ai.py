@@ -284,6 +284,19 @@ async def rotate(
     return summary
 
 
+_UNJOURNALED = ("The connection is out of service now, but the anti-rollback journal could not record "
+                "it: restoring an older backup of the store could bring this credential back. Fix the "
+                "journal (NEURALBRIDGE_CREDENTIAL_JOURNAL) and rotate or re-revoke, or treat the "
+                "credential as compromised and change it at the target.")
+
+
+def _guard(journal: dict[str, bool]) -> str:
+    """``recorded`` / ``not_recorded`` / ``not_applicable`` (no vault-held credential)."""
+    if "recorded" not in journal:
+        return "not_applicable"
+    return "recorded" if journal["recorded"] else "not_recorded"
+
+
 @router.post("/connections/{connection_id}/revoke", summary="Revoke a connection (permanent)")
 async def revoke(
     connection_id: str,
@@ -300,9 +313,10 @@ async def revoke(
     anti-rollback journal so restoring an older backup cannot bring the connection back.
     Idempotent. 404 for a missing or foreign id."""
     await audit_logger.ensure_writable()
+    journal: dict[str, bool] = {}
     try:
         changed = await revoke_connection(
-            registry, store, scope, connection_id, by=actor.as_audit_string(), vault=vault)
+            registry, store, scope, connection_id, by=actor.as_audit_string(), vault=vault, journal=journal)
     except ConnectionLifecycleError as exc:
         await record(
             audit_logger, event_type="connection_revoke", actor=actor.as_audit_string(), owner=scope.owner,
@@ -313,9 +327,15 @@ async def revoke(
     await record(
         audit_logger, event_type="connection_revoke", actor=actor.as_audit_string(), owner=scope.owner,
         resource=f"connection:{connection_id}", action="revoke",
-        result="success" if changed else "already_revoked", details={"connection_id": connection_id},
+        result=("success_unjournaled" if changed and not journal.get("recorded", True) else
+                "success" if changed else "already_revoked"),
+        details={"connection_id": connection_id, "rollback_guard": _guard(journal)},
     )
-    return {"revoked": connection_id, "already_revoked": not changed}
+    body: dict[str, Any] = {"revoked": connection_id, "already_revoked": not changed}
+    if _guard(journal) == "not_recorded":      # the success body is unchanged unless the guard is off
+        body["rollback_guard"] = "not_recorded"
+        body["warning"] = _UNJOURNALED
+    return body
 
 
 @router.delete("/connections/{connection_id}", summary="Unbind one of your connections")
@@ -333,15 +353,22 @@ async def unbind_connection(
     unbind what it bound. Someone else's id, a missing id, the shared seeded
     demo (for non-operators) and any anonymous caller all answer the same 404."""
     await audit_logger.ensure_writable()
-    deleted = await delete_connection(registry, store, scope, connection_id, vault)
+    journal: dict[str, bool] = {}
+    deleted = await delete_connection(registry, store, scope, connection_id, vault, journal=journal)
     await record(
         audit_logger, event_type="connection_delete", actor=actor.as_audit_string(), owner=scope.owner,
-        resource=f"connection:{connection_id}", action="delete", result="success" if deleted else "refused:404",
-        details={"connection_id": connection_id},
+        resource=f"connection:{connection_id}", action="delete",
+        result=("refused:404" if not deleted else
+                "success_unjournaled" if not journal.get("recorded", True) else "success"),
+        details={"connection_id": connection_id, "rollback_guard": _guard(journal)},
     )
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Connection '{connection_id}' not found.")
-    return {"deleted": connection_id}
+    body = {"deleted": connection_id}
+    if _guard(journal) == "not_recorded":      # the success body is unchanged unless the guard is off
+        body["rollback_guard"] = "not_recorded"
+        body["warning"] = _UNJOURNALED
+    return body
 
 
 @router.get("/capabilities", summary="What this agent can do against one connection")

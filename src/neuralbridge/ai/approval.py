@@ -23,8 +23,12 @@ holder might be the one it protects against; only the operator can (``PUT /ai/po
 ``owner``), and not while the environment forces it. The setting in force when a plan is PROPOSED is
 stored on the plan and cannot be loosened afterwards.
 
-What it does not do: it cannot tell two keys held by one person apart, and it does not make the
-operator key (full access) subject to anything but its own key fingerprint.
+For a customer account the proposer and the approver must each be bound to a NAMED OPERATOR and
+to different ones (``named_operator_problem``): an account-level key proves the account, not a
+person, and any holder can mint more keys, so two of them prove nothing. What it still does not do:
+a name binds a credential to a name and does not prove who holds it, so one person who is given
+two operator keys is not detected; and the deployer's own operator key (full access) is subject
+only to its key fingerprint.
 """
 
 from __future__ import annotations
@@ -47,6 +51,9 @@ class CallerRef:
 
     key_ref: str = ""
     operator: str = ""
+    #: True for a customer account's key. The deployer's own ``ASSURANCE_API_KEYS`` key (the
+    #: operator of the platform) is not a tenant credential and keeps the fingerprint-only rule.
+    tenant: bool = False
 
     @classmethod
     def from_request(cls, api_key: str | None, principal: Principal) -> CallerRef:
@@ -54,6 +61,7 @@ class CallerRef:
         return cls(
             key_ref=hash_key(presented)[:16] if presented else "",
             operator=principal.operator_id or "",
+            tenant=principal.account is not None and principal.key_prefix != "operator",
         )
 
 
@@ -97,6 +105,25 @@ def is_expired(expires_at: str | None, now: datetime | None = None) -> bool:
     return bool(expires_at) and datetime.fromisoformat(expires_at) <= (now or datetime.now(UTC))  # type: ignore[arg-type]
 
 
+def named_operator_problem(caller: CallerRef, *, role: str) -> str | None:
+    """Why a TENANT caller cannot take part in a four-eyes decision as ``role`` (proposer or approver).
+
+    An account-level key proves the account, not a person (``Principal``), and any holder can mint
+    more of them (``POST /v1/keys``), so two such keys prove nothing about two people: an
+    independent red team proposed with one and approved with a key it minted a moment later. A
+    key bound to a NAMED OPERATOR is different: an account-level key may create only the account's
+    first operator, and every further operator needs a decider already bound to a name
+    (``POST /v1/operators``). So with four-eyes in force, proposer and approver must each be
+    bound to a named operator, and to different ones. (The name binds a credential to a name; it
+    does not prove who holds it, and the account's deciders decide who the operators are.)
+    """
+    if caller.tenant and not caller.operator:
+        return (f"the {role} must authenticate with a key bound to a named operator "
+                "(POST /v1/operators): an account-level key proves the account, not a person, "
+                "and one holder can mint any number of them")
+    return None
+
+
 def independence_problem(
     proposer_key: str, proposer_operator: str, approver: CallerRef,
 ) -> str | None:
@@ -105,6 +132,12 @@ def independence_problem(
         return "the proposer or the approver was not identified by an API key, so independence cannot be shown"
     if approver.key_ref == proposer_key:
         return "the approver authenticated with the same API key as the proposer"
+    if approver.tenant:
+        problem = named_operator_problem(approver, role="approver")
+        if problem is not None:
+            return problem
+        if not proposer_operator:
+            return "the plan was proposed with an account-level key, which proves the account, not a person"
     if proposer_operator and approver.operator and approver.operator == proposer_operator:
         return "the approver is the same operator as the proposer"
     return None

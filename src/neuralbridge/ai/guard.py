@@ -42,8 +42,9 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from neuralbridge.ai.entitlements import Principal, require_ai_control_plane
+from neuralbridge.ai.entitlements import Principal, require_ai_control_plane, scope_for
 from neuralbridge.ai.policy import PolicyError, evaluate
+from neuralbridge.ai.tenancy import demo_writable_by_paid
 
 #: Per-adapter allow-list of operations a free/anonymous caller may still
 #: invoke without the ai_control_plane entitlement — real discovery/read
@@ -159,6 +160,18 @@ async def enforce_write_gate(adapter_type: str, operation: str, params: dict[str
 
         if decision.requires_approval:
             await require_ai_control_plane(principal)
+            # The plain ``postgres`` key on this route IS the shared seeded demo database, one
+            # database for every tenant, so a write to it is a cross-tenant write. ``/ai`` refuses
+            # that for a paid account (tenancy.py; the local-development switch lifts it for the
+            # buyer-path demo), and this route must not be the cheaper way round: an independent
+            # red team wrote the shared demo through it with a plain Register key, no plan, no
+            # approval and no four-eyes. The operator keeps the route.
+            if not scope_for(principal).is_operator and not demo_writable_by_paid():
+                raise HTTPException(
+                    status_code=403,
+                    detail="The shared demo connection is read-only. Bind your own connection "
+                           "(POST /ai/connections) and propose writes through /ai/plan.",
+                )
         return
 
     safe_ops = _SAFE_DISCOVERY_OPS.get(adapter_type, frozenset())

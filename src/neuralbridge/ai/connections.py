@@ -306,8 +306,13 @@ def get_connection(store: AiStore, scope: Scope, connection_id: str) -> Connecti
 def _journal_best_effort(vault: CredentialVault, op: str, record: ConnectionRecord) -> bool:
     """Record a shrinking action (revoke, delete) in the journal. Revocation must work even when the
     journal cannot be written, so a failure is logged loudly and reported, not raised."""
-    if record.custody != CUSTODY_VAULT or vault.config.journal is None:
-        return True
+    if record.custody != CUSTODY_VAULT:
+        return True      # no ciphertext was ever stored for it, so there is nothing a restore could revive
+    if vault.config.journal is None:
+        # A vault-held credential with no journal to write: the revoke still takes effect now, but
+        # an older backup restored later would bring it back, and the caller must be told.
+        logger.error("ai_credential_journal_unconfigured", op=op, connection_id=record.id)
+        return False
     try:
         vault.journal.append(op, connection_id=record.id, owner=record.owner, version=record.cred_version)
         return True
@@ -318,6 +323,7 @@ def _journal_best_effort(vault: CredentialVault, op: str, record: ConnectionReco
 
 async def delete_connection(
     registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str, vault: CredentialVault | None = None,
+    *, journal: dict[str, bool] | None = None,
 ) -> bool:
     """Unbind a connection ``scope`` owns (the seeded demo: operator only).
     ``False`` means not found *or* not yours — callers answer 404 either way.
@@ -327,7 +333,9 @@ async def delete_connection(
     if record is None or not can_delete_connection(scope, record):
         return False
     if vault is not None:
-        _journal_best_effort(vault, "delete", record)
+        recorded = _journal_best_effort(vault, "delete", record)
+        if journal is not None:
+            journal["recorded"] = recorded
     if not store.delete_connection(connection_id):
         return False
     adapter = registry.get(record.registry_key)
@@ -454,7 +462,7 @@ async def rotate_connection(
 
 async def revoke_connection(
     registry: AdapterRegistry, store: AiStore, scope: Scope, connection_id: str, *, by: str,
-    vault: CredentialVault | None = None,
+    vault: CredentialVault | None = None, journal: dict[str, bool] | None = None,
 ) -> bool:
     """Revoke a connection, permanently. Owner (or operator; the demo: operator only).
 
@@ -465,7 +473,9 @@ async def revoke_connection(
     adapter is closed and unregistered. Idempotent: returns ``False`` if it was already revoked."""
     record = _manageable(store, scope, connection_id)
     if vault is not None:
-        _journal_best_effort(vault, "revoke", record)
+        recorded = _journal_best_effort(vault, "revoke", record)
+        if journal is not None:
+            journal["recorded"] = recorded
     changed = store.revoke_connection(connection_id, by=by)
     if changed is None:
         raise _not_found(connection_id)

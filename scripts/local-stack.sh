@@ -33,6 +33,7 @@ DIR="${LOCAL_STACK_DIR:-/tmp/nb-demo}"
 API_PORT="${API_PORT:-8001}"
 PLATFORM_PORT="${PLATFORM_PORT:-8000}"
 STATE="$DIR/state.env"
+MARKER="$DIR/.nb-local-stack"   # written by `up`; `down` removes only a directory that carries it
 
 export NEURALBRIDGE_AI_PG_HOST="${NEURALBRIDGE_AI_PG_HOST:-127.0.0.1}"
 export NEURALBRIDGE_AI_PG_PORT="${NEURALBRIDGE_AI_PG_PORT:-5432}"
@@ -64,13 +65,55 @@ stop_pid() {
   fi
 }
 
+# The directory must be a real directory (not a symlink), ours, and not writable by group or others:
+# a predictable path in /tmp may have been planted by someone else.
+dir_is_safe() {
+  [ -n "$DIR" ] && [ "$DIR" != "/" ] && [ -d "$DIR" ] && [ ! -L "$DIR" ] || return 1
+  local owner mode
+  owner="$(stat -c %u -- "$DIR" 2>/dev/null)" || return 1
+  mode="$(stat -c %a -- "$DIR" 2>/dev/null)" || return 1
+  [ "$owner" = "$(id -u)" ] || return 1
+  [ $(( 8#$mode & 8#022 )) -eq 0 ]
+}
+
+# Read the state file as DATA. It is never sourced or evaluated: only these keys, only these value
+# shapes. Anything else (an unknown key, a bad value, a line that is not KEY=VALUE) refuses the file.
+S_API_PID="" S_PLATFORM_PID="" S_DB_NAME=""
+read_state() {
+  S_API_PID="" S_PLATFORM_PID="" S_DB_NAME=""
+  [ -f "$STATE" ] && [ ! -L "$STATE" ] || { echo "local-stack: $STATE is not a regular file" >&2; return 1; }
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *=*) key="${line%%=*}"; val="${line#*=}" ;;
+      *) echo "local-stack: refusing $STATE: a line that is not KEY=VALUE" >&2; return 1 ;;
+    esac
+    case "$key" in
+      API_PID|PLATFORM_PID)
+        [[ "$val" =~ ^[0-9]{1,10}$ ]] || { echo "local-stack: refusing $STATE: $key is not a pid" >&2; return 1; }
+        if [ "$key" = API_PID ]; then S_API_PID="$val"; else S_PLATFORM_PID="$val"; fi ;;
+      DB_NAME)
+        [[ "$val" =~ ^nb_local_[a-z0-9]+$ ]] || { echo "local-stack: refusing $STATE: DB_NAME is not a nb_local_ name" >&2; return 1; }
+        S_DB_NAME="$val" ;;
+      API_PORT|PLATFORM_PORT)
+        [[ "$val" =~ ^[0-9]{1,5}$ ]] || { echo "local-stack: refusing $STATE: $key is not a port" >&2; return 1; } ;;
+      *) echo "local-stack: refusing $STATE: unexpected key" >&2; return 1 ;;
+    esac
+  done <"$STATE"
+}
+
 do_down() {
   if [ ! -f "$STATE" ]; then
     echo "local-stack: nothing recorded in $STATE (already down)" >&2
     return 0
   fi
-  # shellcheck disable=SC1090
-  . "$STATE"
+  if ! dir_is_safe || [ ! -f "$MARKER" ] || [ -L "$MARKER" ]; then
+    echo "local-stack: refusing to act on $DIR: not a directory this script created (missing marker), not owned by you, or group/world-writable. Nothing was run or removed." >&2
+    return 2
+  fi
+  read_state || return 2
+  local API_PID="$S_API_PID" PLATFORM_PID="$S_PLATFORM_PID" DB_NAME="$S_DB_NAME"
   stop_pid "${API_PID:-}"
   stop_pid "${PLATFORM_PID:-}"
   local rc=0
@@ -98,6 +141,9 @@ wait_for() {  # $1 url $2 label $3 log
 
 do_up() {
   [ ! -e "$STATE" ] || die "a stack is already recorded in $STATE; run: scripts/local-stack.sh down"
+  if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+    dir_is_safe || die "$DIR already exists and is not a private directory owned by you (planted?); set LOCAL_STACK_DIR or remove it"
+  fi
   [ ! -e "$DIR" ] || [ -z "$(ls -A "$DIR" 2>/dev/null)" ] || die "$DIR exists and is not empty (not ours?); set LOCAL_STACK_DIR or remove it"
   for p in "$API_PORT" "$PLATFORM_PORT"; do
     busy "$p" && die "port $p is already serving something; refusing to start beside an unknown server (set API_PORT / PLATFORM_PORT)"
@@ -105,8 +151,16 @@ do_up() {
   "$PYTHON" -c 'import uvicorn, fastapi, asyncpg, assurance, neuralbridge' 2>/dev/null \
     || die "$PYTHON cannot import uvicorn/fastapi/asyncpg/assurance/neuralbridge; pip install -e '.[dev]' (or set PYTHON)"
 
-  mkdir -p "$DIR" || die "cannot create $DIR"
+  # Create the directory ourselves, mode 0700, or accept an EMPTY one that is already ours and private.
+  if [ -e "$DIR" ] || [ -L "$DIR" ]; then
+    dir_is_safe || die "$DIR already exists and is not a private directory owned by you (planted?); set LOCAL_STACK_DIR or remove it"
+  else
+    ( umask 077; mkdir -- "$DIR" ) || die "cannot create $DIR"
+  fi
   chmod 700 "$DIR" || die "cannot restrict $DIR"
+  dir_is_safe || die "$DIR is not safe to use"
+  [ ! -e "$DIR.custody" ] && [ ! -L "$DIR.custody" ] || die "$DIR.custody already exists; remove it or set LOCAL_STACK_DIR"
+  ( umask 077; : >"$MARKER" ) || die "cannot write $MARKER"
   local suffix db
   suffix="$("$PYTHON" -c 'import secrets; print(secrets.token_hex(4))')"
   db="nb_local_${suffix}"
@@ -133,7 +187,7 @@ do_up() {
     export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1   # LOCAL ONLY: the demo connection is writable by a paid account
     # Credential custody fails closed without a key and a journal kept OUTSIDE the store's directory.
     # A random per-run key, in this subshell's environment only (never printed, never in argv).
-    mkdir -p "$DIR.custody" && chmod 700 "$DIR.custody"
+    ( umask 077; mkdir -- "$DIR.custody" ) && chmod 700 "$DIR.custody"
     NEURALBRIDGE_CREDENTIAL_KEYS="local:$("$PYTHON" -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')"
     export NEURALBRIDGE_CREDENTIAL_KEYS NEURALBRIDGE_CREDENTIAL_JOURNAL="$DIR.custody/journal"
     setsid "$PYTHON" -m uvicorn neuralbridge.main:app --host 127.0.0.1 --port "$PLATFORM_PORT" >"$DIR/platform.log" 2>&1 &

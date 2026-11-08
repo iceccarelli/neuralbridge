@@ -67,11 +67,12 @@ four real workers):
   `WEB_CONCURRENCY` greater than 1 `/health/ready` warns that they admit that many times their configured value. `security/rate_limit.py` (a Redis token bucket)
   is not wired to any route.
 * **Four-eyes approval (opt-in, off by default).** When an account (`PUT /ai/policy`) or the deployment (`NEURALBRIDGE_AI_FOUR_EYES=1`) turns it on, the account
-  that proposes a write plan cannot approve it with the same API key: the approver must authenticate with a different key (and a different operator, when both keys
-  are bound to one). `X-NB-Actor` is a label and plays no part. An unapproved proposal expires after 24 hours (`NEURALBRIDGE_AI_FOUR_EYES_TTL_S`) and a denied,
+  that proposes a write plan cannot approve it with the same API key: for a customer account the proposer and the approver must each authenticate with a key bound to a
+  **named operator**, and to different operators (an account-level key proves the account, not a person, and one holder can mint any number of them; an account-level
+  key can create only the account's first operator, every further one needs a decider). `X-NB-Actor` is a label and plays no part. An unapproved proposal expires after 24 hours (`NEURALBRIDGE_AI_FOUR_EYES_TTL_S`) and a denied,
   expired, failed or executed plan can never run; the approver's identity and time are written once and the store refuses to change them. The policy is visible
   read-only in `GET /ai/policy`, `GET /ai/connections` (`four_eyes`) and the plan (`four_eyes`, `expires_at`). An account can switch it on for itself but only the
-  operator can switch it off. It cannot tell two keys held by one person apart.
+  operator can switch it off. A name binds a credential to a name and does not prove who holds it: one person given two operator keys is not detected.
 
 Treat anything not marked **Supported** as evolving, whatever older marketing
 copy elsewhere in this repository's history might have claimed. The former

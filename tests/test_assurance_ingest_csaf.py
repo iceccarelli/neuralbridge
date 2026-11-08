@@ -30,6 +30,25 @@ SOURCE_KW = {"name": "synthetic-advisory.csaf.json", "supplied_at": "2026-03-12T
 FW = "Safety controller firmware"
 
 
+def observed(it):
+    """The same item as READ off the unit: a (synthetic) hash from the machine itself.
+
+    Only for a product with no stated hash in the advisory, so the label is still what is compared.
+    """
+    from dataclasses import replace
+    digest = hashlib.sha256(f"{it.name}|{it.version}".encode()).hexdigest()
+    return replace(it, content_hash=digest, hash_source=HashSource.READ_FROM_MACHINE)
+
+
+def enrol_observed(ledger, serial, *items):
+    """Enrol a machine, then seal a LOOK (as_found) whose items were hashed on the unit."""
+    key = enrol(ledger, serial, *items)
+    record_manifest(ledger, manifest(serial, *(observed(i) for i in items),
+                                     source=ManifestSource.AS_FOUND, manifest_id=f"LOOK-{serial}"),
+                    actor=PERSON)
+    return key
+
+
 def do_import(ledger: EvidenceLedger | None, doc: Any, **kw: Any) -> dict[str, Any]:
     data = doc if isinstance(doc, bytes) else raw(doc)
     return csaf.import_csaf(ledger, data, source=make_source(data, **SOURCE_KW), actor=SERVICE, **kw)
@@ -368,15 +387,15 @@ def reasons(impact: dict[str, Any], serial: str) -> list[str]:
 def fleet(ledger):
     """A fleet that exercises every result, against the example advisory."""
     enrol(ledger, "AFF", item(FW, "3.8.2"))
-    enrol(ledger, "FIX", item(FW, "3.9.0"))
-    enrol(ledger, "NOT", item(FW, "3.7.0"))
+    enrol_observed(ledger, "FIX", item(FW, "3.9.0"))
+    enrol_observed(ledger, "NOT", item(FW, "3.7.0"))
     enrol(ledger, "RNG", item(FW, "3.5.1"))
     enrol(ledger, "GAP", item(FW, "3.6.5"))
     enrol(ledger, "RC1", item(FW, "3.8.2-rc1"))
     enrol(ledger, "SUP", item("libmotion", "1.4.0", supplier="OpenMotion"))
     enrol(ledger, "NOS", item("libmotion", "1.4.0", supplier=""))
     enrol(ledger, "SAM", item("libmotion", "1.4.0", supplier="Open Motion GmbH"))
-    enrol(ledger, "GWY", item("Unrelated gateway", "1.0"))
+    enrol_observed(ledger, "GWY", item("Unrelated gateway", "1.0"))
     enrol(ledger, "OTH", item("Something else entirely", "7"))
     ref = do_import(ledger, csaf_doc())["advisory_ref"]
     return ledger, ref
@@ -604,7 +623,7 @@ class TestUnderInvestigationAndFixed:
         status(doc)["fixed"].remove("CSAFPID-0002")
         status(doc)["first_fixed"] = ["CSAFPID-0002"]
         enrol(ledger, "P", item(FW, "3.8.2"))
-        enrol(ledger, "Q", item(FW, "3.9.0"))
+        enrol_observed(ledger, "Q", item(FW, "3.9.0"))
         ref = do_import(ledger, doc)["advisory_ref"]
         assert states(csaf.csaf_impact(ledger, ref)) == {"P": "affected", "Q": "fixed"}
 
@@ -661,7 +680,7 @@ class TestFixedAndNotAffectedAreWithheldWhenTheBasisIsWeak:
         doc = csaf_doc()
         doc["product_tree"]["full_product_names"] = [{"name": "x", "product_id": "CSAFPID-0200"}]
         status(doc)["known_affected"].append("CSAFPID-0200")
-        enrol(ledger, "W", item(FW, "3.9.0"))
+        enrol_observed(ledger, "W", item(FW, "3.9.0"))
         ref = do_import(ledger, doc)["advisory_ref"]
         impact = csaf.csaf_impact(ledger, ref)
         assert states(impact) == {"W": "fixed"} and impact["complete"] is False
@@ -674,11 +693,63 @@ class TestFixedAndNotAffectedAreWithheldWhenTheBasisIsWeak:
         assert "no machine is enrolled" in impact["does_not_establish"][0]
 
     def test_every_machine_fixed_or_not_named_is_the_only_complete_answer(self, ledger):
-        enrol(ledger, "X1", item(FW, "3.9.0"))
-        enrol(ledger, "X2", item("Other thing", "1.0"))
+        # CHANGED (red-team finding A): this used to enrol X1 from a DECLARED manifest, matched by
+        # label only, and pin fixed + complete=True. That asserted a clear for software nobody had
+        # observed. A complete answer now needs an OBSERVED machine (an as_found look whose item
+        # hash was read off the unit); the declared-only twin is pinned below as not complete.
+        enrol_observed(ledger, "X1", item(FW, "3.9.0"))
+        enrol_observed(ledger, "X2", item("Other thing", "1.0"))
         ref = do_import(ledger, csaf_doc())["advisory_ref"]
         impact = csaf.csaf_impact(ledger, ref)
         assert states(impact) == {"X1": "fixed", "X2": "unknown"} and impact["complete"] is True
+
+    def test_a_declared_only_label_match_is_never_fixed_or_not_affected_or_complete(self, ledger):
+        enrol(ledger, "D1", item(FW, "3.9.0"))          # would be fixed by its label
+        enrol(ledger, "D2", item(FW, "3.7.0"))          # would be not_affected by its label
+        enrol(ledger, "D3", item("Other thing", "1.0"))
+        ref = do_import(ledger, csaf_doc())["advisory_ref"]
+        impact = csaf.csaf_impact(ledger, ref)
+        assert states(impact) == {"D1": "unknown", "D2": "unknown", "D3": "unknown"}
+        assert reasons(impact, "D1") == reasons(impact, "D2") == ["configuration_not_observed"]
+        assert impact["counts"]["fixed"] == impact["counts"]["not_affected"] == 0
+        assert impact["complete"] is False
+        d1 = next(m for m in impact["machines"] if m["machine"].endswith("#D1"))
+        assert d1["clear_withheld"] is True and d1["rests_on_declared_data"] is True
+        assert any("never observed" in c for c in d1["caveats"])
+
+    def test_an_as_found_look_without_a_hash_is_still_label_only_and_not_a_clear(self, ledger):
+        enrol(ledger, "L1", item(FW, "3.9.0"))
+        record_manifest(ledger, manifest("L1", item(FW, "3.9.0"), source=ManifestSource.AS_FOUND,
+                                         manifest_id="LOOK-L1"), actor=PERSON)
+        ref = do_import(ledger, csaf_doc())["advisory_ref"]
+        impact = csaf.csaf_impact(ledger, ref)
+        assert states(impact) == {"L1": "unknown"}
+        assert reasons(impact, "L1") == ["configuration_not_observed"]
+        assert impact["complete"] is False
+
+    def test_an_observed_machine_still_gets_fixed_and_not_affected(self, ledger):
+        enrol_observed(ledger, "O1", item(FW, "3.9.0"))
+        enrol_observed(ledger, "O2", item(FW, "3.7.0"))
+        ref = do_import(ledger, csaf_doc())["advisory_ref"]
+        impact = csaf.csaf_impact(ledger, ref)
+        assert states(impact) == {"O1": "fixed", "O2": "not_affected"}
+        assert impact["complete"] is True
+
+    def test_one_declared_only_machine_in_a_fleet_makes_the_whole_impact_not_complete(
+            self, ledger):
+        enrol_observed(ledger, "M1", item(FW, "3.9.0"))
+        enrol(ledger, "M2", item(FW, "3.9.0"))
+        ref = do_import(ledger, csaf_doc())["advisory_ref"]
+        impact = csaf.csaf_impact(ledger, ref)
+        assert states(impact) == {"M1": "fixed", "M2": "unknown"}
+        assert impact["complete"] is False
+
+    def test_a_declared_only_affected_is_reported_as_a_lead_for_a_human(self, ledger):
+        enrol(ledger, "A1", item(FW, "3.8.2"))
+        ref = do_import(ledger, csaf_doc())["advisory_ref"]
+        impact = csaf.csaf_impact(ledger, ref)
+        assert states(impact) == {"A1": "affected"} and impact["complete"] is False
+        assert any("LEAD for a human" in c for c in impact["machines"][0]["caveats"])
 
     def test_an_unknown_advisory_ref(self, ledger):
         with pytest.raises(IngestError) as caught:
