@@ -366,6 +366,15 @@ class RollbackJournal:
             fcntl.flock(fd, fcntl.LOCK_EX)
             with self._lock:
                 self._refresh()  # under the file lock nobody else appends: the tail is final
+                size = os.fstat(fd).st_size
+                if size > self._offset:
+                    # Bytes after the last verified line, with no newline: an append that was interrupted
+                    # (crash, ENOSPC). It was never acknowledged (acknowledgement follows the fsync below)
+                    # and, holding the exclusive lock, no live writer owns it. Left in place, the next line
+                    # would be glued onto it and every later read would fail the integrity check, taking
+                    # every vault connection out of service until an operator edited the file by hand.
+                    os.ftruncate(fd, self._offset)
+                    logger.error("ai_credential_journal_torn_tail_truncated", bytes=size - self._offset)
                 body = {
                     "seq": self._seq + 1, "at": datetime.now(UTC).isoformat(), "op": op,
                     "connection_id": connection_id, "owner": owner, "version": version,
