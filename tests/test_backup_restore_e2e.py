@@ -248,7 +248,14 @@ def test_a_tampered_ai_store_and_a_tampered_attestation_log_are_refused(volume, 
 def test_a_backup_taken_from_a_broken_source_is_refused(volume, tmp_path):
     root, ids, _ai = volume
     with sqlite_connect(root / "tenants" / f"{ids[0]}.db") as db:
-        db.execute("UPDATE chain SET link_hash = 'f' || substr(link_hash, 2) WHERE seq = 2")
+        before = db.execute("SELECT link_hash FROM chain WHERE seq = 2").fetchone()[0]
+        # Change the first hex digit to one it is NOT. (An unconditional 'f' || ... left the row
+        # untouched whenever the real hash already began with 'f', one run in sixteen, and the
+        # backup was then rightly not degraded: a flaky test, not a flaky product.)
+        db.execute("UPDATE chain SET link_hash = CASE WHEN substr(link_hash, 1, 1) = 'f' "
+                   "THEN '0' ELSE 'f' END || substr(link_hash, 2) WHERE seq = 2")
+        after = db.execute("SELECT link_hash FROM chain WHERE seq = 2").fetchone()[0]
+    assert after != before, "the corruption must actually change the row"
     out = tmp_path / "bk"
     restore_check.backup(root, out)
     assert json.loads((out / restore_check.MANIFEST_NAME).read_text())["degraded"] is True
