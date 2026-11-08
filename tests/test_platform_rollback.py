@@ -51,6 +51,7 @@ from .platform_support import (
     requires_postgres,
     reset_singletons,
 )
+from .support_sqlite import rows, scalar
 
 pytestmark = requires_postgres
 
@@ -110,10 +111,10 @@ class TestRestoreOfAnOlderBackup:
         for name, bk in (("older", older), ("middle", middle)):
             target = restore_into_service(client, bk, tmp_path, monkeypatch, name)
             # the restored store really does say "active, with a stored credential" - that is the danger
-            row = sqlite3.connect(target / "ai-store.db").execute(
-                "SELECT status, cred_version FROM connections WHERE id=?", (conn["id"],)).fetchone()
+            row = rows(target / "ai-store.db",
+                       "SELECT status, cred_version FROM connections WHERE id=?", (conn["id"],))[0]
             assert row[0] in ("created", "rotated") and row[1] in (1, 2)
-            assert sqlite3.connect(target / "ai-store.db").execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 1
+            assert scalar(target / "ai-store.db", "SELECT COUNT(*) FROM credentials") == 1
             with TestClient(__import__("neuralbridge.main", fromlist=["create_app"]).create_app()) as fresh:
                 r = read(fresh, keys.a, conn["id"])
                 assert r.status_code == 409 and "revoked" in r.json()["detail"], (name, r.text)
@@ -124,9 +125,9 @@ class TestRestoreOfAnOlderBackup:
                 listed = [c for c in fresh.get(f"{API}/connections", headers=h(keys.a)).json() if c["id"] == conn["id"]][0]
                 assert listed["status"] == "revoked" and listed["usable"] is False
                 # the journal's verdict was written back: the restored store now agrees, ciphertext gone
-                healed = sqlite3.connect(target / "ai-store.db")
-                assert healed.execute("SELECT status FROM connections WHERE id=?", (conn["id"],)).fetchone()[0] == "revoked"
-                assert healed.execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 0
+                assert scalar(target / "ai-store.db", "SELECT status FROM connections WHERE id=?",
+                              (conn["id"],)) == "revoked"
+                assert scalar(target / "ai-store.db", "SELECT COUNT(*) FROM credentials") == 0
             reset_singletons()
 
         # the newest backup (revoked) restores to the same answer
@@ -163,8 +164,8 @@ class TestRestoreOfAnOlderBackup:
             assert read(fresh, keys.a, conn["id"]).status_code == 409
             # the journal's "deleted" was applied to the restored store: the record is gone again
             assert [c for c in fresh.get(f"{API}/connections", headers=h(keys.a)).json() if c["id"] == conn["id"]] == []
-            assert sqlite3.connect(tmp_path / "restored-deleted" / "ai-store.db").execute(
-                "SELECT COUNT(*) FROM credentials").fetchone()[0] == 0
+            assert scalar(tmp_path / "restored-deleted" / "ai-store.db",
+                          "SELECT COUNT(*) FROM credentials") == 0
         reset_singletons()
 
     def test_the_reconcile_command_applies_the_journal_to_a_restored_store(
@@ -177,9 +178,8 @@ class TestRestoreOfAnOlderBackup:
         target = restore_into_service(client, older, tmp_path, monkeypatch, "reconcile")
         assert cred.main(["reconcile", "--store", str(target / "ai-store.db")]) == 0
         assert json.loads(capsys.readouterr().out) == {"revoked": 1, "deleted": 1}
-        db = sqlite3.connect(target / "ai-store.db")
-        assert db.execute("SELECT COUNT(*) FROM credentials").fetchone()[0] == 0
-        assert db.execute("SELECT id, status FROM connections").fetchall() == [(a["id"], "revoked")]
+        assert scalar(target / "ai-store.db", "SELECT COUNT(*) FROM credentials") == 0
+        assert rows(target / "ai-store.db", "SELECT id, status FROM connections") == [(a["id"], "revoked")]
 
     def test_an_unrelated_connection_keeps_working_after_the_restore(
         self, client, keys: Keys, roles, volume, tmp_path, monkeypatch

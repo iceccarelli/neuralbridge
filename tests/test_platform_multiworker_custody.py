@@ -35,6 +35,7 @@ import httpx
 import pytest
 
 from .credential_support import ROLE_A, ROLE_B, SECRET_1, SECRET_2, new_key, roles
+from .support_sqlite import rows, scalar
 from .test_multiworker_real import (
     OPERATOR_KEY,
     PG,
@@ -177,9 +178,9 @@ def test_bind_rotate_revoke_across_four_real_workers(platform: SimpleCluster) ->
 
     server.stop()
     _assert_clean(platform, server, [SECRET_1, SECRET_2])
-    db = sqlite3.connect(f"file:{platform.data / 'ai.db'}?mode=ro", uri=True)
-    assert db.execute("SELECT status FROM connections WHERE id=?", (conn["id"],)).fetchone()[0] == "revoked"
-    assert db.execute("SELECT COUNT(*) FROM credentials WHERE connection_id=?", (conn["id"],)).fetchone()[0] == 0
+    ro = f"file:{platform.data / 'ai.db'}?mode=ro"
+    assert scalar(ro, "SELECT status FROM connections WHERE id=?", (conn["id"],), uri=True) == "revoked"
+    assert scalar(ro, "SELECT COUNT(*) FROM credentials WHERE connection_id=?", (conn["id"],), uri=True) == 0
     # the journal was written by whichever workers handled the calls; its chain is intact
     from neuralbridge.ai.credentials import RollbackJournal
 
@@ -214,9 +215,9 @@ def test_concurrent_rotations_on_different_workers_cannot_both_win(platform: Sim
     server.stop()
     from neuralbridge.ai.credentials import RollbackJournal
 
-    db = sqlite3.connect(f"file:{platform.data / 'ai.db'}?mode=ro", uri=True)
-    version = db.execute("SELECT cred_version FROM connections WHERE id=?", (conn["id"],)).fetchone()[0]
-    assert db.execute("SELECT COUNT(*), MIN(version) FROM credentials").fetchone() == (1, version)
+    ro = f"file:{platform.data / 'ai.db'}?mode=ro"
+    version = scalar(ro, "SELECT cred_version FROM connections WHERE id=?", (conn["id"],), uri=True)
+    assert rows(ro, "SELECT COUNT(*), MIN(version) FROM credentials", uri=True) == [(1, version)]
     _, state, _ = RollbackJournal(platform.custody / "journal.jsonl").snapshot()
     assert state[conn["id"]].min_version >= version, "the store may never be ahead of the journal"
     assert version >= 2
@@ -244,8 +245,8 @@ def test_with_no_key_configured_every_worker_refuses_to_bind(platform: SimpleClu
     assert ready["credential_custody"]["mode"] == "unavailable"
     assert any(w.startswith("credential_custody_unavailable") for w in ready["warnings"])
     server.stop()
-    assert sqlite3.connect(f"file:{platform.data / 'ai.db'}?mode=ro", uri=True).execute(
-        "SELECT COUNT(*) FROM connections").fetchone()[0] == 0
+    assert scalar(f"file:{platform.data / 'ai.db'}?mode=ro", "SELECT COUNT(*) FROM connections",
+                  (), uri=True) == 0
     assert SECRET_1.encode() not in server.log.read_bytes()
 
 

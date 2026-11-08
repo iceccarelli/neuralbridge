@@ -134,6 +134,8 @@ dev = [
     "pytest-mock>=3.12.0",
     "ruff>=0.3.0,<0.18",
     "mypy>=1.8.0",
+    "build>=1.2.0",
+    "twine>=5.0.0",
     # CI's lint job (`mypy src/neuralbridge/ src/assurance/`) installs requirements/dev.txt, which
     # carries these stubs; without them yaml/pymysql are untyped here and mypy disagrees with CI.
     # tests/test_dev_install_parity.py keeps this list and requirements/dev.txt/test.txt equal.

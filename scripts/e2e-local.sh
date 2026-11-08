@@ -113,6 +113,13 @@ start_api() {  # $1 = project name
     if ! "$PYTHON" scripts/e2e_seed_ai.py seed "$NEURALBRIDGE_E2E_AI_SEED" >"$d/ai-seed.log" 2>&1; then
       cat "$d/ai-seed.log" >&2; return 4
     fi
+    # Credential custody fails closed without a key and a journal (binding a connection answers 503
+    # credential_custody_unconfigured), so the throwaway platform gets BOTH, per run: a random 32-byte key
+    # (in the child's environment only, never on a command line or in a log) and a journal in a directory
+    # OUTSIDE the store's directory, as production requires.
+    mkdir -p "$WORK/custody" && chmod 700 "$WORK/custody"
+    NEURALBRIDGE_CREDENTIAL_KEYS="e2e:$("$PYTHON" -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')" \
+    NEURALBRIDGE_CREDENTIAL_JOURNAL="$WORK/custody/journal" \
     NEURALBRIDGE_AI_STORE="$d/ai-store.db" setsid "$PYTHON" -m uvicorn neuralbridge.main:app --port "$PLATFORM_PORT" >"$d/platform.log" 2>&1 &
     PLAT_PID=$!; echo "$PLAT_PID" >>"$PIDFILE"
     up=0

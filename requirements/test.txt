@@ -7,3 +7,6 @@ pytest-mock>=3.12.0
 httpx>=0.27.0
 factory-boy>=3.3.0
 faker>=22.0.0
+# scripts/build-dist.sh (the PyPI dry run) is exercised by tests/test_ops_release_pypi.py
+build>=1.2.0
+twine>=5.0.0

@@ -153,8 +153,10 @@ def test_the_interpreter_has_every_runtime_dependency_the_dev_extra_declares() -
         try:
             installed = metadata.version(name)
         except metadata.PackageNotFoundError:
-            if name == "mypy" or name == "ruff" or name == "pre-commit":
-                continue  # tools are judged by the next test, only where they are used
+            if name in ("mypy", "ruff", "pre-commit") or name.startswith("types-"):
+                # tools and mypy's stub packages matter only where mypy runs; the next two tests
+                # judge them there. CI's test legs install requirements/test.txt only (no type check).
+                continue
             problems.append(f"{name} is not installed")
             continue
         if installed not in req.specifier and not req.specifier.contains(installed, prereleases=True):

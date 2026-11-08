@@ -60,6 +60,24 @@ The seeded demo connection is shared by every caller, so by default a paid
 account can only READ it; it proposes/approves writes on connections it binds
 itself (`POST /ai/connections`). For the local single-user demo (the buyer
 path in `docs/buyer-journey.md`, `scripts/verify-buyer-path.sh`) that writes
+
+## Binding your own connection needs credential custody
+
+Binding a customer connection (`POST /ai/connections`) answers **503 `credential_custody_unconfigured`**
+until the platform has a key and a journal. This is deliberate: a bound credential is sealed with
+AES-256-GCM for every worker, and the journal (outside the store's directory) is what stops a restored
+backup from reviving a revoked credential. For a throwaway local run, in the shell that starts uvicorn:
+
+```bash
+export NEURALBRIDGE_CREDENTIAL_KEYS="local:$(python -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')"
+mkdir -p /tmp/nb-custody && chmod 700 /tmp/nb-custody
+export NEURALBRIDGE_CREDENTIAL_JOURNAL=/tmp/nb-custody/journal   # NOT inside the directory of NEURALBRIDGE_AI_STORE
+```
+
+`scripts/local-stack.sh up` and `scripts/e2e-local.sh` do this for you with a fresh random key per run. Never
+reuse a local key anywhere real, and never paste one into chat or a ticket. Production key custody (where
+the key comes from, where the journal lives) is a deployment decision: see `docs/platform.md`.
+
 the demo database, export this in the shell running uvicorn:
 
 ```bash

@@ -78,7 +78,7 @@ do_down() {
     "$PYTHON" scripts/local_stack_db.py drop "$DB_NAME" || rc=1
   fi
   if [ "$rc" = 0 ]; then
-    rm -rf "$DIR"
+    rm -rf "$DIR" "$DIR.custody"
     echo "local-stack: down; database ${DB_NAME:-?} dropped, $DIR removed" >&2
   else
     echo "local-stack: processes stopped but the database drop failed; $DIR kept so \`down\` can be retried" >&2
@@ -131,6 +131,11 @@ do_up() {
   (
     export NEURALBRIDGE_AI_PG_DATABASE="$db" NEURALBRIDGE_AI_STORE="$DIR/ai-store.db"
     export NEURALBRIDGE_AI_DEMO_WRITABLE_BY_PAID=1   # LOCAL ONLY: the demo connection is writable by a paid account
+    # Credential custody fails closed without a key and a journal kept OUTSIDE the store's directory.
+    # A random per-run key, in this subshell's environment only (never printed, never in argv).
+    mkdir -p "$DIR.custody" && chmod 700 "$DIR.custody"
+    NEURALBRIDGE_CREDENTIAL_KEYS="local:$("$PYTHON" -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')"
+    export NEURALBRIDGE_CREDENTIAL_KEYS NEURALBRIDGE_CREDENTIAL_JOURNAL="$DIR.custody/journal"
     setsid "$PYTHON" -m uvicorn neuralbridge.main:app --host 127.0.0.1 --port "$PLATFORM_PORT" >"$DIR/platform.log" 2>&1 &
     echo "PLATFORM_PID=$!" >>"$STATE"
   )
