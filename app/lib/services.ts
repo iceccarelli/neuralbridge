@@ -202,7 +202,7 @@ export const SERVICES: Service[] = [
     ],
     today: [
       'Article 14 signal, awareness, triage, availability, measure, user notification, filing and export: CLI, API and partly MCP (the decisions have no MCP tool, by design).',
-      'Operators with a decider role: API (Cell).',
+      'Operators with a decider role: API (Register and Cell).',
     ],
     gap: ['A reviewed internal-procedure template for manufacturers. None exists.'],
     availability: 'available',

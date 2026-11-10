@@ -391,8 +391,16 @@ class TestTheGoldenPath:
                 "watch_id": "WATCH-GATE-PROBE", "run_started_at": now, "machines": [{
                     "serial": "0777", "status": "uncollectable", "observed_at": now,
                     "collection_complete": False, "detail": "probe"}]}),
-            ("GET", "/v1/operators", None),
-            ("POST", "/v1/operators", {"name": "x.operator", "role": "decider"})]
+]
+        # Operators are the named deciders the Register plan's Article 14 decisions need, so the
+        # Register plan includes them: no key / a made-up key are 401, and a Register key is NOT
+        # refused (the Machine/Cell routes above are).
+        for method, path, body in (("GET", "/v1/operators", None),
+                                   ("POST", "/v1/operators",
+                                    {"name": "x.operator", "role": "decider"})):
+            assert hosted.call(method, path, None, body).status_code == 401, path
+            assert hosted.call(method, path, "asr_not_a_key", body).status_code == 401, path
+        assert hosted.call("GET", "/v1/operators", r_key, None).status_code == 200
         for method, path, body in paid:
             assert hosted.call(method, path, None, body).status_code == 401, path
             assert hosted.call(method, path, "asr_not_a_key", body).status_code == 401, path

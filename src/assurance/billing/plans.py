@@ -254,6 +254,8 @@ PLANS: dict[Tier, Plan] = {
             "Everything in Validator, without the daily cap",
             CASES_NOT_METERED,
             "Awareness records with the reasoning that defends them",
+            "Named decider operators with their own keys: awareness, triage and filings are "
+            "attributed to the person by the server, not to a name typed into a request",
             "Both final-report clocks computed correctly, and the platform's counter "
             "defect surfaced rather than inherited",
             "Hash-chained evidence ledger; export refuses if the chain does not verify",

@@ -69,7 +69,7 @@ automated, deciding that the evidence stands again cannot.
 **What that does and does not prove.** Over the hosted API a decision
 (`decision`, `resume`, `resolve-decision`, `waive-reverification`) needs a key
 issued to an individual **operator** of the account with the `decider` role
-(`POST /v1/operators`). The server attributes the action to that operator by
+(`POST /v1/operators`, available from the Register plan upward). The server attributes the action to that operator by
 credential: a different `actor` in the body is refused (403 `actor_mismatch`),
 an account-level key — what an agent, MCP client or watch holds — is refused
 (403 `operator_required`), and a disabled operator's keys stop authenticating.
