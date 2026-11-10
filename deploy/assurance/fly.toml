@@ -54,8 +54,8 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
   min_machines_running = 1
   max_machines_running = 1
 
-  # /healthz is READINESS (stores open, data directories writable, 503 with a reason
-  # otherwise; an unconfigured attestation key is reported there but is not a failure).
+  # /healthz is READINESS (stores open, data directories writable; 503 otherwise, and the
+  # anonymous body carries no reason: the detail is operator-only at /ops/health).
   # /livez is LIVENESS (the process answers; no dependencies). Fly routes on this check.
   [[http_service.checks]]
     grace_period = "10s"

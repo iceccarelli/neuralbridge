@@ -91,6 +91,7 @@ export const FALLBACK_PLANS: Plan[] = [
       'Everything in Validator, without the daily cap',
       CASES_NOT_METERED,
       'Awareness records with the reasoning that defends them',
+      'Named decider operators with their own keys: awareness, triage and filings are attributed to the person by the server, not to a name typed into a request',
       "Both final-report clocks computed correctly, and the platform's counter defect surfaced rather than inherited",
       'Hash-chained evidence ledger; export refuses if the chain does not verify',
       'If the subscription ends you keep read, verify and export of your own evidence; new records and the operational views stop',

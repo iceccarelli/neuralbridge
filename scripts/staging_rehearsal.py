@@ -150,8 +150,8 @@ NOT_ESTABLISHED = (
     "browser are founder steps this tool cannot perform (see DEPLOY_NOW.md).",
     "A webhook signing secret's mode (test or live) cannot be read from the string; "
     "STAGING_STRIPE_MODE=test is the founder's statement, not a measurement (ATTESTED).",
-    "Whether open mode is off on the host is observed only by smoke's /healthz auth_mode; "
-    "an unset variable in the founder's shell proves nothing about the host (ATTESTED).",
+    "Whether open mode is off on the host is observed only by smoke.no_key_401 "
+    "(a route without a key answers 401, not 200); an unset variable in the founder's shell proves nothing about the host (ATTESTED).",
     "A restore drill proves that this backup restores and that its hash chains verify and "
     "counts match; it cannot show that nothing was removed by someone who rebuilt a chain "
     "(only a signed head attestation shows that).",
@@ -806,12 +806,11 @@ def _smoke_checks(ctx: Ctx, run: Run, http: Http, args: argparse.Namespace, host
                 problems.append(f"status is {body.get('status')!r}")
             if body.get("ledger_ok") is not True or body.get("accounts_ok") is not True:
                 problems.append("a store does not open")
-            if body.get("auth_mode") != "api_key":
-                problems.append(f"auth_mode is {body.get('auth_mode')!r}, not 'api_key'")
+            # The auth mode is no longer anonymous; it is observed by smoke.no_key_401 below.
         if problems:
             run.add("smoke.healthz", FAIL, "; ".join(problems))
         else:
-            run.add("smoke.healthz", PASS, "ok; both stores open; auth_mode is api_key")
+            run.add("smoke.healthz", PASS, "ok; both stores open")
         seen = dict(http.last_headers)
         run.note("response headers on /healthz (observed, not gated: the API sets none of "
                  "these itself)",

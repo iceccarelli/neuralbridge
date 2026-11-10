@@ -110,6 +110,7 @@ __all__ = [
     "require_evidence_readout",
     "require_machine",
     "require_register",
+    "require_register_account",
     "require_supplier",
     "seconds_until_reset",
     "spend",
@@ -940,6 +941,32 @@ async def require_machine(
     return principal
 
 
+async def require_register_account(
+    principal: Principal = Depends(current_principal),
+) -> Principal:
+    """The account plane at the Register plan: operators, who make the register's decisions.
+
+    Exactly ``require_machine`` with the Register entitlement: 401 with no key (never the
+    register's 503 for an unconfigured deployment), open mode passes, 402 for an authenticated
+    account whose plan does not include the register.
+    """
+    if auth_mode() == "open" and principal.account is None:
+        return Principal(account=_OPERATOR, key_prefix="open-mode")
+    if principal.account is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This endpoint needs an API key. See GET /v1/plans.",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+    if not principal.plan.register:
+        raise _payment_required(
+            principal, "plan_does_not_include_register",
+            "Operators, who make the register's decisions, are included from the Register "
+            "plan upward. GET /v1/plans, then POST /v1/checkout.",
+        )
+    return principal
+
+
 async def require_attestation(
     principal: Principal = Depends(current_principal),
 ) -> Principal:
@@ -1009,6 +1036,7 @@ async def require_supplier(
 
 
 Registered = Depends(require_register)
+RegisteredAccount = Depends(require_register_account)
 Machine = Depends(require_machine)
 Attesting = Depends(require_attestation)
 Supplying = Depends(require_supplier)
@@ -1021,6 +1049,7 @@ EvidenceReadout = Depends(require_evidence_readout)
 #: carried by no route.
 ENTITLEMENT_GATES: dict[Callable[..., Any], str] = {
     require_register: "register",
+    require_register_account: "register",
     require_machine: "machine_verification",
     require_attestation: "signed_attestation",
     require_supplier: "supplier_publish",

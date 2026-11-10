@@ -19,6 +19,10 @@ an operator has existed, enabled or not, creating or disabling operators needs a
 itself a decision-making identity. The last enabled decider cannot be disabled
 (create another first), so offboarding never re-opens that path. The account
 holder should create the first operator before handing any key to an agent.
+
+Entitlement: the Register plan upward (``RegisteredAccount``). A named decider is what makes the
+Article 14 decisions the Register plan lists (awareness, triage, filings) possible, so the
+people who make them cannot sit behind a higher plan. Machine verification stays Cell.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from assurance.api.deps import Machine, get_accounts
+from assurance.api.deps import RegisteredAccount, get_accounts
 from assurance.billing.accounts import (
     MAX_ACTIVE_KEYS,
     AccountStore,
@@ -69,7 +73,7 @@ def _require_decider(principal: Principal) -> None:
 
 @operator_router.get("", summary="The account's operators")
 async def list_operators(
-    principal: Annotated[Principal, Machine],
+    principal: Annotated[Principal, RegisteredAccount],
     accounts: Annotated[AccountStore, Depends(get_accounts)],
 ) -> dict[str, Any]:
     return {"operators": accounts.operators_for(_account_id(principal)),
@@ -81,7 +85,7 @@ async def list_operators(
                       summary="Create an operator and issue its key (shown once)")
 async def create_operator(
     body: OperatorIn,
-    principal: Annotated[Principal, Machine],
+    principal: Annotated[Principal, RegisteredAccount],
     accounts: Annotated[AccountStore, Depends(get_accounts)],
 ) -> dict[str, Any]:
     account_id = _account_id(principal)
@@ -118,7 +122,7 @@ async def create_operator(
                       summary="Disable an operator and revoke its keys")
 async def disable_operator(
     operator_id: str,
-    principal: Annotated[Principal, Machine],
+    principal: Annotated[Principal, RegisteredAccount],
     accounts: Annotated[AccountStore, Depends(get_accounts)],
 ) -> dict[str, Any]:
     account_id = _account_id(principal)

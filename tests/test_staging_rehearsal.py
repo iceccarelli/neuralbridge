@@ -159,8 +159,7 @@ def fake_service(**d: Any) -> FastAPI:
     def healthz() -> Any:
         if d.get("redirect"):
             return RedirectResponse("http://127.0.0.1:1/healthz", status_code=302)
-        body: dict[str, Any] = {"status": "ok", "ledger_ok": True, "accounts_ok": True,
-                                "auth_mode": "open" if d.get("open") else "api_key"}
+        body: dict[str, Any] = {"status": "ok", "ledger_ok": True, "accounts_ok": True}
         if d.get("leak"):
             body["debug"] = d["leak"]
         return body
@@ -294,7 +293,7 @@ def test_a_test_key_and_a_complete_environment_is_not_refused(sr, capsys, tmp_pa
 def test_a_complete_test_mode_environment_passes_what_it_can_and_never_exits_0(
         sr, capsys, tmp_path):
     # "open mode is off on the host" cannot be observed from a shell: it is ATTESTED, and an
-    # attested step blocks exit 0 (smoke's healthz is what observes auth_mode on the host)
+    # attested step blocks exit 0 (smoke.no_key_401 is what observes it: open mode would not answer 401)
     ran = cli(sr, capsys, "config-check", "--checkout-expected",
               "--record-dir", str(tmp_path), env=full_env())
     found = statuses(tmp_path, "config-check")
@@ -596,7 +595,6 @@ def test_the_fake_service_with_no_defect_passes_so_the_defect_tests_mean_somethi
     ({"plans": "wrong_price"}, "smoke.plans"),
     ({"plans": "missing_tier"}, "smoke.plans"),
     ({"plans": "unlimited_cell"}, "smoke.plans"),
-    ({"open": True}, "smoke.healthz"),
     ({"nokey_ok": True}, "smoke.no_key_401"),
     ({"bad_key_ok": True}, "smoke.bad_key_401"),
     ({"register_ok": True}, "smoke.register_key_402"),

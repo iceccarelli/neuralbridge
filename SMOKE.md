@@ -18,7 +18,7 @@ It never writes anything on the host and never calls Stripe, but it is not read-
 sense of "GETs only". Every kind of request it sends, to the host you gave and no other (no
 proxy from the environment, no redirects followed):
 
-- `GET /healthz`, `GET /v1/plans`;
+- `GET /healthz` (readiness: `ok` and pass/fail booleans only; it no longer reports the auth mode, which `smoke.no_key_401` observes), `GET /v1/plans`;
 - `POST /v1/machine/verify` with the body `{}` three times, expecting `401` with no key, `401`
   with a made-up key and `402` with your Register key (an authenticated caller without the
   entitlement, so the route refuses before it reads the body and nothing is recorded; only the

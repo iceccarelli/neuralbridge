@@ -276,9 +276,9 @@ class TestTheChokePoint:
             text = source.read_text()
             if re.search(r"\b_register_for\b|\b_tenant_register_for\b|EvidenceLedger\(", text):
                 offenders.append(source.name)
-            # shared_register() is allowed only in the unauthenticated /healthz.
+            # shared_register() is allowed only in the readiness routes (/healthz and the operator's /ops/health).
             uses = len(re.findall(r"\bshared_register\b", text))
-            if uses and not (source.name == "routes.py" and uses <= 2):
+            if uses and not (source.name == "routes.py" and uses <= 3):
                 offenders.append(f"{source.name}: shared_register")
         assert offenders == []
 
