@@ -717,11 +717,14 @@ class TestKeyManagement:
 class TestHealthz:
     def test_it_is_public_cheap_and_does_not_leak(self, client, env):
         body = client.get("/healthz").json()
-        assert body["status"] == "ok" and body["auth_mode"] == "api_key"
+        assert body["status"] == "ok"
         assert body["ledger_ok"] is True and body["accounts_ok"] is True
-        assert body["ledger_records"] == 0
+        assert "auth_mode" not in body and "ledger_records" not in body
         assert "chain_verified" not in body and "ledger" not in body
         assert str(env) not in json.dumps(body)
+        detail = client.get("/ops/health", headers={"X-API-Key": OPERATOR_KEY}).json()
+        assert detail["auth_mode"] == "api_key" and detail["ledger_records"] == 0
+        assert str(env) not in json.dumps(detail)
 
     def test_it_does_not_verify_the_chain(self, client, monkeypatch):
         from assurance.evidence.ledger import EvidenceLedger

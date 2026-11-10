@@ -2981,7 +2981,7 @@
     },
     "/healthz": {
       "get": {
-        "description": "Readiness: reports what is actually true, including an unauthenticated deployment.\n\nUnauthenticated and polled every few seconds, so it is cheap and says\nnothing about the host: no filesystem path, and no chain verification\n(that is O(n) in the ledger and lives at the authenticated\n``GET /v1/ledger/verify``). It does confirm that both stores open, which\nexercises their schema-version checks, and reports the operator ledger's\nentry count. A store or data directory the service cannot use is a 503 with\nthe reason (never a path) in ``ledger_error`` / ``accounts_error`` /\n``storage_problems``, not an unhandled 500. ``attestation_key`` is\ninformational: ``not_configured`` is an honest, supported state and does not\nfail readiness (the attestation routes answer 503 and say so), but it is\nshown; ``unsafe`` / ``unusable`` additionally degrade the status.",
+        "description": "Readiness for an orchestrator: ``ok`` or ``unavailable`` (503), and nothing else.\n\nUnauthenticated and polled every few seconds, so it is cheap, does no chain\nverification (O(n); that is the authenticated ``GET /v1/ledger/verify``) and says\nnothing about the deployment: no auth mode, no ledger entry count, no signing-key\nstate, no warnings, no error text, no path. It carries only the pass/fail booleans\nreadiness is made of (``ledger_ok``, ``accounts_ok``, ``storage_ok``). The detail\nan operator needs lives behind the operator key at ``GET /ops/health``.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -2997,7 +2997,7 @@
             "description": "Successful Response"
           }
         },
-        "summary": "Readiness and configuration",
+        "summary": "Readiness (anonymous, minimal)",
         "tags": [
           "service"
         ]
@@ -3022,6 +3022,58 @@
           }
         },
         "summary": "Liveness: the process answers",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/ops/health": {
+      "get": {
+        "description": "What ``/healthz`` used to say to anyone: the auth mode, the operator ledger's entry\ncount, the attestation key's state (``not_configured`` is honest and does not fail\nreadiness; ``unsafe`` / ``unusable`` degrade the status), warnings and the reasons\n(never a path) a store or directory is unusable. Operator key only.",
+        "operationId": "ops_health_ops_health_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ops Health Ops Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Readiness detail and configuration (operator key)",
         "tags": [
           "service"
         ]

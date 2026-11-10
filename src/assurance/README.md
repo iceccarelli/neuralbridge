@@ -103,7 +103,8 @@ Interactive documentation at `/docs`, schema at `/openapi.json`.
 | `GET /v1/register` · `GET /v1/register/breaches` | readiness across every case |
 | `GET /v1/spec/fields` · `POST /v1/spec/validate` | the field spec, and a dry-run validator |
 | `GET /v1/ledger/verify` | chain verification and the head attestation |
-| `GET /livez` · `GET /healthz` | liveness (process up) and readiness (databases and storage usable; the attestation key's state; the auth mode), stated honestly |
+| `GET /livez` · `GET /healthz` | liveness (process up) and readiness (`ok` / `unavailable` plus pass/fail booleans; anonymous, and discloses no configuration) |
+| `GET /ops/health` | operator key only: the auth mode, the ledger entry count, the attestation key's state, warnings and the reasons behind a failed readiness |
 
 Every write returns what is now outstanding, because the next question after
 recording anything is always "and now what is due".
@@ -119,8 +120,8 @@ HTTP 409  {"error": "clock_not_started",
 ```
 
 **Authentication is not optional.** With no keys configured, every register
-route returns 503 and `/healthz` reports `degraded`. `ASSURANCE_ALLOW_UNAUTHENTICATED=1`
-exists for local evaluation and makes the service say so on `/healthz`.
+route returns 503 and the operator-only `/ops/health` reports `degraded`. `ASSURANCE_ALLOW_UNAUTHENTICATED=1`
+exists for local evaluation and makes the service say so there (and, in that mode, `/ops/health` needs no key).
 
 ## Design rules
 

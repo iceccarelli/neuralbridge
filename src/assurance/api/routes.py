@@ -12,10 +12,11 @@ is actionable.
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..billing.accounts import Principal
@@ -834,22 +835,53 @@ def livez() -> dict[str, str]:
     return {"status": "alive"}
 
 
-@public_router.get("/healthz", response_model=dict, summary="Readiness and configuration")
+@public_router.get("/healthz", response_model=dict, summary="Readiness (anonymous, minimal)")
 def healthz(response: Response) -> dict[str, Any]:
-    """Readiness: reports what is actually true, including an unauthenticated deployment.
+    """Readiness for an orchestrator: ``ok`` or ``unavailable`` (503), and nothing else.
 
-    Unauthenticated and polled every few seconds, so it is cheap and says
-    nothing about the host: no filesystem path, and no chain verification
-    (that is O(n) in the ledger and lives at the authenticated
-    ``GET /v1/ledger/verify``). It does confirm that both stores open, which
-    exercises their schema-version checks, and reports the operator ledger's
-    entry count. A store or data directory the service cannot use is a 503 with
-    the reason (never a path) in ``ledger_error`` / ``accounts_error`` /
-    ``storage_problems``, not an unhandled 500. ``attestation_key`` is
-    informational: ``not_configured`` is an honest, supported state and does not
-    fail readiness (the attestation routes answer 503 and say so), but it is
-    shown; ``unsafe`` / ``unusable`` additionally degrade the status.
+    Unauthenticated and polled every few seconds, so it is cheap, does no chain
+    verification (O(n); that is the authenticated ``GET /v1/ledger/verify``) and says
+    nothing about the deployment: no auth mode, no ledger entry count, no signing-key
+    state, no warnings, no error text, no path. It carries only the pass/fail booleans
+    readiness is made of (``ledger_ok``, ``accounts_ok``, ``storage_ok``). The detail
+    an operator needs lives behind the operator key at ``GET /ops/health``.
     """
+    from .service import readiness
+
+    state = readiness(lambda: len(shared_register().ledger))
+    payload: dict[str, Any] = {"status": "ok" if state["ready"] else "unavailable"}
+    payload |= {k: state[k] for k in ("ledger_ok", "accounts_ok", "storage_ok") if k in state}
+    if not state["ready"]:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return payload
+
+
+def _require_operator_key(x_api_key: str | None = Header(default=None)) -> None:
+    """The operator (an ``ASSURANCE_API_KEYS`` key) or, in open mode, everyone; never a customer key.
+
+    Deliberately independent of the accounts database: this is the route that must still answer
+    when that database is the thing that is broken.
+    """
+    from .deps import _operator_keys
+
+    if auth_mode() == "open":
+        return
+    presented = (x_api_key or "").strip().encode()
+    if presented and any(hmac.compare_digest(presented, k.encode()) for k in _operator_keys()):
+        return
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="An operator API key is required.",
+                        headers={"WWW-Authenticate": "ApiKey"})
+
+
+@public_router.get("/ops/health", response_model=dict,
+                   summary="Readiness detail and configuration (operator key)")
+def ops_health(response: Response,
+               _operator: None = Depends(_require_operator_key)) -> dict[str, Any]:
+    """What ``/healthz`` used to say to anyone: the auth mode, the operator ledger's entry
+    count, the attestation key's state (``not_configured`` is honest and does not fail
+    readiness; ``unsafe`` / ``unusable`` degrade the status), warnings and the reasons
+    (never a path) a store or directory is unusable. Operator key only."""
     from .service import readiness
 
     mode = auth_mode()

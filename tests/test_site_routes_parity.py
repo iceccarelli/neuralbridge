@@ -91,3 +91,62 @@ def test_every_repository_file_the_site_links_to_exists() -> None:
             if not (ROOT / rel.rstrip("/.")).exists():
                 missing.add(f"{rel} (in {source.relative_to(ROOT)})")
     assert not missing, "linked repository paths that do not exist: " + ", ".join(sorted(missing))
+
+
+# --- the tier a route is LISTED at is the tier the BACKEND enforces ---------------------------
+# Black box, so it does not depend on how FastAPI represents dependencies: a Register-only
+# account calls every listed route with an empty body. The entitlement dependency refuses
+# before the body is read, so a route listed at ``cell`` must answer 402 and a route listed at
+# ``register`` must not.
+_EMPTY_ID = "x"
+
+
+@pytest.fixture()
+def register_client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from assurance.api import deps
+
+    monkeypatch.setenv("ASSURANCE_LEDGER", str(tmp_path / "art14.db"))
+    monkeypatch.setenv("ASSURANCE_ACCOUNTS", str(tmp_path / "accounts.db"))
+    monkeypatch.setenv("ASSURANCE_TENANT_LEDGERS", str(tmp_path / "tenants"))
+    monkeypatch.setenv("ASSURANCE_API_KEYS", "operator-key-site-tier-parity-0123456789abcdef")
+    monkeypatch.delenv("ASSURANCE_ALLOW_UNAUTHENTICATED", raising=False)
+    for cache in (deps._register_for, deps._tenant_register_for, deps._accounts_for):
+        cache.cache_clear()
+    store = deps.get_accounts()
+    account = store.upsert_account(email="reg@example.de", tier="register",
+                                   stripe_customer_id="cus_reg")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        c.headers["X-API-Key"] = store.issue_key(account.id)
+        yield c
+    for cache in (deps._register_for, deps._tenant_register_for, deps._accounts_for):
+        cache.cache_clear()
+
+
+def _call(client, method: str, path: str):
+    url = re.sub(r"\{[^}]+\}", _EMPTY_ID, path)
+    return client.request(method, url, json={} if method != "GET" else None)
+
+
+def test_a_register_account_gets_402_exactly_on_the_routes_listed_above_register(
+        register_client) -> None:
+    wrong = []
+    for method, path, tier in [(m, p, t) for m, p, t in
+                               re.findall(r"\{ method: '(\w+)', path: '([^']+)', tier: '(\w+)'",
+                                          ROUTES_TS) if t in ("register", "cell")]:
+        got = _call(register_client, method, path).status_code
+        if tier == "cell" and got != 402:
+            wrong.append(f"{method} {path}: listed cell, but a Register account got {got}")
+        if tier == "register" and got == 402:
+            wrong.append(f"{method} {path}: listed register, but a Register account got 402")
+    assert not wrong, "; ".join(wrong)
+
+
+def test_the_two_machinery_routes_are_listed_at_cell_not_register() -> None:
+    tiers = {(m, p): t for m, p, t in _table_rows()}
+    assert tiers[("GET", "/v1/machinery/export")] == "cell"
+    assert tiers[("POST", "/v1/machinery/passport/check-ledger")] == "cell"
+    page = (ROOT / "app" / "connectors" / "mcp" / "page.tsx").read_text(encoding="utf-8")
+    for name in ("machinery_export", "machinery_passport_check_ledger"):
+        assert re.search(rf"name: '{name}', route: '[^']+', tier: 'cell'", page), name

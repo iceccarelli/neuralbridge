@@ -114,9 +114,11 @@ class TestAuthentication:
             response = unconfigured.get("/v1/cases")
             assert response.status_code == 503
             assert "ASSURANCE_API_KEYS" in response.json()["detail"]
+            # anonymous readiness says nothing about the auth mode; the refusal above is the
+            # honest statement of it, and the operator-only detail names it
             health = unconfigured.get("/healthz").json()
-            assert health["status"] == "degraded"
-            assert health["auth_mode"] == "unconfigured"
+            assert health["status"] == "ok" and "auth_mode" not in health
+            assert unconfigured.get("/ops/health").status_code == 401
 
 
 class TestLifecycle:
@@ -398,7 +400,9 @@ class TestEvidence:
 
 class TestServiceMetadata:
     def test_healthz_reports_what_is_true(self, client):
-        body = client.get("/healthz").json()
+        assert client.get("/healthz").json() == {
+            "status": "ok", "ledger_ok": True, "accounts_ok": True, "storage_ok": True}
+        body = client.get("/ops/health", headers={"X-API-Key": KEY}).json()
         assert body["status"] == "ok"
         assert body["auth_mode"] == "api_key"
         # healthz is unauthenticated and polled: it confirms the stores open and
