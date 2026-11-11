@@ -11,7 +11,7 @@
 #
 # Build from the repository root:  docker build -f deploy/assurance/Dockerfile .
 
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 
 # Install from the hash-pinned lock, not from ranges. `--require-hashes` makes pip refuse any
 # file whose SHA-256 is not in the lock; `--no-deps` stops it resolving anything the lock did
@@ -21,7 +21,7 @@ COPY requirements/assurance-service.lock /tmp/assurance-service.lock
 RUN pip install --no-cache-dir --require-hashes --no-deps --prefix=/install \
       -r /tmp/assurance-service.lock
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 # Run as a non-root user. A service holding a regulatory record has no business
 # running as root, and the container does not need to write anywhere except the
