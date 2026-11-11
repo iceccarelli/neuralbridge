@@ -129,7 +129,7 @@ async def test_a_tool_returns_what_its_route_returns(world, monkeypatch, tool) -
     assert reply["status"] == direct.status_code, (tool, reply, direct.text)
     assert reply["status"] < 500
     if direct.headers.get("content-type", "").startswith("application/json"):
-        if tool == "art14_export":
+        if tool in ("art14_export", "machinery_export"):
             # An export is stamped with the time it was made (exported_at, and the attestation's own
             # time), and two calls can straddle a second boundary: compare everything else exactly.
             assert _without_clock(reply["body"]) == _without_clock(direct.json()), tool
