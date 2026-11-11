@@ -6,7 +6,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Python Application ──────────────────────────────────────
-FROM python:3.11-slim AS production
+FROM python:3.15-slim AS production
 
 # Security: run as non-root user
 RUN groupadd -r neuralbridge && useradd -r -g neuralbridge -d /app neuralbridge
