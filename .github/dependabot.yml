@@ -1,39 +1,79 @@
 # dependabot[bot]: dependency update PRs. It only ever opens PRs; nothing here merges anything
 # (merging to main is the founder's, see CLAUDE.md), and CI must be green on every one.
+#
+# Policy: one PR per ecosystem per week at most (groups), and no major bump of anything that
+# CI cannot exercise or that needs a planned migration. Each ignore below says why. To take one,
+# do the migration by hand in a branch, then delete its ignore entry.
 version: 2
 updates:
   # Every action is pinned to a commit SHA with a version comment; Dependabot bumps both.
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly, day: monday}
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message: {prefix: "ci"}
     labels: [dependencies, github-actions]
     groups:
       actions: {patterns: ["*"]}
+    ignore:
+      # Used by the release/publish workflows (publish-docker.yml, publish-pypi.yml) and the docs
+      # deploy, which run only on tags or main and which CI on a pull request cannot exercise.
+      # A major bump could break a release silently. Bump by hand together with a release dry run
+      # (workflow_dispatch on a throwaway tag) and read the changelog.
+      - {dependency-name: "docker/*", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "sigstore/*", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/attest*", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/upload-artifact", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/download-artifact", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/upload-pages-artifact", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/deploy-pages", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "actions/configure-pages", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "codecov/codecov-action", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "pypa/*", update-types: ["version-update:semver-major"]}
 
-  # The Next.js site. Minor and patch updates arrive as one PR; majors stay separate.
+  # The Next.js site. React and its types move together or the build breaks (react 19 with
+  # react-dom 18 is exactly that), so they are one group. Everything else: minor and patch in one PR.
   - package-ecosystem: npm
     directory: /
     schedule: {interval: weekly, day: monday}
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message: {prefix: "deps(site)"}
     labels: [dependencies, site]
     groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
       site-minor-patch:
         update-types: [minor, patch]
+        exclude-patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+    ignore:
+      # Each of these is a migration, not a bump: tailwindcss 4 replaces the PostCSS/config model,
+      # typescript 7 changes the compiler, marked 13+ changes the parser API, next majors change
+      # the build. Plan them as their own piece of work.
+      - {dependency-name: "tailwindcss", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "typescript", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "marked", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "next", update-types: ["version-update:semver-major"]}
+      - {dependency-name: "@types/node", update-types: ["version-update:semver-major"]}
 
-  # Base images of the platform and the assurance service images.
+  # Base images. The interpreter in a deployed image must be one the test matrix runs
+  # (3.11, 3.12, 3.13 in ci.yml), so a Python image version change is made by hand together
+  # with the matrix and the lock files (scripts/lock.sh), never by a bot.
   - package-ecosystem: docker
     directory: /
     schedule: {interval: weekly, day: monday}
+    open-pull-requests-limit: 1
     commit-message: {prefix: "deps(docker)"}
     labels: [dependencies, docker]
+    ignore:
+      - {dependency-name: "python", update-types: ["version-update:semver-major", "version-update:semver-minor"]}
   - package-ecosystem: docker
     directory: /deploy/assurance
     schedule: {interval: weekly, day: monday}
+    open-pull-requests-limit: 1
     commit-message: {prefix: "deps(docker)"}
     labels: [dependencies, docker]
+    ignore:
+      - {dependency-name: "python", update-types: ["version-update:semver-major", "version-update:semver-minor"]}
 
   # Python: security updates only. requirements/*.txt are human-edited lower bounds and the
   # hash-pinned *.lock files are the real pins (scripts/lock.sh); a version bump to the .txt
