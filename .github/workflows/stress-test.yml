@@ -1,0 +1,65 @@
+name: Stress test (independent authority)
+
+# github-actions[bot] runs the independent adversarial suite (iceccarelli/neuralbridge-stress-test,
+# the test authority) against this repository's main every night, so a regression in an
+# entitlement, a disclosure or a claim is seen within a day instead of at the next release.
+# Read-only: no secrets, no deploy, no write permission, nothing is posted anywhere. A red run
+# is the signal; the job summary lists the failing tests.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      stress_ref:
+        description: "Branch, tag or SHA of the stress-test repository (default: its default branch)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stress-test
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    name: Stress suite against this checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: neuralbridge
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: iceccarelli/neuralbridge-stress-test
+          ref: ${{ inputs.stress_ref }}
+          path: neuralbridge-stress-test
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install the product and the suite's dependencies
+        working-directory: neuralbridge
+        run: |
+          pip install -r requirements/test.txt
+          pip install -e .
+          pip install "pytest>=8.3,<9" "cryptography>=42"
+      - name: Run the suite
+        working-directory: neuralbridge-stress-test
+        env:
+          NEURALBRIDGE_SRC: ${{ github.workspace }}/neuralbridge/src
+        run: |
+          set -o pipefail
+          python -m pytest -q -rfEX --no-header 2>&1 | tee "$RUNNER_TEMP/stress.txt"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Stress suite against \`${GITHUB_SHA::12}\`"
+            echo '```'
+            grep -E "^(FAILED|ERROR|XPASS)|passed|failed|skipped" "$RUNNER_TEMP/stress.txt" | head -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
