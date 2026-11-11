@@ -210,3 +210,7 @@ class TestAnonymousHealthzDisclosesNothingAboutTheDeployment:
 
     def test_livez_is_unchanged(self, client):
         assert client.get("/livez").json() == {"status": "alive"}
+
+    def test_the_operator_route_is_not_advertised_in_the_public_schema(self, client):
+        assert "/ops/health" not in client.get("/openapi.json").json()["paths"]
+        assert _detail(client).status_code == 200      # it exists; it is just not advertised
