@@ -357,7 +357,7 @@ jobs:
       - name: actionlint
         run: actionlint
       - name: shellcheck
-        run: shellcheck scripts/verify-release.sh scripts/rehearse-local.sh scripts/build-dist.sh scripts/local-stack.sh scripts/verify-buyer-path.sh
+        run: shellcheck scripts/verify-release.sh scripts/rehearse-local.sh scripts/build-dist.sh scripts/local-stack.sh scripts/verify-buyer-path.sh scripts/codespaces.sh
 
   # ── Docker Build ───────────────────────────────────────────
   docker:

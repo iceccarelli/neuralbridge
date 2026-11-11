@@ -261,8 +261,8 @@ PLANS: dict[Tier, Plan] = {
             "Hash-chained evidence ledger; export refuses if the chain does not verify",
             "If the subscription ends you keep read, verify and export of your own "
             "evidence; new records and the operational views stop",
-            "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
+            "/ai control plane: reads with no daily cap (120 adapter calls a minute per account by default), propose-and-approve WRITEs, "
+            "bind additional connections, the adapter-call log for your account (durable and hash-chained; tamper-evident, not tamper-proof) and durable plan decisions",
         ),
     ),
     "cell": Plan(
@@ -285,8 +285,8 @@ PLANS: dict[Tier, Plan] = {
         ai_control_plane=True,
         included=(
             "Everything in Register",
-            "/ai control plane: unlimited reads, propose-and-approve WRITEs, "
-            "bind additional connections, the adapter-call log for your account (held in memory, cleared on restart) and durable plan decisions",
+            "/ai control plane: reads with no daily cap (120 adapter calls a minute per account by default), propose-and-approve WRITEs, "
+            "bind additional connections, the adapter-call log for your account (durable and hash-chained; tamper-evident, not tamper-proof) and durable plan decisions",
             "Machine safety verification: POST /v1/machine/verify checks a recorded "
             "run against a declared safety envelope and seals the result",
             "Separation, speed, workspace, stop characterisation, power-and-force and "
