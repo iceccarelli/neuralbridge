@@ -1,9 +1,11 @@
 # NeuralBridge Kubernetes Deployment
 # TOPOLOGY WARNING (read docs/GO-LIVE.md "Deployment topology"): this manifest runs the legacy PLATFORM
-# image with 3 replicas and no volume. It is NOT a supported way to host the evidence ledger or the
+# image with ONE replica (the ledger and account store are single-writer) and no volume. It is NOT a supported way to host the evidence ledger or the
 # account store: those are SQLite WAL files that need ONE machine and ONE local volume (never NFS or
 # another shared filesystem), and the /ai control plane's own SQLite store (NEURALBRIDGE_AI_STORE) is
 # per replica. Rate limits and the Stripe budget are per process, so replicas x workers multiplies them.
+# `strategy: Recreate` is deliberate: a RollingUpdate would run the old and the new pod together, i.e.
+# two writers on one chain. tests/test_container_static.py pins replicas: 1 and Recreate.
 # Treat this file as an unexercised example, not a deployment recipe.
 # Apply: kubectl apply -f deploy/k8s/
 apiVersion: apps/v1
@@ -15,7 +17,9 @@ metadata:
     app: neuralbridge
     component: api
 spec:
-  replicas: 3
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: neuralbridge

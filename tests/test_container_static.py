@@ -145,3 +145,17 @@ def test_the_service_image_keeps_one_worker_and_says_why() -> None:
     cmd = [rest for head, rest in _instructions(IMAGES["assurance"]) if head == "CMD"][-1]
     assert '"--workers", "1"' in cmd
     assert "tests/test_multiworker_real.py" in text
+
+
+def test_the_shipped_orchestrator_examples_never_run_two_ledger_writers() -> None:
+    """The ledger and the account store are SQLite files with one writer (docs/GO-LIVE.md,
+    "Deployment topology"). A second replica, or a rolling update that overlaps two pods, forks the
+    hash chain silently; the application cannot see it. So the examples must say one, and Recreate."""
+    k8s = (ROOT / "deploy/k8s/deployment.yaml").read_text()
+    assert re.search(r"^\s{2}replicas:\s*1\s*$", k8s, re.M), "deploy/k8s: replicas must be 1"
+    assert re.search(r"^\s{2}strategy:\s*\n\s{4}type:\s*Recreate\s*$", k8s, re.M), (
+        "deploy/k8s: a RollingUpdate overlaps two writers; use Recreate")
+    helm = (ROOT / "deploy/helm/values.yaml").read_text()
+    assert re.search(r"^replicaCount:\s*1\s*$", helm, re.M), "deploy/helm: replicaCount must be 1"
+    for rel, text in (("deploy/k8s/deployment.yaml", k8s), ("deploy/helm/values.yaml", helm)):
+        assert "3 replicas" not in text, f"{rel}: the warning still describes 3 replicas"

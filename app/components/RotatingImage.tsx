@@ -40,7 +40,7 @@ export default function RotatingImage({
   // roughly 40% of the home page's image bytes frames that sit at opacity 0.
   const [armed, setArmed] = useState(false);
   const bLoaded = useRef(false);
-  const timeoutRef = useRef<number>();
+  const timeoutRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
