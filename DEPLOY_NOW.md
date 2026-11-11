@@ -92,6 +92,7 @@ Nothing in this repository can do these; none has been done.
 - [ ] The five browser checks in `SMOKE.md`, with Stripe's test card.
 - [ ] In the Stripe dashboard (test mode), *Send test webhook* or complete a test checkout, to show **real** delivery rather than a synthetic signed event.
 - [ ] `fly ssh console -C "python -m assurance.billing.reconcile"` (dry run) against the TEST account; read the report.
+- [ ] If the `/ai` control plane is deployed: `NEURALBRIDGE_CREDENTIAL_KEYS` (or `_KEY_FILE`) and `NEURALBRIDGE_CREDENTIAL_JOURNAL`, from the host's secret store and never committed. Without them binding a connection answers 503 `credential_custody_unconfigured` (it fails closed). Generation and the journal's location rule: `docs/ai-local-setup.md`.
 - [ ] Optional: `ASSURANCE_ATTEST_KEY_PEM` (counter-signed attestation) and `ASSURANCE_RECORDER_TRUST` (without it nothing hosted rises above `community`). Where each comes from and how to rotate or revoke: `deploy/assurance/TRUST-RUNBOOK.md`.
 - [ ] Revoke any Fly token that was ever pasted into an agent chat (§0).
 - [ ] Enable GitHub Pages for the docs site if you want them public (not needed for the rehearsal).
