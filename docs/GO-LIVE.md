@@ -146,10 +146,13 @@ calls no Stripe, no Fly and no GHCR. `scripts/staging_rehearsal.py` against a ho
 with Stripe test-mode credentials is still the founder step in the post-secrets half below.
 
 Two facts it surfaced that matter for a deployment with `--workers N`: a **bound** `/ai`
-connection (`POST /ai/connections`) is live only on the worker that bound it, because
-credentials are never stored (its record is durable and `GET /ai/connections` reports
-`live: false` on other workers until it is bound again), and the in-memory rate limiters
-multiply by the number of workers. The seeded demo connection is registered in whichever worker
+connection (`POST /ai/connections`) now works from every worker, because its credential is held
+encrypted in the shared store (`neuralbridge/ai/credentials.py`, claims-registry row 42), **but only
+when `NEURALBRIDGE_CREDENTIAL_KEYS` (or `NEURALBRIDGE_CREDENTIAL_KEY_FILE`) and
+`NEURALBRIDGE_CREDENTIAL_JOURNAL` are set**: without them `POST /ai/connections` and `/rotate`
+answer 503 `credential_custody_unconfigured` (see `docs/ai-local-setup.md` for generating them;
+supply the key through the host's secret store, never in the repository), and the in-memory
+rate limiters multiply by the number of workers. The seeded demo connection is registered in whichever worker
 serves a request. `deploy/assurance/OPS.md` section 9 has the measurements and the limits.
 
 ### What was actually run and its output (this rehearsal)
@@ -239,7 +242,7 @@ alternative.
 | Processes (`uvicorn --workers N`) on that one machine | **Tested maximum: 4**, on one host and one local filesystem (`tests/test_multiworker_real.py` starts real `--workers 4` process trees and checks 48 concurrent appends: gapless sequence, valid links, SQLite `integrity_check` ok). More than 4 workers and sustained load were **not** tested. The assurance image ships `--workers 1`, the platform image `--workers 4` | `deploy/assurance/OPS.md` section 9, `deploy/assurance/Dockerfile`, `Dockerfile`. *Not enforced:* uvicorn accepts any N |
 | Shared volume, NFS, SMB, EFS, a clustered or network filesystem | **Not supported.** SQLite WAL coordinates its readers and writers through a shared-memory `-shm` file and file locks, which require every process to be on the same host and a filesystem with working locking; on a network filesystem the chain's single-writer guarantee is not available. Not tested, and no code detects or refuses it | *Not enforced.* `OPS.md` section 9 lists "SQLite on a network filesystem" under "not tested" |
 | Kubernetes `replicas`, Helm `replicaCount` | The shipped `deploy/k8s/deployment.yaml` and `deploy/helm/values.yaml` now say **1** (k8s with `strategy: Recreate`, so a rollout never overlaps two writers) and mount no volume. More than one replica is not a supported topology for the ledger or the account store (and `/ai`'s own SQLite store, `NEURALBRIDGE_AI_STORE`, is per replica). They remain unexercised examples: nothing was deployed from them and no cluster was available to apply them | Warning at the top of both files; `tests/test_container_static.py::test_the_shipped_orchestrator_examples_never_run_two_ledger_writers` pins replicas 1 and Recreate |
-| Platform `/ai` bound connections under `--workers N` | A **bound** connection (`POST /ai/connections`) is live only on the worker that bound it, because credentials are never stored (`GET /ai/connections` reports `live: false` elsewhere) | `src/neuralbridge/ai/connections.py`, `OPS.md` section 9 |
+| Platform `/ai` bound connections under `--workers N` | A **bound** connection works on every worker through the encrypted credential vault, which **fails closed**: with no `NEURALBRIDGE_CREDENTIAL_KEYS` / `NEURALBRIDGE_CREDENTIAL_JOURNAL`, binding and rotating answer 503 `credential_custody_unconfigured`. `NEURALBRIDGE_AI_PROCESS_LOCAL_CREDENTIALS=single-worker` restores the old per-process behaviour and is refused when `WEB_CONCURRENCY` > 1 | `src/neuralbridge/ai/credentials.py`, claims-registry row 42, `OPS.md` section 9 |
 
 ### Backup consistency and restore behaviour (what is true)
 

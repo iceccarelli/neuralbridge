@@ -874,7 +874,7 @@ def _require_operator_key(x_api_key: str | None = Header(default=None)) -> None:
                         headers={"WWW-Authenticate": "ApiKey"})
 
 
-@public_router.get("/ops/health", response_model=dict,
+@public_router.get("/ops/health", response_model=dict, include_in_schema=False,
                    summary="Readiness detail and configuration (operator key)")
 def ops_health(response: Response,
                _operator: None = Depends(_require_operator_key)) -> dict[str, Any]:
