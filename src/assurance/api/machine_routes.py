@@ -153,25 +153,38 @@ _VERIFY_GATE = _Gate(MAX_CONCURRENT_VERIFICATIONS, MAX_WAITING_VERIFICATIONS,
                      MAX_VERIFICATIONS_PER_ACCOUNT)
 
 
+def _quantity(description: str, *, default: Any = ..., **bounds: float) -> Any:
+    """A physical quantity in a request body: a JSON number, nothing else.
+
+    Pydantic's default ``float`` is lax: ``true`` becomes 1.0 (a boolean turned a 1.0 s
+    reaction time into a 3420 mm answer), ``"1.0"`` and ``" 1 "`` are parsed, and NaN or
+    infinity pass a ``ge`` bound. ``strict=True`` refuses booleans and strings and still
+    accepts a JSON integer or float; ``allow_inf_nan=False`` refuses NaN, ``Infinity`` and
+    an exponent too large for a float. This is the same rule ``machine.quantities.number``
+    applies to every figure the engine reads (docs/claims-registry.md, "Physical
+    statements"), applied before the model is built so a refusal is a 422, not an answer.
+    """
+    return Field(default, strict=True, allow_inf_nan=False, description=description, **bounds)
+
+
 class SeparationIn(BaseModel):
     """The six inputs an integrator already has written down somewhere."""
 
     model_config = ConfigDict(extra="forbid")
 
-    robot_speed_mm_s: float = Field(ge=0, description="TCP speed under SSM, mm/s")
-    reaction_time_s: float = Field(ge=0, description="Tr: detection to stop command")
-    stop_time_s: float = Field(ge=0, description="Ts: stop command to standstill")
-    stop_distance_mm: float = Field(ge=0, description="travel during Ts")
-    measured_at_speed_mm_s: float = Field(
-        gt=0, description="the speed the stop distance was actually measured at")
-    intrusion_distance_mm: float = Field(
-        ge=0, description="C, per ISO 13855, for the body part that can reach in")
-    human_position_uncertainty_mm: float = Field(default=0.0, ge=0, description="Zd")
-    robot_position_uncertainty_mm: float = Field(default=0.0, ge=0, description="Zr")
-    human_speed_mm_s: float | None = Field(
-        default=None, ge=0,
-        description="closing speed if the sensing system reports it; "
-                    "omit for the ISO 13855 walking figure")
+    robot_speed_mm_s: float = _quantity("TCP speed under SSM, mm/s", ge=0)
+    reaction_time_s: float = _quantity("Tr: detection to stop command", ge=0)
+    stop_time_s: float = _quantity("Ts: stop command to standstill", ge=0)
+    stop_distance_mm: float = _quantity("travel during Ts", ge=0)
+    measured_at_speed_mm_s: float = _quantity(
+        "the speed the stop distance was actually measured at", gt=0)
+    intrusion_distance_mm: float = _quantity(
+        "C, per ISO 13855, for the body part that can reach in", ge=0)
+    human_position_uncertainty_mm: float = _quantity("Zd", default=0.0, ge=0)
+    robot_position_uncertainty_mm: float = _quantity("Zr", default=0.0, ge=0)
+    human_speed_mm_s: float | None = _quantity(
+        "closing speed if the sensing system reports it; "
+        "omit for the ISO 13855 walking figure", default=None, ge=0)
 
 
 class VerifyIn(BaseModel):
