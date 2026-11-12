@@ -65,7 +65,7 @@ from assurance.machine.recorder_attestation import (
     RecorderTrust,
     refuse_private_key,
 )
-from assurance.machine.ssm import separation_required
+from assurance.machine.ssm import separation_disclosures, separation_required
 from assurance.machine.trace import Trace
 
 __all__ = ["machine_router"]
@@ -183,8 +183,8 @@ class SeparationIn(BaseModel):
     human_position_uncertainty_mm: float = _quantity("Zd", default=0.0, ge=0)
     robot_position_uncertainty_mm: float = _quantity("Zr", default=0.0, ge=0)
     human_speed_mm_s: float | None = _quantity(
-        "closing speed if the sensing system reports it; "
-        "omit for the ISO 13855 walking figure", default=None, ge=0)
+        "closing speed if the sensing system reports it; omit to use the package's "
+        "default (1600 mm/s, UNVERIFIED against the standard)", default=None, ge=0)
 
 
 class VerifyIn(BaseModel):
@@ -378,9 +378,12 @@ async def separation(
         )
     if body.human_speed_mm_s is None:
         notes.append(
-            "No closing speed was supplied, so the ISO 13855 walking figure of "
-            f"{breakdown.human_speed_mm_s:.0f} mm/s was used. A directed approach "
-            "at short range is normally taken as 2000 mm/s."
+            "No closing speed was supplied, so the default closing speed of "
+            f"{breakdown.human_speed_mm_s:.0f} mm/s was used (the package's figure for "
+            "the ISO 13855 walking figure, UNVERIFIED: no copy of the standard is here to "
+            "confirm it). The package also lists 2000 mm/s for a directed approach at "
+            "short range, equally unverified. Supply the closing speed your sensing "
+            "system reports if you have one."
         )
 
     result = {
@@ -388,10 +391,10 @@ async def separation(
         "breakdown": breakdown.to_dict(),
         "explain": breakdown.explain(),
         "notes": notes,
-        "checks_skipped": [
-            "this is arithmetic on the figures you supplied. It does not confirm "
-            "they describe your machine, and it is not a risk assessment.",
-        ],
+        # Machine-readable: the formula and its constants are not checked against the
+        # standard. The same statements, in the same words, as `assurance machine separation`.
+        "formula_status": "unverified",
+        "checks_skipped": separation_disclosures(),
     }
     meter.commit(response)
     return result

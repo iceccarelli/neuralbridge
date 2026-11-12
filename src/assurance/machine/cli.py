@@ -38,6 +38,7 @@ import argparse
 import json
 import os
 import sys
+import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -64,7 +65,7 @@ from assurance.machine.recorder_attestation import (
     TrustedRecorder,
     load_attestation_file,
 )
-from assurance.machine.ssm import separation_required
+from assurance.machine.ssm import separation_disclosures, separation_required
 from assurance.machine.trace import Trace
 from assurance.machine.verify import Verdict
 
@@ -249,8 +250,12 @@ def _cmd_separation(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope)
     b = separation_required(envelope, robot_speed_mm_s=args.speed,
                             human_speed_mm_s=args.human_speed)
+    disclosures = separation_disclosures()
     if args.json:
-        print(json.dumps(b.to_dict(), indent=2))
+        # The breakdown as before, plus the statements of limit it is always printed with
+        # (the API route's `checks_skipped`): additive, no existing key changes.
+        print(json.dumps({**b.to_dict(), "formula_status": "unverified",
+                          "checks_skipped": disclosures}, indent=2))
         return 0
     print(f"{envelope.product} {envelope.product_version}  "
           f"envelope {envelope.content_hash()[:12]}")
@@ -266,6 +271,10 @@ def _cmd_separation(args: argparse.Namespace) -> int:
     print(f"  Zr robot uncert.   {b.robot_uncertainty_mm:8.0f} mm")
     print(f"  {'-' * 32}")
     print(f"  S  required        {b.total_mm:8.0f} mm")
+    print()
+    for statement in disclosures:
+        print(textwrap.fill(statement, width=78, initial_indent="  - ",
+                            subsequent_indent="    "))
     if b.rests_on_extrapolation:
         print()
         print("  Ss is extrapolated: this speed is above the one the stopping")

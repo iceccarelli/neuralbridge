@@ -8,8 +8,25 @@ pins; the reference cases at the end state their expected outcome in the fixture
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
+
+from assurance.machine.cli import main as machine_cli
+from assurance.machine.envelope import (
+    FigureBasis,
+    SafetyEnvelope,
+    SensingUncertainty,
+    StopPerformance,
+    Workspace,
+)
+from assurance.machine.ssm import (
+    SEPARATION_ARITHMETIC_ONLY,
+    SEPARATION_UNVERIFIED_FORMULA,
+    separation_disclosures,
+)
+from assurance.machine.trace import OperatingMode, Provenance, Sample, Trace
+from assurance.machine.verify import FORMULA_LIMITATION, verify
 
 SEPARATION_URL = "/v1/machine/separation"
 
@@ -124,3 +141,101 @@ class TestSeparationRouteTakesOnlyJsonNumbers:
     def test_an_unknown_field_is_still_refused(self, client):
         r = client.post(SEPARATION_URL, json={**SEPARATION_BODY, "stop_distance": 1.0})
         assert r.status_code == 422
+
+
+# -- F4: every surface that prints a separation distance says the formula is unverified ----
+
+def _envelope() -> SafetyEnvelope:
+    measured = FigureBasis(kind="measured", reference="STOP-TEST-1", date="2026-03-11")
+    return SafetyEnvelope(
+        envelope_id="ENV-1", product="Cell", product_version="1.0.0",
+        workspace=Workspace(minimum=(-1000.0, -1000.0, 0.0), maximum=(1000.0, 1000.0, 2000.0)),
+        max_tcp_speed_mm_s={OperatingMode.SSM: 500.0},
+        stop=StopPerformance(reaction_time_s=0.1, stop_time_s=0.25, stop_distance_mm=120.0,
+                             measured_at_speed_mm_s=500.0, basis=measured),
+        uncertainty=SensingUncertainty(human_position_mm=100.0, robot_position_mm=50.0,
+                                       basis=measured),
+        intrusion_distance_mm=850.0)
+
+
+@pytest.fixture()
+def envelope_file(tmp_path):
+    path = tmp_path / "envelope.json"
+    path.write_text(json.dumps(_envelope().to_dict()), encoding="utf-8")
+    return path
+
+
+class TestTheUnverifiedFormulaLabelIsOnEverySeparationSurface:
+    """The label was on ``verify`` only. ``assurance machine separation`` (text and --json) and
+    ``POST /v1/machine/separation`` printed a distance with no hint that the formula and its
+    constants are unchecked against the standards, and the API stated the 1600 mm/s walking
+    figure as the ISO 13855 value."""
+
+    def test_the_label_names_what_is_unverified_and_what_the_figure_is_not(self):
+        text = SEPARATION_UNVERIFIED_FORMULA
+        assert text.startswith("UNVERIFIED FORMULA")
+        for term in ("1600 mm/s", "2000 mm/s", "850 mm", "ISO/TS 15066", "ISO 13855",
+                     "quadratic extrapolation", "not a risk assessment",
+                     "not a statement of conformity"):
+            assert term in text
+        assert separation_disclosures() == [SEPARATION_UNVERIFIED_FORMULA,
+                                            SEPARATION_ARITHMETIC_ONLY]
+
+    def test_the_cli_text_carries_the_label(self, envelope_file, capsys):
+        assert machine_cli(["separation", "--envelope", str(envelope_file),
+                            "--speed", "500"]) == 0
+        out = " ".join(capsys.readouterr().out.split())
+        assert " ".join(SEPARATION_UNVERIFIED_FORMULA.split()) in out
+        assert " ".join(SEPARATION_ARITHMETIC_ONLY.split()) in out
+
+    def test_the_cli_json_carries_the_label_and_keeps_every_old_key(self, envelope_file, capsys):
+        assert machine_cli(["separation", "--envelope", str(envelope_file),
+                            "--speed", "500", "--json"]) == 0
+        d = json.loads(capsys.readouterr().out)
+        assert d["formula_status"] == "unverified"
+        assert d["checks_skipped"] == separation_disclosures()
+        for old in ("Sh_human_travel_mm", "Sr_robot_reaction_travel_mm",
+                    "Ss_robot_stopping_travel_mm", "C_intrusion_mm", "Zd_human_uncertainty_mm",
+                    "Zr_robot_uncertainty_mm", "total_mm", "stopping_basis",
+                    "human_speed_mm_s", "human_speed_source", "robot_speed_mm_s"):
+            assert old in d
+        assert d["total_mm"] == pytest.approx(1730.0)
+
+    def test_the_api_carries_the_label_and_keeps_every_old_field(self, client):
+        d = client.post(SEPARATION_URL, json=SEPARATION_BODY).json()
+        assert d["formula_status"] == "unverified"
+        assert d["checks_skipped"] == separation_disclosures()
+        for old in ("required_separation_mm", "breakdown", "explain", "notes", "checks_skipped"):
+            assert old in d
+        assert d["required_separation_mm"] == pytest.approx(1730.0)
+
+    def test_the_api_no_longer_states_the_default_closing_speed_as_the_standards_value(
+            self, client):
+        d = client.post(SEPARATION_URL, json=SEPARATION_BODY).json()
+        note = next(n for n in d["notes"] if "No closing speed was supplied" in n)
+        assert "default closing speed of 1600 mm/s" in note
+        assert "UNVERIFIED" in note
+        assert "is normally taken as 2000 mm/s" not in " ".join(d["notes"])
+        assert "ISO 13855 walking figure of" not in " ".join(d["notes"])
+
+    def test_a_supplied_closing_speed_adds_no_default_note(self, client):
+        d = client.post(SEPARATION_URL, json={**SEPARATION_BODY, "human_speed_mm_s": 1200.0}).json()
+        assert not any("No closing speed was supplied" in n for n in d["notes"])
+        assert d["formula_status"] == "unverified"
+
+    def test_the_openapi_description_of_the_closing_speed_does_not_state_the_value_as_fact(
+            self, client):
+        spec = client.get("/openapi.json").json()
+        text = spec["components"]["schemas"]["SeparationIn"]["properties"][
+            "human_speed_mm_s"]["description"]
+        assert "UNVERIFIED" in text and "ISO 13855 walking figure" not in text
+
+    def test_verify_still_carries_its_own_sealed_wording(self):
+        """The sealed wording is part of every bundle's replay, so it is not the same string."""
+        trace = Trace(
+            trace_id="RUN-1", provenance=Provenance.SIMULATION, source_system="fw",
+            started_at=datetime(2026, 9, 12, 4, 31, tzinfo=UTC), sample_rate_hz=50.0,
+            samples=tuple(Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
+                                 mode=OperatingMode.SSM, separation=3000.0)
+                          for i in range(20)))
+        assert FORMULA_LIMITATION in verify(_envelope(), trace).checks_skipped

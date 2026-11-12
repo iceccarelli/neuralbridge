@@ -56,7 +56,39 @@ from typing import Any
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.quantities import SPEED_MAX_MM_S, QuantityError, number
 
-__all__ = ["SeparationBreakdown", "separation_required"]
+__all__ = [
+    "SEPARATION_ARITHMETIC_ONLY",
+    "SEPARATION_UNVERIFIED_FORMULA",
+    "SeparationBreakdown",
+    "separation_disclosures",
+    "separation_required",
+]
+
+#: The label every surface that prints a separation distance carries (the CLI text and
+#: ``--json``, ``POST /v1/machine/separation``). ``verify`` carries its own wording of the same
+#: limitation (``verify.FORMULA_LIMITATION``, sealed into bundles and so unchangeable here).
+#: No copy of ISO/TS 15066 or ISO 13855 is in this repository: the formula, the closing speeds
+#: (1600 and 2000 mm/s) and the intrusion distance (850 mm) are written from memory of them and
+#: unchecked against the text (docs/claims-registry.md, "Physical statements").
+SEPARATION_UNVERIFIED_FORMULA = (
+    "UNVERIFIED FORMULA: the separation formula and its constants (Sh/Sr/Ss/C/Zd/Zr, the "
+    "1600 mm/s default closing speed, the 2000 mm/s figure for a directed approach, an "
+    "intrusion distance of 850 mm, and the quadratic extrapolation of the stopping distance) "
+    "have not been checked against ISO/TS 15066 or ISO 13855, and no copy of either standard "
+    "is in this repository. The separation figure is arithmetic on the numbers supplied, not a "
+    "risk assessment and not a statement of conformity to any standard."
+)
+
+#: What the figure is, whatever the formula turns out to say.
+SEPARATION_ARITHMETIC_ONLY = (
+    "this is arithmetic on the figures you supplied. It does not confirm they describe your "
+    "machine, and it is not a risk assessment."
+)
+
+
+def separation_disclosures() -> list[str]:
+    """The statements of limit a separation figure is always printed with, in order."""
+    return [SEPARATION_UNVERIFIED_FORMULA, SEPARATION_ARITHMETIC_ONLY]
 
 
 @dataclass(frozen=True)
