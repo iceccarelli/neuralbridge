@@ -231,6 +231,13 @@ product landed on main, and the archived chain now lives under
 apply` are deprecated and refuse to run — make changes on a branch and open a
 PR instead.
 
+**From a terminal (Codespaces or any Debian/Ubuntu box):** `bash scripts/codespaces.sh status`
+reports git, GitHub, open pull requests, CI on `main`, the nightly stress run, the toolchain and
+Postgres, changing nothing. `setup` installs what the gate needs (hash-checked Python lock, Node
+deps, a local throwaway PostgreSQL), `verify` runs the definition of done with Postgres and Node
+required so nothing silently skips, `e2e` the browser suite, `stress` the independent stress-test
+authority, `ci [PR]` the latest runs. It never deploys, merges, pushes or touches a secret.
+
 ---
 
 # NeuralBridge — the platform underneath

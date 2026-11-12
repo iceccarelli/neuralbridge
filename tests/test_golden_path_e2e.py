@@ -687,12 +687,13 @@ class TestTheGoldenPath:
             assert detail["account_status"] == "cancelled" and "export" in detail["remedy"]
         assert hosted.call("POST", "/v1/machine/verify", a_key, {}).status_code == 402
         # The documented read-out (plans.EVIDENCE_READOUT_AFTER_LAPSE, claims-registry
-        # "lapsed" row) still works from the account's own ledger. FOUNDER DECISION, asserted
-        # here as the current behaviour and not as a stated promise: the registry lists the
+        # "lapsed" row) still works from the account's own ledger. DECIDED, asserted here as the
+        # stated promise: the registry lists the
         # change-case routes as 402 after a lapse and does not mention that the read-out
         # route `GET /v1/cases/{id}/export` exports by subject and so also reaches a closed
-        # CHANGE case. Same chain, still anchored. If the founder rules otherwise, this block
-        # and the 402 list above are the two places to change.
+        # CHANGE case. Same chain, still anchored. DECIDED (docs/claims-registry.md, the
+        # lapsed read-out row): this is the promise, not an accident. The customer's evidence
+        # is theirs. To narrow it, this block and the listing block below are what change.
         lapsed = hosted.call("GET", f"/v1/cases/{cid[VALIDATED]}/export", a_key,
                              skeleton="true")
         assert lapsed.status_code == 200
@@ -709,9 +710,9 @@ class TestTheGoldenPath:
         # nothing leaked sideways, before or after any of it
         tenancy_holds()
         # a lapsed account's read-out lists every SUBJECT in its own ledger.
-        # FOUNDER DECISION (open, see docs/claims-registry.md): GET /v1/cases is documented as
-        # the readout of "your cases" but lists change-case ids and machine keys too, while
-        # GET /v1/cases/{id} answers 404 for a change case. Pinned as found.
+        # DECIDED (docs/claims-registry.md): the read-out lists every subject of the account's
+        # OWN ledger (change-case ids and machine keys too), while GET /v1/cases/{id} reads
+        # Article 14 records only and answers 404 for a change case. That is the promise.
         listing = hosted.ok("GET", "/v1/cases", a_key)
         assert set(cid.values()) <= set(listing)
         assert {key_of(s) for s in SERIALS} <= set(listing)
