@@ -115,32 +115,10 @@ metadata:
   name: neuralbridge
   namespace: neuralbridge
 ---
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: neuralbridge
-  namespace: neuralbridge
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: neuralbridge
-  minReplicas: 3
-  maxReplicas: 20
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
----
+# There is deliberately NO HorizontalPodAutoscaler here. An HPA's minReplicas overrides
+# `replicas: 1` above, and every replica is another writer on the hash-chained SQLite ledger and
+# account store (docs/GO-LIVE.md "Deployment topology"): the chain forks silently and the
+# application cannot see it. tests/test_container_static.py fails if one is added back.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

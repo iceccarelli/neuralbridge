@@ -159,3 +159,25 @@ def test_the_shipped_orchestrator_examples_never_run_two_ledger_writers() -> Non
     assert re.search(r"^replicaCount:\s*1\s*$", helm, re.M), "deploy/helm: replicaCount must be 1"
     for rel, text in (("deploy/k8s/deployment.yaml", k8s), ("deploy/helm/values.yaml", helm)):
         assert "3 replicas" not in text, f"{rel}: the warning still describes 3 replicas"
+
+
+def test_no_shipped_example_can_scale_the_ledger_writer_past_one() -> None:
+    """`replicas: 1` is not enough on its own. A HorizontalPodAutoscaler's minReplicas overrides it, and
+    Helm values with autoscaling enabled do the same: either runs several writers on a hash-chained
+    SQLite ledger, which forks silently (docs/GO-LIVE.md "Deployment topology"). The Fly keys state the
+    one-machine intent; the application cannot see a second machine."""
+    k8s = (ROOT / "deploy/k8s/deployment.yaml").read_text()
+    assert not re.search(r"^kind:\s*HorizontalPodAutoscaler\s*$", k8s, re.M), (
+        "deploy/k8s: an HPA overrides replicas: 1 and runs several ledger writers")
+    helm = (ROOT / "deploy/helm/values.yaml").read_text()
+    assert re.search(r"^autoscaling:\s*\n(?:\s+#.*\n)*\s+enabled:\s*false\s*$", helm, re.M), (
+        "deploy/helm: autoscaling must be disabled")
+    assert re.search(r"^\s+minReplicas:\s*1\s*$", helm, re.M), "deploy/helm: minReplicas must be 1"
+    assert re.search(r"^\s+maxReplicas:\s*1\s*$", helm, re.M), "deploy/helm: maxReplicas must be 1"
+    fly = (ROOT / "deploy/assurance/fly.toml").read_text()
+    for key, value in (("min_machines_running", "1"), ("max_machines_running", "1"),
+                       ("auto_stop_machines", "false")):
+        assert re.search(rf"^\s*{key}\s*=\s*{value}\s*$", fly, re.M), (
+            f"deploy/assurance/fly.toml: {key} must be {value}")
+    assert "this is the config line that prevents it" not in fly, (
+        "fly.toml claims an enforcement nobody has verified")
