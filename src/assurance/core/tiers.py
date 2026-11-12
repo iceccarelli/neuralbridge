@@ -65,3 +65,18 @@ class AssuranceTier(StrEnum):
         if not isinstance(other, AssuranceTier):
             return NotImplemented
         return self.rank <= other.rank
+
+    # ``StrEnum`` is a ``str``, and ``str`` defines every comparison operator. Defining
+    # only ``<`` and ``<=`` left ``>`` and ``>=`` to fall back to the STRING order of the
+    # tier names ("profile" > "community" is True; "certified" > "community" is False), so
+    # a guard written as ``tier > ceiling`` silently disagreed with the ladder. All four
+    # operators are defined here, by rank, and tests/test_assurance_tier_order.py pins them.
+    def __gt__(self, other: object) -> bool:  # type: ignore[override]
+        if not isinstance(other, AssuranceTier):
+            return NotImplemented
+        return self.rank > other.rank
+
+    def __ge__(self, other: object) -> bool:  # type: ignore[override]
+        if not isinstance(other, AssuranceTier):
+            return NotImplemented
+        return self.rank >= other.rank
