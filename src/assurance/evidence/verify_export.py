@@ -81,6 +81,7 @@ from typing import TYPE_CHECKING, Any
 
 from assurance.core.evidence import indistinguishable_numbers
 from assurance.core.identity import parse_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import GENESIS, LEDGER_SCHEMA_VERSION, LedgerEntry
 
 if TYPE_CHECKING:  # the Ed25519 dependency is only needed when a key is supplied
@@ -88,8 +89,9 @@ if TYPE_CHECKING:  # the Ed25519 dependency is only needed when a key is supplie
 
 __all__ = ["ANCHORED", "ANCHORED_PARTIAL", "ANCHOR_CLOCK_SKEW_SECONDS", "ASSUMPTIONS",
            "DECLARED_HEAD", "FAILED", "FINGERPRINT_BITS_NOTE", "MAX_PROBLEMS", "NOT_CHECKED",
-           "ExportVerification", "normalise_expect_head", "normalise_fingerprints",
-           "verify_export", "verify_export_file"]
+           "DuplicateKeyError", "ExportVerification", "loads_no_duplicate_keys",
+           "normalise_expect_head", "normalise_fingerprints", "verify_export",
+           "verify_export_file"]
 
 #: ``ExportVerification.completeness``: is it shown that nothing was removed?
 ANCHORED = "anchored"        # a signed anchor, under a trusted key, covers the whole chain
@@ -157,6 +159,33 @@ FINGERPRINT_BITS_NOTE = (
     "impossible. Where the stakes justify it, compare the whole public key file as well.")
 
 _HEX = frozenset("0123456789abcdef")
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object names the same member twice."""
+
+
+def _refuse_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in seen:
+            raise DuplicateKeyError(
+                f"a JSON object repeats the name {neutralise(name[:40])!r}. Parsers disagree "
+                "about which of two values counts (this one keeps the last, others the first), "
+                "so a file that says one thing to one reader and another to the next is refused")
+        seen[name] = value
+    return seen
+
+
+def loads_no_duplicate_keys(text: str) -> Any:
+    """``json.loads`` that refuses an object with a repeated member name.
+
+    Every file this module reads is evidence about what somebody said. A decoy first
+    ``entries`` that one parser keeps and another overwrites is how two readers are shown two
+    different files; this is the one place that closes it for the bundle, the attestation log
+    and the keyset.
+    """
+    return json.loads(text, object_pairs_hook=_refuse_duplicates)
 
 
 def normalise_expect_head(value: object) -> str:
@@ -308,7 +337,9 @@ class ExportVerification:
         lines += [f"  NOT ESTABLISHED  {u}" for u in self.unestablished]
         lines += [f"  ASSUMED  {a}" for a in self.assumptions]
         lines += [f"  NOT CHECKED  {c}" for c in self.checks_skipped]
-        return "\n".join(lines)
+        # The file chose many of these words (a key fingerprint, a subject, an actor): none may
+        # reach a terminal as an escape sequence or start a line of its own.
+        return "\n".join(neutralise(line) for line in lines)
 
 
 def _age(attested_at: str, now: datetime) -> str:
@@ -420,7 +451,7 @@ def verify_export(
     ]
     if not isinstance(bundle, dict) or not isinstance(bundle.get("entries"), list):
         return ExportVerification(False, 0, "unknown",
-                                  (_not_a_ledger_export(bundle),),
+                                  (neutralise(_not_a_ledger_export(bundle)),),
                                   tuple(skipped), (), ASSUMPTIONS)
 
     subject = bundle.get("subject", "")
@@ -712,14 +743,23 @@ def verify_export(
     if total and completeness in (ANCHORED, ANCHORED_PARTIAL, DECLARED_HEAD):
         completeness = NOT_CHECKED  # a bundle with problems is not shown complete
         anchor_info = None
+    if anchor_info is not None:
+        anchor_info = {k: neutralise(v) if isinstance(v, str) else v
+                       for k, v in anchor_info.items()}
     remember = None
     if ok and anchor_info is not None and completeness in (ANCHORED, ANCHORED_PARTIAL):
         remember = {"min_sequence": anchor_info["sequence"],
                     "expect_head": anchor_info["head_link_hash"], "min_length": chain_len}
+
+    def safe(lines: Sequence[str]) -> tuple[str, ...]:
+        # Text that came out of the file (a fingerprint, a subject, an actor, a time) is
+        # shown, never obeyed: unsafe characters become visible escapes.
+        return tuple(neutralise(line) for line in lines)
+
     return ExportVerification(
-        ok, n, scope, tuple(problems), tuple(skipped), tuple(verified),
-        (*ASSUMPTIONS, *anchor_assumptions), head if total == 0 and whole else None,
-        completeness, anchor_info if total == 0 else None, tuple(unestablished), remember)
+        ok, n, neutralise(scope), safe(problems), safe(skipped), safe(verified),
+        safe((*ASSUMPTIONS, *anchor_assumptions)), head if total == 0 and whole else None,
+        completeness, anchor_info if total == 0 else None, safe(unestablished), remember)
 
 
 def _merge_skeleton(
@@ -984,7 +1024,7 @@ def _check_anchors(
             data = raw.to_dict() if hasattr(raw, "to_dict") else raw
             if not isinstance(data, Mapping):
                 raise AttestationError("not an object")
-            att = HeadAttestation.from_dict(dict(data))
+            att = HeadAttestation.from_dict(dict(data), reject_unknown=True)
         except (AttestationError, ValueError, TypeError, KeyError, OverflowError) as exc:
             # OverflowError: `int(1e999)` / `int(inf)` on a number the file chose.
             reject(f"{label} is not a readable head attestation ({exc})")
@@ -1147,9 +1187,11 @@ def verify_export_file(
     now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
 ) -> ExportVerification:
     try:
-        bundle = json.loads(Path(path).read_text(encoding="utf-8"))
+        bundle = loads_no_duplicate_keys(Path(path).read_text(encoding="utf-8"))
     except RecursionError:
         return _too_deep()
+    except DuplicateKeyError as exc:
+        return ExportVerification(False, 0, "unknown", (f"cannot read the bundle: {exc}",), ())
     except (OSError, ValueError) as exc:
         return ExportVerification(False, 0, "unknown",
                                   (f"cannot read the bundle: {type(exc).__name__}",),

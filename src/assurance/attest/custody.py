@@ -28,6 +28,7 @@ from assurance.attest.keys import (
     VerifyingKey,
     private_key_file_problems,
 )
+from assurance.core.text import neutralise
 
 __all__ = [
     "key_file_problems",
@@ -105,6 +106,8 @@ def verify_log_across_rotation(
                 f"attestation {r.sequence}: signature does not verify under pinned key "
                 f"{key.fingerprint}")
     return LogVerdict(
-        ok=not problems, checked=verdict.checked, problems=problems,
+        ok=not problems, checked=verdict.checked,
+        # The fingerprint a record names is the log's word, not ours: shown, never obeyed.
+        problems=[neutralise(p) for p in problems],
         checks_skipped=verdict.checks_skipped, key_fingerprint=pinned.fingerprint,
         latest=verdict.latest, notes=verdict.notes)

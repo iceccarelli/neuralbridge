@@ -383,7 +383,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             },
             indent=2, sort_keys=True))
     else:
-        print(verdict.summary() if not torn or verdict.problems
+        print(neutralise(verdict.summary()) if not torn or verdict.problems
               else f"{verdict.checked} attestation(s) read, 1 problem: the log is incomplete "
                    "(not a pass)")
         if expected and not substitution:
@@ -391,20 +391,20 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         if verdict.latest is not None:
             print(f"  latest: attestation {verdict.latest.sequence}, "
                   f"{verdict.latest.ledger_length} record(s), "
-                  f"{verdict.latest.attested_at}")
+                  f"{neutralise(verdict.latest.attested_at)}")
         for problem in verdict.problems:
-            print(f"  ! {problem}")
+            print(f"  ! {neutralise(problem)}")
         if torn:
             print(f"  ! {_TORN_MESSAGE}")
         print("\n  not checked:")
         for skipped in verdict.checks_skipped:
-            print(f"    - {skipped}")
+            print(f"    - {neutralise(skipped)}")
         remember = _remember(verdict)
         if remember and ok:
             print("\n  keep for your next check (so a rollback or a withheld newer "
                   "attestation is caught):\n"
                   f"    --min-sequence {remember['min_sequence']} "
-                  f"--expect-head {remember['expect_head']}")
+                  f"--expect-head {neutralise(remember['expect_head'])}")
     if not verdict.ok:
         return 1
     return TORN_TAIL_EXIT if torn else 0
@@ -534,11 +534,12 @@ def _cmd_log(args: argparse.Namespace) -> int:
         print(f"{args.log}: no attestations")
         return 0
     for r in records:
-        print(f"{r.sequence:>4}  {r.attested_at}  len={r.ledger_length:<6} "
-              f"head={r.head_seq:<6} {r.head_link_hash[:12]}  key={r.key_fingerprint}"
-              f"  {r.basis.value}"
-              + ((f"  note (requester's text, not the signer's): {r.note}"
-                  if r.note_is_tenant_supplied else f"  {r.note}") if r.note else ""))
+        print(neutralise(
+            f"{r.sequence:>4}  {r.attested_at}  len={r.ledger_length:<6} "
+            f"head={r.head_seq:<6} {r.head_link_hash[:12]}  key={r.key_fingerprint}"
+            f"  {r.basis.value}"
+            + ((f"  note (requester's text, not the signer's): {r.note}"
+                if r.note_is_tenant_supplied else f"  {r.note}") if r.note else "")))
     print("\n  Nothing here was verified. `assurance attest verify` does that.")
     return 0
 
@@ -557,16 +558,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handlers[args.command](args)
     except AttestationTornTailError as exc:
-        print(f"finding: {exc}", file=sys.stderr)
+        print(f"finding: {neutralise(exc, multiline=True)}", file=sys.stderr)
         return TORN_TAIL_EXIT
     except AttestationError as exc:
-        print(f"finding: {exc}", file=sys.stderr)
+        print(f"finding: {neutralise(exc, multiline=True)}", file=sys.stderr)
         return 1
     except FileNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {neutralise(exc, multiline=True)}", file=sys.stderr)
         return 2
     except (AssuranceError, ValueError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {neutralise(exc, multiline=True)}", file=sys.stderr)
         return 2
 
 

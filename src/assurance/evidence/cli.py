@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from assurance.core.errors import AssuranceError
+from assurance.core.text import neutralise
 from assurance.evidence.verify_export import (
     ANCHORED,
     Expectations,
@@ -144,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                 anchors.append(AttestationLog(args.attestations).require_anchor())
         except (ImportError, AssuranceError, OSError, ValueError) as exc:
             # Could not look: a missing key or log is never a quiet unanchored pass.
-            print(f"error: {exc}", file=sys.stderr)
+            print(f"error: {neutralise(exc, multiline=True)}", file=sys.stderr)
             return 2
 
     result: ExportVerification = verify_export_file(

@@ -47,7 +47,9 @@ from typing import Any
 
 from ..core.errors import AssuranceError
 from ..core.identity import content_hash_of, format_utc, parse_utc, utc_now
+from ..core.text import neutralise
 from ..evidence.ledger import GENESIS, EvidenceLedger
+from ..evidence.verify_export import DuplicateKeyError, loads_no_duplicate_keys
 from .keys import SigningKey, VerifyingKey
 
 __all__ = [
@@ -206,6 +208,16 @@ def head_of(ledger: EvidenceLedger) -> LedgerHead:
     )
 
 
+_REQUIRED_FIELDS = ("format", "sequence", "ledger_length", "head_seq", "head_link_hash", "basis",
+                    "attested_at", "key_fingerprint", "previous")
+_INT_FIELDS = ("sequence", "ledger_length", "head_seq")
+_STR_FIELDS = ("format", "head_link_hash", "attested_at", "key_fingerprint", "previous")
+
+
+def _exact_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 @dataclass(frozen=True)
 class HeadAttestation:
     """One signed statement about the state of a ledger at a moment.
@@ -276,50 +288,59 @@ class HeadAttestation:
         return {**self._body(), "signature": self.signature}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> HeadAttestation:
-        missing = [
-            k
-            for k in (
-                "format",
-                "sequence",
-                "ledger_length",
-                "head_seq",
-                "head_link_hash",
-                "basis",
-                "attested_at",
-                "key_fingerprint",
-                "previous",
-            )
-            if k not in data
-        ]
+    def from_dict(cls, data: dict[str, Any], *, reject_unknown: bool = False) -> HeadAttestation:
+        """Read one record, exactly: every field has the type the signer wrote.
+
+        A number is a whole number (not ``"11"``, not ``11.9``, not ``true``) and the rest is
+        text; ``int()`` and ``str()`` used to coerce them, so one record read as two different
+        things to two parsers. Absent ``note`` / ``signature`` default as before. With
+        ``reject_unknown`` a field the signer never writes is refused, not dropped: a bundle's
+        embedded anchor is a signed statement and nothing unsigned may ride beside it.
+        """
+        missing = [k for k in _REQUIRED_FIELDS if k not in data]
         if missing:
             raise AttestationError(
                 "attestation record is missing " + ", ".join(missing)
                 + " — it was not written by this system, or it was edited."
             )
+        bound = data["format"] == ATTESTATION_FORMAT_BOUND
+        wrong = [k for k in _INT_FIELDS if not _exact_int(data[k])]
+        wrong += [k for k in (*_STR_FIELDS, "basis") if not isinstance(data[k], str)]
+        wrong += [k for k in ("note", "signature", *(("ledger_id", "tenant") if bound else ()))
+                  if k in data and not isinstance(data[k], str)]
+        if wrong:
+            raise AttestationError(
+                "attestation record has the wrong type for " + ", ".join(wrong)
+                + " (whole numbers and text only) — it was not written by this system, or it "
+                "was edited.")
+        if reject_unknown:
+            allowed = {*_REQUIRED_FIELDS, "note", "signature",
+                       *(("ledger_id", "tenant") if bound else ())}
+            extra = sorted(str(k)[:40] for k in data if k not in allowed)
+            if extra:
+                raise AttestationError(
+                    "attestation record carries field(s) the signer never writes: "
+                    + ", ".join(neutralise(k) for k in extra[:5])
+                    + " — unsigned content beside a signed statement is refused.")
         try:
             return cls(
-                format=str(data["format"]),
-                sequence=int(data["sequence"]),
-                ledger_length=int(data["ledger_length"]),
-                head_seq=int(data["head_seq"]),
-                head_link_hash=str(data["head_link_hash"]),
-                basis=AttestationBasis(str(data["basis"])),
-                attested_at=str(data["attested_at"]),
-                key_fingerprint=str(data["key_fingerprint"]),
-                previous=str(data["previous"]),
-                note=str(data.get("note", "")),
-                signature=str(data.get("signature", "")),
+                format=data["format"],
+                sequence=data["sequence"],
+                ledger_length=data["ledger_length"],
+                head_seq=data["head_seq"],
+                head_link_hash=data["head_link_hash"],
+                basis=AttestationBasis(data["basis"]),
+                attested_at=data["attested_at"],
+                key_fingerprint=data["key_fingerprint"],
+                previous=data["previous"],
+                note=data.get("note", ""),
+                signature=data.get("signature", ""),
                 # Only a v2 record signs these. On a v1 record they are unsigned text someone
                 # added, so they are dropped rather than believed.
-                ledger_id=(str(data.get("ledger_id", ""))
-                           if data["format"] == ATTESTATION_FORMAT_BOUND else ""),
-                tenant=(str(data.get("tenant", ""))
-                        if data["format"] == ATTESTATION_FORMAT_BOUND else ""),
+                ledger_id=data.get("ledger_id", "") if bound else "",
+                tenant=data.get("tenant", "") if bound else "",
             )
-        except OverflowError as exc:
-            # ``int(1e999)``: JSON accepts a number no integer can hold. The file chose
-            # it, so it is a record that is not one of ours, not a crash.
+        except OverflowError as exc:  # pragma: no cover - whole numbers cannot overflow
             raise AttestationError(
                 "attestation record holds a number that is not a whole number "
                 f"({exc}) — it was not written by this system, or it was edited."
@@ -464,10 +485,12 @@ class AttestationLog:
 
     def _parse(self, line: bytes, number: int) -> HeadAttestation:
         try:
-            data = json.loads(line.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            data = loads_no_duplicate_keys(line.decode("utf-8"))
+        except (ValueError, RecursionError) as exc:
+            what = ("repeats a member name" if isinstance(exc, DuplicateKeyError)
+                    else "is not JSON")
             raise AttestationLogDamagedError(
-                f"{self.label} line {number} is not JSON ({exc}). A damaged "
+                f"{self.label} line {number} {what} ({neutralise(exc)}). A damaged "
                 "attestation log is a finding: it is the one file a rewind "
                 "cannot reach, so damage to it is worth explaining."
             ) from exc
@@ -734,7 +757,7 @@ def attest(
         if head.ledger_id and bound_ids and head.ledger_id not in bound_ids:
             raise AttestationError(
                 f"refusing to attest: this log holds heads bound to ledger "
-                f"{', '.join(sorted(i[:12] for i in bound_ids))}, and this head was read from "
+                f"{', '.join(sorted(neutralise(i[:12]) for i in bound_ids))}, and this head was read from "
                 f"ledger {head.ledger_id[:12]}. A log belongs to one ledger; signing another "
                 "ledger's head into it is a cross-ledger substitution."
             )
@@ -746,7 +769,8 @@ def attest(
         tenants = {r.tenant for r in history if r.tenant}
         if tenant and tenants and tenant not in tenants:
             raise AttestationError(
-                f"refusing to attest: this log is for tenant {', '.join(sorted(tenants))}, "
+                f"refusing to attest: this log is for tenant "
+                f"{', '.join(sorted(neutralise(t) for t in tenants))}, "
                 f"not {tenant}.")
         same_basis = [r for r in history if r.basis is head.basis]
         prior = same_basis[-1] if same_basis else None
@@ -756,7 +780,7 @@ def attest(
                 raise AttestationError(
                     f"refusing to attest: the ledger holds {head.length} record(s), but "
                     f"attestation {prior.sequence} signed for {prior.ledger_length} "
-                    f"at {prior.attested_at}. An append-only ledger does not get "
+                    f"at {neutralise(prior.attested_at)}. An append-only ledger does not get "
                     "shorter. Records were removed after they were attested — this is "
                     "the event this whole mechanism exists to catch. Preserve the "
                     "database and the attestation log as they are."
@@ -764,7 +788,7 @@ def attest(
             if head.head_seq < prior.head_seq:
                 raise AttestationError(
                     f"refusing to attest: head seq {head.head_seq} is behind the "
-                    f"{prior.head_seq} signed at {prior.attested_at}."
+                    f"{prior.head_seq} signed at {neutralise(prior.attested_at)}."
                 )
             for earlier in same_basis:
                 if earlier.head_seq == 0:
@@ -774,7 +798,7 @@ def attest(
                     if current is None:
                         raise AttestationError(
                             f"refusing to attest: seq {earlier.head_seq} was attested at "
-                            f"{earlier.attested_at} and is no longer in the ledger."
+                            f"{neutralise(earlier.attested_at)} and is no longer in the ledger."
                         )
                 elif earlier.head_seq == head.head_seq:
                     current = head.head_link_hash
@@ -783,8 +807,9 @@ def attest(
                 if current != earlier.head_link_hash:
                     raise AttestationError(
                         f"refusing to attest: seq {earlier.head_seq} now links as "
-                        f"{current[:12]} but was attested as "
-                        f"{earlier.head_link_hash[:12]} at {earlier.attested_at}. The "
+                        f"{neutralise(current[:12])} but was attested as "
+                        f"{neutralise(earlier.head_link_hash[:12])} at "
+                        f"{neutralise(earlier.attested_at)}. The "
                         "chain was rebuilt — same position, different history. This is "
                         "a fork, not a gap, and it will not show up in verify_chain."
                     )
@@ -792,7 +817,7 @@ def attest(
             if previous.key_fingerprint != key.fingerprint and not rotating:
                 raise AttestationError(
                     f"refusing to attest: this log was signed by key "
-                    f"{previous.key_fingerprint} and the key offered is "
+                    f"{neutralise(previous.key_fingerprint)} and the key offered is "
                     f"{key.fingerprint}. If this is a deliberate rotation, say so "
                     "explicitly; otherwise somebody is continuing your attestation log "
                     "with a key of their own, which is exactly what a rewind looks "
@@ -1043,7 +1068,7 @@ def check_log_against_ledger(
         f"{(joined[-1].head_seq + 1) if joined else 1} onward rests on the "
         "chain alone."
     )
-    return problems, skipped
+    return [neutralise(p) for p in problems], [neutralise(x) for x in skipped]
 
 
 def verify_log(
@@ -1234,8 +1259,9 @@ def verify_log(
     return LogVerdict(
         ok=not problems,
         checked=len(records),
-        problems=problems,
-        checks_skipped=skipped,
+        # Fingerprints, times and ids in these lines came out of the log: shown, never obeyed.
+        problems=[neutralise(p) for p in problems],
+        checks_skipped=[neutralise(x) for x in skipped],
         key_fingerprint=key.fingerprint,
         latest=records[-1] if records else None,
         notes=notes,
