@@ -1,9 +1,11 @@
 """``assurance evidence`` — check an exported evidence bundle offline.
 
     verify <bundle.json> [--public-key KEY.pub [--attestations LOG]] [--json]
+           [--min-sequence N --expect-head HASH --min-length N --max-age HOURS]
+           [--expect-fingerprint FP]
         exit 0 verified (with --public-key: anchored to a head the signer read from
-        the ledger), 1 does not verify, 2 unreadable, 3 no inconsistency found but
-        not established
+        the ledger, and every remembered value met), 1 does not verify, 2 unreadable,
+        3 no inconsistency found but not established
 
 The exit codes keep "the evidence is wrong" (1) apart from "I could not look" (2) and
 from "nothing wrong was found, and completeness is still not shown" (3). With
@@ -26,17 +28,34 @@ is "not established", exit 3, and the output says how to ask for the skeleton).
 ``--attestations LOG`` adds the verifier's *own* copy of the signed attestations,
 which is the only thing that guards against a party that holds both the ledger and
 the signing key.
+
+A signed anchor does not show the bundle is the NEWEST: a bundle cut back to any older
+signed head is genuine, consistent and anchored. Only what you remember from your last
+check can show it, so a passing result prints a ``KEEP FOR YOUR NEXT CHECK`` line and the
+next check passes it back (``--min-sequence N --expect-head HASH --min-length N``, and
+``--max-age HOURS`` for how old the signed head may be). A bundle that breaks one is
+exit 1, with how many attestations or records are missing. ``--expect-fingerprint FP``
+(the signing key's fingerprint, written down from another source) makes a swapped public
+key exit 1 instead of passing. All of these need ``--public-key``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
+from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from assurance.core.errors import AssuranceError
-from assurance.evidence.verify_export import ANCHORED, ExportVerification, verify_export_file
+from assurance.evidence.verify_export import (
+    ANCHORED,
+    Expectations,
+    ExportVerification,
+    verify_export_file,
+)
 
 __all__ = ["build_parser", "main"]
 
@@ -59,7 +78,46 @@ def build_parser() -> argparse.ArgumentParser:
                         "(`assurance attest sign`); the newest record the signer READ from a ledger "
                         "(else the newest declared one) is checked against the bundle as well. "
                         "Needs --public-key.")
+    v.add_argument("--min-sequence", type=int, default=None, metavar="N",
+                   help="the newest attestation sequence you saw at your LAST check (printed "
+                        "under KEEP FOR YOUR NEXT CHECK). A bundle whose signed head is older "
+                        "is a rollback: exit 1. Needs --public-key")
+    v.add_argument("--expect-head", default=None, metavar="HASH",
+                   help="the head link hash of that attestation (12+ hex characters). A bundle "
+                        "whose chain no longer contains it is a rollback: exit 1")
+    v.add_argument("--min-length", type=int, default=None, metavar="N",
+                   help="the number of records the ledger had at your last check; a shorter "
+                        "bundle fails and the answer says how many were removed")
+    v.add_argument("--max-age", type=float, default=None, metavar="HOURS",
+                   help="fail unless the signed head the bundle rests on was signed within "
+                        "this many hours")
+    v.add_argument("--expect-fingerprint", action="append", default=None, metavar="FP",
+                   help="the signing key's 16-hex fingerprint, written down from a source "
+                        "other than the bundle (repeat for several). A different public key "
+                        "is exit 1: this is the check that catches a substituted key. Needs "
+                        "--public-key")
     return parser
+
+
+def _expectations(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict[str, Any]:
+    """The remembered values as ``verify_export`` keywords; a usage error if they are nonsense."""
+    max_age = None
+    if args.max_age is not None:
+        if not math.isfinite(args.max_age) or args.max_age <= 0:
+            parser.error("--max-age must be a positive number of hours")
+        try:
+            max_age = timedelta(hours=args.max_age)
+        except OverflowError:
+            parser.error("--max-age is too large")
+    given: dict[str, Any] = {
+        "min_sequence": args.min_sequence, "expect_head": args.expect_head,
+        "min_length": args.min_length, "max_age": max_age,
+        "expect_fingerprints": args.expect_fingerprint}
+    try:
+        Expectations.checked(**given)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return given
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.attestations and not args.public_key:
         parser.error("--attestations needs --public-key: a signature can only be "
                      "checked against a key you obtained yourself")
+    expectations = _expectations(parser, args)
+    if any(v is not None for v in expectations.values()) and not args.public_key:
+        parser.error("--min-sequence, --expect-head, --min-length, --max-age and "
+                     "--expect-fingerprint need --public-key: they are held against a signed "
+                     "anchor, which only a key you obtained yourself can check")
     trusted = None
     anchors: list[object] = []
     if args.public_key:
@@ -85,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     result: ExportVerification = verify_export_file(
-        args.bundle, trusted_key=trusted, anchors=anchors)
+        args.bundle, trusted_key=trusted, anchors=anchors, **expectations)
     unreadable = result.scope == "unknown"
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))

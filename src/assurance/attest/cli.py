@@ -35,6 +35,7 @@ operator does not control, on a timer, with the private key held there:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -64,7 +65,9 @@ from assurance.attest.trustlist import (
     trust_file_problems,
 )
 from assurance.core.errors import AssuranceError
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
+from assurance.evidence.verify_export import FINGERPRINT_BITS_NOTE, normalise_fingerprints
 
 __all__ = ["TORN_TAIL_EXIT", "build_parser", "main"]
 
@@ -144,6 +147,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "printed by the last verify). A log that no longer contains it fails")
     v.add_argument("--max-age", type=float, default=None, metavar="HOURS",
                    help="fail unless the newest attestation is no older than this many hours")
+    v.add_argument("--expect-fingerprint", action="append", default=None, metavar="FP",
+                   help="the signing key's 16-hex fingerprint, written down from a source "
+                        "other than the log (repeat for a log that spans a rotation). A "
+                        "different public key, or a record signed by a key you did not list, "
+                        "is a finding (exit 1): this is the check that catches a substituted "
+                        "key")
     v.add_argument("--json", action="store_true")
 
     _preflight_parser(verbs)
@@ -306,6 +315,28 @@ def _remember(verdict: Any) -> dict[str, Any] | None:
     return {"min_sequence": latest.sequence, "expect_head": latest.head_link_hash}
 
 
+def _substitution_problems(
+    expected: tuple[str, ...], keys: list[VerifyingKey], records: list[Any],
+) -> list[str]:
+    """Findings when the key(s) supplied, or the log's signers, are not the ones the caller
+    wrote down. Empty when nothing was expected."""
+    if not expected:
+        return []
+    supplied = {k.fingerprint for k in keys}
+    out: list[str] = []
+    for fp in expected:
+        if fp not in supplied:
+            out.append(
+                f"key substitution: you expected a key with fingerprint {fp}, but the public "
+                f"key(s) supplied have {', '.join(sorted(supplied))}. This is not the key you "
+                "were given, or it was swapped for another.")
+    for fp in sorted({r.key_fingerprint for r in records} - set(expected)):
+        out.append(
+            f"the log holds records signed by key {neutralise(fp)}, which is not one you "
+            "expected.")
+    return out
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     log = AttestationLog(args.log)
@@ -326,6 +357,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     else:
         verdict = verify_log_across_rotation(
             records, keys, ledger=ledger, basis=basis, **expectation)
+    expected = normalise_fingerprints(args.expect_fingerprint) if args.expect_fingerprint else ()
+    substitution = _substitution_problems(expected, keys, records)
+    if substitution:
+        verdict = dataclasses.replace(
+            verdict, ok=False, problems=[*verdict.problems, *substitution])
+    verdict = dataclasses.replace(
+        verdict, checks_skipped=[*verdict.checks_skipped, FINGERPRINT_BITS_NOTE])
     ok = verdict.ok and not torn
     problems = [*verdict.problems, *([_TORN_MESSAGE] if torn else [])]
 
@@ -348,6 +386,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(verdict.summary() if not torn or verdict.problems
               else f"{verdict.checked} attestation(s) read, 1 problem: the log is incomplete "
                    "(not a pass)")
+        if expected and not substitution:
+            print("  key fingerprint(s) are the ones you expected: " + ", ".join(expected))
         if verdict.latest is not None:
             print(f"  latest: attestation {verdict.latest.sequence}, "
                   f"{verdict.latest.ledger_length} record(s), "
