@@ -1,20 +1,23 @@
-# The enrolment kit — the thing you actually send a prospect
+# The enrolment kit — a first run on your own disk
 
 ## What it is for
 
-Everything else in this package assumes somebody has already decided to adopt
-it. This is what runs *before* that decision.
+Everything else in this package assumes the software is already installed and
+trusted. This is what you can run *before* that decision, on a machine you control.
 
 A plant engineer copies a folder onto a machine that is already inside their
 network, edits two files (`kit.json` and `plans/cell.json`), drops their exports in a folder, and runs one command. They get back a sealed evidence
 ledger, an HTML report and an attestation request — **their** ledger, **their**
-data, on **their** disk. No account. No API key. No upload. Nothing to procure
-and nothing for security to review, because nothing left the building.
+data, on **their** disk. No account. No API key. No upload. It needs no
+procurement step of its own, and `kit check` lists what a run would touch so
+security can review it first.
 
-That last part is the whole reason this exists. The blocker on every industrial
-pilot is not price and it is not features: it is the eleven weeks it takes to
-get an unknown tool past a plant's IT department. This kit does not ask to be
-let through. It runs on the inside and proves it stayed there.
+That last part is the whole reason this exists. A plant's IT department cannot
+check a vendor's statement that a tool "works offline". This kit does not ask to be
+believed. It runs on the inside, and the guard described below refuses and
+records any network or process attempt it can see, so there is a record to
+review rather than a promise. The guard watches from inside the process; the
+operating-system boundary is a network namespace (see "The airgap guard").
 
 ## The three commands
 
@@ -59,11 +62,11 @@ nothing leaves your network". Plant IT has heard it before, cannot check it, and
 correctly treats it as worth nothing.
 
 This run arms a guard over the process's socket layer and process creation,
-refuses every outbound connection, records any attempt **with the line of code
-that made it**, and seals that record into the customer's own ledger.
-Afterwards, "did this tool send anything anywhere" has an answer with a hash on
-it, in a file the customer holds. That is a different kind of object from a
-bullet point on a datasheet.
+refuses and records every outbound connection it can see, records any attempt **with
+the line of code that made it**, and seals that record into the customer's own ledger.
+Afterwards, "did this tool try to send anything anywhere" has an answer with a hash
+on it, in a file the customer holds, within the limits listed below. That is a
+different kind of object from a bullet point on a datasheet.
 
 The guard has three layers, because one is not enough: the functions of the
 `socket` module are replaced for the run (`connect`, `connect_ex`,

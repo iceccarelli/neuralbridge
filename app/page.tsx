@@ -46,7 +46,7 @@ const trustStrip = [
   {
     label: 'Airgap',
     title: 'Offline enrolment kit',
-    body: 'Runs on the operator’s disk. The socket guard refuses every outbound connection, including DNS.',
+    body: 'Runs on the operator’s disk. A guard refuses and records any network or process attempt it can see; a network namespace is the operating-system boundary.',
     imageKey: 'strip-offline-kit',
   },
 ] as const;
@@ -65,7 +65,7 @@ const products = [
     badge: '€390/mo',
     badgeClass: 'paid',
     name: 'Article 14 Register',
-    body: 'The CRA register for one manufacturer: both deadline clocks computed correctly, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge.',
+    body: 'The CRA register for one manufacturer: both deadline clocks computed correctly, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge. Unvalidated list price.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-register',
@@ -74,7 +74,7 @@ const products = [
     badge: '€1,290/mo',
     badgeClass: 'paid',
     name: 'Cell',
-    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation.',
+    body: 'Everything in Register, plus machine safety verification, Annex III manifests and passports, fleet advisory fan-out, change-assurance cases, and counter-signed head attestation. Unvalidated list price.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-cell',
@@ -101,7 +101,7 @@ const products = [
     badge: 'Engine',
     badgeClass: 'source',
     name: 'Fleet advisory',
-    body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, never flattened into a boolean.',
+    body: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name. `fleet advisory` does no version-range arithmetic and never flattens a result into a boolean; the CSAF import reads dotted-decimal ranges only and says unknown otherwise.',
     href: `/docs/assurance/fleet`,
     cta: 'Read the engine guide',
     imageKey: 'card-engine-fleet',
@@ -561,11 +561,12 @@ export default function IndustrialAutonomousAssuranceSite() {
           </div>
           <div>
             <span className="kicker">Offline enrolment kit</span>
-            <h2 style={{ color: '#ffffff' }}>Your ledger, your disk. Nothing leaves the room.</h2>
+            <h2 style={{ color: '#ffffff' }}>Your ledger, your disk. No account, no upload.</h2>
             <p className="hero-lead">
               No account, no API key, no upload. <code>kit check</code> lists every file a run would open and
-              touches nothing — the run arms a guard over the process's socket layer and refuses every outbound
-              connection, including name resolution.
+              touches nothing — the run arms a guard that refuses and records any network or process attempt it
+              can see, including name resolution. Run it inside a network namespace for an operating-system-enforced
+              boundary.
             </p>
             <div className="hero-actions">
               <a className="btn btn-outline" href="/docs/assurance/kit">
@@ -581,8 +582,9 @@ python -m assurance kit check plant/kit.json  # lists any placeholder still in p
 python -m assurance kit run  plant/kit.json --out plant/out`}</div>
               <p className="hero-panel-note">
                 Your ledger, your disk. No account, no API key, no upload. The demo uses synthetic machines; a kit run refuses
-                to produce evidence until the template values are replaced. The run arms a guard over the process's
-                socket layer and refuses every outbound connection, including name resolution.
+                to produce evidence until the template values are replaced. The run arms a guard that refuses and
+                records any network or process attempt it can see, including name resolution; for an
+                operating-system-enforced boundary, run it inside a network namespace.
               </p>
             </div>
             <a
@@ -860,9 +862,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             API, and fall back to this static table (identical data) otherwise &mdash; that is the honest state
             right now: the billing API is real and tested (<code>POST /v1/checkout</code> refuses a payment it
             cannot provision rather than faking one, and every register route fails closed with no API keys
-            configured), but it is not deployed to a public endpoint. Deploying it needs outbound access to Fly.io
-            from wherever runs <code>fly deploy</code>, plus live Stripe keys &mdash; neither is available in the
-            environment that built this page. See{' '}
+            configured), but it is not deployed to a public endpoint: there is no hosted API and no live checkout today.
+            See{' '}
             <RepoLink path="/blob/main/src/assurance/api/billing_routes.py" plain>the billing routes</RepoLink>{' '}
             for the exact behaviour.
           </p>
@@ -930,7 +931,7 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
           <div>
             <h2>Re-check one Declaration on your own machine. See what your paperwork stopped describing.</h2>
             <p>
-              The offline kit needs no account, key or upload and opens no sockets.{' '}
+              The offline kit needs no account, key or upload, and its guard refuses and records any network attempt it can see.{' '}
               {HOSTED_API
                 ? 'The hosted API answers the same checks over HTTP; the quickstart runs them locally.'
                 : 'The hosted API is not deployed to a public endpoint yet: run the same code locally from the quickstart.'}

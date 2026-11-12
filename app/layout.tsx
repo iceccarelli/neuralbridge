@@ -103,8 +103,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <ul>
                   <li><a href="/start">Get started</a></li>
                   <li><a href="/#products">Validator (free)</a></li>
-                  <li><a href="/#pricing">Register — &euro;390/mo</a></li>
-                  <li><a href="/#pricing">Cell — &euro;1,290/mo</a></li>
+                  <li><a href="/#pricing">Register — &euro;390/mo (unvalidated list price)</a></li>
+                  <li><a href="/#pricing">Cell — &euro;1,290/mo (unvalidated list price)</a></li>
                   <li><a href="/assurance">Workspace (your key)</a></li>
                   <li><a href="/services">Services</a></li>
                   <li>
@@ -138,8 +138,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div>
                 <h2>Regulation &amp; evidence</h2>
                 <ul>
-                  <li><a href="/docs">CRA Article 14</a></li>
-                  <li><a href="/docs/assurance/machinery">Machinery Reg. Annex III 1.1.9</a></li>
+                  <li><a href="/product/cra-article-14">CRA Article 14</a></li>
+                  <li><a href="/product/machinery-regulation-evidence">Machinery Reg. Annex III 1.1.9</a></li>
                   <li><a href="/docs/assurance/attest">Hash-chained ledger</a></li>
                   <li><a href="/docs/assurance/kit">Offline enrolment kit</a></li>
                 </ul>

@@ -64,11 +64,13 @@ imports outside the standard library (`pip install -e '.[assurance-attest]'` is 
 a label kept so existing commands work). The hosted API, the MCP gateways and the NeuralBridge
 integration platform are extras, listed under [Install](#install-what-each-extra-adds).
 
-The run arms a guard over the process's socket layer, refuses every outbound
-connection — including name resolution, because resolving a name has already
-told a DNS server something — records any attempt *with the line of code that
-made it*, and seals that record into your own ledger. "It does not phone home"
-stops being a promise in a datasheet and becomes a hash in a file you hold.
+The run arms a guard over the process's socket layer, refuses and records every
+outbound connection it can see — including name resolution, because resolving a name
+has already told a DNS server something — records any attempt *with the line of code
+that made it*, and seals that record into your own ledger. "It does not phone home"
+stops being a promise in a datasheet and becomes a record in a file you hold. The guard
+watches from inside the process it guards, so for an operating-system-enforced boundary
+run the kit inside a network namespace.
 
 `check` is the command to hand your IT department. It lists every file a run
 would open and touches nothing.
@@ -88,7 +90,7 @@ not do; what it does not do is listed in each command's output.
 | **Collect** | `assurance collect run` | A sealed manifest of the safety-relevant software on one machine, with normalisation rules so a vendor export's own timestamps do not read as drift. `collect probe` finds those noisy rules for you before they produce a year of false alarms. |
 | **Verify** | `assurance machine verify` | A recorded run checked against the declared safety envelope: ISO/TS 15066 separation, speed limit, workspace containment, stop characterisation, power-and-force, mode consistency — each with its worst margin, each able to answer `unchecked` rather than pretend. |
 | **Identify** | `assurance machinery record-manifest` | Machinery Regulation Annex III 1.1.9: what safety software is on the machine, who changed it, and which safety functions have a recorded verification dated after the last recorded change. |
-| **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name — never by version-range arithmetic, and never flattened into a boolean. |
+| **Fan out** | `assurance fleet advisory` | One supplier advisory across every enrolled serial, matched by hash, then version, then name. `fleet advisory` does no version-range arithmetic and never flattens a result into a boolean; the CSAF import (`ingest csaf-impact`) reads dotted-decimal ranges only and says `unknown` otherwise. |
 | **Case** | `assurance change assess-drift` | A drift, an advisory or an intervention becomes a case with an owner and a required re-verification. Closing, rejecting, deferring or resuming it is a named person's decision; closure is never inferred. |
 | **Intel** | `assurance intel history` | KEV, NVD, EPSS and CSAF files recorded as provenance-stamped, append-only observations. Recording (`intel ingest`) and fetching (`intel refresh --live`) are operator commands; the hosted `/v1/intel/*` routes and the `intel_*` MCP tools only read the store and answer 503 until `ASSURANCE_INTEL_STORE` is set. A CVE no source mentions is `unknown`, never clear. |
 | **Watch** | `assurance watch run` | The part that runs when nobody is looking. Exit 0 quiet, 1 findings, 2 could not see. "I could not look" and "nothing moved" never share an exit code. |

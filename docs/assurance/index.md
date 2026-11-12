@@ -4,7 +4,7 @@ Every row below maps to code that runs — verified in this repository's own
 `pytest tests/ -q` suite and the cold-start CI job that installs from
 a bare checkout and runs the offline kit end to end.
 
-| Engine | Command | The finding nobody else produces |
+| Engine | Command | The finding it is built to report |
 |---|---|---|
 | [Collect](collect.md) | `assurance collect probe` | Finds the vendor tool's own volatile headers before they produce a year of false drift alarms |
 | [Machine safety](machine.md) | `assurance machine verify` | ISO/TS 15066 separation with `Sh` over `Tr + Ts`; `unchecked` is a first-class outcome |
@@ -16,7 +16,7 @@ a bare checkout and runs the offline kit end to end.
 | [Watch](watch.md) | `assurance watch run` | Exit 0 quiet, 1 findings, 2 could not see — "I could not look" never shares a code with "nothing moved" |
 | [Attest](attest.md) | `assurance attest sign` | A hash chain catches editing; a counter-signature is what catches deletion |
 | [Key ceremony](KEY-CEREMONY.md) | `assurance attest keygen` | Prepared, not performed: the procedure for the two trust anchors, and the evidence to keep |
-| [Offline kit](kit.md) | `assurance kit run` | One command inside the plant — their ledger, their disk, a socket guard that proves nothing left |
+| [Offline kit](kit.md) | `assurance kit run` | One command inside the plant — their ledger, their disk, a guard that refuses and records any network or process attempt it can see (run it in a network namespace for an operating-system-enforced boundary) |
 | [Supplier feeds](supplier.md) | `assurance supplier publish` | A supplier cannot silently un-publish; a withdrawal is a publication, not a deletion |
 | [Bridge](bridge.md) | `assurance bridge` | Field 5 (Member States) assembled from serial numbers, never guessed |
 

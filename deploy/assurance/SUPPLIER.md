@@ -1,6 +1,6 @@
 # The supplier side — signing the other half of the market
 
-## The attack nobody has closed
+## The attack: an advisory nobody can verify
 
 A component advisory reaches an integrator today as a PDF attached to an email,
 or a link in a newsletter. Nothing about it is verifiable. Which means this
@@ -59,7 +59,7 @@ content hashes matches by **artefact**. The difference, on a real fleet:
 | | what the integrator is told |
 |---|---|
 | versions only | *possible* — "this is your component, but the version on this machine is not recorded. Somebody has to look." |
-| with hashes | *affected* — by hash, beyond argument. Or `hash_mismatch`, which is the finding nobody else produces: the label says 3.9.0 and the bytes are not 3.9.0's. |
+| with hashes | *affected* — by hash, beyond argument. Or `hash_mismatch`, which is the finding this check exists to report: the label says 3.9.0 and the bytes are not 3.9.0's. |
 
 Publishing the hashes is the single most useful thing a component supplier can
 do for the people who install their parts, and `publish` says so every time you

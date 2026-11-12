@@ -322,9 +322,9 @@ export const PRODUCT_PAGES: ProductPage[] = [
     kicker: 'Operating cycle',
     h1: 'Continuous machine assurance: from enrolment to a passport that can go stale',
     definition:
-      'Continuous machine assurance is the repeated cycle of enrolling a machine, recording what it runs, verifying it, noticing change and re-verifying, with each step written to a ledger and each judgement left to a named person.',
+      'Continuous machine assurance is the repeated cycle of enrolling a machine, recording what it runs, verifying it, noticing configuration drift and re-verifying, with each step written to a ledger and each judgement left to a named person.',
     problem: [
-      'A one-off assessment decays. The repository’s watch guide describes the dull reality: a firmware update tomorrow strands every sign-off in the ledger, and nothing says so until someone runs the comparison again. A job that quietly stops looks identical to a quiet week.',
+      'A one-off assessment decays as configuration drift accumulates. The repository’s watch guide describes the dull reality: a firmware update tomorrow strands every sign-off in the ledger, and nothing says so until someone runs the comparison again. A job that quietly stops looks identical to a quiet week.',
       'So the cycle has two jobs. It must notice change on a schedule, and it must make a failure to look distinguishable from nothing having moved. The watch command uses three exit codes for this: 0 quiet, 1 something for a person to read, 2 it could not rely on its inputs.',
     ],
     workflow: [
@@ -478,7 +478,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     ],
     notEstablished: [
       'That an advisory is genuine, correct, complete or current. A fetch that succeeded records what a host said at that time.',
-      'That a machine is affected or unaffected. Matching works on the labels in a sealed manifest; a range the model cannot represent is not matched, and no version-range arithmetic is done.',
+      'That a machine is affected or unaffected. `fleet advisory` matches the labels in a sealed manifest and does no version-range arithmetic. The CSAF import (`ingest csaf-impact`) compares dotted-decimal ranges only, and a range it cannot read is `unknown`, never a match.',
       'That an empty fleet, or no match, means the fleet is clear. A report over an empty fleet says no machine was assessed.',
       'That the supplier’s key belongs to the supplier. The fingerprint has to arrive by a route the advisories do not travel on.',
       'That silence from a supplier is safety: a supplier that has not noticed a vulnerability publishes nothing, and signing cannot detect that.',
@@ -922,17 +922,17 @@ export const PRODUCT_PAGES: ProductPage[] = [
   {
     slug: 'offline-assurance-kit',
     name: 'Offline assurance kit',
-    intent: 'An enrolment kit that runs inside the plant and opens no sockets',
-    title: 'Offline assurance kit: enrol machines with no network',
+    intent: 'An enrolment kit that runs inside the plant behind a guard that records network attempts',
+    title: 'Offline assurance kit: enrol machines on-site',
     description:
-      'A kit that enrols machines on the plant side, writes your own ledger and report, and runs behind a socket guard that refuses and records every outbound attempt.',
+      'A kit that enrols machines on the plant side and writes your own ledger and report, behind a guard that refuses and records outbound attempts it can see.',
     kicker: 'Offline kit',
     h1: 'The offline assurance kit: a ledger on your disk and a guard that records any attempt to reach out',
     definition:
       'The offline assurance kit is a runnable folder that enrols machines from exported files into a ledger on the plant’s own disk, with no account, no upload and a guard over the process’s network layer.',
     problem: [
       'A tool that runs inside a plant has to get past the plant’s network and IT review. Vendors routinely say that it works offline and nothing leaves the network, and plant IT cannot check that statement.',
-      'The kit answers with a record instead of a promise. It arms a guard over the process’s socket layer and process creation, refuses every outbound connection, records any attempt with the line of code that made it, and seals that record into the account holder’s own ledger.',
+      'The kit answers with a record instead of a promise. It arms a guard over the process’s socket layer and process creation, refuses and records any outbound attempt it can see with the line of code that made it, and seals that record into the account holder’s own ledger. The guard runs inside the process it watches, so a network namespace is what enforces the boundary at the operating-system level.',
     ],
     workflow: [
       {
@@ -984,7 +984,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     ],
     faq: [
       {
-        q: 'Does the kit really open no sockets?',
+        q: 'Can the kit be shown not to reach the network?',
         a: 'A guard refuses and records outbound connections, name resolution and process creation during a run, and a test suite checks it from outside. It records intent in-process, so a network namespace is the enforced boundary.',
       },
       {

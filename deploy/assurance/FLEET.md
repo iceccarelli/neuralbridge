@@ -201,7 +201,7 @@ is ignored.
 component name under a supplier string that differs ("Example Controls" for "Example Controls
 GmbH", a different legal form, a hyphen) is "a person has to look" (`supplier differs`), never
 a clear. This is engineering's stricter default for content a third party wrote, chosen
-because a false clear is the worse mistake; the founder may relax it. A product name that
+because a false clear is the worse mistake; an operator may choose to relax it. A product name that
 differs is not detected. When an import matches nothing, the report lists the (supplier /
 component) pairs it looked for ("no component name matched exactly"), so a misspelling can be
 seen; a product that is truly absent from the fleet is still clear (exit 0).

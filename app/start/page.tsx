@@ -95,7 +95,7 @@ export default function StartPage() {
             <p>
               <strong>What the labels mean.</strong>{' '}
               <span className="tag is-live">live</span> exists and works as described.{' '}
-              <span className="tag is-offline">offline</span> runs on your own machine and opens no socket.{' '}
+              <span className="tag is-offline">offline</span> runs on your own machine; its guard refuses and records network attempts it can see.{' '}
               <span className="tag is-gap">by request / needs an API</span> goes through a conversation with
               NeuralBridge, or needs a deployed API and key. <span className="tag is-none">not available</span> does
               not exist today.
