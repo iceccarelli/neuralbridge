@@ -35,12 +35,13 @@ The order of operations is fixed and the reason is the airgap record:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..collect.collector import collect
+from ..collect.collector import ItemOutcome, collect
 from ..collect.plan import CollectionPlan
 from ..core.actor_names import actor_grammar_problem, declared_role_problem
 from ..core.errors import AssuranceError
@@ -297,12 +298,26 @@ class MachineResult:
     plan_id: str = ""
     warnings: tuple[str, ...] = ()
     detail: str = ""
+    #: One entry per item the plan names: collected, missing or unreadable, with the reason,
+    #: the files it came from, its digest and the version found. Empty when the machine
+    #: failed before any file was read.
+    outcomes: tuple[ItemOutcome, ...] = ()
+    #: Whether a manifest for this machine is in the ledger. An incomplete collection is
+    #: not sealed unless the operator asked for it (``--seal-incomplete``).
+    sealed: bool = False
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        """The item ids the plan names that were not collected (missing or unreadable)."""
+        return tuple(o.item_id for o in self.outcomes if not o.ok)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "serial": self.serial, "status": self.status, "items": self.items,
             "configuration_hash": self.configuration_hash, "plan_id": self.plan_id,
             "warnings": list(self.warnings), "detail": self.detail,
+            "sealed": self.sealed, "missing": list(self.missing),
+            "outcomes": [o.to_dict() for o in self.outcomes],
         }
 
 
@@ -445,6 +460,7 @@ def _enrol_one(
     ledger: EvidenceLedger,
     taken_at: datetime | None,
     read_from_machine: bool = False,
+    seal_incomplete: bool = False,
 ) -> MachineResult:
     plan_path = config.resolve(entry.plan)
     exports = config.resolve(entry.exports)
@@ -495,24 +511,85 @@ def _enrol_one(
             serial=entry.serial, status="failed",
             plan_id=plan.plan_id, detail=str(exc))
 
-    record_manifest(ledger, result.manifest, actor=config.actor)
     template_suppliers = sorted(
         {i.item_id for i in plan.items if _is_placeholder(i.supplier)})
     warnings = tuple(result.warnings) + ((
         f"the supplier of {', '.join(template_suppliers)} is still a template value in "
         f"{plan_path.name}; an advisory matches on the supplier, so it will not match "
         "these items until it is filled in.",) if template_suppliers else ())
+    common: dict[str, Any] = {
+        "serial": entry.serial, "items": len(result.manifest.items),
+        "plan_id": plan.plan_id, "warnings": warnings, "outcomes": result.outcomes,
+    }
+    # The configuration hash names a manifest that is in the ledger; a machine whose
+    # manifest was not sealed has none to name.
+    sealed_hash = result.manifest.configuration_hash()
+
+    if result.complete:
+        record_manifest(ledger, result.manifest, actor=config.actor)
+        return MachineResult(
+            status="enrolled", sealed=True, configuration_hash=sealed_hash,
+            detail=result.summary().splitlines()[0] if result.summary() else "", **common)
+
+    # An incomplete collection is a first-class outcome, but it is not THE configuration of
+    # the machine: a sealed manifest becomes the baseline every later comparison starts from
+    # with the missing items absent from it (COLLECT.md). So it is sealed only when the
+    # operator asked for exactly that; otherwise the attempt is recorded in the run record
+    # (with the missing item ids and why) and nothing describes this machine in the ledger.
+    missing = ", ".join(
+        f"{o.item_id} ({o.status})" for o in result.outcomes if not o.ok)
+    if seal_incomplete:
+        record_manifest(ledger, result.manifest, actor=config.actor)
+        return MachineResult(
+            status="incomplete", sealed=True, configuration_hash=sealed_hash,
+            detail=f"SEALED INCOMPLETE at your request (--seal-incomplete); not collected: "
+                   f"{missing}", **common)
     return MachineResult(
-        serial=entry.serial,
-        # "incomplete" is a first-class outcome: a manifest missing a required
-        # item is still evidence, and pretending otherwise loses the finding.
-        status="enrolled" if result.complete else "incomplete",
-        items=len(result.manifest.items),
-        configuration_hash=result.manifest.configuration_hash(),
-        plan_id=plan.plan_id,
-        warnings=warnings,
-        detail=result.summary().splitlines()[0] if result.summary() else "",
-    )
+        status="incomplete", sealed=False,
+        detail=f"NOT SEALED: the collection is incomplete; not collected: {missing}. Fix the "
+               "export folder or the plan and run again", **common)
+
+
+def _outcome_phrase(o: ItemOutcome) -> str:
+    """One item, as the report and the terminal both say it: what it was, where from."""
+    if o.ok:
+        files = ", ".join(o.files) if o.files else "no file"
+        return (f"{o.item_id} read from {files} (digest {o.digest[:12]}, "
+                + (f"version {o.version}" if o.version else "version unknown") + ")")
+    return f"{o.item_id} {o.status.upper()}: {o.detail}"
+
+
+def machine_limits(results: Iterable[MachineResult]) -> tuple[str, ...]:
+    """What the report must say about each machine that the fleet record cannot.
+
+    The fleet record only knows what was sealed. A machine whose collection was
+    incomplete, or that failed before any file was read, is invisible in it, and a report
+    that is silent about that reads as a clean run. One entry per such machine, plus the
+    per-item reading (what was read, from which file) for every machine the kit looked at.
+    """
+    out: list[str] = []
+    for m in results:
+        if m.status == "failed":
+            out.append(f"Machine {m.serial} was NOT recorded: {m.detail.rstrip('.')}.")
+            continue
+        read = "; ".join(_outcome_phrase(o) for o in m.outcomes)
+        if m.status == "incomplete" and m.sealed:
+            out.append(
+                f"Machine {m.serial} was sealed INCOMPLETE at the operator's request "
+                f"(--seal-incomplete). Not collected: {', '.join(m.missing)}. Its manifest "
+                "carries the incomplete-collection marker; nothing derived from it says "
+                f"anything about those items. What was and was not read: {read}.")
+        elif m.status == "incomplete":
+            out.append(
+                f"Machine {m.serial} was NOT sealed: its collection was incomplete "
+                f"(not collected: {', '.join(m.missing)}), so no manifest of this machine is "
+                "in this ledger and nothing here describes its configuration. What was and "
+                f"was not read: {read}.")
+        else:
+            out.append(f"Machine {m.serial} was sealed. What was read: {read}.")
+        for o in m.outcomes:
+            out.extend(f"Machine {m.serial}, {o.item_id}: {w}" for w in o.warnings)
+    return tuple(out)
 
 
 def run_kit(
@@ -522,6 +599,7 @@ def run_kit(
     allow_loopback: bool = False,
     now: datetime | None = None,
     read_from_machine: bool = False,
+    seal_incomplete: bool = False,
 ) -> KitRun:
     """Enrol every machine in *config*, offline, into a ledger under *out_dir*.
 
@@ -531,6 +609,11 @@ def run_kit(
 
     ``read_from_machine`` is the operator's assertion that the kit ran on the
     machines; without it every item is ``supplied_by_vendor``.
+
+    ``seal_incomplete`` has the meaning it has for ``collect run``: a machine whose
+    collection is incomplete is NOT sealed unless it is set, because a sealed manifest
+    becomes the machine's current one with the missing items absent from every later
+    comparison.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -546,7 +629,8 @@ def run_kit(
 
     with no_network(allow_loopback=allow_loopback) as airgap:
         for entry in config.machines:
-            results.append(_enrol_one(entry, config, ledger, now, read_from_machine))
+            results.append(_enrol_one(
+                entry, config, ledger, now, read_from_machine, seal_incomplete))
 
     # Outside the guard, deliberately: a record of a guard cannot be written
     # while the guard it describes is still running.
@@ -618,7 +702,7 @@ def run_kit(
             organisation=config.organisation,
             prepared_by=config.prepared_by,
             generated_at=now,
-            extra_limits=AIRGAP_LIMITS + limits,
+            extra_limits=machine_limits(results) + AIRGAP_LIMITS + limits,
         )),
         encoding="utf-8")
 

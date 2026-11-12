@@ -28,6 +28,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+from assurance.collect.collector import ItemOutcome
 from assurance.collect.plan import CollectionPlan
 from assurance.core.errors import AssuranceError
 from assurance.kit.enrol import (
@@ -195,6 +196,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "machine it came from. The assertion is the operator's, it is "
                         "recorded in each manifest and in the report, and the software "
                         "cannot check it")
+    r.add_argument("--seal-incomplete", action="store_true",
+                   help="seal a machine even when a required item could not be read. The "
+                        "manifest then becomes the machine's current one with those items "
+                        "absent, and an advisory about them will not match this machine; by "
+                        "default an incomplete collection is not sealed (the attempt is "
+                        "recorded in the run record, with the missing items)")
     r.add_argument("--json", action="store_true")
 
     c = verbs.add_parser("check", help="what this kit would do, touching nothing")
@@ -353,10 +360,26 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def _outcome_lines(o: ItemOutcome, indent: str = "      ") -> list[str]:
+    """One item as the integrator reads it: result, id, where it came from, why if not."""
+    mark = {"collected": "ok  ", "missing": "MISS", "unreadable": "FAIL"}[o.status]
+    if o.ok:
+        version = f"v{o.version}" if o.version else "version unknown"
+        lines = [f"{indent}{mark} {o.item_id:<12} {o.digest[:12]}  {version:<16} "
+                 f"{', '.join(o.files)}"]
+        if o.detail:
+            lines.append(f"{indent}     {o.detail}")
+    else:
+        lines = [f"{indent}{mark} {o.item_id:<12} {o.detail}"]
+    lines.extend(f"{indent}     ! {w}" for w in o.warnings)
+    return lines
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     config = KitConfig.from_json(args.config)
     run = run_kit(config, args.out, allow_loopback=args.allow_loopback,
-                  read_from_machine=args.read_from_machine)
+                  read_from_machine=args.read_from_machine,
+                  seal_incomplete=args.seal_incomplete)
 
     if args.json:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
@@ -365,10 +388,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("  (COMPLETE means only that every item the plan names was found and hashed.)")
         print()
         for m in run.machines:
-            print(f"  {m.status:<11} {m.serial:<16} {m.items} item(s)"
+            count = (f"{m.items} of {len(m.outcomes)} item(s) collected" if m.outcomes
+                     else f"{m.items} item(s)")
+            print(f"  {m.status:<11} {m.serial:<16} {count}"
                   + (f"   {m.detail}" if m.detail else ""))
+            for o in m.outcomes:
+                for line in _outcome_lines(o):
+                    print(line)
             for w in m.warnings:
                 print(f"      ! {w}")
+        unsealed = [m.serial for m in run.machines if m.status == "incomplete" and not m.sealed]
+        if unsealed:
+            print(f"\n  NOT sealed (collection incomplete): {', '.join(unsealed)}. Nothing in "
+                  "the ledger describes those machines; the attempt, with the items that "
+                  "were not collected, is in the run record and the report. Fix the export "
+                  "folder and run again, or pass --seal-incomplete to seal what was read.")
         print(f"\n  airgap: {run.airgap.summary()}")
         for attempt in run.airgap.attempts:
             print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")
