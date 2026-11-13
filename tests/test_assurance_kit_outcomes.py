@@ -433,3 +433,39 @@ class TestTemplateDataInTheKit:
         kit = make_kit(tmp_path)
         run_cli("check", str(kit))
         assert "kit init` wrote" not in capsys.readouterr().out
+
+
+# =====================================================================
+# An existing ledger is verified before anything is appended to it.
+# =====================================================================
+class TestARunDoesNotAppendToABrokenChain:
+    def _edit_first_record(self, db: Path) -> None:
+        import sqlite3
+
+        con = sqlite3.connect(db)
+        con.execute("UPDATE chain SET at = '2020-01-01T00:00:00Z' WHERE seq = 1")
+        con.commit()
+        con.close()
+
+    def test_a_tampered_ledger_is_refused_and_nothing_is_appended(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        out = tmp_path / "out"
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        self._edit_first_record(out / "evidence.db")
+        before = len(EvidenceLedger(out / "evidence.db").entries())
+        request_before = (out / "attestation-request.json").read_text()
+        capsys.readouterr()
+
+        rc = run_cli("run", str(kit), "--out", str(out))
+
+        assert rc == 2
+        assert "does not verify as a hash chain" in capsys.readouterr().err
+        assert len(EvidenceLedger(out / "evidence.db").entries()) == before
+        assert (out / "attestation-request.json").read_text() == request_before
+
+    def test_an_intact_ledger_is_appended_to(self, tmp_path):
+        kit = make_kit(tmp_path)
+        out = tmp_path / "out"
+        run_cli("run", str(kit), "--out", str(out))
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        assert EvidenceLedger(out / "evidence.db").verify_chain()[0] is True

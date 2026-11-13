@@ -689,6 +689,15 @@ def run_kit(
     run_path = out / "run.json"
 
     ledger = EvidenceLedger(ledger_path)
+    # An existing ledger is appended to, so its chain is walked first: appending to a broken
+    # chain would seal fresh records and an attestation request over a ledger that no longer
+    # verifies. Refused with nothing written (the same rule as machinery enrolment).
+    chain_ok, chain_problems = ledger.verify_chain()
+    if not chain_ok:
+        raise KitError(
+            f"{ledger_path} does not verify as a hash chain, so nothing was recorded: "
+            + "; ".join(chain_problems[:3])
+            + ". Do not append to it. Keep it as evidence, and run into a new --out folder.")
     results: list[MachineResult] = []
 
     with no_network(allow_loopback=allow_loopback) as airgap:
