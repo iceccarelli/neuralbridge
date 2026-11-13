@@ -363,13 +363,22 @@ def boundary_problems(block: Any, where: str) -> list[str]:
         out.append(f"{where}'s boundary block omits {', '.join(missing)}.")
     review = block.get("human_review")
     if not (isinstance(review, dict) and review.get("required") is True
-            and isinstance(review.get("reasons"), list) and review["reasons"]):
+            and isinstance(review.get("reasons"), list) and review["reasons"]
+            and all(isinstance(r, str) and r.strip() for r in review["reasons"])):
         out.append(f"{where}'s boundary block does not say that qualified human review is "
                    "required. It always is: software never decides it.")
     for key in ("tested", "not_tested", "assumptions"):
         if key in block and not (isinstance(block[key], list) and all(
-                isinstance(x, str) for x in block[key])):
+                isinstance(x, str) and x.strip() for x in block[key])):
             out.append(f"{where}'s boundary block has a malformed {key}.")
+    # What was tested and what was not are never empty: every check and the result state both.
+    for key in ("tested", "not_tested"):
+        if key in block and block[key] == []:
+            out.append(f"{where}'s boundary block lists nothing under {key}, which every "
+                       "engine 7 result states.")
+    if "valid_for" in block and not (isinstance(block["valid_for"], str)
+                                     and block["valid_for"].strip()):
+        out.append(f"{where}'s boundary block has no valid_for scope sentence.")
     ovd = block.get("observed_vs_declared")
     if "observed_vs_declared" in block and not (isinstance(ovd, dict) and all(
             v in _SOURCES for v in ovd.values())):

@@ -310,7 +310,14 @@ class TestEngine6BundlesStillVerifyAndReplay:
         got = _summary(check_bundle_data(raw, **kw))
         want = dict(exp[mode])
         want.update(exp.get("corrected_by_tier_order_fix", {}))
+        # The only addition to what engine 6's checker said: limitations stating that the
+        # bundle predates engine 7's boundary block and sensed-speed disclosure (and, with the
+        # originals, what engine 7 would have added). Everything else is field for field.
+        added = [n for n in got["limitations"]
+                 if "predates the boundary block" in n or n.startswith("NOTE (engine 7")]
+        got["limitations"] = [n for n in got["limitations"] if n not in added]
         assert got == want
+        assert any("predates the boundary block" in n for n in added)
 
     @pytest.mark.parametrize("case", ENGINE6)
     def test_the_engine_6_rules_are_reproduced_not_the_newest(self, case):
@@ -702,3 +709,73 @@ class TestKnownReviewPoints:
         assert b.human_travel_mm == 560.0       # Ts was not scaled; 0.1 + 0.375 s would be 760
         assert _ssm(_run(doc, "between_the_two_models")).outcome.value == "verified"
         assert _ssm(_run(doc, "at_engine_limit")).outcome.value == "verified"
+
+
+# -- review follow-up: an older engine's bundle cannot hide what engine 7 would have said ------
+
+def _engine6_sensed_zero():
+    """A bundle sealed under engine 6 for a run that PASSES only because a sensed 0.0 replaced
+    the 1600 mm/s default. Engine 6 says nothing about the substitution."""
+    env, tr = _envelope(), _ssm_trace(1200.0, 0.0)
+    r6 = verify(env, tr, engine_version="6")
+    raw = json.loads(json.dumps(build_bundle(env, tr, actor=_ACTOR, result=r6).to_dict()))
+    assert raw["evidence"]["body"]["engine_version"] == "6"
+    return raw, env, tr
+
+
+class TestAnOlderEnginesBundleIsNotAWayAroundTheDisclosure:
+    def test_the_downgraded_bundle_still_reproduces_with_the_same_verdict_and_tier(self):
+        raw, env, tr = _engine6_sensed_zero()
+        c = check_bundle_data(raw, envelope=env, trace=tr)
+        assert c.ok and c.level == "reproduced" and c.believed_tier == "community"
+
+    def test_it_says_it_predates_the_boundary_block_and_the_sensed_speed_disclosure(self):
+        raw, env, tr = _engine6_sensed_zero()
+        for kw in ({}, {"envelope": env, "trace": tr}):
+            c = check_bundle_data(raw, **kw)
+            assert any("engine '6'" in n and "predates" in n and "boundary" in n
+                       and "sensed" in n for n in c.limitations), (kw, c.limitations)
+
+    def test_with_the_originals_it_also_surfaces_what_engine_7_would_have_said(self):
+        raw, env, tr = _engine6_sensed_zero()
+        c = check_bundle_data(raw, envelope=env, trace=tr)
+        assert any("the closing speed the trace itself reports" in n
+                   and "lowest reported value was 0 mm/s" in n for n in c.limitations)
+        assert not any("lowest reported value" in n
+                       for n in check_bundle_data(raw).limitations)
+
+    def test_a_current_engine_bundle_has_no_such_limitation(self):
+        raw, env, tr = _sealed()
+        c = check_bundle_data(raw, envelope=env, trace=tr)
+        assert not any("predates" in n for n in c.limitations)
+
+
+class TestTheBoundaryShapeIsEnforcedWithoutTheOriginals:
+    def _forge(self, edit):
+        raw, _, _ = _sealed()
+        edit(raw["evidence"]["body"]["boundary"])
+        del raw["result"]
+        return check_bundle_data(reseal(raw))
+
+    @pytest.mark.parametrize("edit", [
+        lambda b: b.__setitem__("not_tested", []),
+        lambda b: b.__setitem__("tested", []),
+        lambda b: b.__setitem__("valid_for", ""),
+        lambda b: b.__setitem__("valid_for", 7),
+        lambda b: b["human_review"].__setitem__("reasons", [7]),
+        lambda b: b["human_review"].__setitem__("reasons", [""]),
+        lambda b: b["human_review"].__setitem__("reasons", ["ok", {"x": 1}]),
+    ], ids=["no-not_tested", "no-tested", "empty-valid_for", "int-valid_for",
+            "int-reason", "empty-reason", "dict-reason"])
+    def test_a_resealed_malformed_block_is_rejected(self, edit):
+        c = self._forge(edit)
+        assert not c.ok and any("boundary block" in p for p in c.problems), c.problems
+
+    def test_the_integrity_only_answer_says_the_boundary_text_is_unverified(self):
+        raw, env, tr = _sealed()
+        alone = check_bundle_data(raw)
+        assert alone.ok and alone.level == "integrity_only"
+        assert any("boundary" in n and "unverified" in n.lower() for n in alone.limitations)
+        replayed = check_bundle_data(raw, envelope=env, trace=tr)
+        assert not any("boundary" in n and "unverified" in n.lower()
+                       for n in replayed.limitations)
