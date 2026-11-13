@@ -433,3 +433,31 @@ class TestACaseSealedBeforeTheseFieldsExistedStillWorks:
         revised = advisory(title="Watchdog may not trip (revised)")
         now = assess_advisory(store, impact_of(ledger, revised), actor=BOT)
         assert now.advisory == {}
+
+
+# =====================================================================
+# F9a — the Article 14 register is not told that automation is a person
+# =====================================================================
+
+class TestTheArt14IntakeNeedsARealPersonToBeSealedAsOne:
+    def _run(self, tmp_path, who, capsys):
+        from assurance.bridge.cli import main as bridge_main
+        led = EvidenceLedger(tmp_path / "fleet.db")
+        record_manifest(led, manifest("0412", fw()))
+        adv = tmp_path / "adv.json"
+        adv.write_text(json.dumps(advisory().to_dict()))
+        code = bridge_main(["art14", str(adv), "--ledger", str(tmp_path / "fleet.db"),
+                            "--received-by", who, "--open"])
+        return code, len(EvidenceLedger(tmp_path / "fleet.db")), capsys.readouterr()
+
+    @pytest.mark.parametrize("who", ["automation", "system", "bot-7"])
+    def test_an_automation_name_is_refused_and_nothing_is_sealed(self, tmp_path, capsys, who):
+        code, size, out = self._run(tmp_path, who, capsys)
+        assert code == 2
+        assert "cannot be recorded as a person" in out.err
+        # only the manifest the test sealed itself: no art14 signal
+        assert size == 1
+
+    def test_a_named_person_is_recorded(self, tmp_path, capsys):
+        code, size, out = self._run(tmp_path, "a.integrator", capsys)
+        assert code == 0 and size > 1 and "opened" in out.out
