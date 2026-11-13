@@ -52,6 +52,7 @@ from typing import Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor, Confidence, Evidence, Origin, ValidationState
+from assurance.core.placeholders import placeholder_problem
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machinery.enrol import (
     ALREADY_ENROLLED,
@@ -228,6 +229,9 @@ def canonical_row(raw: Mapping[str, Any], row: int,
     manufacturer = _clean(raw.get("manufacturer"), "manufacturer", required=True)
     model = _clean(raw.get("model"), "model", required=True)
     serial = _clean(raw.get("serial"), "serial", required=True)
+    why = placeholder_problem("serial", serial)
+    if why:
+        raise RowRejected(f"{why}; a template value is not this machine's serial number")
     site = _clean(raw.get("site"), "site")
     owner = _clean(raw.get("owner"), "owner")
     year = _clean(raw.get("year"), "year")
@@ -262,6 +266,10 @@ def canonical_row(raw: Mapping[str, Any], row: int,
         if digest and not _HEX64.fullmatch(digest):
             raise RowRejected(f"{label} sha256: not 64 hexadecimal characters; "
                               "never repaired or guessed")
+        why = placeholder_problem(f"{label} sha256", digest)
+        if why:
+            raise RowRejected(f"{why}; a digest that was never computed is not a hash of "
+                              "this item")
         kind = _clean(entry.get("kind"), f"{label} kind") or ItemKind.FIRMWARE.value
         if kind not in {k.value for k in ItemKind}:
             raise RowRejected(f"{label} kind: not one of "

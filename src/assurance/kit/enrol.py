@@ -43,10 +43,11 @@ from typing import Any
 
 from ..collect.collector import CollectionResult, ItemOutcome, collect
 from ..collect.plan import CollectionPlan
-from ..core.actor_names import actor_grammar_problem, declared_role_problem
+from ..core.actor_names import actor_name_problem, declared_role_problem
 from ..core.errors import AssuranceError
 from ..core.evidence import Actor, Evidence, Origin, ValidationState
 from ..core.identity import format_utc, utc_now
+from ..core.placeholders import placeholder_problem, starter_values
 from ..evidence.ledger import EvidenceLedger
 from ..machinery.manifest import HashSource, ManifestSource
 from ..machinery.record import record_manifest
@@ -57,6 +58,7 @@ __all__ = [
     "describe_placeholders",
     "find_placeholders",
     "inspect_machine",
+    "starter_warnings",
     "AIRGAP_KIND",
     "KIT_RUN_KIND",
     "KitConfig",
@@ -76,17 +78,9 @@ class KitError(AssuranceError):
     """The kit cannot run, and the message says what to fix."""
 
 
-#: Values the starter files ship with. A run that reaches a report with one of
-#: these still in it has produced a document nobody can act on, addressed from
-#: nobody, about a machine made by nobody.
-_PLACEHOLDERS = frozenset({
-    "change me", "changeme", "your company gmbh", "your company",
-    "your.name@yourcompany.example", "yourcompany", "tbd", "todo", "xxx",
-})
-
-
 def _is_placeholder(value: str) -> bool:
-    return value.strip().lower() in _PLACEHOLDERS
+    """Whether *value* is a template value (the one definition, shared with SBOM and inventory)."""
+    return placeholder_problem("value", value) is not None
 
 
 def find_placeholders(config_path: str | Path) -> list[dict[str, str]]:
@@ -229,19 +223,34 @@ class KitConfig:
                 "prepared_by is empty. An unattributed record is not evidence — "
                 "the first question anybody asks of a finding is who looked."
             )
-        _problem = actor_grammar_problem(self.prepared_by) or declared_role_problem(self.role)
+        _problem = actor_name_problem(self.prepared_by) or declared_role_problem(self.role)
         if _problem:
             raise KitError(f"prepared_by / role cannot be recorded: {_problem}.")
         if not self.machines:
             raise KitError("no machines listed; there is nothing to enrol.")
         seen: set[str] = set()
+        folders: dict[Path, str] = {}
         for m in self.machines:
+            why = placeholder_problem("serial", m.serial)
+            if why:
+                raise KitError(
+                    f"machine serial {m.serial!r}: {why}. The serial is what tells this "
+                    "machine from every other one in a fleet record; type the number from "
+                    "the unit's rating plate.")
             if m.serial in seen:
                 raise KitError(
                     f"serial {m.serial} appears twice. Two machines sharing a "
                     "serial produce one record that describes neither."
                 )
             seen.add(m.serial)
+            folder = self.resolve(m.exports).resolve()
+            if folder in folders:
+                raise KitError(
+                    f"machines {folders[folder]} and {m.serial} both read the export folder "
+                    f"{m.exports!r}. They would be enrolled with identical evidence, and one "
+                    "of them is not what that folder holds. Give each machine its own folder "
+                    "of its own exports (exports/<serial>).")
+            folders[folder] = m.serial
         if self.country and (len(self.country) != 2 or not self.country.isalpha()):
             raise KitError(
                 f"country {self.country!r} is not an ISO 3166-1 alpha-2 code. It "
@@ -455,6 +464,23 @@ def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
     }
 
 
+def starter_warnings(entry: MachineEntry, config: KitConfig) -> tuple[str, ...]:
+    """Fields of this machine still holding the value ``kit init`` wrote.
+
+    Not refusals: "Plant 1", ``DE`` and 2025 can all be true. But a value nobody chose is
+    sealed into the manifest and the report as if somebody had (the country is carried into
+    Article 14 filings), so it is named, in ``check``, in the run output and in ``run.json``.
+    """
+    held = starter_values(site=config.site, country=config.country, year=entry.year,
+                          serial=entry.serial)
+    if not held:
+        return ()
+    names = ", ".join(f"{k}={v!r}" for k, v in held.items())
+    return (f"{names} -- still the value `kit init` wrote. It is sealed as this machine's "
+            "own and printed in the report. If it is correct, ignore this; if you did not "
+            "choose it, edit kit.json.",)
+
+
 def _prepare(
     entry: MachineEntry, config: KitConfig,
 ) -> tuple[CollectionPlan | None, Path, MachineResult | None]:
@@ -551,7 +577,7 @@ def _enrol_one(
 
     template_suppliers = sorted(
         {i.item_id for i in plan.items if _is_placeholder(i.supplier)})
-    warnings = tuple(result.warnings) + ((
+    warnings = starter_warnings(entry, config) + tuple(result.warnings) + ((
         f"the supplier of {', '.join(template_suppliers)} is still a template value in "
         f"{plan_path.name}; an advisory matches on the supplier, so it will not match "
         "these items until it is filled in.",) if template_suppliers else ())

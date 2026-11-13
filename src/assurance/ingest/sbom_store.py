@@ -35,6 +35,7 @@ from assurance.core.evidence import (
     ValidationState,
 )
 from assurance.core.identity import utc_now
+from assurance.core.placeholders import placeholder_problem
 from assurance.core.text import invisible_characters
 from assurance.evidence.ledger import EvidenceLedger, LedgerEntry
 from assurance.ingest.common import IngestError, SourceRecord
@@ -65,9 +66,6 @@ __all__ = [
 DRAFT_KIND = "ingest.sbom_draft"
 REVIEW_KIND = "ingest.sbom_review"
 REVIEW_SCHEMA = "assurance.ingest.sbom_review/1"
-_PLACEHOLDER_SERIALS = frozenset({
-    "", "unknown", "n/a", "na", "tbd", "none", "null", "nil", "-", "--", "?", "todo", "xxx",
-    "unspecified", "not supplied", "not available", "serial", "serial number"})
 _REVIEW_KEYS = frozenset({"draft_id", "decision", "reason", "identity", "functions",
                           "components", "instructions"})
 _IDENTITY_KEYS = ("manufacturer", "model", "serial", "site", "owner", "year", "country")
@@ -337,8 +335,9 @@ def _identity(request: Mapping[str, Any], draft: dict[str, Any], bad: list[str]
                                                                        "serial"))
              for k in _IDENTITY_KEYS}
     serial = ident["serial"]
-    if serial.strip().casefold() in _PLACEHOLDER_SERIALS and "identity.serial is required" not in bad:
-        bad.append(f"identity.serial {serial!r} is a placeholder, not a serial number")
+    why = placeholder_problem("identity.serial", serial)
+    if why and "identity.serial is required" not in bad:
+        bad.append(f"identity.serial {serial!r}: {why}; type the number on the unit's rating plate")
     bom = draft["bom"]
     own = {bom.get("serial_number_as_supplied")}
     subject = bom.get("subject_component") or {}

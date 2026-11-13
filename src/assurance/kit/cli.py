@@ -40,6 +40,7 @@ from assurance.kit.enrol import (
     inspect_machine,
     run_kit,
     starter_config,
+    starter_warnings,
 )
 
 __all__ = ["build_parser", "main"]
@@ -293,6 +294,7 @@ def _check_machine(entry: Any, config: KitConfig, placeholders: list[dict[str, s
                             f"({', '.join(o.item_id for o in unreadable)})")
     row["problem"] = "; ".join(filter(None, problems))
     row["ready"] = not row["problem"]
+    row["notes"] = list(starter_warnings(entry, config))
     return row, outcomes, specs
 
 
@@ -363,6 +365,8 @@ def _cmd_check(args: argparse.Namespace) -> int:
             else:
                 for line in _outcome_lines(o):
                     print(line)
+        for note in row["notes"]:
+            print(f"      ? {note}")
         if row["problem"]:
             print(f"      ! {row['problem']}")
 

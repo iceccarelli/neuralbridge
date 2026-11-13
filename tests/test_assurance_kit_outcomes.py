@@ -33,7 +33,7 @@ def make_kit(root: Path, serials=("AR7-1001",), **over) -> Path:
                      operator="m.keller", seq=f"004{n}", radius=1500 + n)
     body = {
         "kit_id": "outcomes-kit", "organisation": "Acme Integration GmbH",
-        "site": "Hamburg Works", "country": "DE", "prepared_by": "Jane Doe",
+        "site": "Hamburg Works", "country": "IT", "prepared_by": "Jane Doe",
         "role": "integrator",
         "machines": [{"serial": s, "plan": "plans/cell.json", "exports": f"exports/{s}",
                       "year": "2024"} for s in serials],
@@ -373,3 +373,63 @@ class TestPerItemReasonsAreNotThrownAway:
         assert len(params["digest"]) == 64 and params["version"] == "3.8.2"
         html = (out / "report.html").read_text()
         assert "ITM-PARAMS read from robot-params.json" in html
+
+
+# =====================================================================
+# Template data is never sealed as real (check AND run say so first).
+# =====================================================================
+class TestTemplateDataInTheKit:
+    def _edit(self, tmp_path, mutate):
+        kit = make_kit(tmp_path)
+        body = json.loads(kit.read_text())
+        mutate(body)
+        kit.write_text(json.dumps(body))
+        return kit
+
+    @pytest.mark.parametrize("cmd", ["check", "run"])
+    @pytest.mark.parametrize("serial", ["TBD", "000000", "xxx", "CHANGE ME"])
+    def test_a_placeholder_serial_is_refused_with_exit_2(self, tmp_path, capsys, cmd, serial):
+        kit = self._edit(tmp_path, lambda b: b["machines"][0].update(serial=serial))
+        extra = ["--out", str(tmp_path / "out")] if cmd == "run" else []
+        assert run_cli(cmd, str(kit), *extra) == 2
+        assert "serial" in capsys.readouterr().err
+        assert not (tmp_path / "out").exists()
+
+    @pytest.mark.parametrize("cmd", ["check", "run"])
+    def test_several_serials_on_one_export_folder_are_refused_with_the_remedy(
+            self, tmp_path, capsys, cmd):
+        def share(body):
+            body["machines"] = [dict(body["machines"][0], serial=f"AR7-100{n}")
+                                for n in range(1, 4)]
+        kit = self._edit(tmp_path, share)
+        extra = ["--out", str(tmp_path / "out")] if cmd == "run" else []
+        assert run_cli(cmd, str(kit), *extra) == 2
+        err = capsys.readouterr().err
+        assert "both read the export folder" in err and "its own folder" in err
+        assert not (tmp_path / "out").exists()
+
+    def test_prepared_by_an_agent_is_not_sealed_as_a_person(self, tmp_path, capsys):
+        for who in ("AI agent", "bot"):
+            kit = self._edit(tmp_path, lambda b, who=who: b.update(prepared_by=who))
+            assert run_cli("run", str(kit), "--out", str(tmp_path / "out")) == 2
+            assert "prepared_by" in capsys.readouterr().err
+            assert not (tmp_path / "out").exists()
+
+    def test_starter_values_that_survive_are_named_in_check_and_run(self, tmp_path, capsys):
+        def starter(body):
+            body.update(site="Plant 1", country="DE")
+            body["machines"][0].update(year="2025")
+        kit = self._edit(tmp_path, starter)
+        # Not refused (a German plant can be "Plant 1"): named, once, where the integrator looks
+        assert run_cli("check", str(kit)) == 0
+        out = capsys.readouterr().out
+        assert "still the value `kit init` wrote" in out and "country='DE'" in out
+        out_dir = tmp_path / "out"
+        assert run_cli("run", str(kit), "--out", str(out_dir)) == 0
+        warnings = json.loads((out_dir / "run.json").read_text())["machines"][0]["warnings"]
+        assert any("site='Plant 1'" in w and "year='2025'" in w for w in warnings)
+
+    def test_a_kit_with_chosen_values_has_no_starter_note(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        run_cli("check", str(kit))
+        assert "kit init` wrote" not in capsys.readouterr().out
