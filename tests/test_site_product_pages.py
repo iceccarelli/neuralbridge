@@ -1,6 +1,6 @@
 """The /product/<slug> pages say what the code does, and each of their claims is held by a test.
 
-The eleven pages are written once, as data, in ``app/lib/productPages.ts`` and rendered by
+The twelve pages are written once, as data, in ``app/lib/productPages.ts`` and rendered by
 ``app/product/[slug]/page.tsx``. This module reads that data under Node (type stripping) and checks the
 words against the capability contract (``public/capabilities.json``), the OpenAPI schema and the engine
 guides under ``deploy/assurance/``; a second layer builds the site and checks what a visitor and a crawler
@@ -37,6 +37,7 @@ SLUGS = [
     "supplier-advisory-fleet-impact",
     "cra-article-14",
     "machinery-regulation-evidence",
+    "machine-passport",
     "machine-safety-verification",
     "evidence-attestation",
     "offline-assurance-kit",
@@ -207,7 +208,7 @@ def check_banned(pages: list[dict]) -> list[str]:
 # 1. the data
 # ---------------------------------------------------------------------------------------------
 class TestTheEveryPageExists:
-    def test_the_eleven_pages_are_exactly_these_slugs_in_order(self, pages):
+    def test_the_twelve_pages_are_exactly_these_slugs_in_order(self, pages):
         assert [p["slug"] for p in pages] == SLUGS
 
     def test_base_path_and_site_url(self, data):
@@ -385,6 +386,106 @@ class TestTheWords:
         text = " ".join(_strings(next(p for p in pages if p["slug"] == "supplier-advisory-fleet-impact"))).lower()
         assert "describes a product" in text and "not what" in text
         assert "empty fleet" in text and "no machine was assessed" in text and "inspect-only" in text
+
+
+def _example_run(example: dict, tmp: Path) -> list[list[str]]:
+    """Run the example's commands in order (in ``tmp``) and return each one's output lines."""
+    import shlex
+    import sys
+
+    outputs: list[list[str]] = []
+    for step in example["steps"]:
+        command = step["command"].replace("examples/workflow/run.py", str(ROOT / "examples" / "workflow" / "run.py"))
+        command = command.replace("python ", shlex.quote(sys.executable) + " ", 1) if command.startswith("python ") else command
+        done = subprocess.run(  # noqa: S603 - the commands are constants in app/lib/productPages.ts
+            ["bash", "-c", command], cwd=tmp, capture_output=True, text=True, check=False, timeout=300,  # noqa: S607
+            env={**os.environ, "PYTHONHASHSEED": "0"},
+        )
+        outputs.append([ln.rstrip() for ln in (done.stdout + done.stderr).splitlines()])
+        if command.startswith(shlex.quote(sys.executable) + " " + str(ROOT / "examples")):
+            tmp = tmp / "demo"  # the first command keeps its files in demo/; the rest run inside it
+    return outputs
+
+
+def check_example(example: dict, actual: list[list[str]]) -> list[str]:
+    """Every line shown is a line the command printed, in order. A line that is only an ellipsis marks lines
+    left out; an ellipsis inside a line stands for text that changes on every run."""
+    problems = []
+    for step, lines in zip(example["steps"], actual, strict=True):
+        at = 0
+        for shown in (ln.rstrip() for ln in step["output"].splitlines()):
+            if shown.strip() == "\u2026":
+                continue
+            pattern = re.compile("^" + ".*".join(re.escape(p) for p in shown.split("\u2026")) + "$")
+            hit = next((i for i in range(at, len(lines)) if pattern.match(lines[i])), None)
+            if hit is None:
+                problems.append(f"{step['command']}: {shown!r} is not in the output, in order")
+            else:
+                at = hit + 1
+    return problems
+
+
+@pytest.fixture(scope="module")
+def run(pages, tmp_path_factory):
+    example = next(p for p in pages if p["slug"] == "machine-passport")["example"]
+    return example, _example_run(example, tmp_path_factory.mktemp("passport-example"))
+
+
+class TestThePassportExampleIsRealOutput:
+    def test_every_line_shown_is_a_line_the_real_commands_print(self, run):
+        example, actual = run
+        assert check_example(example, actual) == []
+        assert any("REJECTED" in "".join(lines) for lines in actual) and any("superseded" in "".join(lines) for lines in actual)
+
+    def test_the_check_catches_an_invented_verdict_or_a_dropped_ellipsis_line(self, run):
+        example, actual = run
+        broken = copy.deepcopy(example)
+        broken["steps"][8]["output"] = broken["steps"][8]["output"].replace("REJECTED", "OK")
+        assert check_example(broken, actual)
+        broken = copy.deepcopy(example)
+        broken["steps"][1]["output"] = broken["steps"][1]["output"].replace("COVERED", "COVERED_AT_COMMUNITY")
+        assert check_example(broken, actual)
+
+    def test_it_is_labelled_synthetic_and_names_only_real_commands(self, pages):
+        example = next(p for p in pages if p["slug"] == "machine-passport")["example"]
+        assert "synthetic" in (example["title"] + example["note"]).lower() and "invented" in example["note"]
+        for step in example["steps"]:
+            if step["command"].startswith("python -m assurance "):
+                assert _cli_prefix_exists(step["command"].split()[3:]), step["command"]
+
+
+class TestThePassportPageSaysWhatTheCodeDoes:
+    def test_the_verdicts_and_schemas_are_the_ones_record_py_defines(self, pages):
+        from assurance.machinery import record
+
+        text = " ".join(_strings(next(p for p in pages if p["slug"] == "machine-passport"))).replace("`", "")
+        for verdict in ("covered", "covered_at_community", "gaps", "no_functions_declared", *record._NEWER_VERDICTS):
+            assert verdict in text, verdict
+        assert record.PASSPORT_SCHEMA.endswith("/1") and record.PASSPORT_SCHEMA_V2.endswith("/2")
+        assert set(record._NEWER_VERDICTS) == {"covered_at_community", "ledger_chain_not_verified"}
+        assert "/1" in text and "/2" in text
+
+    def test_the_exit_codes_stated_are_the_cli_s(self, pages):
+        from assurance.machinery.cli import _exit_for
+
+        body = next(p for p in pages if p["slug"] == "machine-passport")["workflow"][1]["body"]
+        assert (_exit_for("covered"), _exit_for("covered_at_community"), _exit_for("gaps"),
+                _exit_for("ledger_chain_not_verified")) == (0, 3, 1, 2)
+        for phrase in ("and exits 0", "it exits 3", "exit 1", "it exits 2"):
+            assert phrase in body, phrase
+
+    def test_it_says_what_a_passport_is_not(self, pages):
+        page = next(p for p in pages if p["slug"] == "machine-passport")
+        text = " ".join(page["notEstablished"]).lower()
+        for needle in ("certificate", "legal judgement", "seal is a signature", "behaviour was shown on the machine",
+                       "manifest is complete", "unrecorded change"):
+            assert needle in text, needle
+
+    def test_three_other_pages_and_the_insurer_view_link_to_it(self, pages):
+        linking = {p["slug"] for p in pages if "machine-passport" in p["related"]}
+        assert {"machinery-regulation-evidence", "continuous-machine-assurance", "evidence-attestation",
+                "industrial-autonomous-assurance"} <= linking
+        assert "productHref('machine-passport')" in _text("app/lib/solutions.ts")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -729,7 +830,7 @@ def test_llms_txt_lists_every_product_page():
 
     root = Path(__file__).resolve().parent.parent
     slugs = re.findall(r"slug: '([a-z0-9-]+)'", (root / "app/lib/productPages.ts").read_text("utf-8"))
-    assert len(slugs) == 11, slugs
+    assert len(slugs) == 12, slugs
     llms = (root / "public/llms.txt").read_text("utf-8")
     missing = [s for s in slugs if f"https://neuralbridge.io/product/{s}" not in llms]
     assert missing == [], f"public/llms.txt does not list: {missing} (run scripts/export_site_static.py)"

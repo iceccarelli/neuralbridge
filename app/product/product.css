@@ -219,6 +219,29 @@
   margin-top: 0.5rem;
 }
 
+/* A worked example: real commands and output on synthetic data (ProductPage.example). The panels wrap
+   instead of scrolling sideways, so no line of output is hidden off the edge of a phone screen. */
+.product-example {
+  margin: 1.25rem 0 0;
+}
+
+.product-example figcaption {
+  margin: 0 0 0.75rem;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.product-example figcaption strong {
+  color: var(--ink);
+}
+
+.product-example .code-panel {
+  margin: 0 0 0.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
 @media (max-width: 640px) {
   .product-steps > li {
     padding-left: 2.3rem;

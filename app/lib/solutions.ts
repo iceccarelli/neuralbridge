@@ -143,6 +143,7 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Completeness against a signed anchor', body: 'A ledger export checked with the signer’s public key and an attestation log can show that nothing up to the anchored head was removed (records after it are covered by no signature); without an anchor the check reports completeness as not checked, never as a pass.', href: `/docs/assurance/attest` },
       { title: 'What a signature proves and does not', body: 'Counter-signed heads, anchors and the key ceremony, which is prepared and not performed.', href: productHref('evidence-attestation') },
       { title: 'The evidence ledger', body: 'What a hash chain detects, what it cannot, and how anchors and completeness reporting address it.', href: productHref('machine-evidence-ledger') },
+      { title: 'What a machine passport is and is not', body: 'A sealed record of one machine’s position at one moment, free to re-check with no account; checked against the ledger it came from, it can be shown to have been overtaken.', href: productHref('machine-passport') },
     ],
     primaryCta: { label: 'Verify a bundle', href: '/#products' },
     secondaryCta: { label: 'Read how attestation works', href: `/docs/assurance/attest` },
