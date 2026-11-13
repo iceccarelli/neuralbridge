@@ -923,6 +923,11 @@ def main(argv: list[str] | None = None) -> int:
             names = backup(Path(argv[1]), out, ai_store=ai_store)
             digest = _sha256(out / MANIFEST_NAME)
             degraded = bool(json.loads((out / MANIFEST_NAME).read_text()).get("degraded"))
+            if sys.stdout is None:
+                # `>&-`: the digest is printed once and nowhere else; say so rather than lose it.
+                print(f"backup taken at {out} but stdout is closed, so its manifest digest was "
+                      f"not printed. manifest_sha256: {digest}", file=sys.stderr)
+                return 2
             print(json.dumps({"backed_up": names, "manifest": MANIFEST_NAME,
                               "degraded": degraded,
                               "manifest_sha256": digest,
@@ -940,6 +945,10 @@ def main(argv: list[str] | None = None) -> int:
             live_dir = Path(rest[k + 1])
             del rest[k:k + 2]
         if len(rest) == 2 and rest[0] == "verify":
+            if not Path(rest[1]).is_dir():
+                # Nothing was looked at: "could not run", not a failed check (1).
+                print(f"could not run: {rest[1]} is not a directory", file=sys.stderr)
+                return 2
             result = verify(Path(rest[1]), allow_growth=live, live_dir=live_dir)
             print(json.dumps(result, indent=2))
             return {"ok": 0, "failed": 1}.get(str(result["status"]), 3)

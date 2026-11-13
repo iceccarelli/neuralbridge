@@ -334,7 +334,10 @@ class WatchRun:
                          + ", ".join(self.stale_observations))
             lines.append("  A watch that stopped running looks exactly like a fleet "
                          "that stopped changing.")
-        return "\n".join(lines)
+        # Every line is built from file-derived strings (watch id, serials, details): an ESC or
+        # OSC sequence in one of them must reach the terminal as visible text, and a newline in
+        # one must not start a line of its own.
+        return "\n".join(neutralise(line) for line in lines)
 
 
 def _seal_observation(

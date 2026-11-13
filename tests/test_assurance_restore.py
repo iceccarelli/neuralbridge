@@ -102,6 +102,6 @@ def test_cli_exit_codes(data, tmp_path):
     root, _ = data
     assert restore_check.main(["backup", str(root), str(tmp_path / "bk")]) == 0
     assert restore_check.main(["verify", str(tmp_path / "bk")]) == 0
-    assert restore_check.main(["verify", str(tmp_path / "nowhere")]) == 1
+    assert restore_check.main(["verify", str(tmp_path / "nowhere")]) == 2   # nothing was looked at: could not run (2), not a failed check (1)
     assert restore_check.main(["backup", str(tmp_path / "nowhere"), str(tmp_path / "x")]) == 2
     assert restore_check.main([]) == 2

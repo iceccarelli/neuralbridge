@@ -283,3 +283,80 @@ def test_a_file_without_read_permission_is_could_not_observe_not_removed(plant):
     assert "DEGRADED" in r.stdout and "ITM-PARAMS" in r.stdout and "could not be read" in r.stdout
     assert "ITM-PARAMS removed" not in r.stdout
     assert _cases(plant) == []
+
+
+# ---------------------------------------------------------------------------------------------
+# `watch status` is not a second way to say QUIET over a ledger that does not verify
+# ---------------------------------------------------------------------------------------------
+def _status(root: Path, *flags: str) -> list[str]:
+    return ["status", str(root / "watch.json"), "--ledger", str(root / "ev.db"), *flags]
+
+
+@pytest.mark.parametrize("flags", [(), ("--json",)], ids=["text", "json"])
+def test_status_over_a_ledger_that_does_not_verify_is_exit_2_never_quiet(plant, capsys, flags):
+    _baseline(plant, capsys)
+    assert main(_status(plant, *flags)) == 0                 # control: untampered reads QUIET
+    assert "QUIET" in capsys.readouterr().out.upper()
+    _tamper(plant, "machinery.safety_manifest")
+    assert EvidenceLedger.open_existing(plant / "ev.db").verify_chain()[0] is False
+
+    code = main(_status(plant, *flags))
+    out = capsys.readouterr()
+
+    assert code == 2, out.out + out.err
+    assert "QUIET" not in out.out.upper()
+    assert "does not verify" in out.err and "ev.db" in out.err
+
+
+# ---------------------------------------------------------------------------------------------
+# strings from the config and the exports reach a terminal as visible text
+# ---------------------------------------------------------------------------------------------
+def test_escape_sequences_in_config_strings_never_reach_the_terminal(plant, capsys):
+    cfg = json.loads((plant / "watch.json").read_text())
+    cfg["watch_id"] = "\x1b[2JWID"
+    cfg["targets"][0]["serial"] = "\x1b]0;pwn\x07S"
+    (plant / "watch.json").write_text(json.dumps(cfg))
+    for argv in (_watch(plant), _watch(plant), _status(plant)):
+        main(argv)
+        out = capsys.readouterr()
+        for stream in (out.out, out.err):
+            assert "\x1b" not in stream and "\x07" not in stream, stream
+    assert "WID" in out.out                       # still readable, just inert
+
+
+# ---------------------------------------------------------------------------------------------
+# a failed --out does not swallow the findings
+# ---------------------------------------------------------------------------------------------
+def test_a_failed_out_still_prints_the_findings_and_exits_2(plant, capsys):
+    _baseline(plant, capsys)
+    _drift(plant)
+    code = main(_watch(plant, "--out", str(plant / "no" / "such" / "dir" / "o.json")))
+    out = capsys.readouterr()
+    assert code == 2
+    assert "DRIFT" in out.out and "CELL-0412" in out.out          # the findings were printed
+    assert "--out was not written" in out.err
+    assert EvidenceLedger.open_existing(plant / "ev.db").verify_chain()[0] is True   # sealed
+
+
+# ---------------------------------------------------------------------------------------------
+# restore_check: could-not-run is 2
+# ---------------------------------------------------------------------------------------------
+def test_restore_check_verify_of_a_missing_directory_is_exit_2(tmp_path, capsys):
+    from assurance.evidence import restore_check
+
+    assert restore_check.main(["verify", str(tmp_path / "nope")]) == 2
+    out = capsys.readouterr()
+    assert "could not run" in out.err and out.out == ""
+
+
+def test_restore_check_backup_with_stdout_closed_does_not_lose_the_digest(
+        tmp_path, capsys, monkeypatch):
+    from assurance.evidence import restore_check
+
+    (tmp_path / "data").mkdir()
+    EvidenceLedger(tmp_path / "data" / "art14-register.db")
+    monkeypatch.setattr(sys, "stdout", None)
+    code = restore_check.main(["backup", str(tmp_path / "data"), str(tmp_path / "bk")])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "manifest_sha256: " in err and (tmp_path / "bk" / "backup-manifest.json").is_file()
