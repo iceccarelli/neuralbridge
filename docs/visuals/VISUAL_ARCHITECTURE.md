@@ -260,3 +260,551 @@ NeuralBridge produces continuous cryptographically verifiable evidence for EU CR
 ```
 
 **AEO Summary:** NeuralBridge sits on a self-hostable FastAPI service (79 OpenAPI 3 routes) with hash-chained ledger, MCP Gateway enforcing Discover-Read-Plan-Write-Human-Approval, and browser surfaces at neuralbridge.io, while noting the standalone dashboard foundation.
+
+
+---
+
+## Visual Architecture — Applications Page
+
+Target: [`/applications`](https://neuralbridge.io/applications)
+
+All images live at `public/images/visuals/<slug>.png` (master) and `public/images/og/<slug>-og.png` (1200×630).
+
+## applications-hero-five-real-routes
+
+![ Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks. ](../../public/images/visuals/applications-hero-five-real-routes.png)
+
+**Route:** `/applications`
+**Alt:** Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks.
+**Caption:** Applications overview: every card names the exact route it calls and the plan that gates it.
+**CLI/API:** `POST /v1/machine/separation · POST /v1/fleet/advisory · GET /v1/register`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/applications-hero-five-real-routes.webp" type="image/webp" />
+  <img src="/images/visuals/applications-hero-five-real-routes.png" width="1600" height="900" alt="Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks." />
+</picture>
+```
+
+## cobots-iso-ts-15066-separation-envelope
+
+![ ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge. ](../../public/images/visuals/cobots-iso-ts-15066-separation-envelope.png)
+
+**Route:** `/applications`
+**Alt:** ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge.
+**Caption:** Free separation calculator; recorded-run verification is gated to Cell.
+**CLI/API:** `POST /v1/machine/separation`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/cobots-iso-ts-15066-separation-envelope.webp" type="image/webp" />
+  <img src="/images/visuals/cobots-iso-ts-15066-separation-envelope.png" width="1600" height="900" alt="ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge." />
+</picture>
+```
+
+## cobots-free-calc-vs-gated-verify
+
+![ Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge. ](../../public/images/visuals/cobots-free-calc-vs-gated-verify.png)
+
+**Route:** `/applications`
+**Alt:** Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge.
+**Caption:** Calculator is free; verifying a recorded run requires the Cell plan.
+**CLI/API:** `POST /v1/machine/verify`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/cobots-free-calc-vs-gated-verify.webp" type="image/webp" />
+  <img src="/images/visuals/cobots-free-calc-vs-gated-verify.png" width="1600" height="900" alt="Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge." />
+</picture>
+```
+
+## packaging-staleness-join-signoff-vs-change
+
+![ Staleness join showing a prior sign-off dated against a later change on a packaging line. ](../../public/images/visuals/packaging-staleness-join-signoff-vs-change.png)
+
+**Route:** `/applications`
+**Alt:** Staleness join showing a prior sign-off dated against a later change on a packaging line.
+**Caption:** What safety software is on the line and who touched it, dated against the change.
+**CLI/API:** `POST /v1/machinery/coverage`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/packaging-staleness-join-signoff-vs-change.webp" type="image/webp" />
+  <img src="/images/visuals/packaging-staleness-join-signoff-vs-change.png" width="1600" height="900" alt="Staleness join showing a prior sign-off dated against a later change on a packaging line." />
+</picture>
+```
+
+## packaging-safety-software-manifest-coverage
+
+![ Safety software manifest and coverage status for a packaging and palletising line. ](../../public/images/visuals/packaging-safety-software-manifest-coverage.png)
+
+**Route:** `/applications`
+**Alt:** Safety software manifest and coverage status for a packaging and palletising line.
+**Caption:** Manifest lists safety-relevant software items; coverage states per function.
+**CLI/API:** `POST /v1/machinery/manifest`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/packaging-safety-software-manifest-coverage.webp" type="image/webp" />
+  <img src="/images/visuals/packaging-safety-software-manifest-coverage.png" width="1600" height="900" alt="Safety software manifest and coverage status for a packaging and palletising line." />
+</picture>
+```
+
+## fleet-advisory-hash-matched-fanout
+
+![ Supplier advisory fanned out across enrolled machine serials matched by exact hash. ](../../public/images/visuals/fleet-advisory-hash-matched-fanout.png)
+
+**Route:** `/applications`
+**Alt:** Supplier advisory fanned out across enrolled machine serials matched by exact hash.
+**Caption:** One advisory matched by SHA-256, never by version-range arithmetic.
+**CLI/API:** `POST /v1/fleet/advisory`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/fleet-advisory-hash-matched-fanout.webp" type="image/webp" />
+  <img src="/images/visuals/fleet-advisory-hash-matched-fanout.png" width="1600" height="900" alt="Supplier advisory fanned out across enrolled machine serials matched by exact hash." />
+</picture>
+```
+
+## fleet-exact-hash-never-version-range
+
+![ Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected. ](../../public/images/visuals/fleet-exact-hash-never-version-range.png)
+
+**Route:** `/applications`
+**Alt:** Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected.
+**Caption:** Deterministic by hash; version ranges are never flattened into a boolean.
+**CLI/API:** `POST /v1/fleet/advisory`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/fleet-exact-hash-never-version-range.webp" type="image/webp" />
+  <img src="/images/visuals/fleet-exact-hash-never-version-range.png" width="1600" height="900" alt="Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected." />
+</picture>
+```
+
+## oem-article14-register-deadline-clocks
+
+![ OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger. ](../../public/images/visuals/oem-article14-register-deadline-clocks.png)
+
+**Route:** `/applications`
+**Alt:** OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger.
+**Caption:** Both clocks computed correctly; hash-chained ledger with verifiable export.
+**CLI/API:** `GET /v1/register`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/oem-article14-register-deadline-clocks.webp" type="image/webp" />
+  <img src="/images/visuals/oem-article14-register-deadline-clocks.png" width="1600" height="900" alt="OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger." />
+</picture>
+```
+
+## oem-register-verifiable-export-unmetered
+
+![ Verifiable export of the Article 14 register with cases marked as not metered. ](../../public/images/visuals/oem-register-verifiable-export-unmetered.png)
+
+**Route:** `/applications`
+**Alt:** Verifiable export of the Article 14 register with cases marked as not metered.
+**Caption:** Cases are not metered — no per-case cap or charge.
+**CLI/API:** `GET /v1/cases`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/oem-register-verifiable-export-unmetered.webp" type="image/webp" />
+  <img src="/images/visuals/oem-register-verifiable-export-unmetered.png" width="1600" height="900" alt="Verifiable export of the Article 14 register with cases marked as not metered." />
+</picture>
+```
+
+## insurer-unmetered-evidence-check
+
+![ unmetered evidence verification path for insurers and auditors; no account required. ](../../public/images/visuals/insurer-unmetered-evidence-check.png)
+
+**Route:** `/applications`
+**Alt:** unmetered evidence verification path for insurers and auditors; no account required.
+**Caption:** The buyer or auditor is never the paying customer.
+**CLI/API:** `POST /v1/machine/bundle/check`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/insurer-unmetered-evidence-check.webp" type="image/webp" />
+  <img src="/images/visuals/insurer-unmetered-evidence-check.png" width="1600" height="900" alt="unmetered evidence verification path for insurers and auditors; no account required." />
+</picture>
+```
+
+## insurer-declaration-bundle-attestation-verify
+
+![ Three free verification paths: Declaration check, bundle re-verification and attestation verify. ](../../public/images/visuals/insurer-declaration-bundle-attestation-verify.png)
+
+**Route:** `/applications`
+**Alt:** Three free verification paths: Declaration check, bundle re-verification and attestation verify.
+**Caption:** What can be established from the file alone, and what cannot.
+**CLI/API:** `POST /v1/ledger/attest/verify`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/insurer-declaration-bundle-attestation-verify.webp" type="image/webp" />
+  <img src="/images/visuals/insurer-declaration-bundle-attestation-verify.png" width="1600" height="900" alt="Three free verification paths: Declaration check, bundle re-verification and attestation verify." />
+</picture>
+```
+
+## applications-route-to-plan-gating-matrix
+
+![ Matrix mapping the five applications to their exact /v1 routes and the plan that gates each. ](../../public/images/visuals/applications-route-to-plan-gating-matrix.png)
+
+**Route:** `/applications`
+**Alt:** Matrix mapping the five applications to their exact /v1 routes and the plan that gates each.
+**Caption:** Every row is gated in code; if it is not gated, it is free.
+**CLI/API:** `openapi.json`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/applications-route-to-plan-gating-matrix.webp" type="image/webp" />
+  <img src="/images/visuals/applications-route-to-plan-gating-matrix.png" width="1600" height="900" alt="Matrix mapping the five applications to their exact /v1 routes and the plan that gates each." />
+</picture>
+```
+
+## applications-cli-local-to-optional-hosted
+
+![ Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine. ](../../public/images/visuals/applications-cli-local-to-optional-hosted.png)
+
+**Route:** `/applications`
+**Alt:** Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine.
+**Caption:** Same code the hosted API calls, runnable on your own machine first.
+**CLI/API:** `python -m assurance`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/applications-cli-local-to-optional-hosted.webp" type="image/webp" />
+  <img src="/images/visuals/applications-cli-local-to-optional-hosted.png" width="1600" height="900" alt="Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine." />
+</picture>
+```
+
+## applications-change-assurance-case-lifecycle
+
+![ Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer. ](../../public/images/visuals/applications-change-assurance-case-lifecycle.png)
+
+**Route:** `/applications`
+**Alt:** Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer.
+**Caption:** A named person owns the case; the product never decides.
+**CLI/API:** `assurance change assess-drift`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/applications-change-assurance-case-lifecycle.webp" type="image/webp" />
+  <img src="/images/visuals/applications-change-assurance-case-lifecycle.png" width="1600" height="900" alt="Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer." />
+</picture>
+```
+
+## applications-workspace-investigate-one-place
+
+![ Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history. ](../../public/images/visuals/applications-workspace-investigate-one-place.png)
+
+**Route:** `/applications`
+**Alt:** Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history.
+**Caption:** Configuration, evidence and intervention history in one place.
+**CLI/API:** `GET /v1/investigate`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/applications-workspace-investigate-one-place.webp" type="image/webp" />
+  <img src="/images/visuals/applications-workspace-investigate-one-place.png" width="1600" height="900" alt="Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history." />
+</picture>
+```
+
+
+---
+
+## Visual Architecture — Product Lifecycle
+
+Target: [`/product/industrial-autonomous-assurance`](https://neuralbridge.io/product/industrial-autonomous-assurance)
+
+## lifecycle-hero-end-to-end-assurance
+
+![End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head.](../../public/images/visuals/lifecycle-hero-end-to-end-assurance.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head.
+**Caption:** Evidence that notices when the machine changed.
+**CLI/API:** `POST /v1/machinery/enrol · assurance machinery passport · assurance attest sign`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-hero-end-to-end-assurance.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-hero-end-to-end-assurance.png" width="1600" height="900" alt="End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head." />
+</picture>
+```
+
+## lifecycle-enrolment-named-person-seals-manifest
+
+![A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash.](../../public/images/visuals/lifecycle-enrolment-named-person-seals-manifest.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash.
+**Caption:** Enrolment seals the baseline; the receipt carries the configuration hash.
+**CLI/API:** `POST /v1/machinery/enrol`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-enrolment-named-person-seals-manifest.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-enrolment-named-person-seals-manifest.png" width="1600" height="900" alt="A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash." />
+</picture>
+```
+
+## lifecycle-manifest-anatomy-hashes-sources
+
+![Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared).](../../public/images/visuals/lifecycle-manifest-anatomy-hashes-sources.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared).
+**Caption:** Each item is marked as read from the machine, supplied by the vendor, or declared.
+**CLI/API:** `POST /v1/machinery/manifest`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-manifest-anatomy-hashes-sources.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-manifest-anatomy-hashes-sources.png" width="1600" height="900" alt="Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared)." />
+</picture>
+```
+
+## lifecycle-hash-chained-ledger-append
+
+![Evidence records appended to a per-account hash-chained ledger that can be verified.](../../public/images/visuals/lifecycle-hash-chained-ledger-append.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Evidence records appended to a per-account hash-chained ledger that can be verified.
+**Caption:** The ledger catches mid-chain edits; only an off-host counter-signature protects the head.
+**CLI/API:** `GET /v1/ledger/verify`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-hash-chained-ledger-append.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-hash-chained-ledger-append.png" width="1600" height="900" alt="Evidence records appended to a per-account hash-chained ledger that can be verified." />
+</picture>
+```
+
+## lifecycle-drift-detection-machinery-diff
+
+![Configuration drift detection comparing the sealed baseline manifest against the current machine state.](../../public/images/visuals/lifecycle-drift-detection-machinery-diff.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Configuration drift detection comparing the sealed baseline manifest against the current machine state.
+**Caption:** A differing manifest is a change; silent re-enrolment is refused.
+**CLI/API:** `assurance machinery diff`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-drift-detection-machinery-diff.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-drift-detection-machinery-diff.png" width="1600" height="900" alt="Configuration drift detection comparing the sealed baseline manifest against the current machine state." />
+</picture>
+```
+
+## lifecycle-change-assurance-case-opened
+
+![A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person.](../../public/images/visuals/lifecycle-change-assurance-case-opened.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person.
+**Caption:** The product records the case; a named person decides to close, reject or defer.
+**CLI/API:** `assurance change assess-drift`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-change-assurance-case-opened.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-change-assurance-case-opened.png" width="1600" height="900" alt="A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person." />
+</picture>
+```
+
+## lifecycle-verification-against-safety-envelope
+
+![Recorded machine run verified against the declared safety envelope with tiered results.](../../public/images/visuals/lifecycle-verification-against-safety-envelope.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Recorded machine run verified against the declared safety envelope with tiered results.
+**Caption:** Unchecked is a valid outcome; the product does not invent a pass.
+**CLI/API:** `POST /v1/machine/verify`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-verification-against-safety-envelope.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-verification-against-safety-envelope.png" width="1600" height="900" alt="Recorded machine run verified against the declared safety envelope with tiered results." />
+</picture>
+```
+
+## lifecycle-coverage-states-current-stale-unchecked
+
+![Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done.](../../public/images/visuals/lifecycle-coverage-states-current-stale-unchecked.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done.
+**Caption:** Coverage answers whether a prior verification still applies after a change.
+**CLI/API:** `assurance machinery coverage`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-coverage-states-current-stale-unchecked.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-coverage-states-current-stale-unchecked.png" width="1600" height="900" alt="Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done." />
+</picture>
+```
+
+## lifecycle-intervention-recording-dates-inapplicable
+
+![Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable.](../../public/images/visuals/lifecycle-intervention-recording-dates-inapplicable.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable.
+**Caption:** The intervention names what was touched so coverage can be updated.
+**CLI/API:** `assurance machinery record-change`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-intervention-recording-dates-inapplicable.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-intervention-recording-dates-inapplicable.png" width="1600" height="900" alt="Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable." />
+</picture>
+```
+
+## lifecycle-passport-sealed-evidence-position
+
+![Sealed machine passport that captures the current evidence position for external re-check.](../../public/images/visuals/lifecycle-passport-sealed-evidence-position.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Sealed machine passport that captures the current evidence position for external re-check.
+**Caption:** A passport is re-checked with assurance machinery check or POST /v1/machinery/passport/check.
+**CLI/API:** `assurance machinery passport`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-passport-sealed-evidence-position.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-passport-sealed-evidence-position.png" width="1600" height="900" alt="Sealed machine passport that captures the current evidence position for external re-check." />
+</picture>
+```
+
+## lifecycle-signed-ledger-head-attestation
+
+![Signed ledger head that attests the current head of the hash-chained evidence ledger.](../../public/images/visuals/lifecycle-signed-ledger-head-attestation.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Signed ledger head that attests the current head of the hash-chained evidence ledger.
+**Caption:** The counter-signature protects the head; the chain itself detects mid-ledger edits.
+**CLI/API:** `assurance attest sign`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-signed-ledger-head-attestation.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-signed-ledger-head-attestation.png" width="1600" height="900" alt="Signed ledger head that attests the current head of the hash-chained evidence ledger." />
+</picture>
+```
+
+## lifecycle-external-verification-no-account
+
+![External verification of a passport or evidence file that requires no account and stores nothing.](../../public/images/visuals/lifecycle-external-verification-no-account.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** External verification of a passport or evidence file that requires no account and stores nothing.
+**Caption:** What can be established from the file alone is stated plainly; what cannot is also stated.
+**CLI/API:** `POST /v1/machinery/passport/check`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-external-verification-no-account.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-external-verification-no-account.png" width="1600" height="900" alt="External verification of a passport or evidence file that requires no account and stores nothing." />
+</picture>
+```
+
+## lifecycle-artefacts-relationship-diagram
+
+![Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export.](../../public/images/visuals/lifecycle-artefacts-relationship-diagram.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export.
+**Caption:** Each artefact is re-checkable by anyone who holds the file.
+**CLI/API:** `manifest · receipt · passport · attestation`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-artefacts-relationship-diagram.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-artefacts-relationship-diagram.png" width="1600" height="900" alt="Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export." />
+</picture>
+```
+
+## lifecycle-offline-kit-to-optional-hosted
+
+![Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger.](../../public/images/visuals/lifecycle-offline-kit-to-optional-hosted.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger.
+**Caption:** kit and watch never contact a deployment by design.
+**CLI/API:** `python -m assurance kit`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-offline-kit-to-optional-hosted.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-offline-kit-to-optional-hosted.png" width="1600" height="900" alt="Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger." />
+</picture>
+```
+
+## lifecycle-full-operator-pipeline
+
+![Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation.](../../public/images/visuals/lifecycle-full-operator-pipeline.png)
+
+**Route:** `/product/industrial-autonomous-assurance`
+**Alt:** Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation.
+**Caption:** Continuous evidence that shows which checks still apply after a change.
+**CLI/API:** `assurance watch · assurance change`
+
+```tsx
+<picture>
+  <source srcSet="/images/visuals/lifecycle-full-operator-pipeline.webp" type="image/webp" />
+  <img src="/images/visuals/lifecycle-full-operator-pipeline.png" width="1600" height="900" alt="Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation." />
+</picture>
+```
+
+
+---
+
+## NeuralBridge Role Pages Visual Architecture
+
+Light premium visuals for the six solution / role pages.
+
+### 01. manufacturer-declaration-of-conformity-evidence-gap
+![Light premium NeuralBridge role visual: manufacturer declaration of conformity evidence gap](../../public/images/visuals/manufacturer-declaration-of-conformity-evidence-gap.png)
+
+### 02. system-integrator-verifiable-evidence-chain
+![Light premium NeuralBridge role visual: system integrator verifiable evidence chain](../../public/images/visuals/system-integrator-verifiable-evidence-chain.png)
+
+### 03. plant-operator-air-gapped-workstation
+![Light premium NeuralBridge role visual: plant operator air gapped workstation](../../public/images/visuals/plant-operator-air-gapped-workstation.png)
+
+### 04. compliance-officer-cra-article-14-dual-clocks
+![Light premium NeuralBridge role visual: compliance officer cra article 14 dual clocks](../../public/images/visuals/compliance-officer-cra-article-14-dual-clocks.png)
+
+### 05. insurer-auditor-zero-account-verification
+![Light premium NeuralBridge role visual: insurer auditor zero account verification](../../public/images/visuals/insurer-auditor-zero-account-verification.png)
+
+### 06. ai-ops-mcp-gateway-human-approval
+![Light premium NeuralBridge role visual: ai ops mcp gateway human approval](../../public/images/visuals/ai-ops-mcp-gateway-human-approval.png)
+
+### 07. six-roles-overview
+![Light premium NeuralBridge role visual: six roles overview](../../public/images/visuals/six-roles-overview.png)
+
+### 08. change-assurance-case-human-gate
+![Light premium NeuralBridge role visual: change assurance case human gate](../../public/images/visuals/change-assurance-case-human-gate.png)
+
+### 09. iso15066-coverage-for-operators-manufacturers
+![Light premium NeuralBridge role visual: iso15066 coverage for operators manufacturers](../../public/images/visuals/iso15066-coverage-for-operators-manufacturers.png)
+
+### 10. fleet-advisory-deterministic-fanout
+![Light premium NeuralBridge role visual: fleet advisory deterministic fanout](../../public/images/visuals/fleet-advisory-deterministic-fanout.png)
+
+### 11. offline-enrolment-kit-for-plant
+![Light premium NeuralBridge role visual: offline enrolment kit for plant](../../public/images/visuals/offline-enrolment-kit-for-plant.png)
+
+### 12. unmetered-verify-for-insurers-auditors
+![Light premium NeuralBridge role visual: always free verify for insurers auditors](../../public/images/visuals/unmetered-verify-for-insurers-auditors.png)
+
+### 13. pricing-tiers-aligned-to-roles
+![Light premium NeuralBridge role visual: pricing tiers aligned to roles](../../public/images/visuals/pricing-tiers-aligned-to-roles.png)
+
+### 14. hash-chained-ledger-anatomy-all-roles
+![Light premium NeuralBridge role visual: hash chained ledger anatomy all roles](../../public/images/visuals/hash-chained-ledger-anatomy-all-roles.png)
+
+### 15. role-to-capability-mapping
+![Light premium NeuralBridge role visual: role to capability mapping](../../public/images/visuals/role-to-capability-mapping.png)

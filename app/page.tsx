@@ -473,6 +473,7 @@ export default function IndustrialAutonomousAssuranceSite() {
             <h2>Six roles, six honest starting points.</h2>
             <p>Each page says what the problem looks like for that role and links only to things that exist.</p>
           </div>
+          <VisualDiagram slug="six-roles-overview" />
           <ul className="paths">
             {ROLES.map((role) => (
               <li key={role.href}>

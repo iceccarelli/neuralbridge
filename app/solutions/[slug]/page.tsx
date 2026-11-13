@@ -6,6 +6,7 @@ import { buildMetadata, fitDescription } from '../../lib/seo';
 import RotatingImage from '../../components/RotatingImage';
 import ImageryNote from '../../components/ImageryNote';
 import VisualDiagram from '../../components/VisualDiagram';
+import { SOLUTION_VISUAL_BY_SLUG } from '../../lib/visuals';
 
 export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
@@ -100,9 +101,12 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
               </article>
             ))}
           </div>
-          {solution.slug === 'compliance-officer' && (
-            <VisualDiagram slug="eu-cra-article-14-dual-deadline-clocks" />
-          )}
+          {SOLUTION_VISUAL_BY_SLUG[solution.slug] ? (
+            <VisualDiagram slug={SOLUTION_VISUAL_BY_SLUG[solution.slug]} />
+          ) : null}
+          {solution.slug === 'compliance-officer' ? (
+            <VisualDiagram slug="compliance-officer-cra-article-14-dual-clocks" />
+          ) : null}
         </div>
       </section>
 

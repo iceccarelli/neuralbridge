@@ -162,8 +162,8 @@
     "width": 1600,
     "height": 900,
     "alt": "Ledger join of safety software intervention log against recorded verifications showing CURRENT versus STALE status.",
-    "caption": "Machinery Regulation Annex III \u00a71.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
-    "aeoSummary": "NeuralBridge joins the safety software and intervention log with recorded safety function verifications under EU Machinery Regulation 2023/1230 Annex III \u00a71.1.9, marking functions verified after the last change as CURRENT and earlier ones as STALE.",
+    "caption": "Machinery Regulation Annex III §1.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
+    "aeoSummary": "NeuralBridge joins the safety software and intervention log with recorded safety function verifications under EU Machinery Regulation 2023/1230 Annex III §1.1.9, marking functions verified after the last change as CURRENT and earlier ones as STALE.",
     "keywords": [
       "Annex III",
       "staleness",
@@ -177,7 +177,7 @@
       "contentUrl": "https://neuralbridge.io/images/visuals/machinery-regulation-annex-iii-staleness-join.png",
       "width": 1600,
       "height": 900,
-      "caption": "Machinery Regulation Annex III \u00a71.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
+      "caption": "Machinery Regulation Annex III §1.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
       "description": "Ledger join of safety software intervention log against recorded verifications showing CURRENT versus STALE status."
     }
   },
@@ -222,8 +222,8 @@
     "ogPath": "/images/og/pricing-entitlement-tiers-validator-register-cell-og.png",
     "width": 1600,
     "height": 900,
-    "alt": "Three entitlement tiers\u2014Validator free, Register \u20ac390/mo, Cell \u20ac1,290/mo\u2014generated from code-enforced plans.",
-    "caption": "Pricing tiers generated from GET /v1/plans entitlements; \u20ac390 and \u20ac1,290 are launch hypotheses.",
+    "alt": "Three entitlement tiers—Validator free, Register €390/mo, Cell €1,290/mo—generated from code-enforced plans.",
+    "caption": "Pricing tiers generated from GET /v1/plans entitlements; €390 and €1,290 are launch hypotheses.",
     "aeoSummary": "NeuralBridge pricing (Validator free, Register, Cell) is generated directly from the entitlement table enforced in code via GET /v1/plans. External verification remains always free; cases are unmetered.",
     "keywords": [
       "pricing",
@@ -238,8 +238,8 @@
       "contentUrl": "https://neuralbridge.io/images/visuals/pricing-entitlement-tiers-validator-register-cell.png",
       "width": 1600,
       "height": 900,
-      "caption": "Pricing tiers generated from GET /v1/plans entitlements; \u20ac390 and \u20ac1,290 are launch hypotheses.",
-      "description": "Three entitlement tiers\u2014Validator free, Register \u20ac390/mo, Cell \u20ac1,290/mo\u2014generated from code-enforced plans."
+      "caption": "Pricing tiers generated from GET /v1/plans entitlements; €390 and €1,290 are launch hypotheses.",
+      "description": "Three entitlement tiers—Validator free, Register €390/mo, Cell €1,290/mo—generated from code-enforced plans."
     }
   },
   {
@@ -285,7 +285,7 @@
     "width": 1600,
     "height": 900,
     "alt": "Authenticated supplier advisory fan-out by exact SHA-256, version, or component name across machine serials; public intel remains inspect-only.",
-    "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component\u2014never semver arithmetic.",
+    "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component—never semver arithmetic.",
     "aeoSummary": "NeuralBridge fans authenticated supplier advisories across fleet serials strictly by SHA-256 hash, exact version string, or component name via POST /v1/fleet/advisory. Unauthenticated NVD/KEV/EPSS feeds stay inspect-only with no auto stop-use.",
     "keywords": [
       "fleet advisory",
@@ -300,7 +300,7 @@
       "contentUrl": "https://neuralbridge.io/images/visuals/fleet-advisory-deterministic-hash-fanout.png",
       "width": 1600,
       "height": 900,
-      "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component\u2014never semver arithmetic.",
+      "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component—never semver arithmetic.",
       "description": "Authenticated supplier advisory fan-out by exact SHA-256, version, or component name across machine serials; public intel remains inspect-only."
     }
   },
@@ -317,7 +317,7 @@
     "height": 900,
     "alt": "State machine for ChangeAssuranceCase: triggers open immutable case, require re-verification, then named human decision to close.",
     "caption": "ChangeAssuranceCase state machine: software drafts, humans decide; zero auto-close after drift or advisory.",
-    "aeoSummary": "NeuralBridge opens a ChangeAssuranceCase on drift, authenticated advisory, or intervention, requiring safety re-verification and a named human decision (operator ID, timestamp, signed rationale) before close\u2014never automatic.",
+    "aeoSummary": "NeuralBridge opens a ChangeAssuranceCase on drift, authenticated advisory, or intervention, requiring safety re-verification and a named human decision (operator ID, timestamp, signed rationale) before close—never automatic.",
     "keywords": [
       "ChangeAssuranceCase",
       "human gate",
@@ -455,6 +455,1282 @@
       "height": 900,
       "caption": "NeuralBridge FastAPI + MCP + Cursor architecture: self-hostable assurance engine with human-approval agent protocol.",
       "description": "Four-layer architecture: edge CLI and air-gapped kit, FastAPI core with 79 OpenAPI routes, MCP Gateway and Cursor connector, browser surfaces."
+    }
+  },
+  {
+    "id": "applications-hero-five-real-routes",
+    "slug": "applications-hero-five-real-routes",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machine/separation · POST /v1/fleet/advisory · GET /v1/register",
+    "pngPath": "/images/visuals/applications-hero-five-real-routes.png",
+    "webpPath": "/images/visuals/applications-hero-five-real-routes.webp",
+    "ogPath": "/images/og/applications-hero-five-real-routes-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks.",
+    "caption": "Applications overview: every card names the exact route it calls and the plan that gates it.",
+    "aeoSummary": "NeuralBridge Applications page maps five production use cases—cobots, packaging lines, fleet advisory, OEM Article 14 register and insurer evidence checks—to concrete /v1 routes. Evidence tooling supports EU CRA Article 14 and Machinery Regulation 2023/1230 Annex III §1.1.9 without claiming certification.",
+    "keywords": [
+      "applications",
+      "cobots",
+      "fleet advisory",
+      "Article 14",
+      "evidence check"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/applications-hero-five-real-routes.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Applications overview: every card names the exact route it calls and the plan that gates it.",
+      "description": "Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks."
+    }
+  },
+  {
+    "id": "cobots-iso-ts-15066-separation-envelope",
+    "slug": "cobots-iso-ts-15066-separation-envelope",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machine/separation",
+    "pngPath": "/images/visuals/cobots-iso-ts-15066-separation-envelope.png",
+    "webpPath": "/images/visuals/cobots-iso-ts-15066-separation-envelope.webp",
+    "ogPath": "/images/og/cobots-iso-ts-15066-separation-envelope-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge.",
+    "caption": "Free separation calculator; recorded-run verification is gated to Cell.",
+    "aeoSummary": "NeuralBridge provides an ISO/TS 15066 separation calculator that is free to run and a gated verification path for recorded collaborative-cell runs under EU Machinery Regulation Annex III §1.1.9.",
+    "keywords": [
+      "cobots",
+      "ISO/TS 15066",
+      "separation",
+      "collaborative"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/cobots-iso-ts-15066-separation-envelope.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Free separation calculator; recorded-run verification is gated to Cell.",
+      "description": "ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge."
+    }
+  },
+  {
+    "id": "cobots-free-calc-vs-gated-verify",
+    "slug": "cobots-free-calc-vs-gated-verify",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machine/verify",
+    "pngPath": "/images/visuals/cobots-free-calc-vs-gated-verify.png",
+    "webpPath": "/images/visuals/cobots-free-calc-vs-gated-verify.webp",
+    "ogPath": "/images/og/cobots-free-calc-vs-gated-verify-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge.",
+    "caption": "Calculator is free; verifying a recorded run requires the Cell plan.",
+    "aeoSummary": "NeuralBridge separates the free ISO/TS 15066 separation calculator from the Cell-plan verification of a recorded machine run, maintaining clear plan boundaries for industrial assurance evidence.",
+    "keywords": [
+      "cobots",
+      "free calculator",
+      "Cell plan",
+      "verification"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/cobots-free-calc-vs-gated-verify.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Calculator is free; verifying a recorded run requires the Cell plan.",
+      "description": "Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge."
+    }
+  },
+  {
+    "id": "packaging-staleness-join-signoff-vs-change",
+    "slug": "packaging-staleness-join-signoff-vs-change",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/coverage",
+    "pngPath": "/images/visuals/packaging-staleness-join-signoff-vs-change.png",
+    "webpPath": "/images/visuals/packaging-staleness-join-signoff-vs-change.webp",
+    "ogPath": "/images/og/packaging-staleness-join-signoff-vs-change-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Staleness join showing a prior sign-off dated against a later change on a packaging line.",
+    "caption": "What safety software is on the line and who touched it, dated against the change.",
+    "aeoSummary": "NeuralBridge packaging application implements the staleness join: a sign-off from before a change is dated against the change itself so coverage can be assessed under EU Machinery Regulation Annex III §1.1.9.",
+    "keywords": [
+      "packaging",
+      "staleness",
+      "coverage",
+      "change"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/packaging-staleness-join-signoff-vs-change.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "What safety software is on the line and who touched it, dated against the change.",
+      "description": "Staleness join showing a prior sign-off dated against a later change on a packaging line."
+    }
+  },
+  {
+    "id": "packaging-safety-software-manifest-coverage",
+    "slug": "packaging-safety-software-manifest-coverage",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/manifest",
+    "pngPath": "/images/visuals/packaging-safety-software-manifest-coverage.png",
+    "webpPath": "/images/visuals/packaging-safety-software-manifest-coverage.webp",
+    "ogPath": "/images/og/packaging-safety-software-manifest-coverage-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Safety software manifest and coverage status for a packaging and palletising line.",
+    "caption": "Manifest lists safety-relevant software items; coverage states per function.",
+    "aeoSummary": "NeuralBridge records a sealed manifest of safety software on packaging lines and reports coverage status so operators can see which verifications still apply after a change.",
+    "keywords": [
+      "packaging",
+      "manifest",
+      "palletising",
+      "coverage"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/packaging-safety-software-manifest-coverage.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Manifest lists safety-relevant software items; coverage states per function.",
+      "description": "Safety software manifest and coverage status for a packaging and palletising line."
+    }
+  },
+  {
+    "id": "fleet-advisory-hash-matched-fanout",
+    "slug": "fleet-advisory-hash-matched-fanout",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/fleet/advisory",
+    "pngPath": "/images/visuals/fleet-advisory-hash-matched-fanout.png",
+    "webpPath": "/images/visuals/fleet-advisory-hash-matched-fanout.webp",
+    "ogPath": "/images/og/fleet-advisory-hash-matched-fanout-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Supplier advisory fanned out across enrolled machine serials matched by exact hash.",
+    "caption": "One advisory matched by SHA-256, never by version-range arithmetic.",
+    "aeoSummary": "NeuralBridge fleet advisory fans a supplier advisory across every enrolled serial using exact hash matching, supporting deterministic impact assessment for OEM multi-site fleets.",
+    "keywords": [
+      "fleet",
+      "advisory",
+      "hash match",
+      "OEM"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/fleet-advisory-hash-matched-fanout.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "One advisory matched by SHA-256, never by version-range arithmetic.",
+      "description": "Supplier advisory fanned out across enrolled machine serials matched by exact hash."
+    }
+  },
+  {
+    "id": "fleet-exact-hash-never-version-range",
+    "slug": "fleet-exact-hash-never-version-range",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/fleet/advisory",
+    "pngPath": "/images/visuals/fleet-exact-hash-never-version-range.png",
+    "webpPath": "/images/visuals/fleet-exact-hash-never-version-range.webp",
+    "ogPath": "/images/og/fleet-exact-hash-never-version-range-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected.",
+    "caption": "Deterministic by hash; version ranges are never flattened into a boolean.",
+    "aeoSummary": "NeuralBridge refuses version-range arithmetic for fleet advisory matching and requires exact SHA-256 identity so that impact is reported only for the precise software that was enrolled.",
+    "keywords": [
+      "fleet",
+      "SHA-256",
+      "exact match",
+      "advisory"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/fleet-exact-hash-never-version-range.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Deterministic by hash; version ranges are never flattened into a boolean.",
+      "description": "Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected."
+    }
+  },
+  {
+    "id": "oem-article14-register-deadline-clocks",
+    "slug": "oem-article14-register-deadline-clocks",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "GET /v1/register",
+    "pngPath": "/images/visuals/oem-article14-register-deadline-clocks.png",
+    "webpPath": "/images/visuals/oem-article14-register-deadline-clocks.webp",
+    "ogPath": "/images/og/oem-article14-register-deadline-clocks-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger.",
+    "caption": "Both clocks computed correctly; hash-chained ledger with verifiable export.",
+    "aeoSummary": "NeuralBridge Article 14 register computes the CRA Article 14 24h and 72h clocks correctly and stores the record in a hash-chained ledger that can be exported and verified.",
+    "keywords": [
+      "Article 14",
+      "CRA",
+      "deadline clocks",
+      "register"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/oem-article14-register-deadline-clocks.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Both clocks computed correctly; hash-chained ledger with verifiable export.",
+      "description": "OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger."
+    }
+  },
+  {
+    "id": "oem-register-verifiable-export-unmetered",
+    "slug": "oem-register-verifiable-export-unmetered",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "GET /v1/cases",
+    "pngPath": "/images/visuals/oem-register-verifiable-export-unmetered.png",
+    "webpPath": "/images/visuals/oem-register-verifiable-export-unmetered.webp",
+    "ogPath": "/images/og/oem-register-verifiable-export-unmetered-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Verifiable export of the Article 14 register with cases marked as not metered.",
+    "caption": "Cases are not metered — no per-case cap or charge.",
+    "aeoSummary": "NeuralBridge Register plan provides a verifiable export of the hash-chained Article 14 ledger; cases are not metered and carry no per-case charge.",
+    "keywords": [
+      "register",
+      "export",
+      "unmetered cases",
+      "ledger"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/oem-register-verifiable-export-unmetered.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Cases are not metered — no per-case cap or charge.",
+      "description": "Verifiable export of the Article 14 register with cases marked as not metered."
+    }
+  },
+  {
+    "id": "insurer-always-free-evidence-check",
+    "slug": "insurer-always-free-evidence-check",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machine/bundle/check",
+    "pngPath": "/images/visuals/insurer-always-free-evidence-check.png",
+    "webpPath": "/images/visuals/insurer-always-free-evidence-check.webp",
+    "ogPath": "/images/og/insurer-always-free-evidence-check-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "unmetered evidence verification path for insurers and auditors; no account required.",
+    "caption": "The buyer or auditor is never the paying customer.",
+    "aeoSummary": "NeuralBridge engineers declaration check, bundle re-verification and attestation verification as unmetered routes so that an insurer or auditor never needs an account to establish what a file can prove.",
+    "keywords": [
+      "insurer",
+      "auditor",
+      "free verify",
+      "evidence"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/insurer-always-free-evidence-check.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "The buyer or auditor is never the paying customer.",
+      "description": "unmetered evidence verification path for insurers and auditors; no account required."
+    }
+  },
+  {
+    "id": "insurer-declaration-bundle-attestation-verify",
+    "slug": "insurer-declaration-bundle-attestation-verify",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/ledger/attest/verify",
+    "pngPath": "/images/visuals/insurer-declaration-bundle-attestation-verify.png",
+    "webpPath": "/images/visuals/insurer-declaration-bundle-attestation-verify.webp",
+    "ogPath": "/images/og/insurer-declaration-bundle-attestation-verify-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Three free verification paths: Declaration check, bundle re-verification and attestation verify.",
+    "caption": "What can be established from the file alone, and what cannot.",
+    "aeoSummary": "NeuralBridge offers three unmetered verification routes—Declaration check, evidence-bundle re-check and ledger-head attestation verify—so external parties can assess evidence without becoming customers.",
+    "keywords": [
+      "declaration",
+      "bundle",
+      "attestation",
+      "free"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/insurer-declaration-bundle-attestation-verify.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "What can be established from the file alone, and what cannot.",
+      "description": "Three free verification paths: Declaration check, bundle re-verification and attestation verify."
+    }
+  },
+  {
+    "id": "applications-route-to-plan-gating-matrix",
+    "slug": "applications-route-to-plan-gating-matrix",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "openapi.json",
+    "pngPath": "/images/visuals/applications-route-to-plan-gating-matrix.png",
+    "webpPath": "/images/visuals/applications-route-to-plan-gating-matrix.webp",
+    "ogPath": "/images/og/applications-route-to-plan-gating-matrix-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Matrix mapping the five applications to their exact /v1 routes and the plan that gates each.",
+    "caption": "Every row is gated in code; if it is not gated, it is free.",
+    "aeoSummary": "NeuralBridge Applications page cross-checks every listed route against openapi.json and names the plan (Validator free, Register or Cell) that gates it, maintaining zero overclaiming on availability.",
+    "keywords": [
+      "plan gating",
+      "routes",
+      "Free Register Cell",
+      "openapi"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/applications-route-to-plan-gating-matrix.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Every row is gated in code; if it is not gated, it is free.",
+      "description": "Matrix mapping the five applications to their exact /v1 routes and the plan that gates each."
+    }
+  },
+  {
+    "id": "applications-cli-local-to-optional-hosted",
+    "slug": "applications-cli-local-to-optional-hosted",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "python -m assurance",
+    "pngPath": "/images/visuals/applications-cli-local-to-optional-hosted.png",
+    "webpPath": "/images/visuals/applications-cli-local-to-optional-hosted.webp",
+    "ogPath": "/images/og/applications-cli-local-to-optional-hosted-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine.",
+    "caption": "Same code the hosted API calls, runnable on your own machine first.",
+    "aeoSummary": "NeuralBridge CLI runs locally with only the cryptography dependency and a process-level socket guard; selected domains can later talk to a deployment while kit and watch remain strictly offline.",
+    "keywords": [
+      "CLI",
+      "offline kit",
+      "local first",
+      "assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/applications-cli-local-to-optional-hosted.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Same code the hosted API calls, runnable on your own machine first.",
+      "description": "Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine."
+    }
+  },
+  {
+    "id": "applications-change-assurance-case-lifecycle",
+    "slug": "applications-change-assurance-case-lifecycle",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "assurance change assess-drift",
+    "pngPath": "/images/visuals/applications-change-assurance-case-lifecycle.png",
+    "webpPath": "/images/visuals/applications-change-assurance-case-lifecycle.webp",
+    "ogPath": "/images/og/applications-change-assurance-case-lifecycle-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer.",
+    "caption": "A named person owns the case; the product never decides.",
+    "aeoSummary": "NeuralBridge change-assurance cases are created on drift, intervention or advisory and require an explicit human decision before close, reject or defer; the system records the decision but does not make it.",
+    "keywords": [
+      "change case",
+      "drift",
+      "human decision",
+      "assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/applications-change-assurance-case-lifecycle.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "A named person owns the case; the product never decides.",
+      "description": "Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer."
+    }
+  },
+  {
+    "id": "applications-workspace-investigate-one-place",
+    "slug": "applications-workspace-investigate-one-place",
+    "targetRoute": "/applications",
+    "targetSection": "",
+    "cliOrApiReference": "GET /v1/investigate",
+    "pngPath": "/images/visuals/applications-workspace-investigate-one-place.png",
+    "webpPath": "/images/visuals/applications-workspace-investigate-one-place.webp",
+    "ogPath": "/images/og/applications-workspace-investigate-one-place-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history.",
+    "caption": "Configuration, evidence and intervention history in one place.",
+    "aeoSummary": "NeuralBridge Investigate view gathers the sealed configuration, hash-chained evidence and recorded interventions for a single enrolled machine so an operator can see the current assurance position without assembling separate exports.",
+    "keywords": [
+      "workspace",
+      "investigate",
+      "enrolled machine",
+      "history"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/applications-workspace-investigate-one-place.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Configuration, evidence and intervention history in one place.",
+      "description": "Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history."
+    }
+  },
+  {
+    "id": "lifecycle-hero-end-to-end-assurance",
+    "slug": "lifecycle-hero-end-to-end-assurance",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/enrol · assurance machinery passport · assurance attest sign",
+    "pngPath": "/images/visuals/lifecycle-hero-end-to-end-assurance.png",
+    "webpPath": "/images/visuals/lifecycle-hero-end-to-end-assurance.webp",
+    "ogPath": "/images/og/lifecycle-hero-end-to-end-assurance-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head.",
+    "caption": "Evidence that notices when the machine changed.",
+    "aeoSummary": "NeuralBridge Industrial Autonomous Assurance maintains a hash-chained record of machine configuration, verifications and changes so that a later divergence shows which safety checks no longer apply under EU CRA Article 14 and Machinery Regulation 2023/1230 Annex III §1.1.9.",
+    "keywords": [
+      "lifecycle",
+      "enrolment",
+      "hash-chained ledger",
+      "passport"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-hero-end-to-end-assurance.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Evidence that notices when the machine changed.",
+      "description": "End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head."
+    }
+  },
+  {
+    "id": "lifecycle-enrolment-named-person-seals-manifest",
+    "slug": "lifecycle-enrolment-named-person-seals-manifest",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/enrol",
+    "pngPath": "/images/visuals/lifecycle-enrolment-named-person-seals-manifest.png",
+    "webpPath": "/images/visuals/lifecycle-enrolment-named-person-seals-manifest.webp",
+    "ogPath": "/images/og/lifecycle-enrolment-named-person-seals-manifest-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash.",
+    "caption": "Enrolment seals the baseline; the receipt carries the configuration hash.",
+    "aeoSummary": "NeuralBridge enrolment requires a named person to declare the machine identity and seals a baseline manifest; the returned receipt contains the configuration hash that later drift detection compares against.",
+    "keywords": [
+      "enrolment",
+      "manifest",
+      "named person",
+      "configuration hash"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-enrolment-named-person-seals-manifest.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Enrolment seals the baseline; the receipt carries the configuration hash.",
+      "description": "A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash."
+    }
+  },
+  {
+    "id": "lifecycle-manifest-anatomy-hashes-sources",
+    "slug": "lifecycle-manifest-anatomy-hashes-sources",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/manifest",
+    "pngPath": "/images/visuals/lifecycle-manifest-anatomy-hashes-sources.png",
+    "webpPath": "/images/visuals/lifecycle-manifest-anatomy-hashes-sources.webp",
+    "ogPath": "/images/og/lifecycle-manifest-anatomy-hashes-sources-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared).",
+    "caption": "Each item is marked as read from the machine, supplied by the vendor, or declared.",
+    "aeoSummary": "NeuralBridge manifests list safety-relevant software items with their hashes and explicitly record whether each hash came from the machine, the vendor or a declaration so that later comparisons remain traceable.",
+    "keywords": [
+      "manifest",
+      "hashes",
+      "software items",
+      "sources"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-manifest-anatomy-hashes-sources.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Each item is marked as read from the machine, supplied by the vendor, or declared.",
+      "description": "Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared)."
+    }
+  },
+  {
+    "id": "lifecycle-hash-chained-ledger-append",
+    "slug": "lifecycle-hash-chained-ledger-append",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "GET /v1/ledger/verify",
+    "pngPath": "/images/visuals/lifecycle-hash-chained-ledger-append.png",
+    "webpPath": "/images/visuals/lifecycle-hash-chained-ledger-append.webp",
+    "ogPath": "/images/og/lifecycle-hash-chained-ledger-append-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Evidence records appended to a per-account hash-chained ledger that can be verified.",
+    "caption": "The ledger catches mid-chain edits; only an off-host counter-signature protects the head.",
+    "aeoSummary": "NeuralBridge appends enrolment, verification and change records to a hash-chained ledger; verification of the chain detects mid-ledger edits while the head requires a separate counter-signature for full assurance.",
+    "keywords": [
+      "hash-chained ledger",
+      "append",
+      "verify",
+      "evidence"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-hash-chained-ledger-append.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "The ledger catches mid-chain edits; only an off-host counter-signature protects the head.",
+      "description": "Evidence records appended to a per-account hash-chained ledger that can be verified."
+    }
+  },
+  {
+    "id": "lifecycle-drift-detection-machinery-diff",
+    "slug": "lifecycle-drift-detection-machinery-diff",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance machinery diff",
+    "pngPath": "/images/visuals/lifecycle-drift-detection-machinery-diff.png",
+    "webpPath": "/images/visuals/lifecycle-drift-detection-machinery-diff.webp",
+    "ogPath": "/images/og/lifecycle-drift-detection-machinery-diff-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Configuration drift detection comparing the sealed baseline manifest against the current machine state.",
+    "caption": "A differing manifest is a change; silent re-enrolment is refused.",
+    "aeoSummary": "NeuralBridge detects configuration drift by comparing the current state against the sealed baseline; any difference is treated as a change that must be assessed rather than silently accepted.",
+    "keywords": [
+      "drift",
+      "machinery diff",
+      "baseline",
+      "change"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-drift-detection-machinery-diff.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "A differing manifest is a change; silent re-enrolment is refused.",
+      "description": "Configuration drift detection comparing the sealed baseline manifest against the current machine state."
+    }
+  },
+  {
+    "id": "lifecycle-change-assurance-case-opened",
+    "slug": "lifecycle-change-assurance-case-opened",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance change assess-drift",
+    "pngPath": "/images/visuals/lifecycle-change-assurance-case-opened.png",
+    "webpPath": "/images/visuals/lifecycle-change-assurance-case-opened.webp",
+    "ogPath": "/images/og/lifecycle-change-assurance-case-opened-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person.",
+    "caption": "The product records the case; a named person decides to close, reject or defer.",
+    "aeoSummary": "NeuralBridge opens a change-assurance case when drift, an intervention or a supplier advisory is detected; the case is owned by a named person who must explicitly decide the outcome.",
+    "keywords": [
+      "change-assurance case",
+      "drift",
+      "human decision",
+      "advisory"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-change-assurance-case-opened.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "The product records the case; a named person decides to close, reject or defer.",
+      "description": "A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person."
+    }
+  },
+  {
+    "id": "lifecycle-verification-against-safety-envelope",
+    "slug": "lifecycle-verification-against-safety-envelope",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machine/verify",
+    "pngPath": "/images/visuals/lifecycle-verification-against-safety-envelope.png",
+    "webpPath": "/images/visuals/lifecycle-verification-against-safety-envelope.webp",
+    "ogPath": "/images/og/lifecycle-verification-against-safety-envelope-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Recorded machine run verified against the declared safety envelope with tiered results.",
+    "caption": "Unchecked is a valid outcome; the product does not invent a pass.",
+    "aeoSummary": "NeuralBridge machine verification checks a recorded run against the declared safety envelope and reports tiered results, including the explicit state that a check was never performed.",
+    "keywords": [
+      "verification",
+      "safety envelope",
+      "machine verify",
+      "tiers"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-verification-against-safety-envelope.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Unchecked is a valid outcome; the product does not invent a pass.",
+      "description": "Recorded machine run verified against the declared safety envelope with tiered results."
+    }
+  },
+  {
+    "id": "lifecycle-coverage-states-current-stale-unchecked",
+    "slug": "lifecycle-coverage-states-current-stale-unchecked",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance machinery coverage",
+    "pngPath": "/images/visuals/lifecycle-coverage-states-current-stale-unchecked.png",
+    "webpPath": "/images/visuals/lifecycle-coverage-states-current-stale-unchecked.webp",
+    "ogPath": "/images/og/lifecycle-coverage-states-current-stale-unchecked-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done.",
+    "caption": "Coverage answers whether a prior verification still applies after a change.",
+    "aeoSummary": "NeuralBridge coverage assessment states for each safety function whether verification is current, stale, failing, unchecked, incomplete or never done, so operators can see exactly which evidence still applies.",
+    "keywords": [
+      "coverage",
+      "stale",
+      "unchecked",
+      "safety function"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-coverage-states-current-stale-unchecked.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Coverage answers whether a prior verification still applies after a change.",
+      "description": "Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done."
+    }
+  },
+  {
+    "id": "lifecycle-intervention-recording-dates-inapplicable",
+    "slug": "lifecycle-intervention-recording-dates-inapplicable",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance machinery record-change",
+    "pngPath": "/images/visuals/lifecycle-intervention-recording-dates-inapplicable.png",
+    "webpPath": "/images/visuals/lifecycle-intervention-recording-dates-inapplicable.webp",
+    "ogPath": "/images/og/lifecycle-intervention-recording-dates-inapplicable-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable.",
+    "caption": "The intervention names what was touched so coverage can be updated.",
+    "aeoSummary": "NeuralBridge records a technician intervention by naming the software items affected and the timestamp, thereby dating the point at which earlier verifications no longer apply.",
+    "keywords": [
+      "intervention",
+      "record-change",
+      "inapplicable",
+      "technician"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-intervention-recording-dates-inapplicable.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "The intervention names what was touched so coverage can be updated.",
+      "description": "Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable."
+    }
+  },
+  {
+    "id": "lifecycle-passport-sealed-evidence-position",
+    "slug": "lifecycle-passport-sealed-evidence-position",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance machinery passport",
+    "pngPath": "/images/visuals/lifecycle-passport-sealed-evidence-position.png",
+    "webpPath": "/images/visuals/lifecycle-passport-sealed-evidence-position.webp",
+    "ogPath": "/images/og/lifecycle-passport-sealed-evidence-position-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Sealed machine passport that captures the current evidence position for external re-check.",
+    "caption": "A passport is re-checked with assurance machinery check or POST /v1/machinery/passport/check.",
+    "aeoSummary": "NeuralBridge seals a machine passport that records the evidence position at a point in time; anyone can later re-check the passport without access to the original account.",
+    "keywords": [
+      "passport",
+      "sealed",
+      "evidence position",
+      "re-check"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-passport-sealed-evidence-position.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "A passport is re-checked with assurance machinery check or POST /v1/machinery/passport/check.",
+      "description": "Sealed machine passport that captures the current evidence position for external re-check."
+    }
+  },
+  {
+    "id": "lifecycle-signed-ledger-head-attestation",
+    "slug": "lifecycle-signed-ledger-head-attestation",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance attest sign",
+    "pngPath": "/images/visuals/lifecycle-signed-ledger-head-attestation.png",
+    "webpPath": "/images/visuals/lifecycle-signed-ledger-head-attestation.webp",
+    "ogPath": "/images/og/lifecycle-signed-ledger-head-attestation-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Signed ledger head that attests the current head of the hash-chained evidence ledger.",
+    "caption": "The counter-signature protects the head; the chain itself detects mid-ledger edits.",
+    "aeoSummary": "NeuralBridge produces a signed ledger head that attests the current tip of the hash-chained evidence record, enabling external parties to confirm the head without trusting the account database.",
+    "keywords": [
+      "signed head",
+      "attestation",
+      "ledger head",
+      "counter-signature"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-signed-ledger-head-attestation.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "The counter-signature protects the head; the chain itself detects mid-ledger edits.",
+      "description": "Signed ledger head that attests the current head of the hash-chained evidence ledger."
+    }
+  },
+  {
+    "id": "lifecycle-external-verification-no-account",
+    "slug": "lifecycle-external-verification-no-account",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "POST /v1/machinery/passport/check",
+    "pngPath": "/images/visuals/lifecycle-external-verification-no-account.png",
+    "webpPath": "/images/visuals/lifecycle-external-verification-no-account.webp",
+    "ogPath": "/images/og/lifecycle-external-verification-no-account-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "External verification of a passport or evidence file that requires no account and stores nothing.",
+    "caption": "What can be established from the file alone is stated plainly; what cannot is also stated.",
+    "aeoSummary": "NeuralBridge external verification routes for passports, bundles and attestations are engineered as unmetered and require no account, so an auditor or customer can establish what a file proves without becoming a customer.",
+    "keywords": [
+      "external verification",
+      "no account",
+      "passport check",
+      "free"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-external-verification-no-account.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "What can be established from the file alone is stated plainly; what cannot is also stated.",
+      "description": "External verification of a passport or evidence file that requires no account and stores nothing."
+    }
+  },
+  {
+    "id": "lifecycle-artefacts-relationship-diagram",
+    "slug": "lifecycle-artefacts-relationship-diagram",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "manifest · receipt · passport · attestation",
+    "pngPath": "/images/visuals/lifecycle-artefacts-relationship-diagram.png",
+    "webpPath": "/images/visuals/lifecycle-artefacts-relationship-diagram.webp",
+    "ogPath": "/images/og/lifecycle-artefacts-relationship-diagram-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export.",
+    "caption": "Each artefact is re-checkable by anyone who holds the file.",
+    "aeoSummary": "NeuralBridge produces a sealed manifest, receipt, verification bundles, change-case exports, a machine passport and a signed ledger head; each can be independently re-checked.",
+    "keywords": [
+      "artefacts",
+      "manifest",
+      "passport",
+      "receipt"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-artefacts-relationship-diagram.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Each artefact is re-checkable by anyone who holds the file.",
+      "description": "Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export."
+    }
+  },
+  {
+    "id": "lifecycle-offline-kit-to-optional-hosted",
+    "slug": "lifecycle-offline-kit-to-optional-hosted",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "python -m assurance kit",
+    "pngPath": "/images/visuals/lifecycle-offline-kit-to-optional-hosted.png",
+    "webpPath": "/images/visuals/lifecycle-offline-kit-to-optional-hosted.webp",
+    "ogPath": "/images/og/lifecycle-offline-kit-to-optional-hosted-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger.",
+    "caption": "kit and watch never contact a deployment by design.",
+    "aeoSummary": "NeuralBridge offline enrolment kit imports only cryptography and arms a socket guard that refuses all outbound traffic; the kit can later be used with a hosted deployment but never requires one.",
+    "keywords": [
+      "offline kit",
+      "socket guard",
+      "local",
+      "enrolment"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-offline-kit-to-optional-hosted.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "kit and watch never contact a deployment by design.",
+      "description": "Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger."
+    }
+  },
+  {
+    "id": "lifecycle-full-operator-pipeline",
+    "slug": "lifecycle-full-operator-pipeline",
+    "targetRoute": "/product/industrial-autonomous-assurance",
+    "targetSection": "",
+    "cliOrApiReference": "assurance watch · assurance change",
+    "pngPath": "/images/visuals/lifecycle-full-operator-pipeline.png",
+    "webpPath": "/images/visuals/lifecycle-full-operator-pipeline.webp",
+    "ogPath": "/images/og/lifecycle-full-operator-pipeline-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation.",
+    "caption": "Continuous evidence that shows which checks still apply after a change.",
+    "aeoSummary": "NeuralBridge operator pipeline seals a baseline, monitors for drift or intervention, opens change-assurance cases, updates coverage and produces attestable artefacts so that the evidence position remains current under EU regulatory clocks.",
+    "keywords": [
+      "operator pipeline",
+      "continuous",
+      "monitoring",
+      "attestation"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/lifecycle-full-operator-pipeline.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Continuous evidence that shows which checks still apply after a change.",
+      "description": "Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation."
+    }
+  },
+  {
+    "id": "01",
+    "slug": "manufacturer-declaration-of-conformity-evidence-gap",
+    "targetRoute": "/solutions/manufacturer",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/manufacturer-declaration-of-conformity-evidence-gap.png",
+    "webpPath": "/images/visuals/manufacturer-declaration-of-conformity-evidence-gap.webp",
+    "ogPath": "/images/og/manufacturer-declaration-of-conformity-evidence-gap-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: manufacturer declaration of conformity evidence gap",
+    "caption": "NeuralBridge role page visual — Manufacturer Declaration Of Conformity Evidence Gap",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/manufacturer-declaration-of-conformity-evidence-gap.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Manufacturer Declaration Of Conformity Evidence Gap",
+      "description": "Light premium NeuralBridge role visual: manufacturer declaration of conformity evidence gap"
+    }
+  },
+  {
+    "id": "02",
+    "slug": "system-integrator-verifiable-evidence-chain",
+    "targetRoute": "/solutions/system-integrator",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/system-integrator-verifiable-evidence-chain.png",
+    "webpPath": "/images/visuals/system-integrator-verifiable-evidence-chain.webp",
+    "ogPath": "/images/og/system-integrator-verifiable-evidence-chain-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: system integrator verifiable evidence chain",
+    "caption": "NeuralBridge role page visual — System Integrator Verifiable Evidence Chain",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/system-integrator-verifiable-evidence-chain.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — System Integrator Verifiable Evidence Chain",
+      "description": "Light premium NeuralBridge role visual: system integrator verifiable evidence chain"
+    }
+  },
+  {
+    "id": "03",
+    "slug": "plant-operator-air-gapped-workstation",
+    "targetRoute": "/solutions/plant-operator",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/plant-operator-air-gapped-workstation.png",
+    "webpPath": "/images/visuals/plant-operator-air-gapped-workstation.webp",
+    "ogPath": "/images/og/plant-operator-air-gapped-workstation-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: plant operator air gapped workstation",
+    "caption": "NeuralBridge role page visual — Plant Operator Air Gapped Workstation",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/plant-operator-air-gapped-workstation.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Plant Operator Air Gapped Workstation",
+      "description": "Light premium NeuralBridge role visual: plant operator air gapped workstation"
+    }
+  },
+  {
+    "id": "04",
+    "slug": "compliance-officer-cra-article-14-dual-clocks",
+    "targetRoute": "/solutions/compliance-officer",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/compliance-officer-cra-article-14-dual-clocks.png",
+    "webpPath": "/images/visuals/compliance-officer-cra-article-14-dual-clocks.webp",
+    "ogPath": "/images/og/compliance-officer-cra-article-14-dual-clocks-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: compliance officer cra article 14 dual clocks",
+    "caption": "NeuralBridge role page visual — Compliance Officer Cra Article 14 Dual Clocks",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/compliance-officer-cra-article-14-dual-clocks.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Compliance Officer Cra Article 14 Dual Clocks",
+      "description": "Light premium NeuralBridge role visual: compliance officer cra article 14 dual clocks"
+    }
+  },
+  {
+    "id": "05",
+    "slug": "insurer-auditor-zero-account-verification",
+    "targetRoute": "/solutions/insurer-auditor",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/insurer-auditor-zero-account-verification.png",
+    "webpPath": "/images/visuals/insurer-auditor-zero-account-verification.webp",
+    "ogPath": "/images/og/insurer-auditor-zero-account-verification-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: insurer auditor zero account verification",
+    "caption": "NeuralBridge role page visual — Insurer Auditor Zero Account Verification",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/insurer-auditor-zero-account-verification.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Insurer Auditor Zero Account Verification",
+      "description": "Light premium NeuralBridge role visual: insurer auditor zero account verification"
+    }
+  },
+  {
+    "id": "06",
+    "slug": "ai-ops-mcp-gateway-human-approval",
+    "targetRoute": "/solutions/ai-ops",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/ai-ops-mcp-gateway-human-approval.png",
+    "webpPath": "/images/visuals/ai-ops-mcp-gateway-human-approval.webp",
+    "ogPath": "/images/og/ai-ops-mcp-gateway-human-approval-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: ai ops mcp gateway human approval",
+    "caption": "NeuralBridge role page visual — Ai Ops Mcp Gateway Human Approval",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/ai-ops-mcp-gateway-human-approval.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Ai Ops Mcp Gateway Human Approval",
+      "description": "Light premium NeuralBridge role visual: ai ops mcp gateway human approval"
+    }
+  },
+  {
+    "id": "07",
+    "slug": "six-roles-overview",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/six-roles-overview.png",
+    "webpPath": "/images/visuals/six-roles-overview.webp",
+    "ogPath": "/images/og/six-roles-overview-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: six roles overview",
+    "caption": "NeuralBridge role page visual — Six Roles Overview",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/six-roles-overview.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Six Roles Overview",
+      "description": "Light premium NeuralBridge role visual: six roles overview"
+    }
+  },
+  {
+    "id": "08",
+    "slug": "change-assurance-case-human-gate",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/change-assurance-case-human-gate.png",
+    "webpPath": "/images/visuals/change-assurance-case-human-gate.webp",
+    "ogPath": "/images/og/change-assurance-case-human-gate-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: change assurance case human gate",
+    "caption": "NeuralBridge role page visual — Change Assurance Case Human Gate",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/change-assurance-case-human-gate.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Change Assurance Case Human Gate",
+      "description": "Light premium NeuralBridge role visual: change assurance case human gate"
+    }
+  },
+  {
+    "id": "09",
+    "slug": "iso15066-coverage-for-operators-manufacturers",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/iso15066-coverage-for-operators-manufacturers.png",
+    "webpPath": "/images/visuals/iso15066-coverage-for-operators-manufacturers.webp",
+    "ogPath": "/images/og/iso15066-coverage-for-operators-manufacturers-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: iso15066 coverage for operators manufacturers",
+    "caption": "NeuralBridge role page visual — Iso15066 Coverage For Operators Manufacturers",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/iso15066-coverage-for-operators-manufacturers.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Iso15066 Coverage For Operators Manufacturers",
+      "description": "Light premium NeuralBridge role visual: iso15066 coverage for operators manufacturers"
+    }
+  },
+  {
+    "id": "10",
+    "slug": "fleet-advisory-deterministic-fanout",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/fleet-advisory-deterministic-fanout.png",
+    "webpPath": "/images/visuals/fleet-advisory-deterministic-fanout.webp",
+    "ogPath": "/images/og/fleet-advisory-deterministic-fanout-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: fleet advisory deterministic fanout",
+    "caption": "NeuralBridge role page visual — Fleet Advisory Deterministic Fanout",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/fleet-advisory-deterministic-fanout.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Fleet Advisory Deterministic Fanout",
+      "description": "Light premium NeuralBridge role visual: fleet advisory deterministic fanout"
+    }
+  },
+  {
+    "id": "11",
+    "slug": "offline-enrolment-kit-for-plant",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/offline-enrolment-kit-for-plant.png",
+    "webpPath": "/images/visuals/offline-enrolment-kit-for-plant.webp",
+    "ogPath": "/images/og/offline-enrolment-kit-for-plant-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: offline enrolment kit for plant",
+    "caption": "NeuralBridge role page visual — Offline Enrolment Kit For Plant",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/offline-enrolment-kit-for-plant.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Offline Enrolment Kit For Plant",
+      "description": "Light premium NeuralBridge role visual: offline enrolment kit for plant"
+    }
+  },
+  {
+    "id": "12",
+    "slug": "always-free-verify-for-insurers-auditors",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/always-free-verify-for-insurers-auditors.png",
+    "webpPath": "/images/visuals/always-free-verify-for-insurers-auditors.webp",
+    "ogPath": "/images/og/always-free-verify-for-insurers-auditors-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: always free verify for insurers auditors",
+    "caption": "NeuralBridge role page visual — Always Free Verify For Insurers Auditors",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/always-free-verify-for-insurers-auditors.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Always Free Verify For Insurers Auditors",
+      "description": "Light premium NeuralBridge role visual: always free verify for insurers auditors"
+    }
+  },
+  {
+    "id": "13",
+    "slug": "pricing-tiers-aligned-to-roles",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/pricing-tiers-aligned-to-roles.png",
+    "webpPath": "/images/visuals/pricing-tiers-aligned-to-roles.webp",
+    "ogPath": "/images/og/pricing-tiers-aligned-to-roles-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: pricing tiers aligned to roles",
+    "caption": "NeuralBridge role page visual — Pricing Tiers Aligned To Roles",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/pricing-tiers-aligned-to-roles.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Pricing Tiers Aligned To Roles",
+      "description": "Light premium NeuralBridge role visual: pricing tiers aligned to roles"
+    }
+  },
+  {
+    "id": "14",
+    "slug": "hash-chained-ledger-anatomy-all-roles",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/hash-chained-ledger-anatomy-all-roles.png",
+    "webpPath": "/images/visuals/hash-chained-ledger-anatomy-all-roles.webp",
+    "ogPath": "/images/og/hash-chained-ledger-anatomy-all-roles-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: hash chained ledger anatomy all roles",
+    "caption": "NeuralBridge role page visual — Hash Chained Ledger Anatomy All Roles",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/hash-chained-ledger-anatomy-all-roles.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Hash Chained Ledger Anatomy All Roles",
+      "description": "Light premium NeuralBridge role visual: hash chained ledger anatomy all roles"
+    }
+  },
+  {
+    "id": "15",
+    "slug": "role-to-capability-mapping",
+    "targetRoute": "/solutions",
+    "targetSection": "",
+    "cliOrApiReference": "",
+    "pngPath": "/images/visuals/role-to-capability-mapping.png",
+    "webpPath": "/images/visuals/role-to-capability-mapping.webp",
+    "ogPath": "/images/og/role-to-capability-mapping-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Light premium NeuralBridge role visual: role to capability mapping",
+    "caption": "NeuralBridge role page visual — Role To Capability Mapping",
+    "aeoSummary": "NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.",
+    "keywords": [
+      "NeuralBridge",
+      "Industrial Autonomous Assurance"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/role-to-capability-mapping.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge role page visual — Role To Capability Mapping",
+      "description": "Light premium NeuralBridge role visual: role to capability mapping"
     }
   }
 ]
