@@ -24,9 +24,15 @@ python -m assurance kit check plant/kit.json   # what it would touch. Reads only
 python -m assurance kit run  plant/kit.json --out plant/out
 ```
 
-`check` is the command to put in front of whoever has to approve this. It reads
-the configuration and the collection plan, lists every file the run would open,
-names every plan item that matches no file, and touches nothing. Give them that
+`check` is the command to put in front of whoever has to approve this. It makes the
+same read-only collection per machine that `run` makes, under the same socket guard, and
+prints each item with its result: `ok` with the digest prefix, the version found (or
+`version unknown`), the file it came from and any warning, `MISS` for an item that
+matches no file, `FAIL` with the reason for a file that matches and cannot be read (not
+UTF-8 under a text rule, invalid or duplicate-key JSON, not a zip, a link out of the
+folder, a time or size limit). It exits non-zero when anything would fail, and when every
+item passes it prints `READY` and the exact `run` command. It seals nothing, opens no
+ledger and creates no file (a test compares the folder before and after). Give them that
 output before you ask for anything.
 
 While template values remain, `check` still only reads: it names **every** one at
@@ -45,9 +51,12 @@ Exit codes are the interface:
 
 | code | meaning |
 |-----:|---------|
-| 0 | every machine enrolled, nothing tried to reach the network |
-| 1 | a **finding** — a machine incomplete, a required item missing, a refused connection attempt. Evidence was still produced. Read it |
-| 2 | the kit could not run |
+| 0 | every machine recorded, nothing tried to reach the network |
+| 1 | a **finding** with at least one machine recorded — another machine incomplete or failed, or a refused connection attempt. Evidence was still produced. Read it |
+| 2 | the kit could not run, or **no** machine was recorded (every machine incomplete or failed; so a one-machine kit with a missing export is 2, not 1) |
+
+`check` exits 0 only when it prints `READY`, 1 when something would fail, 2 when `kit.json`
+itself cannot be loaded.
 
 A refused connection attempt is a 1, not a 2, deliberately: the run is still
 valid — nothing got out — but somebody needs to know which line tried.
@@ -113,7 +122,10 @@ One implementation detail that is a decision, not an accident: the refusal is
 transient failure — it would retry three times, or fall back to a cache and
 carry on as though nothing happened. A refusal here is not a network problem and
 must not be mistakable for one, so it travels up through every library's error
-handling untouched and stops the run.
+handling untouched. The kit catches it at one place, the machine being collected: that
+machine is recorded as `failed` with the refused call and the line that made it, the
+airgap record says `held: false`, and the machines after it are still collected (so the
+run is `partial`, exit 1; with a single machine it is `failed`, exit 2).
 
 ## What the run writes
 
@@ -137,13 +149,41 @@ The order inside a run is fixed and each step is there for a reason:
 
 ## Refusals that exist to protect a document nobody has written yet
 
-The kit refuses to run when `organisation`, `prepared_by` or `site` still hold
-a starter template value, and when the collection plan still says
-`manufacturer: "CHANGE ME"`. Those values are printed at the top of a report
-that goes to an auditor, an insurer or a customer, and a manifest carrying a
-template manufacturer cannot be matched to a supplier advisory later. Better to
-stop here than to produce a document addressed from nobody about a machine made
-by nobody.
+The kit refuses to run (and `check` says so) when `organisation`, `prepared_by` or `site`
+still hold a starter template value, when a machine `serial` is a placeholder (`TBD`,
+`000000`, `xxx`, `CHANGE ME`, a single repeated character: one list, shared with SBOM
+review and inventory import), when `prepared_by` is not a name a person could have
+(`AI agent`, `bot`), when two machines read the same export folder (they would be enrolled
+with identical evidence; give each its own `exports/<serial>`), and when the collection plan
+still says `manufacturer: "CHANGE ME"`. Those values are printed at the top of a report that
+goes to an auditor, an insurer or a customer, and a manifest carrying a template
+manufacturer cannot be matched to a supplier advisory later. Better to stop here than to
+produce a document addressed from nobody about a machine made by nobody.
+
+`site: Plant 1`, `country: DE`, `year: 2025` and serial `CELL-0412` are what `kit init`
+writes, and each can also be true, so they are not refused. When one survives, `check`,
+the run output and `run.json` say `still the value kit init wrote`: read that line.
+
+A run into an `--out` folder that already holds `evidence.db` first walks its hash chain and
+refuses, writing nothing, if it does not verify.
+
+## What a run records, and what it does not seal
+
+The kit **records** each machine's manifest; it does not **enrol** it. The status is
+`recorded` (never `enrolled`): the ledger holds `safety_manifest`, `kit.airgap` and
+`kit.run`, and `machinery amend-enrolment` will say "not enrolled" until a named person
+declares the enrolment. The run prints the two commands that do it (`collect run ... --out
+manifest-<serial>.json`, then `machinery enrol`), with the kit's own site, country, year and
+paths so the configuration is identical.
+
+A machine whose collection is **incomplete** (an item missing or unreadable) is **not
+sealed**: a sealed manifest becomes the machine's current one with those items absent from
+every later comparison, which is what `collect run` already refuses without
+`--seal-incomplete`. The attempt is recorded in the sealed `kit.run` record and in
+`run.json` (status `incomplete`, `sealed: false`, the missing item ids and why, one outcome
+per item with its files, digest, version and warnings), named in the terminal and in the
+report. `--seal-incomplete` has exactly the `collect run` meaning: the manifest is sealed with
+its incomplete-collection marker, and the report says so.
 
 ## Closing the loop: the counter-signature
 

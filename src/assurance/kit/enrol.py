@@ -460,7 +460,9 @@ def kit_limits(read_from_machine: bool) -> tuple[str, ...]:
 
 
 def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
-    """A configuration that runs as written, so the first attempt succeeds."""
+    """A configuration to edit, not to run: ``organisation`` and ``prepared_by`` are placeholders the
+    kit refuses, and ``site``, ``country``, ``year`` and the serial are values it names as the
+    starter's until they are chosen."""
     return {
         "kit_id": kit_id,
         "organisation": "YOUR COMPANY GmbH",

@@ -58,9 +58,10 @@ _STEPS = (
     "For each machine, make a folder under `exports/` named after its serial and drop "
     "that machine's vendor exports into it: the scanner zone file, the robot parameter "
     "export, the safety PLC project, the controller firmware. Do not rename them.",
-    "Run `python -m assurance kit check kit.json`. It reads only, names every "
-    "placeholder still in your files and every item that matches no file, and writes "
-    "nothing. Fix what it names, then run the kit.",
+    "Run `python -m assurance kit check kit.json`. It reads each file the plan names the "
+    "way the run will, names every placeholder still in your files, every item that "
+    "matches no file and every file it cannot read, and writes nothing. Fix what it "
+    "names; when it says READY it prints the command to run.",
 )
 
 
@@ -107,8 +108,8 @@ plan names was found and hashed.
 
     python -m assurance kit check kit.json
 
-`check` reads the configuration and prints what the run would touch, without
-touching it. The run itself arms a guard over this process's socket layer and
+`check` reads the configuration and every file the plan names, the way the run does, and
+prints each item and what the run would touch, without writing anything. The run itself arms a guard over this process's socket layer and
 refuses every outbound connection, recording any attempt with the line of code
 that made it — and seals that record into your own ledger. So "it does not phone
 home" is not a promise in a document; it is a hash in a file you hold.

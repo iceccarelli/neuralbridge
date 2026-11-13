@@ -131,16 +131,27 @@ path, so adding a file to the project changes the item.
 Grimaldi/AR-7#0412 — COMPLETE
   plan PLAN-AR7 (7caded60db89)  root tue/
   configuration c67b502e01e4fb3d
-  tier ceiling  validated
+  tier ceiling  community
   [ok  ] ITM-ZONES   521c177197fe  (version unknown)  1 file(s)
   [ok  ] ITM-PARAMS  e07850c516b7  v3.8.2             1 file(s)
   [ok  ] ITM-PLC     829608aefc80  (version unknown)  1 file(s)
   [ok  ] ITM-FW      5b2d0285aa4a  (version unknown)  1 file(s)
 ```
 
-`tier ceiling validated` because every digest was read from the machine — which
-is what `--ledger` then seals, and what `assurance machinery` and
-`assurance fleet` consume without any further work.
+`tier ceiling community`: a folder of exported files cannot show which machine it came
+off, so every item is labelled `supplied_by_vendor`. Only with `--read-from-machine` (the
+operator's assertion that the collector ran on the machine itself, recorded in the manifest
+and not checkable by this software) are the items `read_from_machine` and the ceiling
+`validated`. Either way `--ledger` seals the manifest, and `assurance machinery` and
+`assurance fleet` consume it without any further work.
+
+A version label is only as good as where it came from. The item's notes say so: `version
+declared in plan, not read from file` for a `literal`, or the pattern or key and the file
+for a `regex` or `json` source. Notes are outside the configuration hash.
+
+`probe` compares two exports of an unchanged machine. If they are byte-for-byte identical
+(the same folder, or a copy) nothing could differ, so it prints INCOMPLETE and exits 1, never
+STABLE.
 
 The proof it is worth having:
 
