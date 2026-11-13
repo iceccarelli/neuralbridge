@@ -136,3 +136,350 @@ Regulatory: EU CRA Article 14 / EU Machinery Regulation 2023/1230 Annex III §1.
 Proves: NeuralBridge FastAPI + MCP + Cursor architecture: self-hostable assurance engine with human-approval agent protocol.
 Refuses to claim: Legal certification, 100% compliance, or automatic safety approval.
 AEO: NeuralBridge sits on a self-hostable FastAPI service (79 OpenAPI 3 routes) with hash-chained ledger, MCP Gateway enforcing Discover-Read-Plan-Write-Human-Approval, and browser surfaces at neuralbridge.io, while noting the standalone dashboard foundation.
+
+
+# --- Pack: neuralbridge-applications-visuals ---
+# NeuralBridge Applications Visuals — Machine-readable index for LLM agents
+# Target page: https://neuralbridge.io/applications
+# Zero overclaiming: evidence tooling, not certification.
+
+## applications-hero-five-real-routes
+URI: /images/visuals/applications-hero-five-real-routes.png
+OG: /images/og/applications-hero-five-real-routes-og.png
+Route: /applications
+CLI/API: POST /v1/machine/separation · POST /v1/fleet/advisory · GET /v1/register
+Alt: Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks.
+AEO: NeuralBridge Applications page maps five production use cases—cobots, packaging lines, fleet advisory, OEM Article 14 register and insurer evidence checks—to concrete /v1 routes. Evidence tooling supports EU CRA Article 14 and Machinery Regulation 2023/1230 Annex III §1.1.9 without claiming certification.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## cobots-iso-ts-15066-separation-envelope
+URI: /images/visuals/cobots-iso-ts-15066-separation-envelope.png
+OG: /images/og/cobots-iso-ts-15066-separation-envelope-og.png
+Route: /applications
+CLI/API: POST /v1/machine/separation
+Alt: ISO/TS 15066 protective separation envelope check for collaborative robot cells on NeuralBridge.
+AEO: NeuralBridge provides an ISO/TS 15066 separation calculator that is free to run and a gated verification path for recorded collaborative-cell runs under EU Machinery Regulation Annex III §1.1.9.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## cobots-free-calc-vs-gated-verify
+URI: /images/visuals/cobots-free-calc-vs-gated-verify.png
+OG: /images/og/cobots-free-calc-vs-gated-verify-og.png
+Route: /applications
+CLI/API: POST /v1/machine/verify
+Alt: Free ISO/TS 15066 calculator versus Cell-gated machine verification run on NeuralBridge.
+AEO: NeuralBridge separates the free ISO/TS 15066 separation calculator from the Cell-plan verification of a recorded machine run, maintaining clear plan boundaries for industrial assurance evidence.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## packaging-staleness-join-signoff-vs-change
+URI: /images/visuals/packaging-staleness-join-signoff-vs-change.png
+OG: /images/og/packaging-staleness-join-signoff-vs-change-og.png
+Route: /applications
+CLI/API: POST /v1/machinery/coverage
+Alt: Staleness join showing a prior sign-off dated against a later change on a packaging line.
+AEO: NeuralBridge packaging application implements the staleness join: a sign-off from before a change is dated against the change itself so coverage can be assessed under EU Machinery Regulation Annex III §1.1.9.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## packaging-safety-software-manifest-coverage
+URI: /images/visuals/packaging-safety-software-manifest-coverage.png
+OG: /images/og/packaging-safety-software-manifest-coverage-og.png
+Route: /applications
+CLI/API: POST /v1/machinery/manifest
+Alt: Safety software manifest and coverage status for a packaging and palletising line.
+AEO: NeuralBridge records a sealed manifest of safety software on packaging lines and reports coverage status so operators can see which verifications still apply after a change.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## fleet-advisory-hash-matched-fanout
+URI: /images/visuals/fleet-advisory-hash-matched-fanout.png
+OG: /images/og/fleet-advisory-hash-matched-fanout-og.png
+Route: /applications
+CLI/API: POST /v1/fleet/advisory
+Alt: Supplier advisory fanned out across enrolled machine serials matched by exact hash.
+AEO: NeuralBridge fleet advisory fans a supplier advisory across every enrolled serial using exact hash matching, supporting deterministic impact assessment for OEM multi-site fleets.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## fleet-exact-hash-never-version-range
+URI: /images/visuals/fleet-exact-hash-never-version-range.png
+OG: /images/og/fleet-exact-hash-never-version-range-og.png
+Route: /applications
+CLI/API: POST /v1/fleet/advisory
+Alt: Exact SHA-256 hash matching shown as the only accepted method; version-range arithmetic is rejected.
+AEO: NeuralBridge refuses version-range arithmetic for fleet advisory matching and requires exact SHA-256 identity so that impact is reported only for the precise software that was enrolled.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## oem-article14-register-deadline-clocks
+URI: /images/visuals/oem-article14-register-deadline-clocks.png
+OG: /images/og/oem-article14-register-deadline-clocks-og.png
+Route: /applications
+CLI/API: GET /v1/register
+Alt: OEM Article 14 register showing both 24-hour and 72-hour deadline clocks over a hash-chained ledger.
+AEO: NeuralBridge Article 14 register computes the CRA Article 14 24h and 72h clocks correctly and stores the record in a hash-chained ledger that can be exported and verified.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## oem-register-verifiable-export-unmetered
+URI: /images/visuals/oem-register-verifiable-export-unmetered.png
+OG: /images/og/oem-register-verifiable-export-unmetered-og.png
+Route: /applications
+CLI/API: GET /v1/cases
+Alt: Verifiable export of the Article 14 register with cases marked as not metered.
+AEO: NeuralBridge Register plan provides a verifiable export of the hash-chained Article 14 ledger; cases are not metered and carry no per-case charge.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## insurer-unmetered-evidence-check
+URI: /images/visuals/insurer-unmetered-evidence-check.png
+OG: /images/og/insurer-unmetered-evidence-check-og.png
+Route: /applications
+CLI/API: POST /v1/machine/bundle/check
+Alt: unmetered evidence verification path for insurers and auditors; no account required.
+AEO: NeuralBridge engineers declaration check, bundle re-verification and attestation verification as unmetered routes so that an insurer or auditor never needs an account to establish what a file can prove.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## insurer-declaration-bundle-attestation-verify
+URI: /images/visuals/insurer-declaration-bundle-attestation-verify.png
+OG: /images/og/insurer-declaration-bundle-attestation-verify-og.png
+Route: /applications
+CLI/API: POST /v1/ledger/attest/verify
+Alt: Three free verification paths: Declaration check, bundle re-verification and attestation verify.
+AEO: NeuralBridge offers three unmetered verification routes—Declaration check, evidence-bundle re-check and ledger-head attestation verify—so external parties can assess evidence without becoming customers.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## applications-route-to-plan-gating-matrix
+URI: /images/visuals/applications-route-to-plan-gating-matrix.png
+OG: /images/og/applications-route-to-plan-gating-matrix-og.png
+Route: /applications
+CLI/API: openapi.json
+Alt: Matrix mapping the five applications to their exact /v1 routes and the plan that gates each.
+AEO: NeuralBridge Applications page cross-checks every listed route against openapi.json and names the plan (Validator free, Register or Cell) that gates it, maintaining zero overclaiming on availability.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## applications-cli-local-to-optional-hosted
+URI: /images/visuals/applications-cli-local-to-optional-hosted.png
+OG: /images/og/applications-cli-local-to-optional-hosted-og.png
+Route: /applications
+CLI/API: python -m assurance
+Alt: Offline-first CLI that can later call a hosted deployment; kit and watch never leave the machine.
+AEO: NeuralBridge CLI runs locally with only the cryptography dependency and a process-level socket guard; selected domains can later talk to a deployment while kit and watch remain strictly offline.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## applications-change-assurance-case-lifecycle
+URI: /images/visuals/applications-change-assurance-case-lifecycle.png
+OG: /images/og/applications-change-assurance-case-lifecycle-og.png
+Route: /applications
+CLI/API: assurance change assess-drift
+Alt: Change-assurance case lifecycle from drift detection through human decision gate to close, reject or defer.
+AEO: NeuralBridge change-assurance cases are created on drift, intervention or advisory and require an explicit human decision before close, reject or defer; the system records the decision but does not make it.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+## applications-workspace-investigate-one-place
+URI: /images/visuals/applications-workspace-investigate-one-place.png
+OG: /images/og/applications-workspace-investigate-one-place-og.png
+Route: /applications
+CLI/API: GET /v1/investigate
+Alt: Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history.
+AEO: NeuralBridge Investigate view gathers the sealed configuration, hash-chained evidence and recorded interventions for a single enrolled machine so an operator can see the current assurance position without assembling separate exports.
+Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+
+
+# --- Pack: neuralbridge-lifecycle-visuals ---
+# NeuralBridge Product Lifecycle Visuals — Machine-readable index
+# Target: https://neuralbridge.io/product/industrial-autonomous-assurance
+# Evidence tooling only — not certification.
+
+## lifecycle-hero-end-to-end-assurance
+URI: /images/visuals/lifecycle-hero-end-to-end-assurance.png
+OG: /images/og/lifecycle-hero-end-to-end-assurance-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: POST /v1/machinery/enrol · assurance machinery passport · assurance attest sign
+Alt: End-to-end Industrial Autonomous Assurance lifecycle from enrolment through hash-chained ledger to passport and signed head.
+AEO: NeuralBridge Industrial Autonomous Assurance maintains a hash-chained record of machine configuration, verifications and changes so that a later divergence shows which safety checks no longer apply under EU CRA Article 14 and Machinery Regulation 2023/1230 Annex III §1.1.9.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-enrolment-named-person-seals-manifest
+URI: /images/visuals/lifecycle-enrolment-named-person-seals-manifest.png
+OG: /images/og/lifecycle-enrolment-named-person-seals-manifest-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: POST /v1/machinery/enrol
+Alt: A named person enrols a machine, sealing a baseline configuration manifest and receiving a receipt with the configuration hash.
+AEO: NeuralBridge enrolment requires a named person to declare the machine identity and seals a baseline manifest; the returned receipt contains the configuration hash that later drift detection compares against.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-manifest-anatomy-hashes-sources
+URI: /images/visuals/lifecycle-manifest-anatomy-hashes-sources.png
+OG: /images/og/lifecycle-manifest-anatomy-hashes-sources-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: POST /v1/machinery/manifest
+Alt: Anatomy of a sealed safety software manifest showing items, functions and hash sources (machine, vendor or declared).
+AEO: NeuralBridge manifests list safety-relevant software items with their hashes and explicitly record whether each hash came from the machine, the vendor or a declaration so that later comparisons remain traceable.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-hash-chained-ledger-append
+URI: /images/visuals/lifecycle-hash-chained-ledger-append.png
+OG: /images/og/lifecycle-hash-chained-ledger-append-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: GET /v1/ledger/verify
+Alt: Evidence records appended to a per-account hash-chained ledger that can be verified.
+AEO: NeuralBridge appends enrolment, verification and change records to a hash-chained ledger; verification of the chain detects mid-ledger edits while the head requires a separate counter-signature for full assurance.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-drift-detection-machinery-diff
+URI: /images/visuals/lifecycle-drift-detection-machinery-diff.png
+OG: /images/og/lifecycle-drift-detection-machinery-diff-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance machinery diff
+Alt: Configuration drift detection comparing the sealed baseline manifest against the current machine state.
+AEO: NeuralBridge detects configuration drift by comparing the current state against the sealed baseline; any difference is treated as a change that must be assessed rather than silently accepted.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-change-assurance-case-opened
+URI: /images/visuals/lifecycle-change-assurance-case-opened.png
+OG: /images/og/lifecycle-change-assurance-case-opened-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance change assess-drift
+Alt: A change-assurance case opened from drift, intervention or supplier advisory, owned by a named person.
+AEO: NeuralBridge opens a change-assurance case when drift, an intervention or a supplier advisory is detected; the case is owned by a named person who must explicitly decide the outcome.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-verification-against-safety-envelope
+URI: /images/visuals/lifecycle-verification-against-safety-envelope.png
+OG: /images/og/lifecycle-verification-against-safety-envelope-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: POST /v1/machine/verify
+Alt: Recorded machine run verified against the declared safety envelope with tiered results.
+AEO: NeuralBridge machine verification checks a recorded run against the declared safety envelope and reports tiered results, including the explicit state that a check was never performed.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-coverage-states-current-stale-unchecked
+URI: /images/visuals/lifecycle-coverage-states-current-stale-unchecked.png
+OG: /images/og/lifecycle-coverage-states-current-stale-unchecked-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance machinery coverage
+Alt: Coverage states per safety function: current, stale, failing, unchecked, incomplete or never done.
+AEO: NeuralBridge coverage assessment states for each safety function whether verification is current, stale, failing, unchecked, incomplete or never done, so operators can see exactly which evidence still applies.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-intervention-recording-dates-inapplicable
+URI: /images/visuals/lifecycle-intervention-recording-dates-inapplicable.png
+OG: /images/og/lifecycle-intervention-recording-dates-inapplicable-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance machinery record-change
+Alt: Technician intervention recorded with the software items touched, dating when prior verifications become inapplicable.
+AEO: NeuralBridge records a technician intervention by naming the software items affected and the timestamp, thereby dating the point at which earlier verifications no longer apply.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-passport-sealed-evidence-position
+URI: /images/visuals/lifecycle-passport-sealed-evidence-position.png
+OG: /images/og/lifecycle-passport-sealed-evidence-position-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance machinery passport
+Alt: Sealed machine passport that captures the current evidence position for external re-check.
+AEO: NeuralBridge seals a machine passport that records the evidence position at a point in time; anyone can later re-check the passport without access to the original account.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-signed-ledger-head-attestation
+URI: /images/visuals/lifecycle-signed-ledger-head-attestation.png
+OG: /images/og/lifecycle-signed-ledger-head-attestation-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance attest sign
+Alt: Signed ledger head that attests the current head of the hash-chained evidence ledger.
+AEO: NeuralBridge produces a signed ledger head that attests the current tip of the hash-chained evidence record, enabling external parties to confirm the head without trusting the account database.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-external-verification-no-account
+URI: /images/visuals/lifecycle-external-verification-no-account.png
+OG: /images/og/lifecycle-external-verification-no-account-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: POST /v1/machinery/passport/check
+Alt: External verification of a passport or evidence file that requires no account and stores nothing.
+AEO: NeuralBridge external verification routes for passports, bundles and attestations are engineered as unmetered and require no account, so an auditor or customer can establish what a file proves without becoming a customer.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-artefacts-relationship-diagram
+URI: /images/visuals/lifecycle-artefacts-relationship-diagram.png
+OG: /images/og/lifecycle-artefacts-relationship-diagram-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: manifest · receipt · passport · attestation
+Alt: Relationship diagram of core NeuralBridge artefacts: sealed manifest, receipt, verification bundle, passport, signed ledger head and case export.
+AEO: NeuralBridge produces a sealed manifest, receipt, verification bundles, change-case exports, a machine passport and a signed ledger head; each can be independently re-checked.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-offline-kit-to-optional-hosted
+URI: /images/visuals/lifecycle-offline-kit-to-optional-hosted.png
+OG: /images/og/lifecycle-offline-kit-to-optional-hosted-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: python -m assurance kit
+Alt: Offline enrolment kit that runs locally with a process-level socket guard, with optional later push to a hosted ledger.
+AEO: NeuralBridge offline enrolment kit imports only cryptography and arms a socket guard that refuses all outbound traffic; the kit can later be used with a hosted deployment but never requires one.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+## lifecycle-full-operator-pipeline
+URI: /images/visuals/lifecycle-full-operator-pipeline.png
+OG: /images/og/lifecycle-full-operator-pipeline-og.png
+Route: /product/industrial-autonomous-assurance
+CLI/API: assurance watch · assurance change
+Alt: Full operator pipeline from baseline seal through continuous monitoring, change cases and coverage updates to final attestation.
+AEO: NeuralBridge operator pipeline seals a baseline, monitors for drift or intervention, opens change-assurance cases, updates coverage and produces attestable artefacts so that the evidence position remains current under EU regulatory clocks.
+Boundary: Proves hash-chained evidence of configuration, verification and change; refuses to claim legal certification or that a public hosted API is deployed.
+
+
+# --- Pack: neuralbridge-roles-visuals ---
+# NeuralBridge Role Pages Visual Index
+# Aligned to /solutions/* pages on neuralbridge.io
+
+## 01. manufacturer-declaration-of-conformity-evidence-gap
+Route: /solutions/manufacturer
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 02. system-integrator-verifiable-evidence-chain
+Route: /solutions/system-integrator
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 03. plant-operator-air-gapped-workstation
+Route: /solutions/plant-operator
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 04. compliance-officer-cra-article-14-dual-clocks
+Route: /solutions/compliance-officer
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 05. insurer-auditor-zero-account-verification
+Route: /solutions/insurer-auditor
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 06. ai-ops-mcp-gateway-human-approval
+Route: /solutions/ai-ops
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 07. six-roles-overview
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 08. change-assurance-case-human-gate
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 09. iso15066-coverage-for-operators-manufacturers
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 10. fleet-advisory-deterministic-fanout
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 11. offline-enrolment-kit-for-plant
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 12. unmetered-verify-for-insurers-auditors
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 13. pricing-tiers-aligned-to-roles
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 14. hash-chained-ledger-anatomy-all-roles
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.
+
+## 15. role-to-capability-mapping
+Route: /solutions
+NeuralBridge provides continuous cryptographic evidence for EU CRA Article 14 and Machinery Regulation Annex III. This light premium visual supports the role-specific workflow without claiming certification.

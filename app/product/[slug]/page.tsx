@@ -11,6 +11,8 @@ import {
 } from '../../lib/productPages';
 import { BY_ID, STATUS_LABEL, SURFACE_NAMES } from '../../lib/siteCapabilities';
 import { buildMetadata } from '../../lib/seo';
+import VisualDiagram from '../../components/VisualDiagram';
+import { PRODUCT_VISUAL_BY_SLUG } from '../../lib/visuals';
 import '../product.css';
 
 // Every page is generated from app/lib/productPages.ts: the words, the capability ids and the FAQ that
@@ -103,6 +105,9 @@ export default async function ProductPage({ params }: { params: ProductParams })
             <span className="eyebrow">{page.kicker}</span>
             <h1>{page.h1}</h1>
             <p className="product-definition">{inline(page.definition)}</p>
+            {PRODUCT_VISUAL_BY_SLUG[page.slug] ? (
+              <VisualDiagram slug={PRODUCT_VISUAL_BY_SLUG[page.slug]} emitJsonLd={false} showCaption={false} />
+            ) : null}
 
             <section id="problem" aria-labelledby="problem-h">
               <h2 id="problem-h">The problem</h2>
@@ -131,6 +136,9 @@ export default async function ProductPage({ params }: { params: ProductParams })
                   </li>
                 ))}
               </ol>
+              {isCategory ? (
+                <VisualDiagram slug="lifecycle-full-operator-pipeline" emitJsonLd={false} showCaption={false} />
+              ) : null}
             </section>
 
             <section id="what-you-get" aria-labelledby="get-h">

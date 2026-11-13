@@ -6,6 +6,7 @@ import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
 import VisualDiagram from '../components/VisualDiagram';
+import { APPLICATION_VISUAL_SLUGS } from '../lib/visuals';
 
 export const metadata: Metadata = buildMetadata({
   title: 'Applications',
@@ -98,6 +99,7 @@ export default function ApplicationsPage() {
             Not a roadmap slide — every card below names the exact <code>/v1</code> route it calls and the plan
             that gates it, cross-checked against <a href="/openapi.json">openapi.json</a>.
           </p>
+          <VisualDiagram slug="applications-hero-five-real-routes" variant="dark" />
         </div>
       </section>
 
@@ -123,6 +125,18 @@ export default function ApplicationsPage() {
               </article>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="section section-alt" id="application-diagrams">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Route &amp; entitlement diagrams</span>
+            <h2>How each application maps to enforced routes and plans</h2>
+          </div>
+          {APPLICATION_VISUAL_SLUGS.map((vSlug) => (
+            <VisualDiagram key={vSlug} slug={vSlug} />
+          ))}
         </div>
       </section>
 
