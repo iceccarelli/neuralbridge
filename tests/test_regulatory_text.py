@@ -125,3 +125,23 @@ def test_nothing_shipped_calls_a_product_compliant_or_cra_ready():
             assert banned not in text, (path.name, banned)
     legacy = (ROOT / "src/neuralbridge/compliance/cra_report.py").read_text(encoding="utf-8")
     assert "Compliant with CRA requirements" not in legacy
+
+
+def test_machinery_doc_says_what_annex_iii_1_1_9_paragraphs_it_does_not_address():
+    """Paragraphs 1-3 and the 'at all times in an easily accessible form' limb are quoted from the OJ text
+    (OJ L 165, 29.6.2023, retrieved 2026-11-12), and the broader reading of paragraph 5 is stated as open."""
+    text = " ".join((ROOT / "deploy/assurance/MACHINERY.md").read_text(encoding="utf-8").split())
+    assert "## What this does not address in Annex III 1.1.9" in text
+    for quoted in (
+        "does not lead to a hazardous situation.",
+        "shall be designed so that it is adequately protected against accidental or intentional corruption.",
+        "shall be identified as such and shall be adequately protected against accidental or intentional corruption.",
+        "shall be able to provide that information at all times in an easily accessible form.",
+        "collect evidence of a legitimate or illegitimate intervention in the software or a modification of the "
+        "software installed on the machinery or related product or its configuration.",
+    ):
+        assert quoted in text, quoted
+    assert "or as all installed software" in text and "The narrower reading is an interpretation" in text
+    assert "A qualified person must decide" in text and "does not certify" in text
+    # docs/assurance/machinery.md is an include of the same file, not a copy that could drift
+    assert 'deploy/assurance/MACHINERY.md"' in (ROOT / "docs/assurance/machinery.md").read_text(encoding="utf-8")

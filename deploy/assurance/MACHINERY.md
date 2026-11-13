@@ -492,3 +492,52 @@ It does not confirm the manifest is complete. A safety-relevant item nobody
 listed is covered by nothing here and reported by nothing here. That sentence is
 in the `checks_skipped` of every coverage assessment, because it is the limit
 that matters and it is the one a customer will otherwise assume away.
+
+## What this does not address in Annex III 1.1.9
+
+Annex III 1.1.9 ("Protection against corruption") of Regulation (EU) 2023/1230 has five paragraphs.
+The quotations are from the Official Journal text (OJ L 165, 29.6.2023, CELEX 32023R1230, retrieved
+from publications.europa.eu with `Accept: application/xhtml+xml`, `Accept-Language: en`, on
+2026-11-12). The corrigendum and amendments recorded in `tests/test_regulatory_text.py` concern
+other provisions (application dates; Arts. 8, 20, 47), not this text; the quotations were not diffed
+against any later consolidation.
+
+This package is evidence tooling for the manufacturer. The sections above concern **paragraphs 4 and
+5 only**, and only for items a person declared in a manifest. It does not address:
+
+1. **Paragraph 1, connected devices.** "The machinery or related product shall be designed and
+   constructed so that the connection to it of another device, via any feature of the connected
+   device itself or via any remote device that communicates with the machinery or related product
+   does not lead to a hazardous situation." That is a design property of the machine; nothing here
+   tests it.
+2. **Paragraph 2, hardware components.** "A hardware component transmitting signal or data,
+   relevant for connection or access to software that is critical for the compliance of the
+   machinery or related product with the relevant essential health and safety requirements shall be
+   designed so that it is adequately protected against accidental or intentional corruption. The
+   machinery or related product shall collect evidence of a legitimate or illegitimate intervention
+   in that hardware component, [...]". A manifest lists software; hardware components, their
+   protection and evidence of interventions in them are not modelled.
+3. **Paragraph 3, critical software and data.** "Software and data that are critical for the
+   compliance of the machinery or related product with the relevant essential health and safety
+   requirements shall be identified as such and shall be adequately protected against accidental or
+   intentional corruption." The package records what a person declared; it does not identify
+   critical software or data, and it does not protect it. Data is not modelled.
+4. **Paragraph 4, last limb.** "The machinery or related product shall identify the software
+   installed on it that is necessary for it to operate safely, and shall be able to provide that
+   information at all times in an easily accessible form." A manifest filed in a ledger is a record
+   held by the manufacturer or integrator; it is not the machine providing the information itself,
+   at all times, in an easily accessible form. Whether a ledger entry satisfies that limb is not
+   something this package decides.
+5. **Paragraph 5, which software.** "The machinery or related product shall collect evidence of a
+   legitimate or illegitimate intervention in the software or a modification of the software
+   installed on the machinery or related product or its configuration." The text says "the
+   software" and "the software installed on the machinery". It may be read as the software
+   identified in paragraph 4 (necessary to operate safely), which is how this package scopes its
+   manifests, **or as all installed software**. The narrower reading is an interpretation, not
+   established by the text, and not settled by any official guidance this package has seen. If the
+   broader reading is right, evidence for the safety-relevant software only does not cover it, and
+   an item nobody listed is covered by nothing here. A qualified person must decide which reading
+   applies to a given machine.
+
+None of this is a statement that a machine does or does not meet Annex III 1.1.9. This package does
+not certify, assess or declare conformity.
