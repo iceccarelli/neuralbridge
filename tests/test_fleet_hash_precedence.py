@@ -340,3 +340,10 @@ class TestAPlaceholderIsNeverAHashMatch:
         adv = advisory(fixed_hashes=("n/a",))
         m = match_item(adv, item(supplier="ControlCo", content_hash="n/a", version="3.8.2"))
         assert m is not None
+
+    def test_an_all_zero_hash_read_off_the_machine_is_a_contradiction_not_a_label_match(self):
+        """A placeholder cannot confirm or clear, but beside a label the supplier names and
+        hashes it published it is still 'label and artefact disagree': a person looks.
+        (tests/test_attack_fleet.py M11 in the stress repo expects exactly this.)"""
+        m = match_item(advisory(), item(supplier="ControlCo", content_hash="0" * 64))
+        assert m is not None and m[0] is MatchBasis.HASH_MISMATCH

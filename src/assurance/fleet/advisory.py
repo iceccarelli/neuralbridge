@@ -490,6 +490,10 @@ def _match_artefact(
     recorded = fold_hash(item.content_hash)
     digest = _digest(item.content_hash)
     machine_hash = digest if item.hash_source.describes_this_unit else ""
+    # What the machine itself reported, digest or not. A placeholder read off the machine
+    # cannot confirm or clear anything (machine_hash), but beside a label the supplier
+    # names and hashes it published it is still "the label and the artefact disagree".
+    reported = recorded if item.hash_source.describes_this_unit else ""
     if recorded and not digest:
         set_aside = (f" The hash recorded for it ({recorded[:12]!r}) is not a SHA-256 "
                      "digest, so it was not compared.")
@@ -507,8 +511,8 @@ def _match_artefact(
 
     label_matches = bool(label) and label in versions
 
-    if label_matches and machine_hash and (
-            affected_hashes or machine_hash in fixed_hashes):
+    if label_matches and reported and (
+            artefact.content_hashes or machine_hash in fixed_hashes):
         # The label says affected and the artefact disagrees with the supplier's
         # own figures. This is not "affected" and not "clear".
         if machine_hash in fixed_hashes:
@@ -521,7 +525,7 @@ def _match_artefact(
             )
         return MatchBasis.HASH_MISMATCH, (
             f"this machine reports version {item.version!r}, which the advisory "
-            f"names, but the artefact hashes to {machine_hash[:12]}, which "
+            f"names, but the artefact hashes to {reported[:12]}, which "
             f"is not among the hashes {advisory.issued_by} published for that "
             "version. Either the supplier's figure is wrong or this machine is "
             "not running what it says it is running. Both need a person."
