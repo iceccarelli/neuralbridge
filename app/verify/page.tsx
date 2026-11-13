@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { HOSTED_API } from '../lib/hostedApi';
 import { buildMetadata } from '../lib/seo';
 import EvidenceVerifier from '../components/EvidenceVerifier';
+import VisualDiagram from '../components/VisualDiagram';
 import { repoLink } from '../lib/links';
 
 export const metadata: Metadata = buildMetadata({
@@ -30,6 +31,7 @@ export default function VerifyPage() {
       <section className="section" style={{ paddingTop: 0 }}>
         <div className="shell">
           <EvidenceVerifier />
+          <VisualDiagram slug="zero-account-auditor-insurer-verification" />
         </div>
       </section>
 

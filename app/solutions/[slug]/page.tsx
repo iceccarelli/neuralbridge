@@ -5,6 +5,7 @@ import { IMAGES } from '../../lib/images';
 import { buildMetadata, fitDescription } from '../../lib/seo';
 import RotatingImage from '../../components/RotatingImage';
 import ImageryNote from '../../components/ImageryNote';
+import VisualDiagram from '../../components/VisualDiagram';
 
 export function generateStaticParams() {
   return SOLUTIONS.map((s) => ({ slug: s.slug }));
@@ -99,6 +100,9 @@ export default async function SolutionPage({ params }: { params: SolutionParams 
               </article>
             ))}
           </div>
+          {solution.slug === 'compliance-officer' && (
+            <VisualDiagram slug="eu-cra-article-14-dual-deadline-clocks" />
+          )}
         </div>
       </section>
 

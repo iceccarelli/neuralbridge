@@ -13,6 +13,7 @@ import IntentModule from './components/IntentModule';
 import PricingPlans from './components/PricingPlans';
 import RotatingImage from './components/RotatingImage';
 import ImageryNote from './components/ImageryNote';
+import VisualDiagram from './components/VisualDiagram';
 import SizingCalculator from './components/SizingCalculator';
 import ValidatorPlayground from './components/ValidatorPlayground';
 
@@ -295,6 +296,9 @@ export default function IndustrialAutonomousAssuranceSite() {
             <p className="flow-caption">The design, drawn as a list. Not a screenshot; nothing here is live data.</p>
           </div>
         </div>
+        <div className="shell" style={{ marginTop: '2.25rem' }}>
+          <VisualDiagram slug="hero-cryptographic-machine-assurance" variant="dark" />
+        </div>
         <svg className="hero-seam" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
           <path d="M0,60 C480,0 960,0 1440,60 L1440,60 L0,60 Z" fill="var(--surface)" />
         </svg>
@@ -312,6 +316,7 @@ export default function IndustrialAutonomousAssuranceSite() {
               folder says so.
             </p>
           </div>
+          <VisualDiagram slug="silent-drift-broken-declaration-of-conformity" />
           <ul className="ruled">
             <li>
               <h3>Changes silently invalidate evidence</h3>
@@ -370,6 +375,7 @@ export default function IndustrialAutonomousAssuranceSite() {
               own job well enough; none is built to say whether a verification still covers the machine in front of you.
             </p>
           </div>
+          <VisualDiagram slug="legacy-tools-vs-hash-chained-ledger-matrix" />
           <div className="cmp-wrap" tabIndex={0} role="region" aria-label="Comparison table, scrolls sideways on narrow screens">
             <table className="cmp">
               <thead>
@@ -764,6 +770,8 @@ python -m assurance kit run  plant/kit.json --out plant/out`}</div>
             sizes="100vw"
             className="pricing-media"
           />
+
+          <VisualDiagram slug="pricing-entitlement-tiers-validator-register-cell" />
 
           <SizingCalculator />
 

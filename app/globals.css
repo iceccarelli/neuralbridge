@@ -3560,3 +3560,15 @@ table.status-table tbody tr:last-child td {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
+/* Engineering architecture diagrams (public/images/visuals) */
+.visual-figure { margin: 2rem 0; border: 1px solid rgba(15, 27, 45, 0.14); border-radius: 12px; overflow: hidden; background: #ffffff; }
+.visual-frame { background: #0b1422; line-height: 0; }
+.visual-frame img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; }
+.visual-caption { padding: 1rem 1.25rem; border-top: 1px solid rgba(15, 27, 45, 0.1); font-size: 0.9rem; color: var(--ink-soft, #334155); }
+.visual-caption-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1rem; margin-bottom: 0.35rem; color: var(--ink, #0f1b2d); }
+.visual-caption-head code { font-size: 0.78rem; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(15, 27, 45, 0.07); color: var(--ink, #0f1b2d); }
+.visual-caption p { margin: 0; line-height: 1.55; }
+.visual-figure-dark { border-color: rgba(255, 255, 255, 0.16); background: #0f1b2d; }
+.visual-figure-dark .visual-caption { border-top-color: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.82); }
+.visual-figure-dark .visual-caption-head { color: #ffffff; }
+.visual-figure-dark .visual-caption-head code { background: rgba(255, 255, 255, 0.12); color: #e2e8f0; }

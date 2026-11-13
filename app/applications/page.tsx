@@ -5,6 +5,7 @@ import { SALES } from '../lib/links';
 import { IMAGES } from '../lib/images';
 import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
+import VisualDiagram from '../components/VisualDiagram';
 
 export const metadata: Metadata = buildMetadata({
   title: 'Applications',
@@ -103,6 +104,7 @@ export default function ApplicationsPage() {
       <section className="section" id="applications-grid">
         <div className="shell">
           <h2 className="sr-only">The five applications</h2>
+          <VisualDiagram slug="iso15066-safety-envelope-and-coverage-states" />
           <div className="tile-grid">
             {APPLICATIONS.map((appItem) => (
               <article className="tile" key={appItem.slug}>
