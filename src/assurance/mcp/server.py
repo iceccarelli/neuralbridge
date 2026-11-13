@@ -8,36 +8,26 @@ returns the same honest "not configured" error instead of pretending to
 have called anything, matching the fail-closed pattern the rest of this
 site uses (see ``/console`` and ``/developers``).
 
-Tool set is deliberately small, and pinned to the list in
-``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``: the always-free routes
-(``plans``, ``spec_validate``, ``services``,
-``machine_assurance_check``, ``machine_check``, ``evidence_verify``, ``machinery_passport_check``),
-the paid routes (``machine_verify``, ``machinery_coverage``, ``fleet_report``,
-``fleet_machine_assurance``, Cell tier; ``register_cases``, Register tier) chosen because calling
-them on the wrong plan or with no key surfaces the API's real, structured 401/402 shape (the thing
-an agent needs to see to route a human to checkout, not a summary of it), and the change queue:
-three reads (``change_cases``, ``change_case``, ``change_export``), three writes an agent may make
-(``change_claim``, ``change_advance``, ``change_reverify``) and two that open a case from a
-machine's own manifests (``change_assess_drift``, ``change_assess_intervention``). Eighteen further
-read-only tools (``spec_fields``, ``art14_case``, ``art14_register``, ``art14_breaches``,
-``art14_export``, ``ledger_verify``, ``attest_log``, ``attest_verify``, ``attest_service_key``,
-``machine_separation``, ``machinery_diff``, ``fleet_machines``, ``fleet_observations``,
-``fleet_declaration_check``, ``value_position``, ``change_replay``, ``supplier_trust_list``,
-``supplier_trust_check``) wrap a GET or a POST that answers a question and records nothing.
-Four more reads
-serve public-source intelligence from the operator's shared observation store (``intel_history``,
-``intel_observation``, ``intel_cve``, ``intel_candidates``; Cell tier); there is no tool that
-ingests or fetches a feed, and an unconfigured store is the API's real 503, never an empty
-list. Seven more tools take third-party documents (``sbom_import``, ``sbom_drafts``, ``sbom_draft``,
-``csaf_import``, ``csaf_records``, ``csaf_record``, ``csaf_impact``): the two imports record a
-DRAFT inventory (pending a named person's review) and an unsigned, inspect-only supplier advisory,
-and the rest read. Everything beyond the case work and those two imports reads or verifies and
-never decides or records, and none of it can supply a
-trust list or a public key, so what an agent asks the server to check is judged under the server's
-own configuration. There is no tool that opens a case from an advisory, none that reviews or approves
-an SBOM draft (approval enrols a machine and decides which software is safety-relevant), and no tool that closes, rejects,
-defers or resumes a case, answers its open questions or waives a re-verification: those are a
-named person's, on the CLI or the HTTP API.
+53 tools, pinned to the list in ``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``
+and to the connector page by ``tests/test_site_mcp_parity.py`` (which also fails if this number or the
+README's drifts from the registered tools). 46 only read or compute and never decide or record: free
+checks and catalogues, the Cell-tier verifications and reads of the account's own ledger, the
+Register-tier Article 14 reads, and the operator's public-source store (``intel_*``). Calling a paid
+one on the wrong plan or with no key surfaces the API's real, structured 401/402 shape (the thing an
+agent needs to see to route a human to checkout, not a summary of it). ``machine_verify`` is one of
+them: it computes a verification and asks the API NOT to seal it (``seal: false``, with no parameter to
+change that); recording it is the account holder's, through the API or the CLI.
+
+Seven tools write the account's ledger, and ``tests/test_assurance_mcp_write_classification.py`` proves
+from the outside that these seven, and only these, do: the change queue's ``change_claim``,
+``change_advance`` and ``change_reverify``; ``change_assess_drift`` and ``change_assess_intervention``,
+which open a case from a machine's own manifests; and ``sbom_import`` and ``csaf_import``, which record
+a DRAFT inventory (pending a named person's review) and an unsigned, inspect-only supplier advisory.
+No tool supplies a trust list or a public key, so what an agent asks the server to check is judged under
+the server's own configuration. There is no tool that opens a case from an advisory, none that reviews or
+approves an SBOM draft (approval enrols a machine and decides which software is safety-relevant), none
+that fetches or ingests a feed, and none that closes, rejects, defers or resumes a case, answers its open
+questions or waives a re-verification: those are a named person's, on the CLI or the HTTP API.
 
 Run with ``assurance-mcp`` (installed via ``pip install -e '.[assurance-mcp]'``)
 or ``python -m assurance.mcp.server``. Transport is stdio by default, which
@@ -69,7 +59,9 @@ mcp: MCPServer = MCPServer(
         "the API's real 401, which is the correct, informative answer — not an "
         "error in this server. You can read and work the change queue; you "
         "cannot decide a case, resume it, answer its open questions or waive a "
-        "re-verification — those need a named person."
+        "re-verification — those need a named person. machine_verify computes a "
+        "verification and does NOT record it: recording is the account holder's, "
+        "through the API or the CLI."
     ),
 )
 
@@ -205,6 +197,17 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
     return await _call("POST", "/v1/spec/validate", json_body={"track": track, "stage": stage, "payload": payload})
 
 
+#: What `machine_verify` says about the result, because the reply is shaped like a sealed one
+#: (a `content_hash`, an `evidence` block with a `recorded_at`) and an agent must not read it as
+#: filed. Said only when the API itself answered `sealed: false`.
+_NOT_RECORDED = (
+    "This verification was computed and NOT recorded: nothing was appended to the account's "
+    "evidence ledger, so it is not evidence of any machine until the account holder records it "
+    "through the API (POST /v1/machine/verify) or the CLI (assurance machine verify). "
+    "`content_hash` names this computation only."
+)
+
+
 @mcp.tool()
 async def machine_verify(
     envelope: dict[str, Any], trace: dict[str, Any], actor: str,
@@ -212,6 +215,15 @@ async def machine_verify(
     subject: str = "", configuration_hash: str = "",
 ) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
+    The verification is computed and NOT recorded.
+
+    This tool does not append anything to the account's evidence ledger: it always asks the API
+    not to seal (``seal: false``) and has no parameter to change that. An agent does not write
+    evidence. The reply carries the verdict, the evidence tier and why, and says
+    ``recorded: false``; recording the verification is done by the account holder through the API
+    or the CLI (``assurance machine verify``), after which it counts in coverage, re-verification
+    and the passport. Until then it is evidence of nothing, and ``content_hash`` names only this
+    computation.
 
     Cell-tier only. With no ASSURANCE_API_KEY, or a key on Validator/Register,
     this returns the API's real 401/402 — a structured, parseable answer
@@ -223,15 +235,19 @@ async def machine_verify(
     supply a trust list, a private key or a provenance basis. Without an accepted
     attestation a declared provenance is capped at ``community``; an accepted one proves
     a trusted key signed these exact trace bytes, not that the recording is physically
-    true. ``machine_serial`` names the unit the verification is about. ``subject`` files
-    the sealed bundle under that ledger subject, as ``--subject`` does on the CLI; give a
-    unit key (``maker/model#serial``) for it to count as evidence of that unit. Without
-    one the bundle is filed under ``product@version`` and counts for no unit.
+    true. ``machine_serial`` names the unit the verification is about. ``subject`` is the
+    ledger subject the verification is about, as ``--subject`` is on the CLI: give a unit key
+    (``maker/model#serial``) to have it judged as that unit's, otherwise it is
+    ``product@version``, a product line, and counts for no unit. As nothing is recorded, the
+    tier shown was not compared with the ledger (see ``unit_binding_note``).
     ``configuration_hash`` is the machine manifest's configuration hash (64 hex digits) the run
     was made against: a verification without it is unbound and coverage never reads a safety
     function current on it.
     """
-    body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
+    # `seal: false`, always. The API defaults `seal` to true, so leaving it out would append the
+    # result to the account's hash-chained ledger: an agent writing evidence. Deliberately not a
+    # parameter: tests/test_assurance_mcp_write_classification.py pins both halves.
+    body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor, "seal": False}
     if configuration_hash:
         body["configuration_hash"] = configuration_hash
     if recorder_attestations:
@@ -240,7 +256,12 @@ async def machine_verify(
         body["machine_serial"] = machine_serial
     if subject:
         body["subject"] = subject
-    return await _call("POST", "/v1/machine/verify", json_body=body)
+    result = await _call("POST", "/v1/machine/verify", json_body=body)
+    reply = result.get("body")
+    if result.get("status") == 200 and isinstance(reply, dict) and reply.get("sealed") is False:
+        result["recorded"] = False
+        result["recording_note"] = _NOT_RECORDED
+    return result
 
 
 @mcp.tool()

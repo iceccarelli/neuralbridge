@@ -85,3 +85,23 @@ def test_the_page_makes_none_of_its_old_claims():
         assert stale not in PAGE, stale
     # counts come from the array, not from typed numbers
     assert "{TOOL_COUNT} tools" in PAGE
+
+
+README = (ROOT / "src" / "assurance" / "mcp" / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_tool_counts_and_table_in_the_server_docstring_and_readme_are_the_registered_ones():
+    """The README said 'four tools' and the docstring a number that had outgrown the code."""
+    registered = re.findall(r"^@mcp\.tool\(\)\nasync def (\w+)\(", SERVER, re.M)
+    n = len(registered)
+    assert n >= 50
+    doc = SERVER.split('"""', 2)[1]
+    assert re.findall(r"^(\d+) tools,", doc, re.M) == [str(n)], "module docstring tool count"
+    assert re.findall(r"— (\d+) tools, each", README) == [str(n)], "README intro tool count"
+    assert re.findall(r"^(\d+) tools\. ", README, re.M) == [str(n)], "README Tools count"
+    rows = dict(re.findall(r"^\| `(\w+)` \| `[^`]+` \| \w+ \| (yes|no) \|$", README, re.M))
+    assert set(rows) == set(registered), "README table names"
+    writers = {name for name, (_r, _t, write) in _page_tools().items() if write}
+    assert {k for k, v in rows.items() if v == "yes"} == writers, "README writer column"
+    assert f"{n - len(writers)} only read" in doc, "module docstring read-only count"
+    assert len(writers) == 7 and "Seven tools write the account's ledger" in doc
