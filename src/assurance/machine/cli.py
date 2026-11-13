@@ -284,6 +284,32 @@ def _cmd_separation(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_boundary(boundary: dict | None) -> None:
+    """The result's boundary under separate headings (engine 7 and later).
+
+    Printed after the flat ``not checked:`` list, which is unchanged: that list is the sealed
+    set of stated limitations, and the headings below are the structured statement of what the
+    result covers and who must decide what follows from it.
+    """
+    if not boundary:
+        return
+    for heading, key in (("tested", "tested"), ("not tested", "not_tested"),
+                         ("assumptions", "assumptions")):
+        print(f"\n  {heading}:")
+        for line in boundary[key]:
+            print(textwrap.fill(line, width=78, initial_indent="    - ",
+                                subsequent_indent="      "))
+    print("\n  valid for:")
+    print(textwrap.fill(boundary["valid_for"], width=78, initial_indent="    ",
+                        subsequent_indent="    "))
+    review = boundary["human_review"]
+    print("\n  qualified human review required:" if review["required"]
+          else "\n  human review:")
+    for line in review["reasons"]:
+        print(textwrap.fill(line, width=78, initial_indent="    - ",
+                            subsequent_indent="      "))
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     envelope = SafetyEnvelope.from_json(args.envelope)
     trace = Trace.from_json(args.trace)
@@ -321,6 +347,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             print("\n  not checked:")
             for c in bundle.result.checks_skipped:
                 print(f"    - {c}")
+        _print_boundary(bundle.result.boundary)
         if args.out:
             print(f"\n  bundle written to {args.out}")
         if ledger:

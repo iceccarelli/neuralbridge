@@ -47,6 +47,12 @@ NUMERIC_FIELDS = tuple(SEPARATION_BODY) + ("human_speed_mm_s",)
 
 
 @pytest.fixture()
+def store(client):
+    from assurance.api import deps
+    return deps.get_accounts()
+
+
+@pytest.fixture()
 def client(tmp_path, monkeypatch):
     import importlib
 
@@ -395,3 +401,147 @@ class TestASensedClosingSpeedIsDisclosed:
         del raw["result"]
         c = check_bundle_data(reseal(raw), envelope=env, trace=tr)
         assert not c.ok and any("limitations differ" in p for p in c.problems)
+
+
+# -- F2: every result and check states its boundary, and a human must review it -----------------
+from assurance.core.evidence import Actor  # noqa: E402
+from assurance.machine.boundary import BOUNDARY_KEYS  # noqa: E402
+from tests.test_assurance_bundle_check import reseal  # noqa: E402
+
+_ACTOR = Actor(identifier="v.grimaldi", role="verification engineer")
+_CHECK_NAMES = ("workspace_containment", "speed_limit", "ssm_separation",
+                "stop_characterisation", "pfl_contact", "mode_consistency",
+                "trace_coverage", "input_dates")
+
+
+def _sealed(env=None, tr=None):
+    env, tr = env or _envelope(), tr or _ssm_trace(3000.0)
+    raw = json.loads(json.dumps(build_bundle(env, tr, actor=_ACTOR).to_dict()))
+    return raw, env, tr
+
+
+class TestEveryResultStatesItsBoundary:
+    def test_the_result_and_every_check_carry_the_whole_block(self):
+        r = verify(_envelope(), _ssm_trace(3000.0)).to_dict()
+        assert tuple(r["boundary"]) == BOUNDARY_KEYS
+        assert [c["name"] for c in r["checks"]] == list(_CHECK_NAMES)
+        for c in r["checks"]:
+            assert tuple(c["boundary"]) == BOUNDARY_KEYS, c["name"]
+            assert c["boundary"]["tested"] and c["boundary"]["not_tested"]
+            assert c["boundary"]["valid_for"]
+
+    def test_human_review_is_required_on_every_block_whatever_the_outcome(self):
+        for tr, env in ((_ssm_trace(3000.0), _envelope()), (_ssm_trace(10.0), _envelope()),
+                        (_ssm_trace(3000.0, n=3), _envelope())):
+            r = verify(env, tr).to_dict()
+            blocks = [r["boundary"], *[c["boundary"] for c in r["checks"]]]
+            assert all(b["human_review"]["required"] is True for b in blocks)
+            assert all(b["human_review"]["reasons"] for b in blocks)
+
+    def test_inputs_are_named_with_the_hashes_of_the_files_they_came_from(self):
+        env, tr = _envelope(), _ssm_trace(3000.0)
+        b = verify(env, tr).to_dict()["boundary"]
+        assert b["inputs_used"]["hashes"] == {"envelope": env.content_hash(),
+                                              "trace": tr.content_hash()}
+        assert "trace.samples[].separation" in b["inputs_used"]["fields"]
+
+    def test_observed_versus_declared_follows_the_samples(self):
+        def source(tr):
+            r = verify(_envelope(), tr).to_dict()
+            return next(c for c in r["checks"] if c["name"] == "ssm_separation")[
+                "boundary"]["observed_vs_declared"]["human_speed"]
+
+        assert source(_ssm_trace(3000.0)) == "declared"
+        assert source(_ssm_trace(3000.0, human_speed=800.0)) == "observed"
+        mixed = Trace(
+            trace_id="RUN-X", provenance=Provenance.FIELD, source_system="fw",
+            started_at=datetime(2026, 9, 12, 4, 31, tzinfo=UTC), sample_rate_hz=50.0,
+            samples=tuple(Sample(t=i / 50.0, tcp=(0.0, 0.0, 1000.0), tcp_speed=300.0,
+                                 mode=OperatingMode.SSM, separation=3000.0,
+                                 human_speed=800.0 if i % 2 else None) for i in range(20)))
+        assert source(mixed) == "mixed"
+
+    def test_a_check_that_could_not_run_says_why_in_its_review_reasons(self):
+        r = verify(_envelope(), _ssm_trace(3000.0, n=3)).to_dict()
+        cov = next(c for c in r["checks"] if c["name"] == "trace_coverage")
+        assert cov["outcome"] == "unchecked"
+        assert any("could not run" in x for x in cov["boundary"]["human_review"]["reasons"])
+
+    def test_the_sensed_speed_reaches_the_review_reasons(self):
+        r = verify(_envelope(), _ssm_trace(1200.0, 0.0)).to_dict()
+        reasons = r["boundary"]["human_review"]["reasons"]
+        assert any("20 of 20 compared samples used the trace's own closing speed "
+                   "(20 below" in x for x in reasons)
+
+    def test_engine_6_has_no_block_anywhere(self):
+        r = verify(_envelope(), _ssm_trace(3000.0), engine_version="6").to_dict()
+        assert "boundary" not in r and all("boundary" not in c for c in r["checks"])
+
+
+class TestTheBoundaryIsSealedAndCannotBeEdited:
+    def test_a_sealed_bundle_carries_it_and_replays(self):
+        raw, env, tr = _sealed()
+        assert tuple(raw["evidence"]["body"]["boundary"]) == BOUNDARY_KEYS
+        assert raw["result"]["boundary"] == raw["evidence"]["body"]["boundary"]
+        c = check_bundle_data(raw, envelope=env, trace=tr)
+        assert c.ok and c.level == "reproduced"
+        assert any("boundary block that says qualified human review is required" in v
+                   for v in c.verified)
+
+    def test_switching_review_off_and_resealing_is_rejected_without_the_originals(self):
+        raw, _, _ = _sealed()
+        raw["evidence"]["body"]["boundary"]["human_review"]["required"] = False
+        c = check_bundle_data(reseal(raw))
+        assert not c.ok
+        assert any("does not say that qualified human review is required" in p
+                   for p in c.problems)
+
+    def test_switching_review_off_on_one_check_is_rejected(self):
+        raw, _, _ = _sealed()
+        raw["evidence"]["body"]["checks"][2]["boundary"]["human_review"]["required"] = False
+        c = check_bundle_data(reseal(raw))
+        assert not c.ok and any("ssm_separation" in p for p in c.problems)
+
+    def test_dropping_the_block_from_an_engine_7_body_is_rejected(self):
+        raw, _, _ = _sealed()
+        del raw["evidence"]["body"]["boundary"]
+        c = check_bundle_data(reseal(raw))
+        assert not c.ok and any("records no boundary block" in p for p in c.problems)
+
+    def test_rewording_a_limit_is_caught_on_replay(self):
+        raw, env, tr = _sealed()
+        raw["evidence"]["body"]["boundary"]["not_tested"][0] = "Nothing was left out."
+        del raw["result"]
+        c = check_bundle_data(reseal(raw), envelope=env, trace=tr)
+        assert not c.ok and any("boundary" in p for p in c.problems)
+
+    def test_a_printed_result_with_an_edited_block_is_caught(self):
+        raw, _, _ = _sealed()
+        raw["result"]["boundary"]["human_review"]["required"] = False
+        c = check_bundle_data(raw)
+        assert not c.ok and any("boundary" in p for p in c.problems)
+
+
+class TestTheBoundaryOnEverySurface:
+    def test_the_cli_prints_separate_headings_after_the_unchanged_not_checked_list(
+            self, tmp_path, capsys):
+        env, tr = _envelope(), _ssm_trace(3000.0)
+        (tmp_path / "e.json").write_text(json.dumps(env.to_dict()))
+        (tmp_path / "t.json").write_text(json.dumps(tr.hashable_payload()))
+        code = machine_cli(["verify", "--envelope", str(tmp_path / "e.json"), "--trace",
+                            str(tmp_path / "t.json"), "--actor", "a.person", "--role", "engineer"])
+        out = capsys.readouterr().out
+        assert code == 0
+        order = [out.index(h) for h in ("  not checked:", "\n  tested:", "\n  not tested:",
+                                        "\n  assumptions:", "\n  valid for:",
+                                        "\n  qualified human review required:")]
+        assert order == sorted(order)
+
+    def test_the_api_returns_it_for_a_cell_account(self, client, store):
+        from tests.test_assurance_machine import keyed
+        env = _envelope()
+        payload = {"envelope": env.to_dict(), "trace": _ssm_trace(3000.0).hashable_payload(),
+                   "actor": "v.grimaldi"}
+        d = client.post("/v1/machine/verify", json=payload, headers=keyed(store, "cell")).json()
+        assert d["result"]["boundary"]["human_review"]["required"] is True
+        assert all("boundary" in c for c in d["result"]["checks"])

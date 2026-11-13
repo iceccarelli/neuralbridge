@@ -37,6 +37,11 @@ from assurance.core.errors import AssuranceError
 from assurance.core.identity import utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.machine import provenance_trust
+from assurance.machine.boundary import (
+    FIRST_ENGINE_WITH_BOUNDARY,
+    check_boundary,
+    result_boundary,
+)
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import LimitsReviewAssessment, ReviewTrust, assess_reviews
@@ -97,8 +102,11 @@ __all__ = [
 #:    compared samples used it, the lowest value seen, and how many were below the figure the
 #:    envelope would otherwise have used. A sensed speed below that figure shortens Sh and
 #:    can turn a failing separation into a passing one (a sensed 0.0 replaces 1600 mm/s with
-#:    nothing said); until engine 6 the result stated only declared and default use. No check
-#:    outcome, verdict or tier changes. Engine 6 results are still produced by this build
+#:    nothing said); until engine 6 the result stated only declared and default use. The
+#:    result and every check also carry a ``boundary`` block (``machine/boundary.py``): what was
+#:    tested and not tested, the inputs used, observed versus declared per quantity, the
+#:    assumptions, the scope, and that qualified human review is required (always true). No
+#:    check outcome, verdict or tier changes. Engine 6 results are still produced by this build
 #:    (``verify(..., engine_version="6")``) and bundles sealed by engine 6 are replayed under
 #:    engine 6's rules, byte for byte (``bundle.check_bundle_data``).
 ENGINE_VERSION = "7"
@@ -246,9 +254,12 @@ class CheckResult:
     unit: str = ""
     #: Why the check could not run, when outcome is UNCHECKED.
     reason: str = ""
+    #: What this check covers and where it stops (``machine/boundary.py``); engine 7 and
+    #: later. ``None`` for engine 6, whose serialised check has no such key.
+    boundary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "name": self.name,
             "outcome": self.outcome.value,
             "statement": self.statement,
@@ -259,6 +270,9 @@ class CheckResult:
             "unit": self.unit,
             "reason": self.reason,
         }
+        if self.boundary is not None:
+            out["boundary"] = self.boundary
+        return out
 
 
 @dataclass(frozen=True)
@@ -289,6 +303,9 @@ class VerificationResult:
     #: The machine unit the verification is about, if known (checked against the
     #: attestation's machine reference). Empty: the product line.
     machine_serial: str = ""
+    #: What the result covers and where it stops, in machine-readable form
+    #: (``machine/boundary.py``); engine 7 and later, ``None`` for engine 6.
+    boundary: dict[str, Any] | None = None
 
     @property
     def violations(self) -> list[Violation]:
@@ -314,6 +331,12 @@ class VerificationResult:
         return next((c for c in self.checks if c.name == name), None)
 
     def to_dict(self) -> dict[str, Any]:
+        out = self._to_dict_v6()
+        if self.boundary is not None:
+            out["boundary"] = self.boundary
+        return out
+
+    def _to_dict_v6(self) -> dict[str, Any]:
         return {
             "engine_version": self.engine_version,
             "envelope_hash": self.envelope_hash,
@@ -1130,6 +1153,26 @@ def verify(
         "envelope for this application."
     )
 
+    boundary: dict[str, Any] | None = None
+    if engine >= FIRST_ENGINE_WITH_BOUNDARY:
+        limits_hash = limits.content_hash() if limits is not None else ""
+        env_hash, trace_hash = envelope.content_hash(), trace.content_hash()
+        blocks = []
+        stamped = []
+        for c in checks:
+            block = check_boundary(
+                c.name, envelope=envelope, trace=trace, envelope_hash=env_hash,
+                trace_hash=trace_hash, limits_hash=limits_hash, outcome=c.outcome.value,
+                reason=c.reason)
+            if c.outcome is not CheckOutcome.NOT_APPLICABLE:
+                # What the result rests on: a check that did not apply read nothing.
+                blocks.append((c.name, block))
+            stamped.append(replace(c, boundary=block))
+        checks = stamped
+        boundary = result_boundary(
+            blocks, envelope=envelope, envelope_hash=env_hash, trace_hash=trace_hash,
+            limits_hash=limits_hash)
+
     return VerificationResult(
         envelope_hash=envelope.content_hash(),
         trace_hash=trace.content_hash(),
@@ -1147,5 +1190,6 @@ def verify(
         provenance_assessment=prov.to_dict(),
         recorder_attestation=prov.attestation.to_dict() if prov.attestation else None,
         machine_serial=machine_serial,
+        boundary=boundary,
     )
 

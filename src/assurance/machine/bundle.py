@@ -39,6 +39,7 @@ from assurance.core.identity import content_hash_of, format_utc
 from assurance.core.tiers import AssuranceTier
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.machine import provenance_trust
+from assurance.machine.boundary import FIRST_ENGINE_WITH_BOUNDARY, boundary_problems
 from assurance.machine.envelope import (
     FigureBasis,
     SafetyEnvelope,
@@ -179,6 +180,10 @@ def _body(result: VerificationResult, envelope: SafetyEnvelope,
         "tier": result.tier.value,
         "checks": [c.to_dict() for c in result.checks],
     }
+    if result.boundary is not None:
+        # Engine 7 and later: what the result covers and where it stops, and that qualified
+        # human review is required. Absent for engine 6, whose body must replay unchanged.
+        body["boundary"] = result.boundary
     if unit_key:
         # The unit this verification was SEALED FOR, whole (``maker/model#serial``), part of
         # the hashed content. A recorder attestation signs a serial and the product, never a
@@ -615,6 +620,18 @@ def _coherence_problems(
         problems.extend(set_problems)
         limits.extend(set_limits)
         verified.extend(set_verified)
+    boundary_engine = parse_engine_version(body.get("engine_version"))
+    if boundary_engine is not None and boundary_engine >= FIRST_ENGINE_WITH_BOUNDARY:
+        before_boundary = len(problems)
+        problems.extend(boundary_problems(body.get("boundary"), "the bundle"))
+        for c in checks:
+            if isinstance(c, dict):
+                problems.extend(boundary_problems(
+                    c.get("boundary"), f"check {c.get('name')!r}"))
+        if len(problems) == before_boundary:
+            verified.append(
+                "the result and every check carry a boundary block that says qualified "
+                "human review is required")
 
     implied = "fail" if violated else "incomplete" if unchecked else "pass"
     verdict = body.get("verdict")
@@ -722,7 +739,7 @@ def _coherence_problems(
         before = len(problems)
         for key in ("verdict", "tier", "provenance", "provenance_basis", "envelope_hash",
                     "trace_hash", "trace_id", "product", "product_version",
-                    "engine_version"):
+                    "engine_version", "boundary"):
             if result.get(key) != body.get(key):
                 problems.append(
                     f"the printed result says {key} is {result.get(key)!r}; the sealed "
