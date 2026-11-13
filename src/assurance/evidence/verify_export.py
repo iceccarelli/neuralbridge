@@ -86,6 +86,7 @@ from assurance.evidence.ledger import GENESIS, LEDGER_SCHEMA_VERSION, LedgerEntr
 
 if TYPE_CHECKING:  # the Ed25519 dependency is only needed when a key is supplied
     from assurance.attest.keys import VerifyingKey
+    from assurance.attest.keyset import Keyset
 
 __all__ = ["ANCHORED", "ANCHORED_PARTIAL", "ANCHOR_CLOCK_SKEW_SECONDS", "ASSUMPTIONS",
            "DECLARED_HEAD", "FAILED", "FINGERPRINT_BITS_NOTE", "MAX_PROBLEMS", "NOT_CHECKED",
@@ -395,8 +396,17 @@ def verify_export(
     min_sequence: int | None = None, expect_head: str | None = None,
     max_age: timedelta | None = None, min_length: int | None = None,
     now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
+    keyset: Keyset | None = None,
 ) -> ExportVerification:
     """Verify an exported bundle. Never raises on a malformed one: it reports.
+
+    ``keyset`` (instead of ``trusted_key``; both is a ``ValueError``) is the caller's record
+    of several keys and when each was in force (``assurance.attest.keyset``). The key that
+    checks an anchor is the one whose fingerprint the anchor names; an anchor naming a key
+    that is not in the keyset is *not established* (it may be genuine, from a key the caller
+    holds no record of), a revoked key's anchor, or one dated outside a retired key's window,
+    is a problem. With a single ``trusted_key`` an anchor from any other key is a foreign
+    anchor and a problem, exactly as before.
 
     ``trusted_key`` is an Ed25519 public key the caller obtained **outside** the
     bundle. With it the bundle's embedded ``anchor`` (and any ``anchors`` the
@@ -417,6 +427,8 @@ def verify_export(
     (key substitution). Nonsense arguments raise ``ValueError``; none of this applies without a
     trusted key, and asking for it without one is reported as not established.
     """
+    if keyset is not None and trusted_key is not None:
+        raise ValueError("pass trusted_key or keyset, not both")
     expect = Expectations.checked(
         min_sequence=min_sequence, expect_head=expect_head, max_age=max_age,
         min_length=min_length, now=now, expect_fingerprints=expect_fingerprints)
@@ -634,10 +646,19 @@ def verify_export(
     known = {e.seq: e.link_hash for e in entries}
     chain_len = max(links) if links else 0
     if expect.fingerprints:
-        if trusted_key is None:
+        if trusted_key is None and keyset is None:
             cannot("A key fingerprint was expected, but no trusted public key was supplied to "
                    "compare it with.")
-        elif trusted_key.fingerprint not in expect.fingerprints or len(expect.fingerprints) > 1:
+        elif keyset is not None:
+            absent = [fp for fp in expect.fingerprints if keyset.get(fp) is None]
+            if absent:
+                bad("fingerprint",
+                    f"your keyset does not hold the key(s) you expected ({', '.join(absent)}); "
+                    f"it holds {', '.join(keyset.fingerprints)}. This is not the keyset you "
+                    "were given, or a key was swapped out of it.")
+        elif trusted_key is not None and (
+                trusted_key.fingerprint not in expect.fingerprints
+                or len(expect.fingerprints) > 1):
             bad("fingerprint",
                 f"the public key supplied has fingerprint {trusted_key.fingerprint}, but you "
                 f"expected {', '.join(expect.fingerprints)}. Either this is not the key you "
@@ -645,11 +666,11 @@ def verify_export(
                 "trusted.")
     completeness, anchor_info, anchor_facts, anchor_assumptions = _check_anchors(
         bundle, anchors, trusted_key, links, known, chain_len, why_unknown, bad, cannot,
-        skipped, times, expect)
+        skipped, times, expect, keyset)
     if expect.wants_anchor and completeness == NOT_CHECKED:
         cannot("A remembered head, sequence, length or age was given and was NOT checked: "
                + ("no trusted public key was supplied, so there is no signed anchor to hold it "
-                  "against." if trusted_key is None else
+                  "against." if trusted_key is None and keyset is None else
                   "no verified signed anchor covers this bundle to hold it against."))
 
     anchored = completeness in (ANCHORED, ANCHORED_PARTIAL)
@@ -959,7 +980,7 @@ def _check_anchors(
     bundle: dict[str, Any], external: Sequence[Any], key: VerifyingKey | None,
     links: dict[int, str] | None, known: dict[int, str], chain_len: int,
     why_unknown: str, bad: Any, cannot: Any, skipped: list[str], times: dict[int, str],
-    expect: Expectations = Expectations(),
+    expect: Expectations = Expectations(), keyset: Keyset | None = None,
 ) -> tuple[str, dict[str, Any] | None, list[str], list[str]]:
     """Judge completeness. Returns ``(completeness, anchor, facts, assumptions)``.
 
@@ -976,7 +997,7 @@ def _check_anchors(
 
     why = (f"Why there is no complete chain to compare with: {why_unknown}."
            if why_unknown else "")
-    if key is None:
+    if key is None and keyset is None:
         if raws:
             skipped.insert(0, (
                 "COMPLETENESS NOT CHECKED: a signed anchor was supplied or embedded, "
@@ -1013,6 +1034,8 @@ def _check_anchors(
 
     passed: list[Any] = []
     failures = 0
+    deferred = 0
+    used: set[str] = set()
 
     def reject(message: str) -> None:
         nonlocal failures
@@ -1034,19 +1057,43 @@ def _check_anchors(
                    f"{' / '.join(KNOWN_ATTESTATION_FORMATS)}; "
                    "its signature cannot be checked here")
             continue
-        if att.key_fingerprint != key.fingerprint:
-            reject(f"{label} was signed by key {att.key_fingerprint}, not the "
-                   f"trusted key {key.fingerprint} — a foreign anchor anchors "
-                   "nothing")
-            continue
+        if keyset is None:
+            assert key is not None
+            if att.key_fingerprint != key.fingerprint:
+                reject(f"{label} was signed by key {att.key_fingerprint}, not the "
+                       f"trusted key {key.fingerprint} — a foreign anchor anchors "
+                       "nothing")
+                continue
+            use, named = key, key.fingerprint
+        else:
+            entry = keyset.get(att.key_fingerprint)
+            if entry is None:
+                deferred += 1
+                cannot(f"{label} was signed by key {att.key_fingerprint}, which is not in your "
+                       f"keyset ({', '.join(keyset.fingerprints)}). It may be genuine and from "
+                       "a key you hold no record of (an earlier key era), or a forgery: "
+                       "nothing here can tell, so it anchors nothing. Add the key's public "
+                       "half to your keyset if you can obtain it from a source other than "
+                       "this bundle.")
+                continue
+            if expect.fingerprints and entry.fingerprint not in expect.fingerprints:
+                reject(f"{label} was signed by key {entry.fingerprint}, which is not one you "
+                       f"expected ({', '.join(expect.fingerprints)})")
+                continue
+            why_not = entry.judge(att.attested_at)
+            if why_not:
+                reject(f"{label}: {why_not}")
+                continue
+            use, named = entry.key, entry.fingerprint
         try:
-            signature_ok = att.verified_by(key)
+            signature_ok = att.verified_by(use)
         except AttestationError:
             signature_ok = False
         if not signature_ok:
             reject(f"{label}: the signature does not verify against the trusted "
-                   f"key {key.fingerprint} — the anchor was edited or forged")
+                   f"key {named} — the anchor was edited or forged")
             continue
+        used.add(named)
         # The signature is genuine. Whose ledger does it say it is? A bound head names the
         # ledger id it was read from; the bundle names the ledger it was exported from.
         # The bundle format deliberately carries no ledger id, so a bound head's ledger cannot be
@@ -1092,6 +1139,8 @@ def _check_anchors(
 
     if failures:
         return FAILED, None, [], []  # each failure was reported where it was found
+    if not passed and deferred:
+        return NOT_CHECKED, None, [], []     # each unknown signer was reported where found
     if not passed:
         # Every anchor was genuine and none contradicted the bundle, but there was no
         # complete chain to hold them against: asked for, and not established.
@@ -1133,12 +1182,19 @@ def _check_anchors(
         for message in violations:
             bad("expectation", message)
         return FAILED, None, [], []
+    signers = (f"your keyset ({', '.join(sorted(used))})" if keyset is not None
+               else f"the public key you supplied (fingerprint {key.fingerprint})")
     assumptions = [_KEY_PROVENANCE, _SAME_PARTY, FINGERPRINT_BITS_NOTE]
+    if keyset is not None:
+        assumptions.append(
+            "The keyset file is the trust anchor here: its statuses and dates are whatever "
+            "its author wrote, and an anchor's date is the signer's own claim, so a window "
+            "makes a retired key's honest anchors checkable but cannot expose a leaked "
+            "key's forged ones.")
     kept = _expectation_facts(expect, best, chain_len)
     if not read:
         facts = [
-            f"{len(passed)} signed attestation(s) verify against the public key you "
-            f"supplied (fingerprint {key.fingerprint})",
+            f"{len(passed)} signed attestation(s) verify against {signers}",
             f"the bundle's chain runs to seq {chain_len}, at least the "
             f"{best.ledger_length} record(s) the signer was told of, and its link at "
             f"seq {best.head_seq} ({_short(best.head_link_hash)}) is the head the "
@@ -1160,8 +1216,7 @@ def _check_anchors(
             "this is the ledger the head belongs to, or that nothing is missing.")
         return DECLARED_HEAD, info, facts, assumptions
     facts = [
-        f"{len(passed)} signed anchor(s) verify against the public key you supplied "
-        f"(fingerprint {key.fingerprint})",
+        f"{len(passed)} signed anchor(s) verify against {signers}",
         f"the bundle's chain runs to seq {chain_len}, at least the "
         f"{best.ledger_length} record(s) signed for, and its link at seq "
         f"{best.head_seq} ({_short(best.head_link_hash)}) is the signed head — so "
@@ -1185,6 +1240,7 @@ def verify_export_file(
     min_sequence: int | None = None, expect_head: str | None = None,
     max_age: timedelta | None = None, min_length: int | None = None,
     now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
+    keyset: Keyset | None = None,
 ) -> ExportVerification:
     try:
         bundle = loads_no_duplicate_keys(Path(path).read_text(encoding="utf-8"))
@@ -1200,7 +1256,7 @@ def verify_export_file(
         return verify_export(
             bundle, trusted_key=trusted_key, anchors=anchors, min_sequence=min_sequence,
             expect_head=expect_head, max_age=max_age, min_length=min_length, now=now,
-            expect_fingerprints=expect_fingerprints)
+            expect_fingerprints=expect_fingerprints, keyset=keyset)
     except RecursionError:
         # Parsed, but the analysis walks the structure too and the file chose its depth.
         return _too_deep()

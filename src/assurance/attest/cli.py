@@ -1,5 +1,6 @@
 """``assurance attest`` — sign the head of a ledger, and check the signatures.
 
+    keyset      check | add the verifier's key history file (public keys only)
     keygen      make an Ed25519 key pair, refusing to put the private half next
                 to the ledger it will sign, or to overwrite anything
     sign        attest the current head, refusing every case that would lie
@@ -54,6 +55,7 @@ from assurance.attest.attestation import (
 )
 from assurance.attest.custody import require_private_key_file, verify_log_across_rotation
 from assurance.attest.keys import SigningKey, SigningKeyError, VerifyingKey
+from assurance.attest.keyset import KEYSET_FORMAT, Keyset
 from assurance.attest.preflight import run_preflight
 from assurance.attest.trustlist import (
     add_recorder,
@@ -126,7 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = verbs.add_parser("verify", help="check an attestation log")
     v.add_argument("--log", required=True, type=Path)
-    v.add_argument("--public-key", required=True, type=Path, action="append",
+    v.add_argument("--keyset", type=Path, default=None, metavar="FILE",
+                   help="the key history (assurance.attest.keyset.v1) in place of, or beside, "
+                        "--public-key: each attestation is checked under the key it names, "
+                        "within that key's window; a revoked key, or a record dated outside a "
+                        "retired key's window, is a finding")
+    v.add_argument("--public-key", type=Path, action="append",
                    help="the verifier's own copy of the public key. Repeat it, once per "
                         "key, to verify a log that spans a rotation: each attestation must "
                         "verify under the key it names, and a key is never read from the log")
@@ -156,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--json", action="store_true")
 
     _preflight_parser(verbs)
+    _keyset_parser(verbs)
     _anchor_all_parser(verbs)
     _trust_parser(verbs)
 
@@ -195,6 +203,62 @@ def _preflight_parser(verbs: Any) -> None:
     f.add_argument("--json", action="store_true")
 
 
+def _keyset_parser(verbs: Any) -> None:
+    k = verbs.add_parser(
+        "keyset", help="the verifier's key history file (public keys only): check | add")
+    kv = k.add_subparsers(dest="keyset_command", required=True)
+    c = kv.add_parser("check", help="load the file exactly as the verifiers do and list it")
+    c.add_argument("--keyset", required=True, type=Path)
+    c.add_argument("--json", action="store_true")
+    a = kv.add_parser("add", help="add one PUBLIC key (creates the file if absent)")
+    a.add_argument("--keyset", required=True, type=Path)
+    a.add_argument("--public-key", required=True, type=Path)
+    a.add_argument("--fingerprint", required=True,
+                   help="the fingerprint you wrote down for this key by ANOTHER route; a key "
+                        "that does not hash to it is refused")
+    a.add_argument("--status", required=True, choices=["active", "retired", "revoked"])
+    a.add_argument("--effective-from", required=True, metavar="YYYY-MM-DDTHH:MM:SSZ",
+                   help="when the key began to sign. Never defaulted")
+    a.add_argument("--effective-until", default=None, metavar="YYYY-MM-DDTHH:MM:SSZ",
+                   help="the last moment it signed (required for retired)")
+    a.add_argument("--label", default="")
+
+
+def _cmd_keyset(args: argparse.Namespace) -> int:
+    if args.keyset_command == "check":
+        keyset = Keyset.load(args.keyset)
+        if args.json:
+            print(json.dumps({"ok": True, "format": KEYSET_FORMAT,
+                              "keys": [e.to_dict() for e in keyset.entries]},
+                             indent=2, sort_keys=True))
+            return 0
+        print(f"{args.keyset}: {KEYSET_FORMAT}, {len(keyset.entries)} public key(s); "
+              "no private key material")
+        for e in keyset.entries:
+            print(f"  {e.describe()}")
+        print("\n  This checked the file's form. Whether each fingerprint is the one you were "
+              "told, by a route other than this file, is yours to confirm.")
+        return 0
+    existing = Keyset.load(args.keyset).entries if args.keyset.exists() else ()
+    fp = normalise_fingerprints(args.fingerprint)[0]
+    key = VerifyingKey.from_file(args.public_key)
+    if key.fingerprint != fp:
+        raise SigningKeyError(
+            f"that public key's fingerprint is {key.fingerprint}, not the {fp} you were "
+            "given. Refusing to add a key that is not the one you expect.")
+    candidate = {"fingerprint": fp, "public_key_pem": key.pem(), "status": args.status,
+                 "effective_from": args.effective_from}
+    if args.effective_until:
+        candidate["effective_until"] = args.effective_until
+    if args.label:
+        candidate["label"] = args.label
+    doc = {"format": KEYSET_FORMAT, "keys": [*(e.to_dict() for e in existing), candidate]}
+    keyset = Keyset.from_dict(doc)            # the whole file, validated before it is written
+    keyset.save(args.keyset)
+    print(f"{args.keyset}: added {fp} ({args.status}); {len(keyset.entries)} key(s)")
+    return 0
+
+
 def _anchor_all_parser(verbs: Any) -> None:
     a = verbs.add_parser(
         "anchor-all",
@@ -209,6 +273,13 @@ def _anchor_all_parser(verbs: Any) -> None:
                         "already covers its head is left alone (default 24)")
     a.add_argument("--tenants-dir", type=Path, default=None)
     a.add_argument("--logs-dir", type=Path, default=None)
+    a.add_argument("--keyset", type=Path, default=None, metavar="FILE",
+                   help="the key history (assurance.attest.keyset.v1): lets a log that spans "
+                        "a rotation be verified record by record, so a fresh anchor is "
+                        "recognised. The key in --key must be `active` in it")
+    a.add_argument("--rotating", action="store_true",
+                   help="acknowledge that a log's last record names a different key (as "
+                        "`sign --rotating`); needs --keyset")
     a.add_argument("--dry-run", action="store_true",
                    help="verify and report what would be anchored; write nothing")
     a.add_argument("--json", action="store_true")
@@ -316,13 +387,12 @@ def _remember(verdict: Any) -> dict[str, Any] | None:
 
 
 def _substitution_problems(
-    expected: tuple[str, ...], keys: list[VerifyingKey], records: list[Any],
+    expected: tuple[str, ...], supplied: set[str], records: list[Any],
 ) -> list[str]:
     """Findings when the key(s) supplied, or the log's signers, are not the ones the caller
     wrote down. Empty when nothing was expected."""
     if not expected:
         return []
-    supplied = {k.fingerprint for k in keys}
     out: list[str] = []
     for fp in expected:
         if fp not in supplied:
@@ -340,7 +410,13 @@ def _substitution_problems(
 def _cmd_verify(args: argparse.Namespace) -> int:
     ledger = EvidenceLedger.open_existing(args.ledger) if args.ledger else None
     log = AttestationLog(args.log)
-    keys = [VerifyingKey.from_file(p) for p in args.public_key]
+    keys = [VerifyingKey.from_file(p) for p in (args.public_key or [])]
+    keyset = Keyset.load(args.keyset) if args.keyset else None
+    if keyset is not None and keys:
+        keyset = keyset.merged_with(Keyset.from_keys(keys))
+    if keyset is None and not keys:
+        raise ValueError("give the verifier's own public key (--public-key, once per key) "
+                         "or a --keyset; a key is never taken from the log.")
     records, torn = log.scan()
     basis = AttestationBasis(args.basis) if args.basis else None
     if args.min_sequence is not None and args.min_sequence < 1:
@@ -352,13 +428,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         max_age = timedelta(hours=args.max_age)
     expectation: dict[str, Any] = {
         "min_sequence": args.min_sequence, "expect_head": args.expect_head, "max_age": max_age}
-    if len(keys) == 1:
+    if keyset is None and len(keys) == 1:
         verdict = verify_log(records, keys[0], ledger=ledger, basis=basis, **expectation)
     else:
         verdict = verify_log_across_rotation(
-            records, keys, ledger=ledger, basis=basis, **expectation)
+            records, keyset if keyset is not None else keys, ledger=ledger, basis=basis,
+            **expectation)
     expected = normalise_fingerprints(args.expect_fingerprint) if args.expect_fingerprint else ()
-    substitution = _substitution_problems(expected, keys, records)
+    substitution = _substitution_problems(
+        expected, set(keyset.fingerprints) if keyset is not None else {k.fingerprint for k in keys},
+        records)
     if substitution:
         verdict = dataclasses.replace(
             verdict, ok=False, problems=[*verdict.problems, *substitution])
@@ -457,7 +536,9 @@ def _cmd_anchor_all(args: argparse.Namespace) -> int:
                          "whoever can rewrite the ledger could re-sign it. Nothing was signed.")
     report = anchor_all(args.data_dir, key, tenants_dir=args.tenants_dir,
                         logs_dir=args.logs_dir, max_age_hours=args.max_age,
-                        dry_run=args.dry_run)
+                        dry_run=args.dry_run,
+                        keyset=Keyset.load(args.keyset) if args.keyset else None,
+                        rotating=args.rotating)
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
@@ -552,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
         "verify": _cmd_verify,
         "log": _cmd_log,
         "preflight": _cmd_preflight,
+        "keyset": _cmd_keyset,
         "anchor-all": _cmd_anchor_all,
         "trust-list": _cmd_trust_list,
     }

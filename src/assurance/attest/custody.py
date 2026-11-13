@@ -28,6 +28,7 @@ from assurance.attest.keys import (
     VerifyingKey,
     private_key_file_problems,
 )
+from assurance.attest.keyset import Keyset
 from assurance.core.text import neutralise
 
 __all__ = [
@@ -80,10 +81,14 @@ _MULTI_KEY_MARKER = "the log names more than one signing key"
 
 def verify_log_across_rotation(
     records: Iterable[HeadAttestation],
-    keys: Iterable[VerifyingKey],
+    keys: Iterable[VerifyingKey] | Keyset,
     **kwargs: Any,
 ) -> LogVerdict:
     """Verify a log that may span key rotations against the verifier's pinned *keys*.
+
+    *keys* may be a :class:`~assurance.attest.keyset.Keyset`, which also judges each record
+    against its key's status and window (a revoked key, or a record dated outside a retired
+    key's window, is a problem).
 
     Every record must (a) name a fingerprint that is one of the pinned keys, and (b) carry a
     signature made by *that* key, not merely by some pinned key. Sequence, predecessor and
@@ -91,11 +96,20 @@ def verify_log_across_rotation(
     is a problem, however valid its signature is under the key it names.
     """
     recs = list(records)
-    pinned = _KeySet(keys)
+    keyset = keys if isinstance(keys, Keyset) else None
+    pinned = _KeySet(e.key for e in keys.entries) if keyset is not None else _KeySet(
+        cast(Iterable[VerifyingKey], keys))
     verdict = verify_log(recs, cast(VerifyingKey, pinned), **kwargs)
     problems = [p for p in verdict.problems if not p.startswith(_MULTI_KEY_MARKER)]
     for r in recs:
         key = pinned.by_fp.get(r.key_fingerprint)
+        if keyset is not None and key is not None:
+            # A keyset adds what a bare pin cannot say: revoked, or outside its window.
+            entry = keyset.get(r.key_fingerprint)
+            why = entry.judge(r.attested_at) if entry is not None else ""
+            if why:
+                problems.append(f"attestation {r.sequence}: {why}")
+                continue
         if key is None:
             problems.append(
                 f"attestation {r.sequence}: signed under key {r.key_fingerprint}, which is "

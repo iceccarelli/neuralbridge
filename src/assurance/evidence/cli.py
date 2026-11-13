@@ -68,12 +68,21 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("verify", help="verify an exported bundle, offline")
     v.add_argument("bundle")
     v.add_argument("--json", action="store_true")
-    v.add_argument("--public-key", type=Path, default=None, metavar="KEY.pub",
+    v.add_argument("--keyset", type=Path, default=None, metavar="FILE",
+                   help="your key history (assurance.attest.keyset.v1; `attest keyset add`): "
+                        "the key that checks an anchor is the one whose fingerprint it names, "
+                        "within that key's window. A revoked key, or an anchor dated outside a "
+                        "retired key's window, is exit 1; a fingerprint not in the file is "
+                        "exit 3 (not established), never a pass. Like --public-key it asks "
+                        "for completeness")
+    v.add_argument("--public-key", type=Path, action="append", default=None, metavar="KEY.pub",
                    help="the signer's Ed25519 PUBLIC key, obtained somewhere other than "
                         "the bundle. Turns on the completeness check against the "
                         "bundle's signed anchor; then only a head the signer READ "
                         "from the ledger and that covers the last record is exit "
-                        "0 (anything less is exit 3).")
+                        "0 (anything less is exit 3). ONE key: an anchor from any other key "
+                        "is a foreign anchor, exit 1. Repeat it (or use --keyset) to "
+                        "recognise several keys: an anchor from an unlisted key is then exit 3.")
     v.add_argument("--attestations", type=Path, default=None, metavar="LOG",
                    help="your own copy of the signed attestation log "
                         "(`assurance attest sign`); the newest record the signer READ from a ledger "
@@ -125,22 +134,34 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.attestations and not args.public_key:
-        parser.error("--attestations needs --public-key: a signature can only be "
+    if args.attestations and not (args.public_key or args.keyset):
+        parser.error("--attestations needs --public-key or --keyset: a signature can only be "
                      "checked against a key you obtained yourself")
     expectations = _expectations(parser, args)
-    if any(v is not None for v in expectations.values()) and not args.public_key:
+    asked = bool(args.public_key or args.keyset)
+    if any(v is not None for v in expectations.values()) and not asked:
         parser.error("--min-sequence, --expect-head, --min-length, --max-age and "
-                     "--expect-fingerprint need --public-key: they are held against a signed "
-                     "anchor, which only a key you obtained yourself can check")
+                     "--expect-fingerprint need --public-key or --keyset: they are held "
+                     "against a signed anchor, which only a key you obtained yourself can "
+                     "check")
     trusted = None
+    keyset = None
     anchors: list[object] = []
-    if args.public_key:
+    if asked:
         try:
             from assurance.attest.attestation import AttestationLog
             from assurance.attest.keys import VerifyingKey
+            from assurance.attest.keyset import Keyset
 
-            trusted = VerifyingKey.from_file(args.public_key)
+            keys = [VerifyingKey.from_file(p) for p in (args.public_key or [])]
+            if args.keyset:
+                keyset = Keyset.load(args.keyset)
+                if keys:
+                    keyset = keyset.merged_with(Keyset.from_keys(keys))
+            elif len(keys) == 1:
+                trusted = keys[0]
+            else:
+                keyset = Keyset.from_keys(keys)
             if args.attestations:
                 anchors.append(AttestationLog(args.attestations).require_anchor())
         except (ImportError, AssuranceError, OSError, ValueError) as exc:
@@ -149,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     result: ExportVerification = verify_export_file(
-        args.bundle, trusted_key=trusted, anchors=anchors, **expectations)
+        args.bundle, trusted_key=trusted, keyset=keyset, anchors=anchors, **expectations)
     unreadable = result.scope == "unknown"
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
@@ -161,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if not result.ok:
         return 3  # nothing wrong was found, but something asked for is not established
-    if trusted is not None and result.completeness != ANCHORED:
+    if asked and result.completeness != ANCHORED:
         return 3  # a key asks for completeness: partial, declared and unchecked are not a pass
     return 0
 
