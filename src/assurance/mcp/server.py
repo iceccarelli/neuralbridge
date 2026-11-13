@@ -205,6 +205,17 @@ async def spec_validate(track: str, stage: str, payload: dict[str, Any]) -> dict
     return await _call("POST", "/v1/spec/validate", json_body={"track": track, "stage": stage, "payload": payload})
 
 
+#: What `machine_verify` says about the result, because the reply is shaped like a sealed one
+#: (a `content_hash`, an `evidence` block with a `recorded_at`) and an agent must not read it as
+#: filed. Said only when the API itself answered `sealed: false`.
+_NOT_RECORDED = (
+    "This verification was computed and NOT recorded: nothing was appended to the account's "
+    "evidence ledger, so it is not evidence of any machine until the account holder records it "
+    "through the API (POST /v1/machine/verify) or the CLI (assurance machine verify). "
+    "`content_hash` names this computation only."
+)
+
+
 @mcp.tool()
 async def machine_verify(
     envelope: dict[str, Any], trace: dict[str, Any], actor: str,
@@ -212,6 +223,15 @@ async def machine_verify(
     subject: str = "", configuration_hash: str = "",
 ) -> dict[str, Any]:
     """POST /v1/machine/verify — verify a recorded machine run against its declared envelope.
+    The verification is computed and NOT recorded.
+
+    This tool does not append anything to the account's evidence ledger: it always asks the API
+    not to seal (``seal: false``) and has no parameter to change that. An agent does not write
+    evidence. The reply carries the verdict, the evidence tier and why, and says
+    ``recorded: false``; recording the verification is done by the account holder through the API
+    or the CLI (``assurance machine verify``), after which it counts in coverage, re-verification
+    and the passport. Until then it is evidence of nothing, and ``content_hash`` names only this
+    computation.
 
     Cell-tier only. With no ASSURANCE_API_KEY, or a key on Validator/Register,
     this returns the API's real 401/402 — a structured, parseable answer
@@ -223,15 +243,19 @@ async def machine_verify(
     supply a trust list, a private key or a provenance basis. Without an accepted
     attestation a declared provenance is capped at ``community``; an accepted one proves
     a trusted key signed these exact trace bytes, not that the recording is physically
-    true. ``machine_serial`` names the unit the verification is about. ``subject`` files
-    the sealed bundle under that ledger subject, as ``--subject`` does on the CLI; give a
-    unit key (``maker/model#serial``) for it to count as evidence of that unit. Without
-    one the bundle is filed under ``product@version`` and counts for no unit.
+    true. ``machine_serial`` names the unit the verification is about. ``subject`` is the
+    ledger subject the verification is about, as ``--subject`` is on the CLI: give a unit key
+    (``maker/model#serial``) to have it judged as that unit's, otherwise it is
+    ``product@version``, a product line, and counts for no unit. As nothing is recorded, the
+    tier shown was not compared with the ledger (see ``unit_binding_note``).
     ``configuration_hash`` is the machine manifest's configuration hash (64 hex digits) the run
     was made against: a verification without it is unbound and coverage never reads a safety
     function current on it.
     """
-    body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor}
+    # `seal: false`, always. The API defaults `seal` to true, so leaving it out would append the
+    # result to the account's hash-chained ledger: an agent writing evidence. Deliberately not a
+    # parameter: tests/test_assurance_mcp_write_classification.py pins both halves.
+    body: dict[str, Any] = {"envelope": envelope, "trace": trace, "actor": actor, "seal": False}
     if configuration_hash:
         body["configuration_hash"] = configuration_hash
     if recorder_attestations:
@@ -240,7 +264,12 @@ async def machine_verify(
         body["machine_serial"] = machine_serial
     if subject:
         body["subject"] = subject
-    return await _call("POST", "/v1/machine/verify", json_body=body)
+    result = await _call("POST", "/v1/machine/verify", json_body=body)
+    reply = result.get("body")
+    if result.get("status") == 200 and isinstance(reply, dict) and reply.get("sealed") is False:
+        result["recorded"] = False
+        result["recording_note"] = _NOT_RECORDED
+    return result
 
 
 @mcp.tool()
