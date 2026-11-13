@@ -257,6 +257,104 @@ def platform_displayed_notification_due(early_warning_submitted_at: datetime) ->
     return early_warning_submitted_at + timedelta(hours=_PLATFORM_COUNTER_OFFSET_HOURS)
 
 
+_CITATION = "Regulation (EU) 2024/2847, OJ L, 20.11.2024, "
+_WITHOUT_UNDUE_DELAY = (
+    "without undue delay: the outer limit is not the standard. The provision requires the "
+    "filing without undue delay and in any event within the limit."
+)
+_ALREADY_PROVIDED = (
+    "'unless the relevant information has already been provided' is not modelled: the deadline "
+    "is shown as running. Whether the stage can be satisfied by earlier information is for a "
+    "person (and, for Art. 14(4)(c), a lawyer) to decide; nothing here records that decision."
+)
+
+#: provision -> (stage kind, period, verbatim wording from the OJ text, qualifiers, counting id)
+_PROVISIONS: dict[str, dict[str, Any]] = {
+    "Art. 14(2)(a)": {
+        "kind": "hours", "n": 24, "counting": "hours_from_awareness_instant",
+        "wording": "without undue delay and in any event within 24 hours of the manufacturer becoming aware of it",
+        "also_required": _WITHOUT_UNDUE_DELAY, "not_modelled": [],
+    },
+    "Art. 14(2)(b)": {
+        "kind": "hours", "n": 72, "counting": "hours_from_awareness_instant",
+        "wording": "without undue delay and in any event within 72 hours of the manufacturer becoming aware of the actively exploited vulnerability",
+        "also_required": _WITHOUT_UNDUE_DELAY, "not_modelled": [_ALREADY_PROVIDED],
+    },
+    "Art. 14(2)(c)": {
+        "kind": "days", "n": 14, "counting": "days_from_measure_available_instant",
+        "wording": "no later than 14 days after a corrective or mitigating measure is available",
+        "also_required": None, "not_modelled": [_ALREADY_PROVIDED],
+    },
+    "Art. 14(4)(a)": {
+        "kind": "hours", "n": 24, "counting": "hours_from_awareness_instant",
+        "wording": "without undue delay and in any event within 24 hours of the manufacturer becoming aware of it",
+        "also_required": _WITHOUT_UNDUE_DELAY, "not_modelled": [],
+    },
+    "Art. 14(4)(b)": {
+        "kind": "hours", "n": 72, "counting": "hours_from_awareness_instant",
+        "wording": "without undue delay and in any event within 72 hours of the manufacturer becoming aware of the incident",
+        "also_required": _WITHOUT_UNDUE_DELAY, "not_modelled": [_ALREADY_PROVIDED],
+    },
+    "Art. 14(4)(c)": {
+        "kind": "month", "n": 1, "counting": "calendar_month_earliest_over_fixed_utc_offsets",
+        "wording": "within one month after the submission of the incident notification under point (b)",
+        "also_required": None, "not_modelled": [_ALREADY_PROVIDED],
+    },
+}
+
+_WEEKEND_HOLIDAY = {
+    "id": "reg_1182_71_art3_4_next_working_day",
+    "status": "UNRESOLVED_LEGAL_QUESTION",
+    "applied": False,
+    "informational_only": True,
+    "would_end_at": None,
+    "note": (
+        "Reg. 1182/71 Art. 3(4) moves a last day that is a public holiday, Saturday or Sunday to "
+        "the next working day, for periods 'expressed otherwise than in hours'. It can only make "
+        "the legal date LATER, public holidays depend on the place and are not known here, and "
+        "whether it applies to an Art. 14 filing period at all is an open legal question "
+        "(see open_legal_question_ids). The product does not apply it: its due_at is never "
+        "later because of it."
+    ),
+}
+
+_RESIDUAL = {
+    "hours": None,
+    "days": (
+        "In a zone that changes its UTC offset inside the 14 days (daylight saving) the 14 x 24 h "
+        "instant can be later than the end of the local 14th day by less than one hour."
+    ),
+    "month": (
+        "In a zone that changes its UTC offset inside the month (daylight saving) the due time can "
+        "still be later than the end of the same local date one month on by up to one hour: a "
+        "fixed offset is used for the month."
+    ),
+}
+
+
+def _offset_label(offset: timedelta | None) -> str:
+    if offset is None:
+        return "none"
+    minutes = int(offset.total_seconds() // 60)
+    sign = "-" if minutes < 0 else "+"
+    return f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def _utc(moment: datetime) -> datetime:
+    return moment.astimezone(UTC) if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def _reading_end(kind: str, n: int, start: datetime) -> datetime:
+    """The end of the period in the UTC calendar under Reg. 1182/71 Art. 3(1)-(2)."""
+    start = _utc(start)
+    if kind == "hours":      # the hour of the event is not counted; the last hour expires
+        return start.replace(minute=0, second=0, microsecond=0) + timedelta(hours=n + 1)
+    midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    if kind == "days":       # the day of the event is not counted; the last day expires
+        return midnight + timedelta(days=n + 1)
+    return _end_of_same_date_one_month_on(start, timedelta(0))
+
+
 @dataclass(frozen=True)
 class Deadline:
     """One deadline, what starts it, and where it stands."""
@@ -273,6 +371,9 @@ class Deadline:
     #: True when the counted filing carries a platform reference. It is the
     #: caller's own declaration; nothing here checks it against the platform.
     has_platform_reference: bool = False
+    #: Where the fact this deadline runs from sits in the ledger, when the case loader has it:
+    #: ``{"ledger_seq", "content_hash", "recorded_by", "actor_kind"}``.
+    source: dict[str, Any] | None = None
 
     @property
     def met(self) -> bool | None:
@@ -316,6 +417,89 @@ class Deadline:
         reference = now or utc_now()
         return round((self.due_at - reference).total_seconds() / 3600.0, 2)
 
+    def basis(self) -> dict[str, Any]:
+        """Why this deadline is what it is. Provenance only: nothing here changes ``due_at``.
+
+        Other legal readings are listed for information with their own end time; none of them
+        replaces ``due_at``, ``status`` or ``met``. Which reading governs is for a qualified
+        lawyer to decide, and no legal conclusion is stated.
+        """
+        spec = _PROVISIONS.get(self.provision)
+        src = self.source or {}
+        starts_from = {
+            "fact": self.runs_from_fact,
+            "at": format_utc(self.runs_from),
+            "ledger_seq": src.get("ledger_seq"),
+            "ledger_hash": src.get("content_hash"),
+            "recorded_by": src.get("recorded_by"),
+            "actor_kind": src.get("actor_kind"),
+            "source_note": None if src else (
+                "the ledger position of this fact is not carried for this deadline; find the "
+                "record with this time in the case's audit history"
+            ),
+        }
+        basis: dict[str, Any] = {
+            "instrument": "Regulation (EU) 2024/2847",
+            "citation": _CITATION + self.provision,
+            "provision": self.provision,
+            "wording": spec["wording"] if spec else None,
+            "counting": spec["counting"] if spec else None,
+            "rule_version": RULE_VERSION,
+            "also_required": spec["also_required"] if spec else None,
+            "not_modelled": list(spec["not_modelled"]) if spec else [],
+            "starts_from": starts_from,
+            "residual": _RESIDUAL[spec["kind"]] if spec else None,
+            "other_readings": [],
+            "weekend_holiday_rule": dict(_WEEKEND_HOLIDAY),
+            "open_legal_question_ids": [q["id"] for q in OPEN_LEGAL_QUESTIONS],
+            "status_note": None,
+        }
+        if spec is None:
+            return basis
+        readings: list[dict[str, Any]] = []
+        end = _reading_end(spec["kind"], spec["n"], self.runs_from)
+        readings.append({
+            "id": "reg_1182_71_end_of_period_utc_calendar",
+            "status": "UNRESOLVED_LEGAL_QUESTION",
+            "informational_only": True,
+            "would_end_at": format_utc(end),
+            "note": (
+                "Reg. 1182/71 Art. 3(1)-(2) counted in the UTC calendar: the hour or day of the "
+                "event is not counted and the period ends with the expiry of its last hour or day."
+            ),
+        })
+        ends = [end]
+        if spec["kind"] == "month":
+            readings_m = _month_readings(self.runs_from)
+            if readings_m.utc_wall_clock != self.due_at:
+                readings.append({
+                    "id": "utc_wall_clock_month_rule_v1",
+                    "status": "SUPERSEDED_PRODUCT_RULE",
+                    "informational_only": True,
+                    "would_end_at": format_utc(readings_m.utc_wall_clock),
+                    "note": (
+                        "Same time of day one month later in the UTC calendar: the rule of "
+                        "rule_version 1. The due_at above is earlier because the month ends "
+                        "earlier in the calendar of a fixed UTC offset "
+                        f"({_offset_label(readings_m.at_offset)}), and the product shows the "
+                        "earliest."
+                    ),
+                })
+                ends.append(readings_m.utc_wall_clock)
+        basis["other_readings"] = readings
+        if self.submitted_at is not None and self.submitted_at > self.due_at:
+            fits = [r for r, e in zip(readings, ends, strict=True) if self.submitted_at <= e]
+            if fits:
+                names = ", ".join(f"{r['id']} (ends {r['would_end_at']})" for r in fits)
+                basis["status_note"] = (
+                    f"Recorded as filed late on this product's due_at ({format_utc(self.due_at)}); "
+                    f"the recorded submission time {format_utc(self.submitted_at)} is not later "
+                    f"than the end of the period under: {names}. Whether such a reading applies "
+                    "is an UNRESOLVED_LEGAL_QUESTION that a qualified lawyer must decide. This "
+                    "note does not change due_at, status or met."
+                )
+        return basis
+
     def to_dict(self, now: datetime | None = None) -> dict[str, Any]:
         d = {
             "stage": self.stage.value,
@@ -332,6 +516,7 @@ class Deadline:
             # product has no channel to the reporting platform and verifies nothing about it.
             "submission_evidence": self.submission_evidence,
             "verified_by_platform": False,
+            "basis": self.basis(),
         }
         if self.submitted_at is None:
             d["hours_remaining"] = self.hours_remaining(now)
@@ -363,6 +548,9 @@ class Deadlines:
     notification_first_recorded_at: datetime | None = None
     #: Stages recorded with more than one distinct filing time -> those times, ascending.
     conflicting_filing_times: dict[str, tuple[datetime, ...]] = field(default_factory=dict)
+    #: Ledger provenance of the facts the deadlines run from, keyed ``awareness`` / ``measure`` /
+    #: ``notification``; each ``{"ledger_seq", "content_hash", "recorded_by", "actor_kind"}``.
+    sources: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def _flags(self, stage: Stage) -> dict[str, bool]:
         return {
@@ -380,6 +568,7 @@ class Deadlines:
             runs_from_fact="becoming aware",
             provision="Art. 14(2)(a)" if self.track is Track.VULNERABILITY else "Art. 14(4)(a)",
             submitted_at=self.early_warning_submitted_at,
+            source=self.sources.get("awareness"),
             **self._flags(Stage.EARLY_WARNING),
         )
 
@@ -392,6 +581,7 @@ class Deadlines:
             runs_from_fact="becoming aware",
             provision="Art. 14(2)(b)" if self.track is Track.VULNERABILITY else "Art. 14(4)(b)",
             submitted_at=self.notification_submitted_at,
+            source=self.sources.get("awareness"),
             **self._flags(Stage.NOTIFICATION),
         )
 
@@ -412,6 +602,7 @@ class Deadlines:
                 runs_from_fact="a corrective or mitigating measure became available",
                 provision="Art. 14(2)(c)",
                 submitted_at=self.final_submitted_at,
+                source=self.sources.get("measure"),
                 **self._flags(Stage.FINAL),
             )
         if self.notification_submitted_at is None:
@@ -426,6 +617,7 @@ class Deadlines:
             runs_from_fact="submission of the 72-hour incident notification",
             provision="Art. 14(4)(c)",
             submitted_at=self.final_submitted_at,
+            source=self.sources.get("notification"),
             **self._flags(Stage.FINAL),
         )
 
@@ -500,6 +692,8 @@ class Deadlines:
                 stage: [format_utc(t) for t in times]
                 for stage, times in sorted(self.conflicting_filing_times.items())
             },
+            "rule_version": RULE_VERSION,
+            "open_legal_questions": [dict(q) for q in OPEN_LEGAL_QUESTIONS],
         }
         if self.early_warning_submitted_at is not None:
             shown = platform_displayed_notification_due(self.early_warning_submitted_at)

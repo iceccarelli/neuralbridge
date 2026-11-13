@@ -27,10 +27,16 @@ from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
+from assurance.core import Actor
 from assurance.core.identity import format_utc, parse_utc
+from assurance.evidence import EvidenceLedger
+from assurance.security.art14 import Art14Register, Awareness, Signal, SignalChannel, Stage
+from assurance.security.art14.cli import main as cli
 from assurance.security.art14.clock import (
     EARLY_WARNING_HOURS,
     NOTIFICATION_HOURS,
+    OPEN_LEGAL_QUESTIONS,
+    RULE_VERSION,
     VULNERABILITY_FINAL_DAYS,
     Deadlines,
     add_one_month,
@@ -294,3 +300,183 @@ class TestHoursAndDaysAreUntouched:
                 format_utc(vuln.final.due_at)
                 == format_utc(t + timedelta(days=14))
             )
+
+
+# --------------------------------------------------------------------------------------------
+# F2: the basis block
+# --------------------------------------------------------------------------------------------
+OJ = "Regulation (EU) 2024/2847, OJ L, 20.11.2024, "
+#: Verbatim from the Official Journal text (checked 2026-11-12 against CELEX 32024R2847 as published).
+WORDING = {
+    "Art. 14(2)(a)": "without undue delay and in any event within 24 hours of the manufacturer becoming aware of it",
+    "Art. 14(2)(b)": "without undue delay and in any event within 72 hours of the manufacturer becoming aware of the actively exploited vulnerability",
+    "Art. 14(2)(c)": "no later than 14 days after a corrective or mitigating measure is available",
+    "Art. 14(4)(a)": "without undue delay and in any event within 24 hours of the manufacturer becoming aware of it",
+    "Art. 14(4)(b)": "without undue delay and in any event within 72 hours of the manufacturer becoming aware of the incident",
+    "Art. 14(4)(c)": "within one month after the submission of the incident notification under point (b)",
+}
+PERSON = Actor("m.braun", "Entwicklungsleitung")
+BOT = Actor("monitor-1", "watcher", kind="automation")
+AWARE = parse_utc("2026-09-19T06:30:00Z")
+NOW = parse_utc("2026-12-30T12:00:00Z")
+
+
+def open_case(tmp_path, track):
+    reg = Art14Register(EvidenceLedger(tmp_path / "b.db"))
+    reg.record_signal("c1", Signal(AWARE - timedelta(hours=1), SignalChannel.OTHER, "x", "d"), BOT)
+    reg.record_awareness(
+        "c1", Awareness(AWARE, AWARE - timedelta(minutes=30), AWARE, "m.braun", "judged"),
+        track, PERSON, now=NOW)
+    return reg
+
+
+def all_dicts(reg):
+    return {d["provision"]: d for d in reg.case("c1").to_dict(NOW)["deadlines"]["deadlines"]}
+
+
+class TestBasisBlock:
+    def test_every_deadline_cites_the_provision_with_verbatim_wording(self, tmp_path):
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        reg.record_measure_available("c1", AWARE + timedelta(hours=5), "workaround", PERSON, now=NOW)
+        got = all_dicts(reg)
+        assert set(got) == {"Art. 14(2)(a)", "Art. 14(2)(b)", "Art. 14(2)(c)"}
+        for prov, d in got.items():
+            b = d["basis"]
+            assert b["citation"] == OJ + prov and b["wording"] == WORDING[prov]
+            assert b["instrument"] == "Regulation (EU) 2024/2847" and b["rule_version"] == RULE_VERSION
+
+    def test_incident_provisions_and_their_wording(self, tmp_path):
+        reg = open_case(tmp_path, Track.INCIDENT)
+        reg.record_filing("c1", Stage.NOTIFICATION, AWARE + timedelta(hours=60), {}, PERSON, now=NOW)
+        got = all_dicts(reg)
+        assert set(got) == {"Art. 14(4)(a)", "Art. 14(4)(b)", "Art. 14(4)(c)"}
+        for prov, d in got.items():
+            assert d["basis"]["wording"] == WORDING[prov] and d["basis"]["citation"] == OJ + prov
+
+    def test_the_outer_limit_is_not_the_standard_for_24h_and_72h_only(self, tmp_path):
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        reg.record_measure_available("c1", AWARE + timedelta(hours=5), "w", PERSON, now=NOW)
+        got = all_dicts(reg)
+        for prov in ("Art. 14(2)(a)", "Art. 14(2)(b)"):
+            assert "without undue delay" in got[prov]["basis"]["also_required"]
+        assert got["Art. 14(2)(c)"]["basis"]["also_required"] is None
+
+    def test_starts_from_names_the_ledger_record_and_who_recorded_it(self, tmp_path):
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        reg.record_measure_available("c1", AWARE + timedelta(hours=5), "w", PERSON, now=NOW)
+        reg.record_measure_available("c1", AWARE + timedelta(hours=9), "later patch", PERSON, now=NOW)
+        case = reg.case("c1")
+        got = all_dicts(reg)
+        aw = case.awareness_history[-1]
+        sf = got["Art. 14(2)(a)"]["basis"]["starts_from"]
+        assert sf["at"] == format_utc(AWARE) and sf["fact"] == "becoming aware"
+        assert (sf["ledger_seq"], sf["ledger_hash"]) == (aw["ledger_seq"], aw["content_hash"])
+        assert sf["recorded_by"] == aw["recorded_by"] == "m.braun (Entwicklungsleitung)"
+        assert sf["actor_kind"] == "person"
+        mf = got["Art. 14(2)(c)"]["basis"]["starts_from"]
+        measure_entries = [h for h in case.history if h["kind"] == "art14.measure"]
+        assert mf["at"] == format_utc(AWARE + timedelta(hours=5))
+        assert mf["ledger_seq"] == measure_entries[0]["ledger_seq"]      # the EARLIEST measure
+        assert mf["ledger_hash"] == measure_entries[0]["content_hash"]
+
+    def test_starts_from_follows_a_superseded_awareness(self, tmp_path):
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        first = reg.case("c1").awareness_hash
+        reg.supersede_awareness(
+            "c1", Awareness(AWARE + timedelta(hours=1), AWARE, AWARE + timedelta(hours=1), "m.braun", "r2"),
+            "typo", first, PERSON, now=NOW)
+        case = reg.case("c1")
+        sf = all_dicts(reg)["Art. 14(2)(a)"]["basis"]["starts_from"]
+        assert sf["ledger_hash"] == case.awareness_hash != first
+
+    def test_a_case_without_a_loader_source_says_so_instead_of_inventing_one(self):
+        d = Deadlines(track=Track.VULNERABILITY, awareness_at=AWARE).early_warning.to_dict()
+        sf = d["basis"]["starts_from"]
+        assert sf["ledger_seq"] is None and sf["ledger_hash"] is None and sf["source_note"]
+
+    def test_basis_changes_no_due_at_status_or_met(self):
+        t = parse_utc("2027-03-01T07:11:00Z")
+        d = Deadlines(track=Track.INCIDENT, awareness_at=t - timedelta(days=1),
+                      notification_submitted_at=t, final_submitted_at=parse_utc("2027-03-30T12:00:00Z"))
+        final = d.final
+        assert final.due_at == incident_final_due_at(t)
+        assert (final.status, final.met) == ("filed_late", False)
+        assert final.to_dict()["due_at"] == format_utc(final.due_at)
+
+    def test_other_readings_are_informational_and_never_replace_due_at(self):
+        t = parse_utc("2027-03-01T07:11:00Z")
+        d = Deadlines(track=Track.INCIDENT, awareness_at=t - timedelta(days=1),
+                      notification_submitted_at=t).final.to_dict()
+        readings = d["basis"]["other_readings"]
+        assert {r["id"] for r in readings} == {"reg_1182_71_end_of_period_utc_calendar",
+                                               "utc_wall_clock_month_rule_v1"}
+        for r in readings:
+            assert r["informational_only"] is True and r["would_end_at"]
+            assert r["status"] in ("UNRESOLVED_LEGAL_QUESTION", "SUPERSEDED_PRODUCT_RULE")
+        assert d["due_at"] == "2027-03-29T07:15:00Z"        # a later reading did not replace it
+        assert max(r["would_end_at"] for r in readings) > d["due_at"]
+
+    def test_the_weekend_and_holiday_rule_is_declared_not_applied_with_the_reason(self):
+        b = Deadlines(track=Track.VULNERABILITY, awareness_at=AWARE).early_warning.to_dict()["basis"]
+        w = b["weekend_holiday_rule"]
+        assert w["applied"] is False and w["would_end_at"] is None
+        assert "LATER" in w["note"] and "not known here" in w["note"]
+        assert b["open_legal_question_ids"] == [q["id"] for q in OPEN_LEGAL_QUESTIONS]
+
+    def test_a_late_filing_inside_another_reading_gets_a_note_and_keeps_its_status(self):
+        measure = parse_utc("2026-10-01T12:00:00Z")       # 14 d: product due 2026-10-15T12:00Z
+        late = parse_utc("2026-10-15T20:00:00Z")          # UTC calendar reading ends 2026-10-16T00:00Z
+        d = Deadlines(track=Track.VULNERABILITY, awareness_at=measure - timedelta(days=1),
+                      measure_available_at=measure, final_submitted_at=late).final
+        out = d.to_dict()
+        assert out["status"] == "filed_late" and d.met is False
+        note = out["basis"]["status_note"]
+        assert "filed late on this product's due_at" in note and "qualified lawyer must decide" in note
+        assert "does not change due_at, status or met" in note
+
+    def test_no_note_when_on_time_or_beyond_every_reading(self):
+        measure = parse_utc("2026-10-01T12:00:00Z")
+        on_time = Deadlines(track=Track.VULNERABILITY, awareness_at=measure, measure_available_at=measure,
+                            final_submitted_at=measure + timedelta(days=13)).final
+        far = Deadlines(track=Track.VULNERABILITY, awareness_at=measure, measure_available_at=measure,
+                        final_submitted_at=measure + timedelta(days=20)).final
+        assert on_time.to_dict()["basis"]["status_note"] is None
+        assert far.to_dict()["basis"]["status_note"] is None
+
+    def test_deadlines_carry_the_open_legal_questions_once_at_case_level(self):
+        d = Deadlines(track=Track.VULNERABILITY, awareness_at=AWARE).to_dict()
+        assert d["rule_version"] == RULE_VERSION
+        assert [q["id"] for q in d["open_legal_questions"]] == [
+            "reg_1182_71_applies", "art3_or_art5", "calendar_of_the_day",
+            "meaning_of_submission", "art14_4c_trigger_when_waived"]
+
+    def test_the_text_report_and_the_cli_print_the_same_facts(self, tmp_path, capsys):
+        from assurance.security.art14.report import case_report
+
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        text = case_report(reg.case("c1"), now=NOW)
+        assert OJ + "Art. 14(2)(a)" in text and WORDING["Art. 14(2)(a)"] in text
+        assert f"rule version {RULE_VERSION}" in text and "also required: without undue delay" in text
+        assert "weekend/holiday rule" in text and "NOT applied" in text
+        assert "OPEN LEGAL QUESTIONS" in text and "a qualified lawyer must decide" in text
+        led = str(tmp_path / "cli.db")
+        by = ["--by", "m.braun:R"]
+        iso = lambda t: format_utc(t)  # noqa: E731
+        cli(["--ledger", led, "signal", "C1", *by, "--at", iso(AWARE - timedelta(hours=1)), "--description", "d"])
+        capsys.readouterr()
+        assert cli(["--ledger", led, "awareness", "C1", *by, "--at", iso(AWARE), "--started", iso(AWARE),
+                    "--completed", iso(AWARE), "--track", "actively_exploited_vulnerability",
+                    "--because", "r"]) == 0
+        out = capsys.readouterr().out
+        assert "basis: " + OJ + "Art. 14(2)(b)" in out and "rule version" in out
+        assert cli(["--ledger", led, "measure", "C1", *by, "--at", iso(AWARE + timedelta(hours=5)),
+                    "--description", "w"]) == 0
+        assert "basis: " + OJ + "Art. 14(2)(c)" in capsys.readouterr().out
+
+    def test_the_register_report_and_readiness_json_show_the_rule_version(self, tmp_path):
+        from assurance.security.art14.report import readiness_report, register_report
+
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        assert f"clock rule version   {RULE_VERSION}" in register_report(reg, now=NOW)
+        r = readiness_report(reg, now=NOW)
+        assert r["clock_rule_version"] == RULE_VERSION and len(r["open_legal_questions"]) == 5

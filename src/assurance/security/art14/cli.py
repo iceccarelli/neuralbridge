@@ -38,7 +38,7 @@ from ...core.identity import format_utc, utc_now
 from ...evidence.ledger import EvidenceLedger
 from .engine import Art14Register
 from .model import Awareness, ProductVersion, Signal, SignalChannel, Stage, Track
-from .report import case_report, readiness_json, register_report
+from .report import basis_lines, case_report, readiness_json, register_report
 from .srp import fields_for, validate_payload
 from .timestamps import legal_timestamp
 from .triage import Answer, Question
@@ -145,6 +145,8 @@ def cmd_awareness(args: argparse.Namespace) -> int:
         print("\ndeadlines now running:")
         for d in deadlines.all():
             print(f"  {d.stage.label:26s} {format_utc(d.due_at)}   {d.provision}")
+            for line in basis_lines(d):
+                print(line)
         for gap in deadlines.pending_facts():
             print(f"  not computable: {gap}")
     _show_outstanding(register, args.case_id)
@@ -191,6 +193,8 @@ def cmd_measure(args: argparse.Namespace) -> int:
             f"  the 14-day final-report clock now runs to "
             f"{format_utc(deadlines.final.due_at)} ({deadlines.final.provision})"
         )
+        for line in basis_lines(deadlines.final):
+            print(line)
     elif case.track is Track.INCIDENT:
         print(
             "  recorded, but a measure does not start a clock on the incident track: the "

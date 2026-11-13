@@ -201,6 +201,8 @@ class Case:
     filing_times: dict[str, list[datetime]] = None  # type: ignore[assignment]
     #: Decisions recorded (in a ledger written before this was enforced) by a non-person actor.
     non_person_records: list[str] = None  # type: ignore[assignment]
+    #: Ledger position of the measure record the 14-day clock runs from (the earliest one).
+    measure_source: dict[str, Any] | None = None
     #: Content hash of the awareness record that is currently in force.
     awareness_hash: str = ""
     #: Every awareness record in order (the original and each supersession), with which one is
@@ -255,7 +257,24 @@ class Case:
                 for stage, times in self.filing_times.items()
                 if len(set(times)) > 1
             },
+            sources=self._fact_sources(),
         )
+
+    def _fact_sources(self) -> dict[str, dict[str, Any]]:
+        """Where in the ledger the facts the deadlines run from were recorded, when known."""
+        sources: dict[str, dict[str, Any]] = {}
+        if self.awareness_history:
+            current = self.awareness_history[-1]   # the record in force is always the last one
+            kinds = {h["ledger_seq"]: h["actor_kind"] for h in self.history}
+            sources["awareness"] = {
+                "ledger_seq": current["ledger_seq"],
+                "content_hash": current["content_hash"],
+                "recorded_by": current["recorded_by"],
+                "actor_kind": kinds.get(current["ledger_seq"], ""),
+            }
+        if self.measure_source is not None:
+            sources["measure"] = dict(self.measure_source)
+        return sources
 
     @property
     def state(self) -> str:
@@ -1062,6 +1081,12 @@ class Art14Register:
                 at = parse_utc(body["available_at"])
                 if case.measure_available_at is None or at < case.measure_available_at:
                     case.measure_available_at = at
+                    case.measure_source = {
+                        "ledger_seq": entry.seq,
+                        "content_hash": entry.content_hash,
+                        "recorded_by": _who(entry),
+                        "actor_kind": actor_kind,
+                    }
             elif kind == CASE_KIND["filing"]:
                 at = parse_utc(body["submitted_at"])
                 stage = body["stage"]
