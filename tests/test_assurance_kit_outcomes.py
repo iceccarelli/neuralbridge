@@ -545,3 +545,44 @@ class TestVersionProvenanceIsInTheNotes:
         literal = self._collect(tmp_path, {"kind": "literal", "value": "9.9.9"}).manifest
         stripped = replace(literal, items=tuple(replace(i, notes="") for i in literal.items))
         assert literal.configuration_hash() == stripped.configuration_hash()
+
+
+# =====================================================================
+# `collect probe` does not call an untested plan STABLE.
+# =====================================================================
+class TestProbeWithNothingToCompare:
+    def _probe(self, a, b):
+        from assurance.collect.plan import CollectionPlan
+        from assurance.collect.volatility import probe
+
+        return probe(CollectionPlan.from_dict(plan_dict()), a, b)
+
+    def test_the_same_folder_twice_is_incomplete_not_stable(self, tmp_path):
+        root = write_export(tmp_path / "a", stamp="s", operator="o", seq="1")
+        report = self._probe(root, root)
+        assert report.verdict == "incomplete"
+        assert any("byte-for-byte identical" in c for c in report.checks_skipped)
+
+    def test_a_byte_identical_copy_is_incomplete_not_stable(self, tmp_path):
+        import shutil
+
+        root = write_export(tmp_path / "a", stamp="s", operator="o", seq="1")
+        shutil.copytree(root, tmp_path / "b")
+        assert self._probe(root, tmp_path / "b").verdict == "incomplete"
+
+    def test_two_real_exports_that_differ_only_in_noise_are_still_stable(self, tmp_path):
+        a = write_export(tmp_path / "a", stamp="2026-09-14T06:02:11Z", operator="m.keller",
+                         seq="0040")
+        b = write_export(tmp_path / "b", stamp="2026-10-01T17:45:59Z", operator="s.berg",
+                         seq="0057")
+        assert self._probe(a, b).verdict == "stable"
+
+    def test_the_cli_exits_non_zero_for_the_same_folder(self, tmp_path, capsys):
+        from assurance.collect.cli import main as collect_main
+
+        root = write_export(tmp_path / "a", stamp="s", operator="o", seq="1")
+        plan = tmp_path / "plan.json"
+        plan.write_text(json.dumps(plan_dict()))
+        rc = collect_main(["probe", str(plan), "--first", str(root), "--second", str(root)])
+        assert rc == 1
+        assert "STABLE" not in capsys.readouterr().out.split("\n")[0]

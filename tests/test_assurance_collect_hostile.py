@@ -585,10 +585,13 @@ class TestProbeDoesNotCallAnUnexercisedPlanStable:
         assert r.verdict == "volatile"
 
     def test_every_rule_exercised_and_stable_is_stable(self, tmp_path):
+        # Two real exports: the stamped header differs, the content does not. (Byte-identical
+        # exports could show no noise at all and read INCOMPLETE, not STABLE.)
         for d in ("mon", "tue"):
             (tmp_path / d).mkdir()
-            (tmp_path / d / "a.cfg").write_bytes(b"same")
-        r = probe(plan(spec("ITM-A", "a.cfg")), tmp_path / "mon", tmp_path / "tue")
+            (tmp_path / d / "a.cfg").write_bytes(f"# {d}\nsame\n".encode())
+        r = probe(plan(spec("ITM-A", "a.cfg", rule=TEXT_RULE)),
+                  tmp_path / "mon", tmp_path / "tue")
         assert r.verdict == "stable"
         assert r.unexercised == ()
 
