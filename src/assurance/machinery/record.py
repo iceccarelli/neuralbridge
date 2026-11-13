@@ -615,6 +615,8 @@ class MachinePassport:
     manifest: SafetyManifest
     coverage: CoverageReport
     interventions: tuple[Intervention, ...]
+    #: Whether this passport was appended to the ledger (``build_passport(seal=True)``).
+    sealed: bool = True
 
     @property
     def content_hash(self) -> str:
@@ -651,7 +653,8 @@ class MachinePassport:
                    if self.verdict == "ledger_chain_not_verified" else "")
         return (f"{warning}{self.coverage.summary()}\n"
                 f"  {len(self.interventions)} recorded intervention(s)\n"
-                f"  sealed as {self.content_hash[:16]}")
+                + (f"  sealed as {self.content_hash[:16]}" if self.sealed
+                   else f"  content hash {self.content_hash[:16]} (not sealed)"))
 
 
 def build_passport(
@@ -762,7 +765,7 @@ def build_passport(
 
     return MachinePassport(
         evidence=evidence, manifest=manifest, coverage=coverage,
-        interventions=tuple(ivs),
+        interventions=tuple(ivs), sealed=seal,
     )
 
 
