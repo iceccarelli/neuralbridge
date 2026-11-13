@@ -5,6 +5,7 @@ import { IMAGES } from '../lib/images';
 import { ROUTES, TIER_LABEL } from '../lib/routes';
 import RotatingImage from '../components/RotatingImage';
 import ImageryNote from '../components/ImageryNote';
+import VisualDiagram from '../components/VisualDiagram';
 import openapi from '../../public/openapi.json';
 
 const SITE_URL = 'https://neuralbridge.io';
@@ -86,7 +87,17 @@ export default function DevelopersPage() {
         </div>
       </section>
 
-      <section className="section section-alt" id="routes">
+      <section className="section section-alt" id="architecture">
+        <div className="shell">
+          <div className="section-head">
+            <span className="eyebrow">Platform architecture</span>
+            <h2>Edge CLI, FastAPI core, MCP gateway, and browser surfaces</h2>
+          </div>
+          <VisualDiagram slug="neuralbridge-fastapi-mcp-cursor-architecture" />
+        </div>
+      </section>
+
+      <section className="section" id="routes">
         <div className="shell">
           <div className="section-head">
             <span className="eyebrow">Routes</span>
@@ -168,6 +179,7 @@ else:
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href="/llms.txt">Get llms.txt</a>
+            <a className="btn btn-outline" href="/llms-visuals.txt">Get llms-visuals.txt</a>
             <a className="btn btn-outline" href="/cli">Install the CLI</a>
             <a className="btn btn-outline" href="/connectors/mcp">MCP connector</a>
             <RepoLink path="" className="btn btn-outline">Browse the source</RepoLink>

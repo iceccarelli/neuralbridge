@@ -1,0 +1,460 @@
+[
+  {
+    "id": "01",
+    "slug": "hero-cryptographic-machine-assurance",
+    "targetRoute": "/",
+    "targetSection": "Hero + README.md Banner",
+    "cliOrApiReference": "assurance attest sign / HEAD ATTESTATION",
+    "pngPath": "/images/visuals/hero-cryptographic-machine-assurance.png",
+    "webpPath": "/images/visuals/hero-cryptographic-machine-assurance.webp",
+    "ogPath": "/images/og/hero-cryptographic-machine-assurance-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Isometric industrial robot cell tethered by cyan hash links to a telemetry ledger showing verified ISO/TS 15066 envelope and counter-signed head.",
+    "caption": "Cryptographic machine assurance: hash-chained proof that the floor machine matches the verified safety state.",
+    "aeoSummary": "NeuralBridge links an industrial collaborative robot cell to a hash-chained ledger proving continuous match to the verified safety state under EU Machinery Regulation 2023/1230 Annex III and ISO/TS 15066. The diagram shows counter-signed head attestation with EXIT 0, providing cryptographic evidence rather than a static declaration.",
+    "keywords": [
+      "NeuralBridge",
+      "hash chain",
+      "ISO/TS 15066",
+      "robot cell",
+      "attestation",
+      "CRA"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/hero-cryptographic-machine-assurance.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Cryptographic machine assurance: hash-chained proof that the floor machine matches the verified safety state.",
+      "description": "Isometric industrial robot cell tethered by cyan hash links to a telemetry ledger showing verified ISO/TS 15066 envelope and counter-signed head."
+    }
+  },
+  {
+    "id": "02",
+    "slug": "silent-drift-broken-declaration-of-conformity",
+    "targetRoute": "/",
+    "targetSection": "Why this exists",
+    "cliOrApiReference": "assurance watch",
+    "pngPath": "/images/visuals/silent-drift-broken-declaration-of-conformity.png",
+    "webpPath": "/images/visuals/silent-drift-broken-declaration-of-conformity.webp",
+    "ogPath": "/images/og/silent-drift-broken-declaration-of-conformity-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Timeline showing static paper Declaration of Conformity frozen at Day 0 while physical reality drifts into an unverified safety gap.",
+    "caption": "Silent drift: a Declaration of Conformity detaches from shop-floor reality after each unverified intervention.",
+    "aeoSummary": "NeuralBridge visualizes how a static EU Machinery Regulation Declaration of Conformity becomes stale as PLC hotfixes, parameter edits, and firmware swaps occur without re-verification. The evidence gap illustrates the need for continuous hash-chained monitoring.",
+    "keywords": [
+      "Declaration of Conformity",
+      "drift",
+      "Machinery Regulation",
+      "safety gap",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/silent-drift-broken-declaration-of-conformity.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Silent drift: a Declaration of Conformity detaches from shop-floor reality after each unverified intervention.",
+      "description": "Timeline showing static paper Declaration of Conformity frozen at Day 0 while physical reality drifts into an unverified safety gap."
+    }
+  },
+  {
+    "id": "03",
+    "slug": "end-to-end-assurance-operator-pipeline",
+    "targetRoute": "/docs/getting-started",
+    "targetSection": "The operator pipeline",
+    "cliOrApiReference": "kit run / assurance watch / /v1/machine/verify / /v1/ledger/attest/verify",
+    "pngPath": "/images/visuals/end-to-end-assurance-operator-pipeline.png",
+    "webpPath": "/images/visuals/end-to-end-assurance-operator-pipeline.webp",
+    "ogPath": "/images/og/end-to-end-assurance-operator-pipeline-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Seven-stage operator pipeline from enrolment through named human decision to counter-signed machine passport.",
+    "caption": "End-to-end assurance pipeline: deterministic stages turning raw exports into an externally verifiable Machine Passport.",
+    "aeoSummary": "NeuralBridge's operator pipeline sequences kit enrolment, baseline sealing, scheduled drift checks, ChangeAssuranceCase opening, safety re-verification, named human decision, and counter-signed passport under CRA Article 14 and Machinery Regulation requirements.",
+    "keywords": [
+      "operator pipeline",
+      "ChangeAssuranceCase",
+      "kit run",
+      "human decision",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/end-to-end-assurance-operator-pipeline.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "End-to-end assurance pipeline: deterministic stages turning raw exports into an externally verifiable Machine Passport.",
+      "description": "Seven-stage operator pipeline from enrolment through named human decision to counter-signed machine passport."
+    }
+  },
+  {
+    "id": "04",
+    "slug": "hash-chain-edits-vs-countersigned-head-truncation",
+    "targetRoute": "/docs/assurance/attest",
+    "targetSection": "Attest Engine Spotlight",
+    "cliOrApiReference": "assurance attest sign",
+    "pngPath": "/images/visuals/hash-chain-edits-vs-countersigned-head-truncation.png",
+    "webpPath": "/images/visuals/hash-chain-edits-vs-countersigned-head-truncation.webp",
+    "ogPath": "/images/og/hash-chain-edits-vs-countersigned-head-truncation-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Side-by-side comparison: hash chain catches mid-file edits but misses tail truncation; only off-host counter-signed head detects ledger rewind.",
+    "caption": "Hash chain versus counter-signed head: mid-ledger edits are caught, silent truncation requires off-host attestation.",
+    "aeoSummary": "NeuralBridge demonstrates that a hash chain alone detects internal edits but not tail truncation of the ledger. Only an off-host counter-signed head (assurance attest sign, refusing co-location with register.db) triggers EXIT 1 on shortening.",
+    "keywords": [
+      "hash chain",
+      "truncation",
+      "attest sign",
+      "ledger rewind",
+      "EXIT 1"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/hash-chain-edits-vs-countersigned-head-truncation.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Hash chain versus counter-signed head: mid-ledger edits are caught, silent truncation requires off-host attestation.",
+      "description": "Side-by-side comparison: hash chain catches mid-file edits but misses tail truncation; only off-host counter-signed head detects ledger rewind."
+    }
+  },
+  {
+    "id": "05",
+    "slug": "eu-cra-article-14-dual-deadline-clocks",
+    "targetRoute": "/solutions/compliance-officer",
+    "targetSection": "CRA Article 14 Register",
+    "cliOrApiReference": "GET /v1/register",
+    "pngPath": "/images/visuals/eu-cra-article-14-dual-deadline-clocks.png",
+    "webpPath": "/images/visuals/eu-cra-article-14-dual-deadline-clocks.webp",
+    "ogPath": "/images/og/eu-cra-article-14-dual-deadline-clocks-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Dual chronometers for CRA Article 14 24-hour early warning and 72-hour notification clocks anchored at T=0 awareness.",
+    "caption": "EU CRA Article 14 dual deadline clocks: 24h early warning and 72h notification, linked to un-metered hash-chained register.",
+    "aeoSummary": "NeuralBridge surfaces the CRA Article 14(4) 24-hour early-warning and 72-hour notification clocks starting at awareness of an actively exploited vulnerability or severe incident, connected to the GET /v1/register hash-chained case log with zero per-incident metering.",
+    "keywords": [
+      "CRA Article 14",
+      "24h clock",
+      "72h notification",
+      "ENISA",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/eu-cra-article-14-dual-deadline-clocks.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "EU CRA Article 14 dual deadline clocks: 24h early warning and 72h notification, linked to un-metered hash-chained register.",
+      "description": "Dual chronometers for CRA Article 14 24-hour early warning and 72-hour notification clocks anchored at T=0 awareness."
+    }
+  },
+  {
+    "id": "06",
+    "slug": "machinery-regulation-annex-iii-staleness-join",
+    "targetRoute": "/docs/assurance/machinery",
+    "targetSection": "Annex III staleness join",
+    "cliOrApiReference": "POST /v1/machinery/manifest / POST /v1/machinery/coverage",
+    "pngPath": "/images/visuals/machinery-regulation-annex-iii-staleness-join.png",
+    "webpPath": "/images/visuals/machinery-regulation-annex-iii-staleness-join.webp",
+    "ogPath": "/images/og/machinery-regulation-annex-iii-staleness-join-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Ledger join of safety software intervention log against recorded verifications showing CURRENT versus STALE status.",
+    "caption": "Machinery Regulation Annex III \u00a71.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
+    "aeoSummary": "NeuralBridge joins the safety software and intervention log with recorded safety function verifications under EU Machinery Regulation 2023/1230 Annex III \u00a71.1.9, marking functions verified after the last change as CURRENT and earlier ones as STALE.",
+    "keywords": [
+      "Annex III",
+      "staleness",
+      "safety_plc.bin",
+      "t_change",
+      "t_verify",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/machinery-regulation-annex-iii-staleness-join.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Machinery Regulation Annex III \u00a71.1.9 staleness join: verification after last change is CURRENT; earlier is STALE.",
+      "description": "Ledger join of safety software intervention log against recorded verifications showing CURRENT versus STALE status."
+    }
+  },
+  {
+    "id": "07",
+    "slug": "legacy-tools-vs-hash-chained-ledger-matrix",
+    "targetRoute": "/",
+    "targetSection": "Tooling Comparison",
+    "cliOrApiReference": "NeuralBridge ledger capabilities",
+    "pngPath": "/images/visuals/legacy-tools-vs-hash-chained-ledger-matrix.png",
+    "webpPath": "/images/visuals/legacy-tools-vs-hash-chained-ledger-matrix.webp",
+    "ogPath": "/images/og/legacy-tools-vs-hash-chained-ledger-matrix-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Four-column matrix contrasting spreadsheets, PLM, OT scanners, and NeuralBridge hash-chained ledger.",
+    "caption": "Legacy tools versus NeuralBridge ledger: only the ledger provides air-gapped SHA-256 provenance, Annex III joins, and counter-signed heads.",
+    "aeoSummary": "NeuralBridge's capability matrix shows spreadsheets, PLM/ALM, and OT asset scanners fail to capture shop-floor hotfixes, air-gapped cells, or ISO/TS 15066 margins, while the hash-chained ledger enforces cryptographic evidence for CRA and Machinery Regulation.",
+    "keywords": [
+      "spreadsheets",
+      "PLM",
+      "OT scanners",
+      "hash-chained ledger",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/legacy-tools-vs-hash-chained-ledger-matrix.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Legacy tools versus NeuralBridge ledger: only the ledger provides air-gapped SHA-256 provenance, Annex III joins, and counter-signed heads.",
+      "description": "Four-column matrix contrasting spreadsheets, PLM, OT scanners, and NeuralBridge hash-chained ledger."
+    }
+  },
+  {
+    "id": "08",
+    "slug": "pricing-entitlement-tiers-validator-register-cell",
+    "targetRoute": "/pricing",
+    "targetSection": "GET /v1/plans Capability Architecture",
+    "cliOrApiReference": "GET /v1/plans",
+    "pngPath": "/images/visuals/pricing-entitlement-tiers-validator-register-cell.png",
+    "webpPath": "/images/visuals/pricing-entitlement-tiers-validator-register-cell.webp",
+    "ogPath": "/images/og/pricing-entitlement-tiers-validator-register-cell-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Three entitlement tiers\u2014Validator free, Register \u20ac390/mo, Cell \u20ac1,290/mo\u2014generated from code-enforced plans.",
+    "caption": "Pricing tiers generated from GET /v1/plans entitlements; \u20ac390 and \u20ac1,290 are launch hypotheses.",
+    "aeoSummary": "NeuralBridge pricing (Validator free, Register, Cell) is generated directly from the entitlement table enforced in code via GET /v1/plans. External verification remains always free; cases are unmetered.",
+    "keywords": [
+      "pricing",
+      "Validator",
+      "Register",
+      "Cell",
+      "GET /v1/plans",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/pricing-entitlement-tiers-validator-register-cell.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Pricing tiers generated from GET /v1/plans entitlements; \u20ac390 and \u20ac1,290 are launch hypotheses.",
+      "description": "Three entitlement tiers\u2014Validator free, Register \u20ac390/mo, Cell \u20ac1,290/mo\u2014generated from code-enforced plans."
+    }
+  },
+  {
+    "id": "09",
+    "slug": "offline-enrolment-kit-socket-guard-airgap",
+    "targetRoute": "/docs/assurance/kit",
+    "targetSection": "Air-Gapped Plant Execution",
+    "cliOrApiReference": "python -m assurance kit check / kit run",
+    "pngPath": "/images/visuals/offline-enrolment-kit-socket-guard-airgap.png",
+    "webpPath": "/images/visuals/offline-enrolment-kit-socket-guard-airgap.webp",
+    "ogPath": "/images/og/offline-enrolment-kit-socket-guard-airgap-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Isometric air-gapped plant with process socket guard blocking outbound traffic while writing local evidence.db and report.html.",
+    "caption": "Offline enrolment kit: cryptography-only dependency, process-level socket guard, zero network, evidence sealed locally.",
+    "aeoSummary": "NeuralBridge offline enrolment kit (python -m assurance kit check / kit run) imports only cryptography, arms a process socket guard refusing all outbound TCP/UDP and DNS, and seals any attempt into evidence.db for air-gapped CRA and Machinery Regulation evidence collection.",
+    "keywords": [
+      "kit run",
+      "socket guard",
+      "air-gapped",
+      "cryptography",
+      "evidence.db",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/offline-enrolment-kit-socket-guard-airgap.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Offline enrolment kit: cryptography-only dependency, process-level socket guard, zero network, evidence sealed locally.",
+      "description": "Isometric air-gapped plant with process socket guard blocking outbound traffic while writing local evidence.db and report.html."
+    }
+  },
+  {
+    "id": "10",
+    "slug": "fleet-advisory-deterministic-hash-fanout",
+    "targetRoute": "/docs/assurance/fleet",
+    "targetSection": "Multi-Site OEM Fleet Advisory",
+    "cliOrApiReference": "POST /v1/fleet/advisory",
+    "pngPath": "/images/visuals/fleet-advisory-deterministic-hash-fanout.png",
+    "webpPath": "/images/visuals/fleet-advisory-deterministic-hash-fanout.webp",
+    "ogPath": "/images/og/fleet-advisory-deterministic-hash-fanout-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Authenticated supplier advisory fan-out by exact SHA-256, version, or component name across machine serials; public intel remains inspect-only.",
+    "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component\u2014never semver arithmetic.",
+    "aeoSummary": "NeuralBridge fans authenticated supplier advisories across fleet serials strictly by SHA-256 hash, exact version string, or component name via POST /v1/fleet/advisory. Unauthenticated NVD/KEV/EPSS feeds stay inspect-only with no auto stop-use.",
+    "keywords": [
+      "fleet advisory",
+      "SHA-256",
+      "semver",
+      "NVD",
+      "KEV",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/fleet-advisory-deterministic-hash-fanout.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Deterministic hash fan-out: advisories matched by SHA-256 binary hash, exact version, or component\u2014never semver arithmetic.",
+      "description": "Authenticated supplier advisory fan-out by exact SHA-256, version, or component name across machine serials; public intel remains inspect-only."
+    }
+  },
+  {
+    "id": "11",
+    "slug": "change-assurance-case-human-gate-state-machine",
+    "targetRoute": "/docs/assurance",
+    "targetSection": "CHANGE.md / Workspace",
+    "cliOrApiReference": "ChangeAssuranceCase / POST /v1/machine/verify",
+    "pngPath": "/images/visuals/change-assurance-case-human-gate-state-machine.png",
+    "webpPath": "/images/visuals/change-assurance-case-human-gate-state-machine.webp",
+    "ogPath": "/images/og/change-assurance-case-human-gate-state-machine-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "State machine for ChangeAssuranceCase: triggers open immutable case, require re-verification, then named human decision to close.",
+    "caption": "ChangeAssuranceCase state machine: software drafts, humans decide; zero auto-close after drift or advisory.",
+    "aeoSummary": "NeuralBridge opens a ChangeAssuranceCase on drift, authenticated advisory, or intervention, requiring safety re-verification and a named human decision (operator ID, timestamp, signed rationale) before close\u2014never automatic.",
+    "keywords": [
+      "ChangeAssuranceCase",
+      "human gate",
+      "named decision",
+      "re-verify",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/change-assurance-case-human-gate-state-machine.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "ChangeAssuranceCase state machine: software drafts, humans decide; zero auto-close after drift or advisory.",
+      "description": "State machine for ChangeAssuranceCase: triggers open immutable case, require re-verification, then named human decision to close."
+    }
+  },
+  {
+    "id": "12",
+    "slug": "immutable-ledger-anatomy-and-watch-exit-codes",
+    "targetRoute": "/docs/assurance/watch",
+    "targetSection": "Ledger & Scheduled Watch Contract",
+    "cliOrApiReference": "assurance watch (exit 0/1/2)",
+    "pngPath": "/images/visuals/immutable-ledger-anatomy-and-watch-exit-codes.png",
+    "webpPath": "/images/visuals/immutable-ledger-anatomy-and-watch-exit-codes.webp",
+    "ogPath": "/images/og/immutable-ledger-anatomy-and-watch-exit-codes-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Hash-chained ledger anatomy above three distinct assurance watch exit codes: 0 quiet, 1 findings, 2 could not see.",
+    "caption": "Immutable ledger anatomy and assurance watch contract: EXIT 2 (could not look) never shares a code with EXIT 0 (nothing moved).",
+    "aeoSummary": "NeuralBridge hash-chained ledger records manifests, interventions, ISO/TS 15066 verifications, cases, and counter-signed heads. assurance watch enforces EXIT 0 quiet, EXIT 1 findings, EXIT 2 could-not-see with checks_skipped, never collapsing 'could not look' into clean.",
+    "keywords": [
+      "exit code",
+      "assurance watch",
+      "hash chain",
+      "EXIT 0",
+      "EXIT 1",
+      "EXIT 2"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/immutable-ledger-anatomy-and-watch-exit-codes.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Immutable ledger anatomy and assurance watch contract: EXIT 2 (could not look) never shares a code with EXIT 0 (nothing moved).",
+      "description": "Hash-chained ledger anatomy above three distinct assurance watch exit codes: 0 quiet, 1 findings, 2 could not see."
+    }
+  },
+  {
+    "id": "13",
+    "slug": "iso15066-safety-envelope-and-coverage-states",
+    "targetRoute": "/applications",
+    "targetSection": "Cobots & Collaborative Cells",
+    "cliOrApiReference": "POST /v1/machine/verify",
+    "pngPath": "/images/visuals/iso15066-safety-envelope-and-coverage-states.png",
+    "webpPath": "/images/visuals/iso15066-safety-envelope-and-coverage-states.webp",
+    "ogPath": "/images/og/iso15066-safety-envelope-and-coverage-states-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Isometric cobot workspace with ISO/TS 15066 envelopes and coverage matrix of six explicit states including UNCHECKED.",
+    "caption": "ISO/TS 15066 safety envelopes and per-function coverage states: worst margin reported, UNCHECKED never hidden as green.",
+    "aeoSummary": "NeuralBridge verifies five physical envelopes including ISO/TS 15066 protective separation with worst-margin reporting via POST /v1/machine/verify, and exposes six coverage states (CURRENT, STALE, FAILING, UNCHECKED, INCOMPLETE, NEVER DONE) without collapsing unmeasured items into pass.",
+    "keywords": [
+      "ISO/TS 15066",
+      "protective separation",
+      "UNCHECKED",
+      "coverage matrix",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/iso15066-safety-envelope-and-coverage-states.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "ISO/TS 15066 safety envelopes and per-function coverage states: worst margin reported, UNCHECKED never hidden as green.",
+      "description": "Isometric cobot workspace with ISO/TS 15066 envelopes and coverage matrix of six explicit states including UNCHECKED."
+    }
+  },
+  {
+    "id": "14",
+    "slug": "zero-account-auditor-insurer-verification",
+    "targetRoute": "/verify",
+    "targetSection": "Check an evidence file",
+    "cliOrApiReference": "POST /v1/machine/bundle/check / POST /v1/ledger/attest/verify / assurance attest verify",
+    "pngPath": "/images/visuals/zero-account-auditor-insurer-verification.png",
+    "webpPath": "/images/visuals/zero-account-auditor-insurer-verification.webp",
+    "ogPath": "/images/og/zero-account-auditor-insurer-verification-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Trust-boundary handoff: manufacturer exports portable bundle; auditor verifies free at neuralbridge.io/verify with no account.",
+    "caption": "Zero-account auditor and insurer verification: cryptographic proof established or explicitly not established; always free.",
+    "aeoSummary": "NeuralBridge allows auditors, notified bodies, and insurers to verify machine-passport-bundle.json and attest.jsonl at neuralbridge.io/verify or via offline CLI without any account or subscription, separating established cryptographic proof from scope limits.",
+    "keywords": [
+      "zero-account",
+      "/verify",
+      "auditor",
+      "insurer",
+      "attestation",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/zero-account-auditor-insurer-verification.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "Zero-account auditor and insurer verification: cryptographic proof established or explicitly not established; always free.",
+      "description": "Trust-boundary handoff: manufacturer exports portable bundle; auditor verifies free at neuralbridge.io/verify with no account."
+    }
+  },
+  {
+    "id": "15",
+    "slug": "neuralbridge-fastapi-mcp-cursor-architecture",
+    "targetRoute": "/developers",
+    "targetSection": "Platform Architecture",
+    "cliOrApiReference": "uvicorn assurance.api.service:app / MCP Gateway",
+    "pngPath": "/images/visuals/neuralbridge-fastapi-mcp-cursor-architecture.png",
+    "webpPath": "/images/visuals/neuralbridge-fastapi-mcp-cursor-architecture.webp",
+    "ogPath": "/images/og/neuralbridge-fastapi-mcp-cursor-architecture-og.png",
+    "width": 1600,
+    "height": 900,
+    "alt": "Four-layer architecture: edge CLI and air-gapped kit, FastAPI core with 79 OpenAPI routes, MCP Gateway and Cursor connector, browser surfaces.",
+    "caption": "NeuralBridge FastAPI + MCP + Cursor architecture: self-hostable assurance engine with human-approval agent protocol.",
+    "aeoSummary": "NeuralBridge sits on a self-hostable FastAPI service (79 OpenAPI 3 routes) with hash-chained ledger, MCP Gateway enforcing Discover-Read-Plan-Write-Human-Approval, and browser surfaces at neuralbridge.io, while noting the standalone dashboard foundation.",
+    "keywords": [
+      "FastAPI",
+      "MCP",
+      "Cursor",
+      "OpenAPI",
+      "architecture",
+      "NeuralBridge"
+    ],
+    "schemaOrgImageObject": {
+      "@type": "ImageObject",
+      "contentUrl": "https://neuralbridge.io/images/visuals/neuralbridge-fastapi-mcp-cursor-architecture.png",
+      "width": 1600,
+      "height": 900,
+      "caption": "NeuralBridge FastAPI + MCP + Cursor architecture: self-hostable assurance engine with human-approval agent protocol.",
+      "description": "Four-layer architecture: edge CLI and air-gapped kit, FastAPI core with 79 OpenAPI routes, MCP Gateway and Cursor connector, browser surfaces."
+    }
+  }
+]

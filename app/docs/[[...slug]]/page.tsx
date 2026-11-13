@@ -5,6 +5,8 @@ import { DOCS_NAV, listDocSlugs, loadDoc } from '../../lib/docs';
 import DocsSidebar from '../../components/DocsSidebar';
 import Breadcrumbs from '../../components/Breadcrumbs';
 import { buildMetadata, docDescription } from '../../lib/seo';
+import VisualDiagram from '../../components/VisualDiagram';
+import { DOCS_VISUAL_BY_PATH } from '../../lib/visuals';
 
 export function generateStaticParams() {
   // `[]` is /docs itself: it has no markdown source, so it is rendered from DOCS_NAV below.
@@ -93,6 +95,11 @@ export default async function DocPage({ params }: { params: DocParams }) {
   if (!doc) notFound();
 
   const activeHref = `/docs/${slug.join('/')}`;
+  const visualSlug = DOCS_VISUAL_BY_PATH[activeHref];
+  const fullHtml = accessibleDocHtml(doc.html);
+  const firstParaEnd = fullHtml.indexOf('</p>');
+  const leadHtml = visualSlug && firstParaEnd !== -1 ? fullHtml.slice(0, firstParaEnd + 4) : fullHtml;
+  const restHtml = visualSlug && firstParaEnd !== -1 ? fullHtml.slice(firstParaEnd + 4) : '';
 
   return (
     <main id="top">
@@ -101,7 +108,15 @@ export default async function DocPage({ params }: { params: DocParams }) {
           <DocsSidebar activeHref={activeHref} editPath={doc.editPath} />
           <div className="docs-main">
             <Breadcrumbs trail={[{ name: 'Home', path: '/' }, { name: 'Docs', path: '/docs' }, { name: doc.title, path: activeHref }]} />
-            <article className="docs-content" dangerouslySetInnerHTML={{ __html: accessibleDocHtml(doc.html) }} />
+            {visualSlug ? (
+              <article className="docs-content">
+                <div dangerouslySetInnerHTML={{ __html: leadHtml }} />
+                <VisualDiagram slug={visualSlug} />
+                {restHtml ? <div dangerouslySetInnerHTML={{ __html: restHtml }} /> : null}
+              </article>
+            ) : (
+              <article className="docs-content" dangerouslySetInnerHTML={{ __html: fullHtml }} />
+            )}
           </div>
         </div>
       </section>
